@@ -1,0 +1,2484 @@
+{
+  "slug": "lab-fanout-sns-sqs-multiplos-consumidores",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência é a mesma equipe de duas pessoas do "
+              },
+              {
+                "text": "L01",
+                "code": true
+              },
+              {
+                "text": " e do "
+              },
+              {
+                "text": "L22",
+                "code": true
+              },
+              {
+                "text": ": API de pedidos para trinta lojas, em ECS Fargate. Desde o L22, quando um pedido é criado, o checkout publica numa fila SQS de estoque — com DLQ e consumo idempotente — para dar baixa no saldo por SKU."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Na semana passada, o time de atendimento pediu confirmação por e-mail. A forma mais rápida de entregar foi acrescentar, dentro do MESMO método que processa o checkout, uma segunda chamada "
+              },
+              {
+                "text": "SendMessageAsync",
+                "code": true
+              },
+              {
+                "text": " para uma fila nova. Funcionou, e ninguém tratou isso como decisão de arquitetura — foi só mais uma linha."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Hoje o time de dados pediu uma terceira cópia: cada pedido criado precisa cair também numa fila de analytics. E aí o problema aparece — não é a fila em si, é onde ela teria de ser conectada. O método que cria um pedido, o caminho mais sensível do sistema, já tem duas integrações de saída amarradas nele, e a terceira exige abri-lo de novo, testar as duas anteriores de novo, e aceitar que uma exceção na chamada nova pode atrapalhar a resposta ao cliente que só queria confirmar uma compra."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Básico — depende do L21 (Lambda) e do L22 (fila com DLQ e idempotência)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L22 concluído: fila SQS de estoque com DLQ e consumidor idempotente"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 30 min · implementação 1 h a 1 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Muito baixo: SNS cobra por publicação e por entrega; sem servidor novo"
+              },
+              {
+                "k": "Serviços",
+                "v": "SNS, SQS (3 filas + 3 DLQ de processamento + 1 DLQ de entrega), Lambda"
+              },
+              {
+                "k": "Volume atual",
+                "v": "30 lojas, cerca de 9 mil pedidos por dia"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "adicionar um quarto, quinto consumidor sem alterar o checkout"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "todo evento publicado é do MESMO tipo, \"pedido criado\" — é o que autoriza SNS simples em vez de um barramento com regras"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "um tópico com três assinaturas, uma delas criada sem tocar no serviço de checkout, com a prova gravada"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é EventBridge. O barramento com múltiplos TIPOS de evento, regras de roteamento por conteúdo e schema registry é o L24, e ele depende deste. Aqui existe um único tipo de evento — \"pedido criado\" — distribuído para vários interessados; quando surgir um segundo tipo de evento com regras próprias, é sinal de que chegou a hora do L24, não de esticar este desenho com mais filtros."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação, não com a sensação de ter entendido fanout."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que a lista de consumidores pertence às assinaturas do tópico, e não ao código do produtor.",
+              "Nomear a diferença entre falha de ENTREGA (SNS → fila) e falha de PROCESSAMENTO (fila → consumidor).",
+              "Configurar filtro de mensagem numa assinatura, com o escopo correto, e provar que ele descarta o que não interessa.",
+              "Justificar por que existe uma fila SQS entre o tópico e cada Lambda, em vez de assinar a Lambda direto.",
+              "Adicionar um terceiro consumidor sem alterar uma linha do código do produtor, e provar isso com `git diff`.",
+              "Configurar a política de acesso da fila que autoriza o tópico — e só ele — a publicar nela.",
+              "Reaproveitar a idempotência do L22 num consumidor novo, sabendo que a entrega é \"pelo menos uma vez\".",
+              "Diagnosticar por que uma fila específica não recebe mensagem, distinguindo filtro, política e RawMessageDelivery."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Fanout SNS → SQS",
+                "SAA-C03, DVA-C02",
+                "um tópico, três filas assinadas",
+                "por que publicar para N destinos é diferente de publicar N vezes"
+              ],
+              [
+                "Filtro de mensagem em assinatura",
+                "SAA-C03",
+                "a fila de e-mail só recebe evento de cliente real",
+                "o filtro roda na entrega, antes de a fila ver a mensagem"
+              ],
+              [
+                "SQS entre SNS e o consumidor",
+                "SAA-C03, DVA-C02",
+                "fila com DLQ própria por trás de cada assinatura",
+                "a diferença entre durabilidade de fila e retry de invocação assíncrona"
+              ],
+              [
+                "Política de acesso de fila (resource policy)",
+                "SAA-C03, SOA-C02",
+                "`Principal: sns.amazonaws.com` com `Condition: SourceArn`",
+                "por que \"publicar com sucesso\" não garante \"entregou\""
+              ],
+              [
+                "DLQ de assinatura vs. DLQ de fila",
+                "DVA-C02, SOA-C02",
+                "duas DLQ distintas no mesmo desenho",
+                "qual das duas captura falha de entrega e qual captura falha de consumo"
+              ],
+              [
+                "Desacoplamento e raio de explosão",
+                "SAA-C03",
+                "produtor com uma única integração externa",
+                "por que N chamadas síncronas dentro de um request aumentam a superfície de falha"
+              ],
+              [
+                "Entrega pelo menos uma vez",
+                "DVA-C02, SAA-C03",
+                "idempotência reaproveitada do L22 num consumidor novo",
+                "por que \"recebi a mensagem\" não implica \"recebi uma única vez\""
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve um `Publish` que retorna sucesso e pergunta por que nenhuma fila recebeu a mensagem. A resposta quase nunca é o tópico — é a política de acesso da fila, ausente ou mal escrita. \"Publicado com sucesso\" mede a aceitação pelo SNS, não a entrega ao assinante."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não aparece numa linha de Terraform é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "O produtor não pode conhecer o número de consumidores",
+                "zero acoplamento",
+                "tópico SNS central; o checkout publica UMA vez, sempre"
+              ],
+              [
+                "Cada consumidor tem ritmo e taxa de falha próprios",
+                "independência",
+                "uma fila SQS por consumidor, nunca fila compartilhada"
+              ],
+              [
+                "E-mail não pode duplicar em reprocessamento",
+                "evento de cliente real, só",
+                "filtro de mensagem na assinatura da fila de e-mail, por atributo `origem`"
+              ],
+              [
+                "Consumidor fora do ar não pode perder mensagem",
+                "durabilidade",
+                "fila entre o tópico e a Lambda, com `visibility timeout` e DLQ de processamento"
+              ],
+              [
+                "Terceiro consumidor sem deploy do produtor",
+                "entregável deste laboratório",
+                "assinatura nova via Terraform; nenhuma mudança no serviço de checkout"
+              ],
+              [
+                "Distinguir \"não entregou\" de \"não processou\"",
+                "diagnóstico rápido",
+                "DLQ de assinatura (entrega) separada da DLQ de fila (processamento)"
+              ],
+              [
+                "Nenhuma mensagem duplicada processada duas vezes",
+                "idempotência mantida",
+                "a trava condicional do L22, reaproveitada em cada consumidor novo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b3_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A hipótese que mantém este desenho simples",
+            "content": "Todo requisito acima pressupõe um ÚNICO tipo de evento — \"pedido criado\" — com vários interessados. Essa hipótese é o que justifica SNS puro em vez de um barramento com schema registry: no dia em que aparecer um segundo tipo de evento com regras de roteamento próprias, ela deixa de valer, e é o sinal de migrar para o L24."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o produtor que precisa saber quem está ouvindo"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem hoje, e ele é legítimo como ponto de partida: publica de verdade, com poucas linhas, para dois consumidores. O laboratório começa por tornar o acoplamento visível em código, porque \"está tudo amarrado\" é opinião e um `grep` é fato."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O produtor que precisa saber quem está ouvindo",
+            "caption": "Este desenho publica de verdade: duas filas, duas chamadas, poucas linhas. O defeito não está em nenhuma configuração errada — está em que a lista de destinos mora dentro do método que cria o pedido. Percorra os passos e repare onde a linha do TERCEIRO consumidor entraria.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente do checkout",
+                    "note": "dispara o pedido e não vê nada do que acontece depois da confirmação"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "svc",
+                    "service": "ecs",
+                    "label": "Serviço ECS — checkout da Cadência",
+                    "note": "a mesma API do L01/L22; nada de novo aqui além do método de criar pedido"
+                  },
+                  {
+                    "id": "task",
+                    "service": "fargate",
+                    "label": "Task .NET 8",
+                    "note": "grava o pedido no Postgres e, no mesmo método, decide quem mais precisa saber"
+                  }
+                ]
+              },
+              {
+                "label": "Filas que o produtor conhece pelo nome",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sqs_estoque",
+                    "service": "sqs",
+                    "label": "Fila estoque (do L22)",
+                    "note": "com DLQ e consumo idempotente já provados; nada muda nela"
+                  },
+                  {
+                    "id": "sqs_email",
+                    "service": "sqs",
+                    "label": "Fila email (criada semana passada)",
+                    "note": "segunda chamada explícita dentro do mesmo método — a costura já dói"
+                  }
+                ]
+              },
+              {
+                "label": "Consumidores",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "lb_estoque",
+                    "service": "lambda",
+                    "label": "Baixa de estoque",
+                    "note": "decrementa saldo por SKU; idempotente por pedidoId no DynamoDB"
+                  },
+                  {
+                    "id": "lb_email",
+                    "service": "lambda",
+                    "label": "Confirmação por e-mail",
+                    "note": "dispara o e-mail via SES; hoje recebe TUDO, sem distinguir origem"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "task",
+                "label": "POST /pedidos",
+                "style": "solid"
+              },
+              {
+                "from": "task",
+                "to": "sqs_estoque",
+                "label": "SendMessage nº1, explícito no código",
+                "style": "solid"
+              },
+              {
+                "from": "task",
+                "to": "sqs_email",
+                "label": "SendMessage nº2, explícito no código",
+                "style": "solid"
+              },
+              {
+                "from": "sqs_estoque",
+                "to": "lb_estoque",
+                "label": "evento da fila (trigger SQS)",
+                "style": "dashed"
+              },
+              {
+                "from": "sqs_email",
+                "to": "lb_email",
+                "label": "evento da fila (trigger SQS)",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O pedido é criado, e a task já sabe demais",
+                "detail": "O método que atende o `POST /pedidos` grava no Postgres e, na sequência, decide para onde o evento vai. Conhecer o destino é responsabilidade de quem PUBLICA o evento — não deveria ser.",
+                "nodes": [
+                  "user",
+                  "task"
+                ],
+                "edges": [
+                  "user>task"
+                ]
+              },
+              {
+                "label": "Cada fila é uma linha escrita à mão, dentro do mesmo método",
+                "detail": "Duas chamadas `SendMessageAsync`, cada uma com a URL da fila fixa em configuração. Funciona, e é o menor número de linhas que resolve o problema com dois consumidores.",
+                "nodes": [
+                  "task",
+                  "sqs_estoque",
+                  "sqs_email"
+                ],
+                "edges": [
+                  "task>sqs_estoque",
+                  "task>sqs_email"
+                ]
+              },
+              {
+                "label": "A fila de estoque já é o padrão do L22, e continua correta",
+                "detail": "DLQ e idempotência por `pedidoId` já provados ali. Este laboratório não muda o CONSUMO — muda como o evento chega até a fila.",
+                "nodes": [
+                  "sqs_estoque",
+                  "lb_estoque"
+                ],
+                "edges": [
+                  "sqs_estoque>lb_estoque"
+                ]
+              },
+              {
+                "label": "O terceiro interessado exige abrir este método de novo",
+                "detail": "O time de dados pediu uma cópia de cada pedido para análise. A única forma de atender, neste desenho, é acrescentar uma TERCEIRA `SendMessageAsync` no mesmo método que já tem duas — o caminho mais sensível do sistema.",
+                "nodes": [
+                  "task",
+                  "sqs_email"
+                ],
+                "edges": [
+                  "task>sqs_email"
+                ]
+              },
+              {
+                "label": "Testar de novo não é cautela, é o preço do acoplamento",
+                "detail": "Mexer no método de checkout para adicionar a terceira integração obriga a reexecutar o teste das outras duas — elas vivem na mesma função, e uma exceção na chamada nova pode derrubar a resposta ao cliente.",
+                "nodes": [
+                  "task",
+                  "sqs_estoque"
+                ],
+                "edges": [
+                  "task>sqs_estoque"
+                ]
+              },
+              {
+                "label": "Por que alguém escreve assim",
+                "detail": "Com um ou dois consumidores, é genuinamente a solução mais simples — sem tópico, sem política de fila, sem assinatura para configurar. O defeito só aparece quando o número de interessados deixa de ser fixo, e nesse ponto já existem clientes do padrão antigo para não quebrar.",
+                "nodes": [
+                  "task",
+                  "sqs_email"
+                ],
+                "edges": [
+                  "task>sqs_email"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "medir-o-acoplamento.sh",
+            "code": "# Quantas integracoes de saida vivem dentro do metodo de checkout, hoje.\ngrep -c \"SendMessageAsync\" src/Cadencia.Checkout/PedidosController.cs\n# Saida na Cadencia: 2. Cada consumidor novo soma 1 aqui — E soma 1 na\n# superficie de teste do metodo mais sensivel do sistema.\n\n# O raio de explosao: se a chamada para a fila de email lancar excecao sem\n# tratamento, o que acontece com a resposta ao cliente?\ngrep -A3 \"SendMessageAsync.*filaEmail\" src/Cadencia.Checkout/PedidosController.cs\n# Na Cadencia: nao ha try/catch ao redor da segunda chamada. Uma excecao ali\n# propaga e o POST /pedidos retorna 500 — mesmo com o pedido ja gravado."
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "O pedido já foi criado, e o cliente recebe 500 mesmo assim",
+            "content": "No desenho mínimo, se a chamada à fila de e-mail lançar exceção sem tratamento, ela propaga depois de o pedido já estar gravado no Postgres. O cliente vê erro numa compra que, do lado do banco, teve sucesso — e cada consumidor novo é mais uma chance disso acontecer, porque cada `SendMessageAsync` é mais uma chamada síncrona no caminho crítico."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. Se você não conseguir apontar o requisito, a peça é adorno — e este desenho não tem nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Um evento publicado, N filas que decidem se querem",
+            "caption": "A troca deixa de ser \"o produtor chama cada destino\" e passa a ser \"o produtor publica uma vez, e quem quer se inscreve\". O que muda no desenho é a existência de um ponto único de publicação — o tópico — e a lista de destinos sai do código e vira assinatura. Percorra os passos até o consumidor NOVO.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente do checkout",
+                    "note": "não percebe a troca; o comportamento observável do checkout não muda"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "svc",
+                    "service": "ecs",
+                    "label": "Serviço ECS — checkout da Cadência",
+                    "note": "depois desta mudança, tem UM ponto de integração externa, não N"
+                  },
+                  {
+                    "id": "task",
+                    "service": "fargate",
+                    "label": "Task .NET 8",
+                    "note": "publica o evento e não sabe, nem precisa saber, quantos assinantes existem"
+                  }
+                ]
+              },
+              {
+                "label": "Barramento de notificação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "topic",
+                    "service": "sns",
+                    "label": "Tópico pedido-criado",
+                    "note": "ponto único de publicação; a lista de quem recebe mora nas assinaturas dele"
+                  }
+                ]
+              },
+              {
+                "label": "Assinantes — cada fila com DLQ própria",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sqs_estoque",
+                    "service": "sqs",
+                    "label": "Fila estoque",
+                    "note": "sem filtro: baixa de estoque tem de acontecer mesmo em reprocessamento"
+                  },
+                  {
+                    "id": "sqs_email",
+                    "service": "sqs",
+                    "label": "Fila email",
+                    "note": "com filtro de assinatura: só evento de cliente real, não reprocessamento interno"
+                  },
+                  {
+                    "id": "sqs_analytics",
+                    "service": "sqs",
+                    "label": "Fila analytics (NOVA)",
+                    "note": "assinatura criada só com Terraform — zero linha tocada no checkout"
+                  }
+                ]
+              },
+              {
+                "label": "Consumidores",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "lb_estoque",
+                    "service": "lambda",
+                    "label": "Baixa de estoque",
+                    "note": "mesmo consumidor do L22; não sabe que o produtor mudou"
+                  },
+                  {
+                    "id": "lb_email",
+                    "service": "lambda",
+                    "label": "Confirmação por e-mail",
+                    "note": "agora só recebe pedido de cliente real, filtrado antes de chegar"
+                  },
+                  {
+                    "id": "lb_analytics",
+                    "service": "lambda",
+                    "label": "Cópia para analytics",
+                    "note": "lê tudo, inclusive reprocessamento — é sinal de negócio para quem analisa"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "task",
+                "label": "POST /pedidos",
+                "style": "solid"
+              },
+              {
+                "from": "task",
+                "to": "topic",
+                "label": "Publish único, com atributos de mensagem",
+                "style": "solid"
+              },
+              {
+                "from": "topic",
+                "to": "sqs_estoque",
+                "label": "cópia — sem filtro, recebe tudo",
+                "style": "solid"
+              },
+              {
+                "from": "topic",
+                "to": "sqs_email",
+                "label": "cópia — só se origem != interna (filtro)",
+                "style": "solid"
+              },
+              {
+                "from": "topic",
+                "to": "sqs_analytics",
+                "label": "cópia — assinatura nova, sem filtro",
+                "style": "dashed"
+              },
+              {
+                "from": "sqs_estoque",
+                "to": "lb_estoque",
+                "label": "evento da fila (trigger SQS)",
+                "style": "dashed"
+              },
+              {
+                "from": "sqs_email",
+                "to": "lb_email",
+                "label": "evento da fila (trigger SQS)",
+                "style": "dashed"
+              },
+              {
+                "from": "sqs_analytics",
+                "to": "lb_analytics",
+                "label": "evento da fila (trigger SQS)",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Publish único — o produtor deixa de enumerar destinos",
+                "detail": "A task chama `Publish` UMA vez no tópico, com o pedido no corpo e atributos de mensagem (`tipoEvento`, `origem`). Ela não referencia nenhuma fila.",
+                "nodes": [
+                  "task",
+                  "topic"
+                ],
+                "edges": [
+                  "task>topic"
+                ]
+              },
+              {
+                "label": "A lista de destinos mora nas assinaturas, não no código",
+                "detail": "Cada `aws_sns_topic_subscription` no Terraform é uma linha que declara \"esta fila quer o evento\" — sem que o produtor precise concordar ou saber.",
+                "nodes": [
+                  "topic",
+                  "sqs_estoque",
+                  "sqs_email"
+                ],
+                "edges": [
+                  "topic>sqs_estoque",
+                  "topic>sqs_email"
+                ]
+              },
+              {
+                "label": "Cada fila decide se quer, com filtro na própria assinatura",
+                "detail": "A fila de e-mail declara, na SUA assinatura, que só quer mensagens em que `origem` não seja reprocessamento interno. O tópico avalia o filtro antes de entregar — a fila nunca vê a mensagem que não lhe interessa.",
+                "nodes": [
+                  "topic",
+                  "sqs_email"
+                ],
+                "edges": [
+                  "topic>sqs_email"
+                ]
+              },
+              {
+                "label": "A fila é o que dá durabilidade que o Lambda direto não teria",
+                "detail": "Entre a fila e a Lambda existe fila de verdade: profundidade visível, `visibility timeout` próprio, e uma DLQ de PROCESSAMENTO por consumidor. Um consumidor lento não afeta os outros dois.",
+                "nodes": [
+                  "sqs_estoque",
+                  "lb_estoque"
+                ],
+                "edges": [
+                  "sqs_estoque>lb_estoque"
+                ]
+              },
+              {
+                "label": "O terceiro consumidor é uma assinatura nova, não um deploy",
+                "detail": "A fila de analytics e a Lambda que a consome são recursos NOVOS, mas o arquivo do serviço de checkout não muda uma linha. É o entregável deste laboratório, e a prova de implantação confirma isso com `git diff`.",
+                "nodes": [
+                  "topic",
+                  "sqs_analytics"
+                ],
+                "edges": [
+                  "topic>sqs_analytics"
+                ]
+              },
+              {
+                "label": "Cada consumidor tem seu próprio ritmo e sua própria DLQ",
+                "detail": "Se o consumidor de analytics cair por uma hora, a fila dele acumula — as outras duas seguem intocadas. No desenho mínimo, uma exceção na chamada de analytics podia atrapalhar a resposta ao cliente.",
+                "nodes": [
+                  "sqs_analytics",
+                  "lb_analytics"
+                ],
+                "edges": [
+                  "sqs_analytics>lb_analytics"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação ao desenho anterior não é a fila de analytics a mais: é a existência de um ÚNICO ponto de publicação. Adicionar, remover ou mudar um consumidor deixa de tocar o produtor — passa a ser operação inteiramente do lado das assinaturas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O efeito que não aparece no diagrama: o raio de explosão encolheu",
+            "content": "No desenho mínimo, uma falha ao enviar para a fila de e-mail podia derrubar a resposta do checkout. Aqui existe uma única chamada externa no caminho crítico — o Publish no tópico — e a falha de um CONSUMIDOR específico (fila de estoque cheia, Lambda de analytics fora do ar) não chega perto do request que cria o pedido."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Como funciona ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os nomes dos atributos não são só metadado: são o que o filtro de assinatura compara. Publicar sem eles, ou publicá-los no lugar errado (corpo em vez de atributo), faz o filtro nunca casar — em silêncio."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "De um pedido criado a três consumidores atendidos, sem o produtor saber quantos são",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1 · Checkout grava o pedido",
+                "desc": "Na mesma transação de negócio do L01/L22: o Postgres é a fonte de verdade do pedido antes de qualquer evento sair."
+              },
+              {
+                "label": "2 · Publish único no tópico",
+                "desc": "A task publica o corpo do pedido em JSON e dois atributos de mensagem: `tipoEvento=pedido.criado` e `origem` (cliente real, reprocessamento ou correção)."
+              },
+              {
+                "label": "3 · SNS avalia o filtro de cada assinatura",
+                "desc": "Para cada fila inscrita, o SNS compara os atributos da mensagem ao `filter_policy` da assinatura ANTES de tentar entregar. Não há filtro = recebe tudo."
+              },
+              {
+                "label": "4 · Entrega tentada, e retentada, para cada assinatura que casou",
+                "desc": "Para assinantes gerenciados pela AWS (SQS, Lambda), o SNS retenta a entrega por um período longo antes de desistir — a entrega em si é resiliente."
+              },
+              {
+                "label": "5 · Fila de estoque recebe sempre",
+                "desc": "Sem filtro. O consumidor idempotente do L22 continua igual: não sabe, e não precisa saber, que o produtor agora publica via SNS."
+              },
+              {
+                "label": "6 · Fila de e-mail recebe só o pedido de cliente real",
+                "desc": "O filtro descarta, na assinatura, tudo com `origem` de reprocessamento ou correção — cliente não recebe confirmação duplicada de um replay operacional."
+              },
+              {
+                "label": "7 · Fila de analytics — a nova — recebe tudo, sem tocar no checkout",
+                "desc": "Criada depois das outras duas, só com `terraform apply`. O time de dados passa a receber cópia de cada pedido a partir de agora — não do histórico."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "json",
+            "filename": "evento-pedido-criado.json",
+            "code": "// Corpo publicado no topico. Com RawMessageDelivery=true, este e o CORPO\n// exato que cada fila recebe — sem envelope do SNS por cima.\n{\n  \"pedidoId\": \"b3f1e8c2-4a9d-4e11-9c2a-7d5e0f1a2b3c\",\n  \"lojaId\": 17,\n  \"valorTotal\": 249.90,\n  \"itens\": [\n    { \"sku\": \"TENIS-42-AZ\", \"quantidade\": 1 }\n  ],\n  \"criadoEm\": \"2026-08-07T14:32:00Z\"\n}\n\n// Atributos de mensagem do Publish (NAO vao no corpo — sao metadado do SNS,\n// e sao o que o filtro de assinatura compara):\n// tipoEvento = \"pedido.criado\"            (String)\n// origem     = \"checkout-cliente\"         (String) — ou \"reprocessamento-interno\",\n//              ou \"correcao-manual\", conforme quem disparou a criacao do pedido."
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "Publish com sucesso não é sinônimo de entregue",
+            "content": "O `Publish` retorna um `MessageId` assim que o SNS aceita a mensagem — isso mede que o TÓPICO recebeu, não que cada assinatura recebeu. Para endpoints gerenciados pela AWS (SQS, Lambda), o SNS retenta a entrega até 100.015 vezes ao longo de 23 dias antes de desistir, o que torna a entrega em si bastante resiliente — mas ela ainda pode falhar de imediato por erro de permissão, e é aí que entra a DLQ de assinatura."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "A Cadência tem hoje dois consumidores do evento \"pedido criado\" (estoque e e-mail), acoplados no código do checkout, e o time de dados acabou de pedir um terceiro. Não é a última vez que isso vai acontecer.",
+            "winner": "SNS com fanout para uma fila SQS por consumidor, cada uma com DLQ própria (o padrão de fila do L22, repetido por assinatura)",
+            "why": "O produtor passa a ter UM ponto de integração externa em vez de N, e adicionar consumidor deixa de ser mudança de código — é `terraform apply` de uma assinatura nova. O raio de explosão também encolhe: no desenho acoplado, uma exceção ao chamar a fila de e-mail podia atrapalhar a resposta ao cliente que está criando o pedido; com um único `Publish`, só existe uma chamada externa no caminho crítico.",
+            "alternatives": [
+              {
+                "name": "Lambda assinado direto no tópico SNS, sem fila",
+                "downside": "Perde a fila como amortecedor: sem profundidade visível, sem `visibility timeout` próprio, e a única proteção contra falha de processamento é o que o Lambda oferecer nativamente (destino assíncrono em falha), que não tem a mesma granularidade de DLQ por tentativa."
+              },
+              {
+                "name": "Continuar publicando direto em cada fila (o desenho mínimo)",
+                "downside": "É a arquitetura deste módulo antes da mudança. Cada consumidor novo é uma linha a mais no método mais sensível do sistema, e o raio de explosão cresce junto com o número de integrações."
+              },
+              {
+                "name": "EventBridge como barramento",
+                "downside": "Resolve o mesmo problema e mais: múltiplos tipos de evento, regras de roteamento por conteúdo, replay. Para UM tipo de evento com filtro simples por atributo, é mais peça do que a Cadência precisa hoje — é o L24, o próximo passo quando o número de TIPOS de evento crescer, não só de consumidores."
+              },
+              {
+                "name": "Webhook HTTP por consumidor",
+                "downside": "Sem fila, sem retentativa gerenciada, sem DLQ: se o endpoint do consumidor estiver fora do ar no momento da publicação, a mensagem some, a menos que o produtor implemente sua própria fila de retentativa — o que é reinventar o SQS com mais código."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Ponto de publicação",
+                "tópico SNS único",
+                "produtor chama cada fila; cada consumidor por webhook",
+                "produtor passa a ter uma integração externa, não N",
+                "mais uma peça gerenciada para operar, ainda que sem servidor"
+              ],
+              [
+                "Entre o tópico e a Lambda",
+                "fila SQS por consumidor",
+                "Lambda assinada direto no tópico",
+                "durabilidade, `visibility timeout` e DLQ de processamento granular",
+                "latência extra de milissegundos e mais um recurso por consumidor"
+              ],
+              [
+                "Quem decide o que recebe",
+                "filtro na assinatura",
+                "filtro dentro do código do consumidor",
+                "a fila nunca vê, nem processa, o que não lhe interessa — custo e código a menos",
+                "o filtro fica em Terraform, mais distante de quem lê só o C#"
+              ],
+              [
+                "Formato da mensagem na fila",
+                "`RawMessageDelivery = true`",
+                "manter o envelope do SNS e desserializar duas vezes",
+                "o corpo da fila é o JSON publicado, sem tradução extra em cada consumidor",
+                "nada relevante aqui; é praticamente sempre a escolha certa"
+              ],
+              [
+                "DLQ de entrega separada da de processamento",
+                "as duas, com propósitos distintos",
+                "uma DLQ só, misturando as duas causas",
+                "diagnóstico aponta direto para o lado certo do problema",
+                "mais uma fila para monitorar — e ela deve ficar quase sempre vazia"
+              ],
+              [
+                "Tipo de barramento",
+                "SNS (um tipo de evento)",
+                "EventBridge",
+                "resolve o problema declarado sem regra de roteamento nem schema registry",
+                "quando surgir um segundo tipo de evento, este desenho não escala sozinho — é o L24"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que o fanout cria, e que este módulo não paga",
+            "content": "Um tópico SNS padrão (standard, não FIFO) não garante ordem entre mensagens nem entre filas diferentes. Se dois eventos do mesmo pedido forem publicados em sequência rápida, a fila de estoque e a de analytics podem processá-los em ordens diferentes. Enquanto cada evento for autocontido — como o `pedido.criado` deste módulo — isso não importa; no dia em que a ordem passar a importar, a resposta é um tópico FIFO com deduplicação, não uma correção no consumidor."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: o tópico e as filas que decidem se querem"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O `for_each` sobre um mapa de consumidores não é economia de digitação: é o que torna o terceiro consumidor uma ENTRADA NO MAPA, não uma seção nova de código. Adicionar `analytics = { filtro = null }` e rodar `apply` é o laboratório inteiro, do lado do Terraform."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "fanout.tf",
+            "code": "# fanout.tf — um topico, N filas que decidem se querem\n\nresource \"aws_sns_topic\" \"pedido_criado\" {\n  name              = \"${var.projeto}-pedido-criado\"\n  kms_master_key_id = \"alias/aws/sns\" # chave gerenciada basta: o payload nao carrega segredo\n}\n\n# Cada consumidor tem seu proprio ritmo e sua propria causa de falha — por isso\n# fila e DLQ sao POR CONSUMIDOR, nunca compartilhadas. O filtro mora aqui, ao\n# lado do que ele protege: quem le a fila de email entende por que ela existe.\nlocals {\n  consumidores = {\n    estoque = {\n      # Recebe TUDO. Baixa de estoque tem de acontecer mesmo quando o evento\n      # veio de um reprocessamento — o saldo tem de refletir a realidade.\n      filtro = null\n    }\n    email = {\n      # So evento de cliente de verdade. Reprocessamento interno e correcao\n      # manual nao podem gerar confirmacao duplicada para quem ja recebeu a\n      # primeira. \"anything-but\" e o operador certo aqui: nega uma lista curta\n      # em vez de enumerar todos os valores validos, que podem crescer.\n      filtro = jsonencode({\n        origem = [{ \"anything-but\" : [\"reprocessamento-interno\", \"correcao-manual\"] }]\n      })\n    }\n    analytics = {\n      # Fila NOVA deste laboratorio. Recebe tudo, inclusive reprocessamento —\n      # para quem analisa dado, isso tambem e sinal de negocio.\n      filtro = null\n    }\n  }\n}\n\nresource \"aws_sqs_queue\" \"dlq\" {\n  for_each                   = local.consumidores\n  name                       = \"${var.projeto}-${each.key}-dlq\"\n  message_retention_seconds  = 1209600 # 14 dias — o teto, para dar tempo de investigar\n}\n\nresource \"aws_sqs_queue\" \"fila\" {\n  for_each                    = local.consumidores\n  name                        = \"${var.projeto}-${each.key}\"\n  visibility_timeout_seconds  = 30 # ponto de partida; ajuste por consumidor e' o L22\n\n  # Esta e' a DLQ de PROCESSAMENTO: recebe mensagem que a fila ENTREGOU ao\n  # consumidor e ele nao confirmou apos 5 tentativas. E' diferente da DLQ de\n  # assinatura abaixo, que e' de ENTREGA — a distincao central deste modulo.\n  redrive_policy = jsonencode({\n    deadLetterTargetArn = aws_sqs_queue.dlq[each.key].arn\n    maxReceiveCount      = 5 # herdado do L22\n  })\n}\n\n# A fila nao aceita mensagem de ninguem por padrao. Esta politica autoriza\n# ESTE topico — e so ele — a chamar SendMessage. Sem ela, a assinatura existe\n# e fica \"confirmed\", mas toda entrega falha do lado de dentro: o Publish no\n# topico continua retornando sucesso, porque publicar != entregar.\nresource \"aws_sqs_queue_policy\" \"permite_sns\" {\n  for_each  = local.consumidores\n  queue_url = aws_sqs_queue.fila[each.key].id\n\n  policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect    = \"Allow\"\n      Principal = { Service = \"sns.amazonaws.com\" }\n      Action    = \"sqs:SendMessage\"\n      Resource  = aws_sqs_queue.fila[each.key].arn\n      Condition = {\n        # Sem isto, QUALQUER topico SNS de QUALQUER conta poderia escrever\n        # nesta fila: o principal \"sns.amazonaws.com\" sozinho nao distingue\n        # topicos. O ArnEquals com o SourceArn e' a fronteira real.\n        ArnEquals = { \"aws:SourceArn\" = aws_sns_topic.pedido_criado.arn }\n      }\n    }]\n  })\n}\n\n# DLQ de ENTREGA — da ASSINATURA, nao da fila. So recebe mensagem se o SNS\n# nao conseguir ENTREGAR a fila (ex.: politica revogada, fila apagada). E' um\n# erro de lado de fora; a DLQ da fila acima e' erro de lado de dentro.\nresource \"aws_sqs_queue\" \"dlq_entrega\" {\n  name                       = \"${var.projeto}-fanout-entrega-dlq\"\n  message_retention_seconds  = 1209600\n}\n\nresource \"aws_sns_topic_subscription\" \"assinatura\" {\n  for_each  = local.consumidores\n  topic_arn = aws_sns_topic.pedido_criado.arn\n  protocol  = \"sqs\"\n  endpoint  = aws_sqs_queue.fila[each.key].arn\n\n  # Sem isto, o corpo da mensagem SQS vira o envelope do SNS (Type, MessageId,\n  # TopicArn, Message, Timestamp, assinatura de verificacao...) e o consumidor\n  # precisaria desserializar duas vezes. Com RawMessageDelivery, o corpo da\n  # mensagem SQS E' o JSON publicado, e os atributos do Publish viram\n  # atributos de mensagem do SQS diretamente.\n  raw_message_delivery = true\n\n  filter_policy       = each.value.filtro\n  filter_policy_scope = \"MessageAttributes\" # e' o padrao; explicito porque a alternativa (MessageBody) exige corpo bem-formado\n\n  redrive_policy = jsonencode({\n    deadLetterTargetArn = aws_sqs_queue.dlq_entrega.arn\n  })\n\n  depends_on = [aws_sqs_queue_policy.permite_sns]\n}\n\noutput \"topico_pedido_criado\" {\n  value       = aws_sns_topic.pedido_criado.arn\n  description = \"unico ponto de publicacao; a lista de quem recebe mora nas assinaturas, nao aqui\"\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A política de fila é o passo que mais gente esquece",
+            "content": "Sem `aws_sqs_queue_policy`, a assinatura fica \"confirmed\" no console — parece correta — e mesmo assim nenhuma mensagem chega. O `Principal: sns.amazonaws.com` sozinho não basta: sem a condição `SourceArn`, ou a política não existe, a fila recusa a escrita e a mensagem vai para a DLQ de ENTREGA, não para a fila. É o defeito mais silencioso deste laboratório."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o papel de cada consumidor, e nada além disso"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um papel IAM por consumidor, não um papel compartilhado. A fila de e-mail e a de analytics não têm nada em comum do ponto de vista de permissão, e dar ao consumidor de e-mail acesso à fila de estoque só porque \"é mais rápido de configurar\" reintroduz acoplamento pela porta dos fundos."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "consumo.tf",
+            "code": "# consumo.tf — cada consumidor le so a fila dele, e nada alem disso\n\ndata \"aws_iam_policy_document\" \"publicar_evento\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"sns:Publish\"]\n    resources = [aws_sns_topic.pedido_criado.arn] # so este topico; a task nunca fala com SQS direto\n  }\n}\n\nresource \"aws_iam_role_policy\" \"checkout_publica\" {\n  role   = aws_iam_role.task.id # o mesmo papel de aplicacao do L01/L22 — nao o de execucao\n  policy = data.aws_iam_policy_document.publicar_evento.json\n}\n\n# Um papel POR consumidor. O de email nao consegue ler a fila de estoque, e\n# vice-versa — isolamento que a arquitetura de filas separadas so entrega se\n# o IAM acompanhar.\ndata \"aws_iam_policy_document\" \"consumir_fila\" {\n  for_each = local.consumidores\n  statement {\n    effect = \"Allow\"\n    actions = [\n      \"sqs:ReceiveMessage\",\n      \"sqs:DeleteMessage\",\n      \"sqs:GetQueueAttributes\",\n    ]\n    resources = [aws_sqs_queue.fila[each.key].arn]\n  }\n}\n\nresource \"aws_iam_role\" \"consumidor\" {\n  for_each           = local.consumidores\n  name               = \"${var.projeto}-${each.key}-consumidor\"\n  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json\n}\n\nresource \"aws_iam_role_policy\" \"consumidor_le_fila\" {\n  for_each = local.consumidores\n  role     = aws_iam_role.consumidor[each.key].id\n  policy   = data.aws_iam_policy_document.consumir_fila[each.key].json\n}\n\nresource \"aws_lambda_function\" \"consumidor\" {\n  for_each      = local.consumidores\n  function_name = \"${var.projeto}-${each.key}\"\n  role          = aws_iam_role.consumidor[each.key].arn\n  handler       = \"Consumidor::Consumidor.Funcao::Executar\"\n  runtime       = \"dotnet8\"\n  filename      = \"build/${each.key}.zip\"\n  timeout       = 30\n}\n\nresource \"aws_lambda_event_source_mapping\" \"consumo\" {\n  for_each                 = local.consumidores\n  event_source_arn         = aws_sqs_queue.fila[each.key].arn\n  function_name            = aws_lambda_function.consumidor[each.key].arn\n  batch_size                = 10\n  function_response_types  = [\"ReportBatchItemFailures\"] # falha de UM item do lote nao reprocessa o lote inteiro\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "`ReportBatchItemFailures` evita reprocessar o lote inteiro",
+            "content": "Sem essa opção no `event_source_mapping`, uma falha em UMA mensagem de um lote de 10 faz o SQS reentregar as 10 depois do `visibility timeout` — inclusive as 9 que já tinham sido processadas com sucesso. Com ela, o consumidor informa QUAIS itens do lote falharam, e só esses voltam à fila."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o produtor publica uma vez"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A mudança real, do lado do checkout, é pequena em linhas e grande em consequência: sai a lista de filas, entra um único destino. O método deixa de crescer a cada consumidor novo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "PedidosController.cs",
+            "code": "// PedidosController.cs — trecho: publica UMA vez, nao sabe quem esta ouvindo\n\n[HttpPost]\npublic async Task<IActionResult> Criar(CriarPedidoRequest req)\n{\n    var pedido = await _pedidos.CriarAsync(req); // grava no Postgres, mesma transacao de negocio\n\n    // Ate a semana passada, este metodo tinha DUAS chamadas SendMessageAsync\n    // explicitas — uma por fila. Agora ele nao sabe, e nao precisa saber,\n    // quantos sistemas se interessam pelo pedido criado.\n    var evento = new\n    {\n        pedidoId = pedido.Id,\n        lojaId = pedido.LojaId,\n        valorTotal = pedido.ValorTotal,\n        itens = pedido.Itens.Select(i => new { sku = i.Sku, quantidade = i.Quantidade }),\n        criadoEm = pedido.CriadoEm\n    };\n\n    await _sns.PublishAsync(new PublishRequest\n    {\n        TopicArn = _config[\"Sns:TopicoPedidoCriado\"],\n        Message = JsonSerializer.Serialize(evento),\n        MessageAttributes = new Dictionary<string, MessageAttributeValue>\n        {\n            [\"tipoEvento\"] = new() { DataType = \"String\", StringValue = \"pedido.criado\" },\n            // \"origem\" e' o atributo que a assinatura da fila de email filtra.\n            // Uma reexecucao em lote usa \"reprocessamento-interno\" e nao gera\n            // e-mail duplicado para quem ja recebeu o primeiro.\n            [\"origem\"] = new()\n            {\n                DataType = \"String\",\n                StringValue = req.OrigemInterna ? \"reprocessamento-interno\" : \"checkout-cliente\"\n            }\n        }\n    });\n\n    // Se o Publish falhar (rede, throttling), a exceção propaga daqui — e e'\n    // a UNICA chamada externa no caminho critico. No desenho anterior, eram\n    // duas, e uma terceira estava para chegar.\n    return Ok(pedido);\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O atributo \"origem\" é contrato, não detalhe de implementação",
+            "content": "Se alguém publicar um evento sem o atributo `origem`, ou com um valor fora dos três combinados, o filtro da assinatura de e-mail — que usa `anything-but` — deixa a mensagem PASSAR, porque um atributo ausente não corresponde a nenhum valor da lista de exclusão. É a razão para tratar `origem` como parte do contrato do evento, com o valor sempre explícito no código, nunca opcional."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: o consumidor de e-mail, e a idempotência herdada do L22"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Nenhuma novidade na tática de idempotência — é o mesmo `PutItem` condicional do consumidor de estoque, só que numa tabela separada. O que muda é a origem da mensagem: antes vinha de uma fila que só o checkout escrevia; agora vem de uma fila que o SNS escreve, com o mesmo corpo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "FuncaoEmailConfirmacao.cs",
+            "code": "// FuncaoEmailConfirmacao.cs — a mensagem pode chegar mais de uma vez (SNS e\n// SQS entregam \"pelo menos uma vez\"); a idempotencia e' a mesma tatica do L22.\n\npublic async Task FunctionHandler(SQSEvent evento, ILambdaContext contexto)\n{\n    foreach (var msg in evento.Records)\n    {\n        // O corpo JA' e' o JSON puro do pedido: RawMessageDelivery=true tirou\n        // o envelope do SNS. Sem isso, este Deserialize leria {Type, MessageId,\n        // TopicArn, Message: \"...\"} em vez do pedido.\n        var pedido = JsonSerializer.Deserialize<PedidoCriado>(msg.Body)!;\n\n        try\n        {\n            // A trava de idempotencia: so um PutItem por pedidoId vence. E' o\n            // MESMO padrao do consumidor de estoque do L22 — reaproveitado,\n            // nao reinventado.\n            await _dynamo.PutItemAsync(new PutItemRequest\n            {\n                TableName = \"idempotencia-email\",\n                Item = new Dictionary<string, AttributeValue>\n                {\n                    [\"pedidoId\"] = new AttributeValue { S = pedido.PedidoId },\n                    [\"expiraEm\"] = new AttributeValue\n                    {\n                        N = DateTimeOffset.UtcNow.AddDays(7).ToUnixTimeSeconds().ToString()\n                    },\n                },\n                ConditionExpression = \"attribute_not_exists(pedidoId)\",\n            });\n        }\n        catch (ConditionalCheckFailedException)\n        {\n            // Segunda entrega do mesmo pedidoId: ja processamos, nao reenvia\n            // e-mail. Nao e' erro — e' o comportamento esperado de \"pelo\n            // menos uma vez\".\n            continue;\n        }\n\n        await _ses.SendEmailAsync(MontarEmailConfirmacao(pedido));\n    }\n}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar que o terceiro consumidor não tocou o produtor"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. A terceira é a que sustenta o núcleo deste laboratório, e nenhuma delas aceita \"chegou, acho\" como resultado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medicoes; nenhuma conclusao vem de \"parece que chegou\"\n\nPROJETO=ffv-lab; REGIAO=us-east-1\nTOPICO=$(terraform output -raw topico_pedido_criado)\n\n# ── Prova 1: um Publish, tres filas recebem cada uma sua copia ───────────────\naws sns publish --topic-arn \"$TOPICO\" --region \"$REGIAO\" \\\n  --message '{\"pedidoId\":\"prova-001\",\"lojaId\":17,\"valorTotal\":99.9,\"itens\":[],\"criadoEm\":\"2026-08-07T15:00:00Z\"}' \\\n  --message-attributes '{\"tipoEvento\":{\"DataType\":\"String\",\"StringValue\":\"pedido.criado\"},\"origem\":{\"DataType\":\"String\",\"StringValue\":\"checkout-cliente\"}}'\n\nfor f in estoque email analytics; do\n  n=$(aws sqs get-queue-attributes \\\n        --queue-url \"$(terraform output -json filas | jq -r .$f)\" \\\n        --attribute-names ApproximateNumberOfMessages \\\n        --query 'Attributes.ApproximateNumberOfMessages' --output text)\n  echo \"fila $f: $n mensagem(ns)\"\ndone\n# Esperado: as tres filas mostram pelo menos 1. Na medicao de referencia deste\n# modulo, as tres chegaram em menos de 2 s do Publish.\n\n# ── Prova 2: o filtro funciona — reprocessamento NAO gera e-mail ─────────────\naws sns publish --topic-arn \"$TOPICO\" --region \"$REGIAO\" \\\n  --message '{\"pedidoId\":\"prova-002\",\"lojaId\":17,\"valorTotal\":10,\"itens\":[],\"criadoEm\":\"2026-08-07T15:01:00Z\"}' \\\n  --message-attributes '{\"tipoEvento\":{\"DataType\":\"String\",\"StringValue\":\"pedido.criado\"},\"origem\":{\"DataType\":\"String\",\"StringValue\":\"reprocessamento-interno\"}}'\nsleep 3\naws sqs get-queue-attributes \\\n  --queue-url \"$(terraform output -json filas | jq -r .email)\" \\\n  --attribute-names ApproximateNumberOfMessages --query 'Attributes.ApproximateNumberOfMessages'\n# Esperado: 0 mensagens NOVAS na fila de email (a da prova 1 ja deve ter sido\n# consumida). Estoque e analytics, ao contrario, recebem esta tambem.\n\n# ── Prova 3: o terceiro consumidor nao tocou o produtor ──────────────────────\ngit diff --stat origin/main -- src/Cadencia.Checkout/\n# Esperado: zero linhas no diretorio do servico de checkout. A fila e a\n# Lambda de analytics aparecem so no diff do Terraform.\n\n# ── Prova 4: durabilidade — consumidor fora do ar nao perde mensagem ─────────\naws lambda put-function-concurrency \\\n  --function-name \"${PROJETO}-estoque\" --reserved-concurrent-executions 0\naws sns publish --topic-arn \"$TOPICO\" --region \"$REGIAO\" \\\n  --message '{\"pedidoId\":\"prova-004\",\"lojaId\":17,\"valorTotal\":10,\"itens\":[],\"criadoEm\":\"2026-08-07T15:02:00Z\"}' \\\n  --message-attributes '{\"tipoEvento\":{\"DataType\":\"String\",\"StringValue\":\"pedido.criado\"},\"origem\":{\"DataType\":\"String\",\"StringValue\":\"checkout-cliente\"}}'\nsleep 5\naws sqs get-queue-attributes \\\n  --queue-url \"$(terraform output -json filas | jq -r .estoque)\" \\\n  --attribute-names ApproximateNumberOfMessagesNotVisible,ApproximateAgeOfOldestMessage\naws lambda delete-function-concurrency --function-name \"${PROJETO}-estoque\"\n# Esperado: a mensagem fica RETIDA na fila (idade > 0, visivel apos o\n# visibility timeout) em vez de se perder. E' a diferenca central em relacao\n# a assinar a Lambda direto no topico.\n\n# ── Prova 5: mensagem malformada cai na DLQ de PROCESSAMENTO, nao na de entrega\naws sqs send-message \\\n  --queue-url \"$(terraform output -json filas | jq -r .email)\" \\\n  --message-body '{\"pedidoId\":\"prova-005-sem-campos-esperados\"}'\nsleep 2\naws sqs get-queue-attributes \\\n  --queue-url \"$(terraform output -raw fila_email_dlq)\" \\\n  --attribute-names ApproximateNumberOfMessages\n# Esperado: 1 mensagem na DLQ da FILA apos 5 tentativas (redrive_policy da\n# fila) — nao na DLQ da assinatura, que so trata falha de ENTREGA do SNS.\n"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Uma publicação, três cópias",
+                "`sns publish` + `get-queue-attributes` × 3",
+                "as três filas mostram ao menos 1 mensagem",
+                "fila com 0 e sem política de acesso: falha de entrega, veja a DLQ de assinatura"
+              ],
+              [
+                "2 · O filtro descarta o que não interessa",
+                "publicar com `origem=reprocessamento-interno`",
+                "fila de e-mail não ganha mensagem nova; estoque e analytics ganham",
+                "se a de e-mail também recebeu, o `filter_policy_scope` ou o valor do atributo está errado"
+              ],
+              [
+                "3 · O produtor não mudou",
+                "`git diff --stat` no diretório do checkout",
+                "zero linhas alteradas",
+                "qualquer linha aqui é sinal de que o consumidor novo ainda está acoplado ao produtor"
+              ],
+              [
+                "4 · A fila retém, não perde",
+                "zerar concorrência da Lambda e publicar",
+                "a mensagem fica visível como retida na fila, com idade > 0",
+                "mensagem ausente da fila indicaria assinatura direta sem buffer — não é este desenho"
+              ],
+              [
+                "5 · A DLQ certa recebe a mensagem errada",
+                "mensagem malformada direto na fila",
+                "aparece na DLQ da FILA após 5 tentativas, não na DLQ de entrega",
+                "se caiu na de entrega, o problema está sendo classificado no lado errado do fanout"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três produzem o mesmo sintoma superficial — \"a fila não recebeu o que eu esperava\" — e cada uma exige olhar num lugar diferente do desenho."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Política de fila ausente",
+                "remova (ou nunca aplique) `aws_sqs_queue_policy` numa das filas",
+                "Publish retorna sucesso; a fila fica em 0 mensagens para sempre",
+                "DLQ de entrega (`dlq_entrega`) acumulando; `NumberOfNotificationsFailed` do tópico",
+                "aplicar a `queue_policy` com `Principal sns.amazonaws.com` e `Condition SourceArn`"
+              ],
+              [
+                "Escopo de filtro trocado",
+                "publique com o atributo em `MessageAttributes`, mas deixe `filter_policy_scope = \"MessageBody\"`",
+                "fila de e-mail permanece vazia mesmo com pedidos de cliente real chegando",
+                "`NumberOfNotificationsFilteredOut` do tópico subindo junto com publicações legítimas",
+                "usar `MessageAttributes` (o padrão) ou mover o filtro para dentro do corpo JSON, coerentemente"
+              ],
+              [
+                "RawMessageDelivery esquecido",
+                "crie a assinatura sem `raw_message_delivery = true`",
+                "consumidor lança exceção de desserialização, ou lê campos nulos do pedido",
+                "corpo cru da mensagem na fila: começa com `{\"Type\":\"Notification\"...}` em vez do pedido",
+                "ligar `raw_message_delivery` na assinatura — não compensar com parsing no consumidor"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A falha que parece \"SNS não está entregando\" e não é",
+            "content": "Publish com sucesso e fila vazia é quase sempre política de acesso ausente, não defeito do SNS. Investigar o tópico primeiro custa tempo: a causa mora do lado da FILA, na política que autoriza — ou não — a escrita. A DLQ de entrega existe para transformar essa suspeita em fato observável em vez de em teoria."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Depois de migrar o checkout da Cadência para publicar num tópico SNS com fanout, o time de dados pede um quarto consumidor. Por que essa mudança não exige tocar no código do serviço de checkout?",
+        "options": [
+          "Porque o SNS reescreve automaticamente o código do produtor quando uma assinatura nova é criada",
+          "Porque a lista de quem recebe o evento mora nas assinaturas do tópico, e não no código do produtor",
+          "Porque o consumidor de analytics não precisa de nenhuma infraestrutura nova para funcionar",
+          "Porque o SQS mantém um histórico de mensagens antigas e reenvia retroativamente para assinantes novos"
+        ],
+        "correctIndex": 1,
+        "explanation": "A resposta certa é estrutural: o produtor publica um evento genérico no tópico, sem referenciar nenhuma fila, e cada assinatura declara — do lado de fora do código do produtor — que quer receber aquele evento. Adicionar consumidor passa a ser uma operação de infraestrutura (`aws_sns_topic_subscription` nova), não de aplicação.\n\nA primeira alternativa é absurda por construção: nenhum serviço da AWS altera código de aplicação sozinho, e atribuir isso ao SNS confundiria automação de infraestrutura com reescrita de software. A terceira inverte a lógica do próprio requisito: o consumidor de analytics PRECISA, sim, de infraestrutura nova — uma fila, uma função e uma assinatura — a diferença é que essa infraestrutura nova fica do lado do consumidor, não do produtor. A quarta descreve um comportamento que o SQS não tem: uma assinatura nova recebe apenas mensagens publicadas A PARTIR do momento em que ela existe — não há redistribuição retroativa de mensagens que já passaram pelo tópico antes da assinatura ser criada."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: quem pode publicar, e quem pode escrever em cada fila"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Fanout multiplica pontos de confiança: agora existem um produtor, um tópico e N filas, e cada elo precisa da permissão mínima para o papel que exerce ali."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Fila aceita mensagem de tópico de outra conta ou de outro tópico",
+                "baixa",
+                "alto",
+                "`Condition: SourceArn` na política da fila, nunca `Principal: \"*\"`",
+                "CloudTrail em `SendMessage` com `sourceArn` inesperado",
+                "corrigir a política; auditar mensagens recebidas na janela do incidente"
+              ],
+              [
+                "Papel do checkout com permissão além de `sns:Publish` no tópico",
+                "média",
+                "médio",
+                "política restrita ao ARN do tópico; nunca `sns:*` nem recurso `*`",
+                "IAM Access Analyzer sobre uso real do papel",
+                "derivar a política do uso medido — é o L41"
+              ],
+              [
+                "Consumidor de e-mail com acesso à fila de estoque",
+                "média",
+                "médio",
+                "um papel IAM por consumidor, restrito à própria fila",
+                "revisão do `for_each` de papéis: um por chave do mapa",
+                "separar os papéis; nunca compartilhar por conveniência de deploy"
+              ],
+              [
+                "Filtro mal escrito expõe evento de reprocessamento a e-mail do cliente",
+                "média",
+                "baixo",
+                "teste automatizado que publica os três valores de `origem` e confere a fila de e-mail",
+                "auditoria manual de e-mails enviados vs. `origem` do pedido correspondente",
+                "corrigir o `filter_policy`; a prova 2 desta seção existe para pegar isso antes de produção"
+              ],
+              [
+                "Dado sensível no payload do evento (se um dia o pedido carregar CPF)",
+                "baixa",
+                "alto",
+                "este módulo não trata mascaramento — declare a hipótese e revise antes de adicionar campo sensível",
+                "revisão de payload em toda mudança de contrato de evento",
+                "mascarar ou tokenizar antes de publicar; nunca depois, quando já está em três filas"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que a `Condition` na política da fila não é opcional",
+            "content": "`Principal: sns.amazonaws.com` sozinho autoriza QUALQUER tópico SNS de QUALQUER conta que descubra o ARN da fila. A condição `aws:SourceArn` restringe a autorização a este tópico específico. É a diferença entre \"qualquer SNS pode escrever aqui\" e \"só este tópico pode\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel do fanout tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um painel de fanout tem uma função que o de uma fila única não tem: dizer se o problema está na ENTREGA (tópico → fila) ou no PROCESSAMENTO (fila → consumidor), porque as correções são completamente diferentes."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "O tópico está falhando em entregar a algum assinante?",
+                "`NumberOfNotificationsFailed` (SNS)",
+                "política de fila, assinatura removida ou fila apagada",
+                "> 0 em qualquer período"
+              ],
+              [
+                "O filtro está descartando mais do que deveria?",
+                "`NumberOfNotificationsFilteredOut` (SNS)",
+                "atributo ausente no Publish, ou regra de filtro incoerente com o contrato",
+                "crescimento súbito face ao volume normal"
+              ],
+              [
+                "Alguma fila está acumulando sem ser consumida?",
+                "`ApproximateNumberOfMessagesVisible` por fila",
+                "consumidor lento, parado, ou com concorrência reduzida",
+                "depende do throughput normal de cada fila"
+              ],
+              [
+                "A mensagem mais antiga está envelhecendo?",
+                "`ApproximateAgeOfOldestMessage` por fila",
+                "sinal de consumidor que parou de avançar, não só de pico",
+                "> 5 min para filas de latência baixa esperada"
+              ],
+              [
+                "Chegou mensagem na DLQ de entrega?",
+                "`ApproximateNumberOfMessagesVisible` da `dlq_entrega`",
+                "falha do lado de FORA da fila — política, assinatura, permissão",
+                "> 0 sempre é investigável"
+              ],
+              [
+                "Chegou mensagem na DLQ de uma fila específica?",
+                "`ApproximateNumberOfMessagesVisible` de cada `*-dlq`",
+                "falha de PROCESSAMENTO daquele consumidor específico, isolada dos outros dois",
+                "> 0 sempre é investigável"
+              ],
+              [
+                "O consumidor de e-mail está sendo invocado no ritmo esperado?",
+                "Lambda `Invocations`, `Errors`, `Throttles`",
+                "throttling por concorrência reservada baixa, ou erro sistemático no handler",
+                "Errors > 1% das invocações"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que confunde entrega com processamento",
+            "content": "`ApproximateNumberOfMessagesVisible` alto numa fila pode significar duas coisas opostas: o consumidor está devagar (processamento) ou a fila nunca devia estar recebendo tanto assim (filtro mal ajustado, entrega indevida). Cruzar com `NumberOfNotificationsFilteredOut` do tópico — que deveria estar ALTO quando o filtro funciona — separa as duas histórias."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão de eventos por dia"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece com o fanout",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 pedidos/dia, 3 assinantes",
+                "30 entregas totais; nada relevante",
+                "nada; é o cenário do laboratório",
+                "nada"
+              ],
+              [
+                "9 mil pedidos/dia (Cadência hoje), 3 assinantes",
+                "27 mil entregas/dia",
+                "ainda desprezível para SNS e SQS; o Lambda de menor concorrência pode formar fila",
+                "ajustar concorrência reservada do consumidor mais lento, não do tópico"
+              ],
+              [
+                "1 milhão de eventos/dia, 3 assinantes",
+                "3 milhões de entregas/dia",
+                "cada consumidor novo MULTIPLICA a carga a partir do mesmo Publish — o 4º consumidor não soma, ele adiciona 1 milhão de invocações a mais para SI, não para os outros",
+                "dimensionar concorrência de Lambda por consumidor; considerar lote maior no event source mapping"
+              ],
+              [
+                "Um consumidor específico fica lento",
+                "só a fila dele cresce",
+                "no desenho mínimo isso poderia atrasar ou falhar o checkout; aqui, isolado",
+                "é o comportamento esperado — alarme na fila daquele consumidor, sem tocar nos outros"
+              ],
+              [
+                "Pico de 10× em cima do fanout",
+                "SNS e SQS absorvem sem configuração extra",
+                "o gargalo desloca para a concorrência de Lambda de cada consumidor",
+                "reservar concorrência mínima para o consumidor mais crítico (estoque)"
+              ],
+              [
+                "Um quarto tipo de evento aparece (não mais um consumidor, um TIPO)",
+                "o filtro por atributo começa a acumular regras",
+                "manutenção do `filter_policy` fica difícil de auditar com muitas condições",
+                "é o sinal de migrar para EventBridge (L24), que tem regras dedicadas por tipo de evento"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O número que ninguém olha, e que é o que realmente cresce com fanout",
+            "content": "O `Publish` no produtor não muda de custo com o número de consumidores. Quem cresce é a contagem de ENTREGAS do SNS — uma por assinatura que casa com o filtro. Um quarto consumidor não pesa nada a mais no checkout; pesa exatamente 1 entrega extra por evento publicado, do lado do tópico para fora."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "SNS e SQS cobram por uso, não por hora ligada — não existe recurso ocioso aqui como NAT Gateway. A dimensão que surpreende não é o preço unitário, é a multiplicação: cada consumidor a mais multiplica entregas, não soma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "10 pedidos/dia, 3 assinantes",
+                "algumas dezenas de publicações e entregas por dia",
+                "desprezível",
+                "nenhuma; otimizar aqui é gastar atenção onde não há dinheiro"
+              ],
+              [
+                "Produção pequena (Cadência hoje)",
+                "9 mil pedidos/dia, 3 assinantes",
+                "9 mil publicações e cerca de 27 mil entregas por dia",
+                "baixa e previsível",
+                "nenhuma ação necessária até crescer uma ordem de grandeza"
+              ],
+              [
+                "Alta escala",
+                "1 milhão de pedidos/dia, 5 assinantes",
+                "1 milhão de publicações e 5 milhões de entregas por dia",
+                "a linha de SNS passa a aparecer na fatura, dominada por entregas, não por publicações",
+                "filtro mais estrito reduz entregas que o consumidor descartaria de qualquer forma"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "SNS — publicação",
+                "requisição de `Publish`",
+                "uma por pedido criado, independente do número de assinantes"
+              ],
+              [
+                "SNS — entrega",
+                "notificação entregue a cada assinatura",
+                "multiplica pelo número de assinaturas que casam com o filtro"
+              ],
+              [
+                "SQS — requisição",
+                "lote de até 10 mensagens por chamada",
+                "consumo em lote (`batch_size`) reduz o número de requisições cobradas"
+              ],
+              [
+                "Lambda — invocação e duração",
+                "por invocação e por GB-segundo",
+                "cresce junto com a fila que o alimenta, isolado por consumidor"
+              ],
+              [
+                "CloudWatch Logs",
+                "GB ingerido e retido",
+                "três consumidores geram três grupos de log; retenção curta em teste"
+              ],
+              [
+                "DLQ (4 filas adicionais)",
+                "requisição de leitura/escrita, quase sempre vazias",
+                "custo desprezível se o sistema está saudável — presença de custo aqui é sinal de problema, não de uso normal"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "Onde o filtro de mensagem também é otimização de custo",
+            "content": "A fila de e-mail poderia receber tudo e descartar reprocessamento DENTRO do consumidor — funcionaria, mas cada mensagem descartada ainda teria sido entregue (cobrada) e invocado uma Lambda (cobrada) para nada. O filtro na assinatura corta isso na origem: mensagem que não casa nunca chega a virar entrega nem invocação."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "consumidor novo é mudança de infraestrutura, não de aplicação",
+                "ainda não há contrato de schema versionado para o evento publicado",
+                "schema registry e versionamento do evento (L24)",
+                "média"
+              ],
+              [
+                "Segurança",
+                "política de fila restrita por `SourceArn`; papel IAM por consumidor",
+                "payload em texto claro por três filas; sem mascaramento se surgir dado sensível",
+                "revisar contrato do evento antes de adicionar campo pessoal",
+                "alta"
+              ],
+              [
+                "Confiabilidade",
+                "fila com DLQ própria por consumidor; DLQ de entrega separada",
+                "tópico standard não garante ordem entre eventos do mesmo pedido",
+                "tópico FIFO com deduplicação, se a ordem passar a importar",
+                "média"
+              ],
+              [
+                "Eficiência de performance",
+                "processamento em lote com falha parcial de item isolada",
+                "concorrência de Lambda ainda não dimensionada por criticidade do consumidor",
+                "concorrência reservada mínima para o consumidor de estoque",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "filtro reduz entrega e invocação desnecessárias",
+                "nenhum hoje, dado o volume atual",
+                "revisar quando o número de assinantes ultrapassar cinco",
+                "baixa"
+              ],
+              [
+                "Sustentabilidade",
+                "nenhum recurso ocioso cobrando por hora — tudo aqui é sob demanda",
+                "nenhum identificado",
+                "nenhuma ação necessária",
+                "baixa"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "O pilar que este laboratório resolve melhor do que os outros",
+            "content": "Confiabilidade é onde o fanout entrega o ganho mais concreto: a falha de um consumidor específico deixou de ser capaz de afetar os outros dois, e cada um tem sua própria DLQ para isolar o diagnóstico. Segurança e excelência operacional ainda têm dívida real — mascaramento de dado sensível e contrato de schema — e nenhuma das duas foi resolvida por acidente só porque o fanout existe."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do produtor acoplado ao barramento de eventos com dados e IA — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Produtor chama cada fila diretamente, uma `SendMessageAsync` por consumidor. É onde a Cadência estava, e continua legítimo com um ou dois consumidores fixos.",
+                "note": "Risco resolvido: nenhum. Novo risco: acoplamento cresce com cada consumidor, e o raio de explosão do checkout cresce junto. Custo: o mais baixo — sem tópico nem entrega multiplicada."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "SNS fanout para N filas SQS, cada uma com DLQ de processamento; filtro de mensagem por assinatura; DLQ de entrega no nível do tópico.",
+                "note": "Risco resolvido: acoplamento do produtor e perda silenciosa por indisponibilidade momentânea de um consumidor. Novo risco: tópico standard não garante ordem nem exclui duplicata entre filas diferentes. Custo: publicação única mais entrega multiplicada por assinante."
+              },
+              {
+                "label": "Nível 3 — Múltiplos tipos de evento (L24)",
+                "instruction": "EventBridge substitui o tópico quando aparecem outros tipos de evento além de \"pedido criado\" — pagamento aprovado, pedido cancelado — cada um com regras de roteamento próprias.",
+                "note": "Risco resolvido: filtro por atributo de um único tipo não escala para dezenas de tipos e regras de conteúdo. Novo risco: o barramento vira ponto único de governança — quem pode publicar o quê exige contrato. Custo: por evento publicado e por regra correspondida, comparável ao SNS."
+              },
+              {
+                "label": "Nível 4 — Contrato de evento versionado",
+                "instruction": "Schema registry e versionamento semântico do evento (`pedido.criado.v1`, `v2`), para consumidores evoluírem em ritmos diferentes sem quebrar uns aos outros.",
+                "note": "Risco resolvido: mudar um campo do payload quebra um consumidor que não esperava a mudança. Novo risco: disciplina de contrato tem custo de processo — revisão e depreciação levam tempo de time. Custo: baixo; é processo mais que infraestrutura."
+              },
+              {
+                "label": "Nível 5 — Replay e auditoria completa",
+                "instruction": "Arquivamento e replay de eventos (por exemplo, trilha em S3 a partir do barramento), para reconstruir o estado de um consumidor a partir de um ponto no tempo.",
+                "note": "Risco resolvido: consumidor fora do ar por mais tempo que a retenção da fila (14 dias) perde eventos para sempre. Novo risco: replay sem idempotência robusta duplica processamento em escala. Custo: armazenamento de longo prazo e processamento ocasional em lote."
+              },
+              {
+                "label": "Nível 6 — Dados e IA sobre o barramento",
+                "instruction": "A fila de analytics vira entrada de um pipeline quase em tempo real — ingestão para um data lake e, eventualmente, detecção de padrão anômalo de pedidos.",
+                "note": "Risco resolvido: decisão de negócio sem visibilidade dos eventos em tempo real. Novo risco: modelo treinado com pouco histórico gera alarme falso; exige período de calibração e revisão humana antes de agir sozinho. Custo: ingestão, armazenamento colunar e, eventualmente, treino e inferência."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "EventBridge no nível 3 sem o filtro de assinatura do nível 2 já dominado significa reconstruir, com regras mais complexas, exatamente o problema que o filtro simples já resolvia. Quem pula direto para o barramento de múltiplos tipos de evento sem nunca ter operado UM tipo com N assinantes chega lá sem saber diagnosticar entrega de processamento — a distinção que este laboratório existe para ensinar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Fanout é roteamento determinístico: um evento, um conjunto de assinaturas, um filtro declarativo por atributo. Nenhuma parte disso se beneficia de um modelo — decidir quem recebe o quê é exatamente o tipo de regra que um `filter_policy` resolve melhor do que qualquer classificador, porque é auditável, testável e não erra por probabilidade."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar, adiante na cadeia, onde IA acrescentaria valor real: a fila de analytics, no nível 6 da evolução acima, é o ponto de entrada natural para detecção de padrão anômalo em volume de pedidos — picos que fogem do esperado por loja, horário ou SKU. Isso está fora do escopo deste laboratório porque depende de histórico que a Cadência ainda não tem: a fila de analytics criada aqui é o que começa a gerar esse histórico, não o que já pode ser analisado por um modelo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria aqui?",
+                "nenhum, no fanout em si — é roteamento por regra, não por inferência"
+              ],
+              [
+                "Por que não usar IA para decidir o filtro de cada assinatura?",
+                "a regra de negócio (\"e-mail não pode duplicar em reprocessamento\") é conhecida e estável; um modelo trocaria uma decisão auditável por uma probabilística sem ganho nenhum"
+              ],
+              [
+                "Onde, então, IA teria lugar nesta cadeia?",
+                "na fila de analytics, depois que ela acumular histórico suficiente para detecção de anomalia ter base estatística"
+              ],
+              [
+                "Por que não agora?",
+                "a fila de analytics é criada NESTE laboratório; não existe histórico para treinar nem para avaliar um modelo ainda"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"decidir quais eventos cada consumidor deveria receber\" trocaria um filtro determinístico e testável por uma decisão que pode mudar sem aviso entre duas execuções. Roteamento de evento é o tipo de problema onde a regra simples não é uma versão inferior da solução com IA — é a solução certa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Lambda assinada direto no tópico, sem fila",
+                "menos peças, menos Terraform, parece mais simples",
+                "sem buffer nem DLQ de processamento granular; throttling de Lambda em pico não tem para onde acumular com a mesma visibilidade de uma fila",
+                "picos de tráfego \"perdem\" eventos sem rastro fácil de investigar",
+                "SQS entre o tópico e a Lambda, sempre",
+                "notificação best-effort onde perda é tolerável — um alerta informativo, não um evento de negócio"
+              ],
+              [
+                "Filtro dentro do código do consumidor, mantendo a assinatura sem filtro",
+                "parece \"mais fácil de entender lendo o C#\"",
+                "a fila recebe e paga por mensagem que vai ser descartada de qualquer forma; a decisão de quem recebe volta a ficar espalhada",
+                "custo de entrega e invocação sem efeito nenhum no comportamento final",
+                "filtro na assinatura, ao lado da definição de quem é aquele consumidor",
+                "nunca, para filtro simples por atributo — só quando a regra depende de dado que não existe no atributo"
+              ],
+              [
+                "`Principal: \"*\"` na política da fila SQS",
+                "copiado de um exemplo antigo que só queria \"fazer funcionar\"",
+                "qualquer tópico SNS de qualquer conta pode escrever na fila",
+                "mensagem inesperada aparecendo na fila, sem correspondência com nenhum Publish do seu tópico",
+                "`Principal: sns.amazonaws.com` com `Condition: aws:SourceArn` apontando para o tópico específico",
+                "nunca em produção"
+              ],
+              [
+                "Uma fila única compartilhada entre consumidores não relacionados",
+                "\"menos filas para gerenciar\" parece economia",
+                "`visibility timeout` tem de servir o consumidor mais lento; a DLQ mistura falha de dois domínios; escalar um consumidor arrasta o outro",
+                "fila lenta por causa de um handler que nada tem a ver com o outro",
+                "uma fila por consumidor, sempre — mesmo que pareçam pequenos hoje",
+                "nunca, exceto protótipo descartável de um dia"
+              ],
+              [
+                "Esquecer `RawMessageDelivery` e compensar com parsing manual do envelope no consumidor",
+                "descobriu o problema em produção e corrigiu no lado que estava mexendo",
+                "todo consumidor futuro reinventa o mesmo parsing, e ninguém documenta o porquê",
+                "cada Lambda tem uma função ligeiramente diferente de \"extrair mensagem do envelope SNS\"",
+                "`raw_message_delivery = true` na assinatura, resolvido uma vez para todos os consumidores",
+                "nunca — é sempre mais barato corrigir na assinatura"
+              ],
+              [
+                "Confiar só na DLQ da fila, sem DLQ de assinatura",
+                "a distinção entre entrega e processamento não parece relevante até faltar",
+                "falha de ENTREGA (política ausente, fila apagada) não deixa rastro nenhum — a mensagem simplesmente desaparece",
+                "\"o SNS não está entregando\" sem nenhuma evidência para investigar",
+                "DLQ de assinatura configurada desde o início, mesmo que fique vazia o tempo todo",
+                "nunca — o custo de tê-la é desprezível e vazia é o resultado esperado"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Nenhuma fila recebe nada, `Publish` retorna sucesso",
+                "falta a política de acesso (`queue_policy`) numa ou em todas as filas",
+                "confira a política de cada fila e compare o `SourceArn` exigido com o ARN real do tópico",
+                "`aws sqs get-queue-attributes --attribute-names Policy`; `dlq_entrega`",
+                "aplicar a política com `Principal sns.amazonaws.com` e `Condition SourceArn`"
+              ],
+              [
+                "Uma fila específica está sempre vazia, as outras recebem normalmente",
+                "filtro de assinatura não casa com o atributo publicado",
+                "compare os atributos do `Publish` com o `filter_policy` daquela assinatura, atributo por atributo",
+                "`NumberOfNotificationsFilteredOut` do tópico; `filter_policy_scope`",
+                "corrigir o atributo publicado ou a expressão do filtro"
+              ],
+              [
+                "Consumidor lança exceção de desserialização em toda mensagem",
+                "`RawMessageDelivery` desabilitado; o corpo é o envelope do SNS",
+                "leia o corpo cru de uma mensagem sem deletar (visibilidade zero) antes de processar",
+                "console SQS \"Send and receive messages\"; começa com `{\"Type\":\"Notification\"`",
+                "habilitar `raw_message_delivery = true` na assinatura"
+              ],
+              [
+                "Mensagens duplicadas processadas pelo consumidor de e-mail",
+                "entrega \"pelo menos uma vez\" é normal; falta idempotência no handler",
+                "confira se existe `PutItem` condicional (ou equivalente) antes de disparar o e-mail",
+                "log do consumidor: dois processamentos com o mesmo `pedidoId`",
+                "aplicar o padrão de idempotência do L22 — trava condicional por `pedidoId`"
+              ],
+              [
+                "Terceiro consumidor \"não recebe nada\" logo após criado",
+                "assinatura ainda em `PendingConfirmation`, ou `apply` não incluiu a política da fila nova",
+                "`aws sns list-subscriptions-by-topic` e confira o status de cada `SubscriptionArn`",
+                "coluna `SubscriptionArn`: deve ser um ARN completo, não a string `PendingConfirmation`",
+                "reaplicar o Terraform; assinatura SQS confirma automaticamente ao criar via `aws_sns_topic_subscription`"
+              ],
+              [
+                "Uma fila específica acumula e envelhece, as outras estão normais",
+                "o CONSUMIDOR daquela fila está lento ou parado — não é problema do fanout",
+                "`ApproximateAgeOfOldestMessage` daquela fila; `CloudWatch Logs` do Lambda correspondente",
+                "métricas do Lambda: `Throttles`, `Errors`, concorrência reservada",
+                "investigar o consumidor isoladamente — é exatamente o isolamento que a arquitetura entrega"
+              ],
+              [
+                "Mensagem aparece na DLQ de entrega em vez da DLQ da fila",
+                "falha do lado de FORA da fila: política revogada, fila apagada, permissão retirada",
+                "compare o horário da mensagem na DLQ de entrega com mudanças recentes de infraestrutura",
+                "`aws_sqs_queue_policy` e histórico de mudanças (CloudTrail em `SetQueueAttributes`)",
+                "restaurar a política ou a fila; redirecionar as mensagens presas manualmente"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em qualquer configuração, pergunte: a mensagem chegou a EXISTIR na fila, ou nunca chegou? Se a fila está em zero e a DLQ de entrega tem conteúdo, o problema é entre o tópico e a fila. Se a fila recebeu e o consumidor não avançou, o problema é entre a fila e o código. As duas metades do desenho falham de formas completamente diferentes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório cria só recursos sob demanda — nada cobra por hora ligada. Mesmo assim, dois pontos merecem conferência depois do `destroy`."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Derrube o que o Terraform administra.\nterraform destroy -auto-approve\n\n# 2. MENSAGENS PRESAS NAS DLQ: o destroy remove a fila, mas se voce quer\n#    investigar antes de perder o conteudo, drene primeiro.\nfor f in estoque email analytics fanout-entrega; do\n  aws sqs receive-message --queue-url \"$(aws sqs get-queue-url \\\n    --queue-name ffv-lab-${f}-dlq --query QueueUrl --output text 2>/dev/null)\" \\\n    --max-number-of-messages 10 2>/dev/null || true\ndone\n\n# 3. ASSINATURAS: normalmente saem com o destroy, mas se a fila foi apagada\n#    manualmente ANTES do topico, a assinatura pode ficar orfa (\"confirmed\"\n#    apontando para um ARN que nao existe mais). Confira.\naws sns list-subscriptions-by-topic --topic-arn \"$(terraform output -raw topico_pedido_criado 2>/dev/null)\" 2>/dev/null || \\\n  echo \"topico ja removido — confira subscricoes orfas manualmente no console\"\n\n# 4. GRUPOS DE LOGS de cada Lambda: retencao propria, nao pertencem ao ciclo\n#    da funcao.\nfor f in estoque email analytics; do\n  aws logs delete-log-group --log-group-name \"/aws/lambda/ffv-lab-${f}\" 2>/dev/null || true\ndone\n\n# 5. Prova final: nada com nome do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Tópico SNS",
+                "sim",
+                "não",
+                "sem uso, não gera custo residual"
+              ],
+              [
+                "Filas SQS (3) e DLQ de processamento (3)",
+                "sim",
+                "não sem mensagem",
+                "custo é só por requisição; fila vazia não cobra"
+              ],
+              [
+                "DLQ de entrega",
+                "sim",
+                "não sem mensagem",
+                "idem — o risco é esquecer de investigar o que ficou dentro"
+              ],
+              [
+                "Funções Lambda (3)",
+                "sim",
+                "não",
+                "sem invocação, sem cobrança"
+              ],
+              [
+                "Grupos de log do Lambda",
+                "depende de `skip_destroy`",
+                "sim, retenção",
+                "ciclo próprio; pode sobreviver à função que o alimentava"
+              ],
+              [
+                "Assinaturas SNS",
+                "sim, junto com o tópico ou a fila",
+                "não",
+                "órfã só se um dos dois lados foi apagado fora de ordem"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Produtor precisa saber quem está ouvindo",
+                "tópico SNS único",
+                "a lista de destinos sai do código e vira assinatura"
+              ],
+              [
+                "Consumidor novo exige deploy do produtor",
+                "assinatura nova via Terraform",
+                "entrar num mapa `for_each` não é o mesmo que editar o método de checkout"
+              ],
+              [
+                "E-mail duplicado em reprocessamento",
+                "filtro de mensagem na assinatura",
+                "a fila nunca vê o que não lhe interessa; a decisão é declarativa e auditável"
+              ],
+              [
+                "Consumidor fora do ar perderia mensagem",
+                "fila SQS entre o tópico e a Lambda",
+                "durabilidade e visibilidade que uma assinatura direta de Lambda não oferece"
+              ],
+              [
+                "\"Publiquei com sucesso\" não significa \"entreguei\"",
+                "DLQ de assinatura, separada da DLQ da fila",
+                "as duas causas de falha pedem investigação e correção diferentes"
+              ],
+              [
+                "Corpo da mensagem embrulhado no envelope do SNS",
+                "`RawMessageDelivery = true`",
+                "o consumidor lê o JSON publicado direto, sem tradução repetida em cada handler"
+              ],
+              [
+                "Fila apagada ou política revogada por outro time",
+                "política de acesso com `SourceArn`",
+                "só este tópico pode escrever nesta fila — fecha a porta que ficaria aberta com `Principal: \"*\"`"
+              ],
+              [
+                "Mensagem processada duas vezes (entrega \"pelo menos uma vez\")",
+                "idempotência herdada do L22",
+                "a trava condicional por `pedidoId` já resolvia isso; só foi reaproveitada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Fila sem política de acesso",
+                "checagem explícita na prova 1 e na seção de troubleshooting",
+                "não previne o erro de configuração — só torna o diagnóstico rápido"
+              ],
+              [
+                "Consumidor fora do ar perdendo mensagem",
+                "fila com `visibility timeout` e retenção própria",
+                "consumidor fora do ar por MAIS tempo que a retenção da fila — aí é o L22/nível 5 (replay)"
+              ],
+              [
+                "Filtro descartando mensagem legítima",
+                "prova 2 desta seção, publicando os três valores de `origem`",
+                "não protege contra um quarto valor de `origem` criado sem atualizar o filtro"
+              ],
+              [
+                "Mensagem duplicada processada duas vezes",
+                "idempotência do L22, reaproveitada",
+                "não protege se um consumidor NOVO esquecer de implementar a mesma trava"
+              ],
+              [
+                "Ordem entre eventos do mesmo pedido",
+                "nenhuma, no tópico standard",
+                "nada — é dívida declarada; a resposta é tópico FIFO, não código no consumidor"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "O checkout grava o pedido no Postgres, na mesma transação de sempre.",
+              "A task publica UMA vez no tópico, com o pedido no corpo e atributos de mensagem.",
+              "O SNS avalia o filtro de cada assinatura antes de tentar entregar.",
+              "A fila de estoque recebe sempre — sem filtro — e o consumidor idempotente do L22 processa.",
+              "A fila de e-mail recebe só quando `origem` não é reprocessamento ou correção.",
+              "A fila de analytics — criada só neste laboratório — recebe tudo, sem tocar no checkout.",
+              "Cada fila entrega ao seu consumidor via `event_source_mapping`, em lote.",
+              "Falha de processamento de UM item do lote não reprocessa os outros nove.",
+              "Falha de processamento repetida 5 vezes move a mensagem para a DLQ daquela fila.",
+              "Falha de ENTREGA do SNS para a fila move a mensagem para a DLQ de entrega, separada."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que colocar SQS entre o tópico SNS e o Lambda, em vez de assinar direto?",
+            "answer": "Porque a fila entrega durabilidade e controle de ritmo que a assinatura direta não tem, com mensagens retidas e visíveis enquanto esperam processamento. Uma dead-letter queue de granularidade fina captura exatamente as que falharam no CONSUMO — proteção diferente da que existe no nível da invocação assíncrona da própria Lambda. Sem a fila, um pico que provoque throttling depende inteiramente do que a invocação assíncrona oferece nativamente, com menos visibilidade operacional do que uma fila com métricas próprias de profundidade e idade da mensagem mais antiga."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "O SNS entrega as mensagens às filas na mesma ordem em que os pedidos foram criados?",
+            "answer": "Não, se o tópico for do tipo padrão (standard), que é o usado neste laboratório. Um tópico standard otimiza para throughput e não garante ordem entre mensagens, nem entre filas diferentes assinadas no mesmo tópico — dois eventos do mesmo pedido publicados em sequência podem chegar fora de ordem a um assinante. Enquanto cada evento for autocontido, como o `pedido.criado` deste módulo, isso não afeta o resultado. Se a ordem passar a importar — por exemplo, eventos de status que só fazem sentido numa sequência —, a resposta é migrar para um tópico FIFO com deduplicação, não tentar reordenar no consumidor."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "O que muda no código do produtor quando eu adiciono o quarto consumidor?",
+            "answer": "Nada, e essa ausência de mudança é o entregável deste laboratório. O produtor publica um evento no tópico sem referenciar nenhuma fila; adicionar um consumidor novo é criar uma fila, uma função e uma assinatura no Terraform — uma entrada a mais no mapa `local.consumidores` — sem tocar em nenhuma linha do serviço de checkout. A prova de implantação deste módulo usa `git diff --stat` sobre o diretório do checkout justamente para tornar essa ausência de mudança verificável, não apenas afirmada."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Preciso mudar o produtor se um consumidor mudar de ideia sobre o que recebe?",
+            "answer": "Não. A decisão de o que receber mora na `filter_policy` da assinatura daquele consumidor específico, e editá-la é uma mudança isolada de infraestrutura — o produtor continua publicando o mesmo evento, com os mesmos atributos, para o mesmo tópico. A única forma de um consumidor precisar de mudança no produtor é se ele passar a depender de um atributo ou campo que o evento ainda não carrega, e mesmo nesse caso a mudança é aditiva: adicionar atributo não quebra assinaturas existentes que não o utilizam."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Qual a diferença entre a DLQ da fila e a DLQ da assinatura do SNS?",
+            "answer": "A DLQ da fila captura falha de PROCESSAMENTO: a mensagem foi entregue com sucesso, o consumidor a recebeu, e falhou em confirmá-la (por exceção, timeout ou lógica de negócio) até esgotar o número de tentativas configurado no `redrive_policy` da fila. A DLQ da assinatura captura falha de ENTREGA: o SNS não conseguiu sequer colocar a mensagem na fila — por exemplo, porque a política de acesso da fila não autoriza o tópico, ou a fila foi apagada. São causas do lado oposto do fanout, e investigar a DLQ errada custa tempo sem levar à correção certa."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "RawMessageDelivery é obrigatório numa assinatura SNS para SQS?",
+            "answer": "Não é obrigatório, mas deixar de habilitá-lo quase sempre é engano, não escolha. Sem ele, o corpo da mensagem SQS é um envelope JSON do SNS — com campos como `Type`, `MessageId`, `TopicArn` e o payload publicado dentro da chave `Message`, como uma string — em vez do evento em si. Cada consumidor então precisa desserializar duas vezes: uma para tirar o envelope, outra para ler o pedido de fato. Habilitar `RawMessageDelivery` faz o corpo da mensagem SQS ser exatamente o que foi publicado, e os atributos de mensagem do `Publish` passam a chegar como atributos de mensagem do SQS diretamente, sem essa camada extra."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "O SNS entrega cada mensagem exatamente uma vez para cada assinante?",
+            "answer": "Não, em tópicos standard a entrega é pelo menos uma vez — o mesmo modelo do SQS por trás dele. Uma mensagem pode, em cenários raros de retentativa após falha parcial, chegar mais de uma vez ao mesmo consumidor. É por isso que este laboratório reaproveita, no consumidor de e-mail, a mesma trava de idempotência do L22: um `PutItem` condicional por `pedidoId` que garante processar cada pedido uma única vez do ponto de vista de negócio, independentemente de quantas vezes a mensagem chegou fisicamente à fila."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Por que não usar EventBridge desde já, já que ele também faz fanout?",
+            "answer": "Porque, para um único tipo de evento com filtro simples por atributo, o EventBridge resolve o mesmo problema com mais peças do que a Cadência precisa hoje: schema registry, regras de roteamento com sintaxe própria e um barramento pensado para múltiplos tipos de evento coexistindo. O SNS com fanout para SQS cobre exatamente o requisito declarado — um evento, vários interessados — com menos conceitos novos. A migração para EventBridge faz sentido quando aparece um SEGUNDO tipo de evento com regras de roteamento próprias, não quando aparece um consumidor a mais do mesmo evento: é o degrau seguinte da evolução em níveis, tratado no L24."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Uma Lambda recém-assinada a uma fila SQS que recebe mensagens de um tópico SNS começa a lançar exceção de desserialização em toda mensagem processada, embora as mensagens estejam chegando normalmente à fila. Qual é a causa mais provável?",
+            "options": [
+              "A fila não tem uma dead-letter queue configurada",
+              "O filtro de mensagem da assinatura está bloqueando as mensagens válidas",
+              "A assinatura do SNS para a fila está com `RawMessageDelivery` desabilitado, e o corpo da mensagem é o envelope do SNS, não o payload publicado",
+              "O consumidor não implementa idempotência para a chave do evento"
+            ],
+            "correctIndex": 2,
+            "explanation": "O sintoma descrito — mensagens CHEGANDO normalmente, mas falhando ao serem desserializadas — aponta diretamente para o formato do corpo, não para ausência ou presença de mensagem. Sem `RawMessageDelivery`, o SQS recebe um envelope JSON do SNS (`Type`, `MessageId`, `TopicArn`, e o payload publicado dentro da string `Message`), e um `Deserialize<PedidoCriado>` sobre esse envelope não encontra os campos esperados no nível certo do JSON.\n\nA primeira alternativa trata de uma configuração que afeta o que acontece DEPOIS de várias falhas de processamento — ausência de DLQ não causa exceção de desserialização, só faz a mensagem ser reentregue indefinidamente. A terceira descreve um sintoma incompatível com o enunciado: um filtro bloqueando mensagens faria a fila ficar VAZIA, e aqui as mensagens estão chegando e sendo processadas — só que malformadas. A quarta confunde processamento duplicado com formato de dado: falta de idempotência causaria efeito repetido (como dois e-mails), não uma exceção ao ler o corpo da mensagem."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Um `Publish` no tópico `pedido-criado` retorna sucesso com um `MessageId` válido. Nenhuma das três filas assinadas (estoque, e-mail, analytics) mostra mensagem nova, e nenhum filtro de mensagem está configurado em nenhuma das três assinaturas. Qual é a causa mais provável?",
+            "options": [
+              "As filas não têm política de acesso (`queue_policy`) autorizando o tópico SNS a chamar `SendMessage`",
+              "O filtro de mensagem das três assinaturas está bloqueando tudo simultaneamente",
+              "O papel do produtor não tem permissão `sns:Publish` no tópico",
+              "O `RawMessageDelivery` está desabilitado nas três assinaturas"
+            ],
+            "correctIndex": 0,
+            "explanation": "Ausência de política de acesso na fila é a causa que explica TODOS os fatos do enunciado ao mesmo tempo: o `Publish` tem sucesso porque autorização de publicar no tópico é coisa distinta de autorização de escrever na fila, e sem a `Condition SourceArn` na política de cada fila o SNS tenta entregar e é recusado — a mensagem não aparece em nenhuma fila, e o rastro dessa falha vai para a DLQ de entrega, não para o tópico nem para o produtor.\n\nA primeira alternativa contradiz o próprio enunciado: se o papel do produtor não tivesse `sns:Publish`, a chamada teria lançado exceção de autorização em vez de devolver um `MessageId` válido — \"publicou com sucesso\" já elimina essa hipótese. A terceira é logicamente impossível aqui: o enunciado declara explicitamente que nenhuma das três assinaturas tem filtro configurado, então não há regra nenhuma para bloquear mensagem. A quarta erra o sintoma: `RawMessageDelivery` desabilitado muda o FORMATO do corpo da mensagem que chega à fila — ela ainda chegaria, só que envelopada — e não explicaria as três filas em zero mensagens."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L21 (Lambda e cold start), L22 (fila SQS com DLQ e consumidor idempotente) no ar"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "fanout SNS → SQS; filtro de mensagem por assinatura e seu escopo; a distinção entre DLQ de entrega e DLQ de processamento; RawMessageDelivery e o que ele evita; por que SQS entre o tópico e o consumidor; redução de raio de explosão no produtor"
+              ],
+              [
+                "Limitação que fica",
+                "tópico standard não garante ordem nem exclusão de duplicata entre filas — se isso passar a importar, é tópico FIFO, não correção no consumidor"
+              ],
+              [
+                "Próximo laboratório recomendado",
+                "L24 — EventBridge como espinha dorsal. Migra o mesmo problema para múltiplos tipos de evento, com regras de roteamento e schema versionado"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "qualquer laboratório futuro que precise notificar mais de um sistema a partir de um único evento de negócio reaproveita este padrão de fila por consumidor com DLQ própria"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Amazon SNS — Fanout to Amazon SQS queues",
+                "code": true
+              },
+              {
+                "text": " — o formato do envelope de mensagem, o efeito de `RawMessageDelivery` e a necessidade de política de acesso na fila; "
+              },
+              {
+                "text": "Amazon SNS message filtering",
+                "code": true
+              },
+              {
+                "text": " — o funcionamento do `filter_policy`, seu escopo (atributos ou corpo) e os operadores disponíveis; e "
+              },
+              {
+                "text": "Amazon SNS dead-letter queues for subscriptions",
+                "code": true
+              },
+              {
+                "text": " — por que a DLQ pertence à assinatura, não ao tópico, e o número de retentativas de entrega para endpoints gerenciados pela AWS. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "O número de retentativas de entrega do SNS para endpoints gerenciados pela AWS (100.015 tentativas em 23 dias) vem da documentação oficial consultada nesta data, não de medição própria — e a AWS pode revisar esses valores. Os volumes de mensagem nas provas desta seção (tempo de chegada às filas, contagem de tentativas até a DLQ) refletem o ambiente de exemplo usado na escrita deste módulo; meça no seu ambiente antes de tratar qualquer número aqui como garantia contratual."
+          }
+        }
+      ]
+    }
+  ]
+}

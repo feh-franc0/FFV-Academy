@@ -80,58 +80,79 @@ type optionJSON struct {
 
 const (
 	defaultBankDir    = "../frontend/data/question-bank"
-	defaultUpPath     = "migrations/000042_reseed_clf_questions_v2.up.sql"
-	clfPrefix         = "clf-c02-"
 	backupSuffix      = ".v1-backup.json"
-	simuladoID        = "aws-clf"
 	defaultDifficulty = "medium"
 )
+
+// cert liga um prefixo de arquivo do question-bank ao simulado no banco e ao
+// arquivo de migration que recebe as questões.
+//
+// Antes de ago/2026 isto era uma constante única `clf-c02-`, e o efeito estava
+// medido: existiam 140 questões de AIF-C01 escritas em
+// `frontend/data/question-bank/` que NUNCA chegavam à produção, porque o
+// gerador as ignorava em silêncio e o deploy aplica migration, não o binário
+// `seed-questions`. Arquivo escrito e não lido é o mesmo defeito de conteúdo
+// declarado e não renderizado — só que do lado do banco.
+//
+// Cada certificação tem migration PRÓPRIA de propósito: assim regerar a AIF não
+// produz diff no arquivo do CLF, e o drift check do CI continua acusando só o
+// que mudou de verdade.
+type cert struct {
+	Prefix     string
+	SimuladoID string
+	UpPath     string
+	Titulo     string
+}
+
+var certs = []cert{
+	{"clf-c02-", "aws-clf", "migrations/000042_reseed_clf_questions_v2.up.sql", "AWS CLF-C02"},
+	{"aif-c01-", "aws-aif", "migrations/000046_seed_aif_questions.up.sql", "AWS AIF-C01"},
+	{"dva-c02-", "aws-dva", "migrations/000047_seed_dva_questions.up.sql", "AWS DVA-C02"},
+	{"saa-c03-", "aws-saa", "migrations/000048_seed_saa_questions.up.sql", "AWS SAA-C03"},
+}
 
 func main() {
 	bankDir := defaultBankDir
 	if len(os.Args) > 1 {
 		bankDir = os.Args[1]
 	}
-	upPath := defaultUpPath
-	if len(os.Args) > 2 {
-		upPath = os.Args[2]
-	}
-
 	if info, err := os.Stat(bankDir); err != nil || !info.IsDir() { //nolint:gosec // G703,G304: path vem do operador via CLI args, não de input externo
 		log.Fatalf("bank-dir não encontrado: %s", bankDir) //nolint:gosec // G706: log de path controlado pelo operador
 	}
 
-	files, err := selectFiles(bankDir)
-	if err != nil {
-		log.Fatalf("listar arquivos: %v", err)
-	}
-	if len(files) == 0 {
-		log.Fatal("nenhum arquivo clf-c02-*.json encontrado")
-	}
+	for _, c := range certs {
+		files, err := selectFiles(bankDir, c.Prefix)
+		if err != nil {
+			log.Fatalf("listar arquivos de %s: %v", c.Titulo, err)
+		}
+		if len(files) == 0 {
+			log.Fatalf("nenhum arquivo %s*.json encontrado", c.Prefix)
+		}
 
-	questions, byFile, err := loadAll(bankDir, files)
-	if err != nil {
-		log.Fatalf("carregar JSONs: %v", err)
-	}
+		questions, byFile, err := loadAll(bankDir, files)
+		if err != nil {
+			log.Fatalf("carregar JSONs de %s: %v", c.Titulo, err)
+		}
 
-	// Ordenação determinística por ID para diff estável entre regenerações.
-	sort.SliceStable(questions, func(i, j int) bool {
-		return questions[i].ID < questions[j].ID
-	})
+		// Ordenação determinística por ID para diff estável entre regenerações.
+		sort.SliceStable(questions, func(i, j int) bool {
+			return questions[i].ID < questions[j].ID
+		})
 
-	upSQL := buildUpSQL(questions, byFile)
-	if err := os.WriteFile(upPath, []byte(upSQL), 0o600); err != nil { //nolint:gosec // G304,G703: upPath vem de CLI args do operador, não de input externo
-		log.Fatalf("escrever up.sql: %v", err)
+		upSQL := buildUpSQL(questions, byFile, c)
+		if err := os.WriteFile(c.UpPath, []byte(upSQL), 0o600); err != nil { //nolint:gosec // G304,G703: caminho vem da tabela `certs`, controlada no código
+			log.Fatalf("escrever %s: %v", c.UpPath, err)
+		}
+		fmt.Printf("✓ Gerado %s (%d questões de %d arquivos)\n", c.UpPath, len(questions), len(files))
 	}
 
 	// Não regeneramos o .down.sql — ele é escrito a mão como no-op (ver
-	// 000042_reseed_clf_questions_v2.down.sql). A migration 000042 não
-	// APAGA dados, só atualiza via ON CONFLICT, então um DELETE genérico
-	// no down quebraria invariantes da 000041 (que tem o estado base).
-	fmt.Printf("✓ Gerado %s (%d questões de %d arquivos)\n", upPath, len(questions), len(files))
+	// 000042_reseed_clf_questions_v2.down.sql). As migrations de seed não
+	// APAGAM dados, só atualizam via ON CONFLICT, então um DELETE genérico
+	// no down quebraria invariantes da migration base.
 }
 
-func selectFiles(dir string) ([]string, error) {
+func selectFiles(dir, prefix string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -142,7 +163,7 @@ func selectFiles(dir string) ([]string, error) {
 			continue
 		}
 		name := e.Name()
-		if !strings.HasPrefix(name, clfPrefix) || !strings.HasSuffix(name, ".json") {
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".json") {
 			continue
 		}
 		if strings.HasSuffix(name, backupSuffix) {
@@ -160,7 +181,7 @@ func loadAll(dir string, files []string) ([]questionJSON, map[string]int, error)
 	seenIDs := make(map[string]string)
 
 	for _, f := range files {
-		raw, err := os.ReadFile(filepath.Join(dir, f)) //nolint:gosec // G304: f vem de selectFiles que só permite clf-c02-*.json; dir é controlado pelo operador
+		raw, err := os.ReadFile(filepath.Join(dir, f)) //nolint:gosec // G304: f vem de selectFiles, que só permite o prefixo declarado em `certs`; dir é controlado pelo operador
 		if err != nil {
 			return nil, nil, fmt.Errorf("read %s: %w", f, err)
 		}
@@ -182,9 +203,9 @@ func loadAll(dir string, files []string) ([]questionJSON, map[string]int, error)
 
 // --- SQL emission ---
 
-func buildUpSQL(qs []questionJSON, byFile map[string]int) string {
+func buildUpSQL(qs []questionJSON, byFile map[string]int, c cert) string {
 	var b strings.Builder
-	b.WriteString("-- Seed: AWS CLF-C02 questions\n")
+	fmt.Fprintf(&b, "-- Seed: %s questions\n", c.Titulo)
 	// Sem timestamp no header — caso contrário o drift check do CI quebra todo
 	// dia quando o relógio do CI passa pra um dia diferente do último commit
 	// (gera diff falso sem mudar conteúdo real). Conteúdo determinístico = diff
@@ -192,7 +213,7 @@ func buildUpSQL(qs []questionJSON, byFile map[string]int) string {
 	b.WriteString("-- Generated by cmd/gen-seed-migration (deterministic, no timestamp).\n")
 	b.WriteString("-- DO NOT EDIT BY HAND — run `make gen-seed-migration` to regenerate.\n")
 	fmt.Fprintf(&b, "-- Total: %d questões\n", len(qs))
-	b.WriteString("-- Fontes (clf-c02-*.json):\n")
+	fmt.Fprintf(&b, "-- Fontes (%s*.json):\n", c.Prefix)
 
 	files := make([]string, 0, len(byFile))
 	for f := range byFile {
@@ -207,12 +228,12 @@ func buildUpSQL(qs []questionJSON, byFile map[string]int) string {
 	// Strategy: 1 INSERT por questão (não multi-VALUES) — mais limpo no diff
 	// quando uma questão é editada, e cada UPDATE ON CONFLICT atua sobre 1 row.
 	for _, q := range qs {
-		writeInsert(&b, q)
+		writeInsert(&b, q, c.SimuladoID)
 	}
 	return b.String()
 }
 
-func writeInsert(b *strings.Builder, q questionJSON) {
+func writeInsert(b *strings.Builder, q questionJSON, simuladoID string) {
 	tags := q.Tags
 	if tags == nil {
 		tags = []string{}

@@ -60,7 +60,7 @@ interface GoalConfig {
 const GOAL_CONFIGS: Record<GoalType, GoalConfig> = {
   'aws-clf': {
     label: 'AWS Cloud Practitioner',
-    trailPriority: ['trail4', 'trail12', 'trail8'],
+    trailPriority: ['trail4', 'trail12'],
     milestones: [
       { afterTrailId: 'trail4', description: 'Pronto para o simulado AWS CLF' },
     ],
@@ -68,7 +68,7 @@ const GOAL_CONFIGS: Record<GoalType, GoalConfig> = {
   },
   'aws-saa': {
     label: 'AWS Solutions Architect Associate',
-    trailPriority: ['trail4', 'trail5', 'trail12', 'trail10', 'trail8'],
+    trailPriority: ['trail4', 'trail5', 'trail12', 'trail10'],
     milestones: [
       { afterTrailId: 'trail4', description: 'Base AWS CLF concluída — pronto para nível SAA' },
       { afterTrailId: 'trail5', description: 'Conteúdo SAA-C03 completo — hora de simular a prova' },
@@ -77,7 +77,7 @@ const GOAL_CONFIGS: Record<GoalType, GoalConfig> = {
   },
   'backend-senior': {
     label: 'Backend Engineer Sênior',
-    trailPriority: ['trail12', 'trail14', 'trail8', 'trail10', 'trail11', 'trail4', 'trail47'],
+    trailPriority: ['trail12', 'trail14', 'trail10', 'trail11', 'trail4', 'trail47'],
     milestones: [
       { afterTrailId: 'trail12', description: 'Fundamentos técnicos sólidos' },
       { afterTrailId: 'trail14', description: 'SQL & Databases dominados' },
@@ -97,19 +97,17 @@ const GOAL_CONFIGS: Record<GoalType, GoalConfig> = {
   },
   'fullstack': {
     label: 'Full-Stack Developer',
-    trailPriority: ['trail12', 'trail31', 'trail19', 'trail8', 'trail4', 'trail14'],
+    trailPriority: ['trail12', 'trail19', 'trail4', 'trail14'],
     milestones: [
       { afterTrailId: 'trail12', description: 'Fundamentos técnicos consolidados' },
-      { afterTrailId: 'trail31', description: 'Frontend moderno dominado' },
       { afterTrailId: 'trail19', description: 'Backend Node.js produtivo' },
     ],
     finalMilestone: 'Perfil Full-Stack completo e competitivo',
   },
   'devops-sre': {
     label: 'DevOps / SRE',
-    trailPriority: ['trail12', 'trail7', 'trail4', 'trail11', 'trail10', 'trail5'],
+    trailPriority: ['trail12', 'trail4', 'trail11', 'trail10', 'trail5'],
     milestones: [
-      { afterTrailId: 'trail7', description: 'Docker + Kubernetes dominados' },
       { afterTrailId: 'trail11', description: 'Observabilidade & SRE implementados' },
       { afterTrailId: 'trail4', description: 'Base AWS sólida para infraestrutura cloud' },
     ],
@@ -117,17 +115,16 @@ const GOAL_CONFIGS: Record<GoalType, GoalConfig> = {
   },
   'frontend-senior': {
     label: 'Frontend Sênior',
-    trailPriority: ['trail12', 'trail31', 'trail18', 'trail8', 'trail40', 'trail60'],
+    trailPriority: ['trail12', 'trail18'],
     milestones: [
       { afterTrailId: 'trail12', description: 'Fundamentos técnicos sólidos' },
-      { afterTrailId: 'trail31', description: 'Frontend moderno dominado' },
       { afterTrailId: 'trail18', description: 'TypeScript profissional consolidado' },
     ],
     finalMilestone: 'Perfil Frontend Sênior completo',
   },
   'open': {
     label: 'Aprendizado Livre Otimizado',
-    trailPriority: ['trail12', 'trail1', 'trail8', 'trail14', 'trail18', 'trail10'],
+    trailPriority: ['trail12', 'trail1', 'trail14', 'trail18', 'trail10'],
     milestones: [],
     finalMilestone: 'Jornada de aprendizado contínuo consolidada',
   },
@@ -141,8 +138,6 @@ function moduleReason(trailName: string, goalType: GoalType, index: number, trai
     'trail2': 'cobre arquiteturas LLM',
     'trail4': 'essencial para AWS CLF',
     'trail5': 'núcleo do SAA-C03',
-    'trail7': 'infraestrutura de containers',
-    'trail8': 'engenharia de software moderna',
     'trail9': 'IA aplicada em produção',
     'trail10': 'sistemas distribuídos',
     'trail11': 'observabilidade e SRE',
@@ -150,13 +145,10 @@ function moduleReason(trailName: string, goalType: GoalType, index: number, trai
     'trail14': 'banco de dados essencial',
     'trail18': 'TypeScript avançado',
     'trail19': 'backend Node.js',
-    'trail31': 'frontend moderno',
     'trail36': 'Python para IA',
     'trail47': 'Go para backend',
     'trail50': 'machine learning clássico',
     'trail51': 'ML em produção',
-    'trail60': 'performance web',
-    'trail40': 'produtividade de dev',
   };
 
   const goalLabels: Record<GoalType, string> = {

@@ -1,0 +1,2335 @@
+{
+  "slug": "lab-busca-catalogo-opensearch-vs-like",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência do "
+              },
+              {
+                "text": "L14",
+                "code": true
+              },
+              {
+                "text": " já separa leitura de escrita com réplica dedicada, mas um problema diferente cresceu no mesmo período: o catálogo de produtos passou de algumas dezenas de milhares de itens para 2,1 milhões de SKUs, alimentado por integração contínua com fornecedores. A busca de produto — usada em quase toda tela do aplicativo do lojista — sempre fez "
+              },
+              {
+                "text": "WHERE descricao ILIKE '%' || @termo || '%'",
+                "code": true
+              },
+              {
+                "text": " direto na tabela, e até uns meses atrás isso bastava."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Não basta mais. Um termo de duas palavras leva quase dois segundos para responder, e a consulta consome CPU do mesmo banco em que a integração de fornecedores está gravando preço e estoque o dia inteiro — os dois competem pelo mesmo recurso. E há uma queixa recorrente do time de suporte: lojista digita \"tenes\" ou \"camizeta\", a busca não encontra nada, e o produto está lá, cadastrado, com o nome certo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O instinto mais comum é \"trocar por um banco de busca de verdade\". Este laboratório resiste a esse instinto até ele se justificar: mede exatamente por que a consulta atual é lenta, mostra até onde o próprio Postgres resolve — sem peça nova na conta — e só então introduz OpenSearch, para o pedaço do problema que o Postgres genuinamente não cobre de graça."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Intermediário — depende do L14 e pressupõe SQL e índice à vontade"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L14 concluído (réplica de leitura no ar), Postgres e Terraform básicos"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 45 min · implementação 2 h a 2 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo no estágio 1 (só configuração no RDS existente); médio no estágio 2 (cluster OpenSearch + instância de replicação)"
+              },
+              {
+                "k": "Serviços",
+                "v": "RDS PostgreSQL, AWS DMS, OpenSearch Service, CloudWatch, Secrets Manager"
+              },
+              {
+                "k": "Volume atual",
+                "v": "2,1 milhões de SKUs, crescendo ~180 mil/mês, ~30% do tráfego de leitura do RDS"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "busca abaixo de 150 ms; tolerância a erro de digitação é meta, não obrigação do estágio 1"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "os termos são majoritariamente em português, e um atraso de poucos segundos entre escrever e aparecer na busca é aceitável"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "busca com índice de verdade no RDS e, quando justificado, um índice OpenSearch sincronizado por captura de mudança, com o atraso medido"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é busca semântica nem recuperação híbrida — aqui a relevância inteira é léxica (termo bate com termo, ponderado por frequência). Combinar busca por palavra-chave com busca vetorial é o L85; usar um modelo para interpretar a intenção da consulta é o L94. Este módulo é sobre a fronteira mais barata: até onde um índice invertido clássico resolve antes de precisar de IA."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar, a partir da estrutura de um índice-B, por que curinga à esquerda o torna inútil.",
+              "Medir com EXPLAIN ANALYZE a troca de Seq Scan por Bitmap Index Scan no mesmo banco.",
+              "Criar uma coluna tsvector gerada e um índice GIN sem bloquear escrita concorrente.",
+              "Escrever uma consulta com ranking por relevância (ts_rank_cd) e explicar o que ele pondera.",
+              "Nomear o índice invertido (lexema → linhas) e o custo de mantê-lo sincronizado com a origem.",
+              "Configurar tolerância a erro de digitação no OpenSearch e dizer o que o Postgres não oferece de graça para isso.",
+              "Montar um pipeline de captura de mudança do RDS ao OpenSearch sem escrita dupla no código da aplicação.",
+              "Medir o atraso entre uma escrita confirmada no RDS e sua presença buscável no OpenSearch.",
+              "Decidir, a partir dos requisitos declarados, até onde o full-text do Postgres basta antes de introduzir OpenSearch."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Índice-B e padrões de LIKE",
+                "DVA-C02, DBS-C01",
+                "curinga à esquerda invalida o índice existente",
+                "por que a ordenação de um índice-B não ajuda quando a posição do termo é desconhecida"
+              ],
+              [
+                "Full-text search no RDS PostgreSQL",
+                "DBS-C01, DVA-C02",
+                "coluna tsvector gerada + índice GIN",
+                "até onde ele basta antes de precisar de um motor de busca dedicado"
+              ],
+              [
+                "OpenSearch Service: quando compensa",
+                "SAA-C03, DVA-C02",
+                "tolerância a erro de digitação e desacoplamento de carga",
+                "reconhecer o requisito que justifica o custo e a operação extra"
+              ],
+              [
+                "AWS DMS e captura de mudança",
+                "DBS-C01, SAA-C03",
+                "sincronização assíncrona via log de replicação lógica",
+                "ler o log, não a tabela — e o que acontece quando o slot fica órfão"
+              ],
+              [
+                "Relevância: ranking por frequência",
+                "DVA-C02",
+                "ts_rank_cd de um lado, BM25 do outro",
+                "por que a ordem pode divergir entre os dois motores sem ser bug"
+              ],
+              [
+                "Índice invertido",
+                "DVA-C02, SAA-C03",
+                "estrutura termo → lista de documentos",
+                "o trade-off de espaço e de atualização contra um índice-B comum"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica dá uma coluna com índice e uma consulta `LIKE '%termo%'` lenta, e pede por que o índice \"não funciona\". A resposta certa não é \"falta índice\" — é que o índice existe e é do tipo errado para aquele padrão de busca. Confundir \"sem índice\" com \"índice que o padrão de consulta não permite usar\" é o erro mais comum do tema."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Latência de busca ao usuário",
+                "p95 abaixo de 150 ms",
+                "exclui varredura completa; obriga índice de verdade — no mínimo GIN sobre tsvector"
+              ],
+              [
+                "Tolerância a erro de digitação",
+                "meta desejável, não obrigatória no estágio 1",
+                "licencia começar só com RDS/GIN e adiar OpenSearch até o requisito virar obrigatório"
+              ],
+              [
+                "Volume do catálogo",
+                "2,1 milhões de SKUs, crescendo ~180 mil/mês",
+                "o índice precisa crescer sem bloquear escrita: `CREATE INDEX CONCURRENTLY`, sempre"
+              ],
+              [
+                "Carga de escrita concorrente com busca",
+                "integração de fornecedores grava o dia inteiro",
+                "motiva desacoplar a leitura de busca do banco de escrita quando a contenção for medida"
+              ],
+              [
+                "Consistência da busca após escrita",
+                "atraso de poucos segundos é aceitável",
+                "licencia sincronização assíncrona por captura de mudança em vez de escrita dupla síncrona"
+              ],
+              [
+                "Relevância por importância, não só filtro",
+                "obrigatório",
+                "exige ranking por frequência de termo — `ts_rank_cd` no estágio 1, BM25 no estágio 2"
+              ],
+              [
+                "Orçamento e equipe",
+                "equipe pequena; sem infra nova até necessidade comprovada",
+                "obriga esgotar o estágio 1 (RDS/GIN, sem custo novo) antes de introduzir OpenSearch e DMS"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o mesmo banco, dois planos de execução"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O primeiro desenho não acrescenta serviço nenhum. Ele mostra por que a consulta atual é lenta e o que muda quando a MESMA tabela, no MESMO banco, é consultada de um jeito que o planejador consegue otimizar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O mesmo banco, dois planos de execução",
+            "caption": "Nenhum recurso novo entra neste desenho — a diferença inteira mora em qual índice o Postgres consegue usar. Percorra os passos: o quarto é onde a busca para de varrer 2,1 milhões de linhas a cada tecla digitada.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Lojista buscando produto",
+                    "note": "digita termo livre, sem acento consistente nem forma canônica do cadastro"
+                  }
+                ]
+              },
+              {
+                "label": "Aplicação — sub-rede privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "api",
+                    "service": "fargate",
+                    "label": "API .NET 8 em ECS Fargate",
+                    "note": "monta a consulta parametrizada; nunca concatena o termo digitado na string SQL"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — banco relacional",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "rds",
+                    "service": "rds",
+                    "label": "RDS PostgreSQL, tabela produtos",
+                    "note": "2,1 milhões de linhas; é a fonte da verdade de preço, estoque e descrição"
+                  },
+                  {
+                    "id": "idx",
+                    "service": "indice_invertido",
+                    "label": "GIN sobre tsvector(nome, descrição)",
+                    "note": "índice invertido de verdade: termo normalizado aponta direto para as linhas"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "api",
+                "label": "termo de busca livre, sem forma canônica",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "rds",
+                "label": "consulta parametrizada com o termo do usuário",
+                "style": "solid"
+              },
+              {
+                "from": "rds",
+                "to": "idx",
+                "label": "bitmap index scan — só quando o filtro usa a coluna tsvector",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O termo chega sem estrutura",
+                "detail": "O lojista digita \"tenis azul\" sem saber se o cadastro tem acento, plural ou a ordem das palavras. A API parametriza a consulta — evita injeção — mas ainda não decide COMO comparar o termo com 2,1 milhões de descrições.",
+                "nodes": [
+                  "user",
+                  "api"
+                ],
+                "edges": [
+                  "user>api"
+                ]
+              },
+              {
+                "label": "A consulta ingênua não deixa opção ao planejador",
+                "detail": "A versão original faz `WHERE descricao ILIKE '%' || @termo || '%'`. O curinga à ESQUERDA é o problema: existe um índice-B comum na coluna, criado para ordenação, e ele não serve aqui — o otimizador nem tenta usá-lo.",
+                "nodes": [
+                  "api",
+                  "rds"
+                ],
+                "edges": [
+                  "api>rds"
+                ]
+              },
+              {
+                "label": "Ordenação não ajuda quando a posição é desconhecida",
+                "detail": "Um índice-B é uma estrutura ORDENADA: rápido para \"começa com foo\", porque a ordem alfabética localiza o intervalo. Para \"contém foo em qualquer posição\", a ordem não elimina candidato nenhum — sobra varrer linha por linha.",
+                "nodes": [
+                  "rds"
+                ],
+                "edges": [
+                  "api>rds"
+                ]
+              },
+              {
+                "label": "O Postgres já tem um índice de verdade embutido",
+                "detail": "A extensão de busca textual nativa transforma cada descrição num `tsvector` — lista normalizada de lexemas — e o índice GIN mapeia lexema → linhas que o contêm. É a mesma ideia estrutural de um índice invertido de motor de busca.",
+                "nodes": [
+                  "rds",
+                  "idx"
+                ],
+                "edges": [
+                  "rds>idx"
+                ]
+              },
+              {
+                "label": "O plano muda de Seq Scan para Bitmap Index Scan",
+                "detail": "Trocando o filtro para `busca @@ websearch_to_tsquery('portuguese', @termo)`, o planejador escolhe o GIN em vez de varrer a tabela. `EXPLAIN ANALYZE` prova isso pelo nome do nó do plano, não por impressão de velocidade.",
+                "nodes": [
+                  "rds",
+                  "idx"
+                ],
+                "edges": [
+                  "rds>idx"
+                ]
+              },
+              {
+                "label": "Relevância entra pela primeira vez",
+                "detail": "`ts_rank` pondera frequência do termo e proximidade entre lexemas — não é só filtro binário \"contém ou não contém\". É o primeiro degrau de ordenar por importância, e ele já está aqui, sem peça nova.",
+                "nodes": [
+                  "idx"
+                ],
+                "edges": [
+                  "rds>idx"
+                ]
+              },
+              {
+                "label": "Onde este desenho já esbarra",
+                "detail": "Digitar \"tenes\" (erro real de digitação) não casa com nenhum lexema de \"tênis\" — `tsvector` normaliza plural e derivação da MESMA raiz, não erro de teclado. É a fronteira que justifica olhar para o próximo desenho.",
+                "nodes": [
+                  "rds",
+                  "idx"
+                ],
+                "edges": [
+                  "rds>idx"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A migration que trava a tabela inteira se você pular uma palavra",
+            "content": "`CREATE INDEX` sem `CONCURRENTLY` pede bloqueio `ACCESS EXCLUSIVE` na tabela inteira até terminar de construir o índice. Em 2,1 milhões de linhas, isso não é uma pausa curta — é minutos em que a integração de fornecedores não consegue gravar preço nem estoque, e o catálogo fica visivelmente desatualizado. `CONCURRENTLY` constrói o índice em duas varreduras sem bloqueio exclusivo; o custo é demorar mais e exigir que não haja outra migration DDL na mesma tabela ao mesmo tempo."
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O estágio 1 não entra na fatura",
+            "content": "Coluna gerada e índice GIN são schema e armazenamento dentro do RDS que já existe — não há instância nova, nó novo nem serviço novo para provisionar. É por isso que ele vem primeiro: resolve o problema medido hoje sem pedir aprovação de orçamento."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção: quando GIN não basta"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Esta topologia só se justifica pelos dois requisitos que o estágio 1 deixa em aberto: tolerância a erro de digitação e desacoplar a carga de busca do banco de escrita. Cada peça nova abaixo rastreia a um desses dois — se você não consegue apontar qual, ela é adorno."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Um índice secundário, sincronizado pelo log — não pela aplicação",
+            "caption": "A aplicação não ganhou nenhuma linha de código de sincronização. O que muda é que a busca passa a ler de um sistema diferente de quem grava, e a ponte entre os dois é um pipeline assíncrono que lê o log de escrita, não a tabela. Percorra os passos: o terceiro é a peça que a maioria das explicações de CDC omite.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Lojista buscando produto",
+                    "note": "agora digita \"tenes\" e ainda encontra \"tênis\" — tolerância a erro é o requisito novo"
+                  }
+                ]
+              },
+              {
+                "label": "Aplicação — sub-rede privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "api",
+                    "service": "fargate",
+                    "label": "API .NET 8 em ECS Fargate",
+                    "note": "grava sempre no RDS; lê busca do OpenSearch — os dois caminhos não se cruzam no código"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — escrita e captura",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "rds",
+                    "service": "rds",
+                    "label": "RDS PostgreSQL — fonte da verdade",
+                    "note": "continua sendo o único lugar onde a aplicação escreve; nada aqui mudou de contrato"
+                  },
+                  {
+                    "id": "dms",
+                    "service": "cdc",
+                    "label": "AWS DMS — captura de mudança",
+                    "note": "lê o slot de replicação lógica (o WAL decodificado); nunca faz SELECT na tabela"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — índice de busca",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "os",
+                    "service": "opensearch",
+                    "label": "OpenSearch — índice derivado",
+                    "note": "não é fonte de verdade: se for apagado, reconstrói a partir do RDS via novo full load"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Alarme de atraso de réplica",
+                    "note": "mede o intervalo entre o commit no RDS e o documento ficar buscável no destino"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "api",
+                "label": "termo com erro de digitação tolerado",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "rds",
+                "label": "escrita de preço e estoque — sem mudança de contrato",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "os",
+                "label": "consulta de busca com fuzziness",
+                "style": "solid"
+              },
+              {
+                "from": "rds",
+                "to": "dms",
+                "label": "WAL decodificado pelo slot de replicação lógica",
+                "style": "dashed"
+              },
+              {
+                "from": "dms",
+                "to": "os",
+                "label": "documento indexado, com atraso próprio da fila",
+                "style": "dashed"
+              },
+              {
+                "from": "cw",
+                "to": "dms",
+                "label": "métrica de atraso entre origem e destino",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A escrita não muda",
+                "detail": "A API continua fazendo `INSERT`/`UPDATE` só no RDS, exatamente como antes. Não existe transação distribuída nem chamada síncrona ao OpenSearch no caminho de escrita — é a diferença central em relação a escrever nos dois lugares.",
+                "nodes": [
+                  "api",
+                  "rds"
+                ],
+                "edges": [
+                  "api>rds"
+                ]
+              },
+              {
+                "label": "O DMS lê o log, não a tabela",
+                "detail": "Com `rds.logical_replication = 1` no grupo de parâmetros, o Postgres decodifica cada mudança de linha no WAL e a expõe por um slot de replicação lógica. O DMS consome esse slot — é leitura de log, não consulta que compete com o OLTP.",
+                "nodes": [
+                  "rds",
+                  "dms"
+                ],
+                "edges": [
+                  "rds>dms"
+                ]
+              },
+              {
+                "label": "A propagação é assíncrona, e o atraso tem nome",
+                "detail": "Entre o commit e o documento aparecer no OpenSearch existe uma fila de aplicação. A AWS expõe isso como métrica (`CDCLatencySource`, `CDCLatencyTarget`) — o atraso não é escondido, é medido, e cresce sob pico de escrita.",
+                "nodes": [
+                  "dms",
+                  "os"
+                ],
+                "edges": [
+                  "dms>os"
+                ]
+              },
+              {
+                "label": "A leitura de busca sai do caminho do banco de escrita",
+                "detail": "Toda consulta de busca — que antes competia por CPU e I/O com a integração de fornecedores gravando no RDS — passa a bater no OpenSearch. O RDS deixa de fazer o trabalho de busca; continua fazendo só o de registro.",
+                "nodes": [
+                  "api",
+                  "os"
+                ],
+                "edges": [
+                  "api>os"
+                ]
+              },
+              {
+                "label": "A consulta ganha tolerância a erro de digitação",
+                "detail": "A consulta `match` com `fuzziness: AUTO` aceita distância de edição Damerau-Levenshtein: até 5 caracteres tolera 1 edição, acima disso tolera 2. É o que o `tsvector` do desenho anterior não oferece de graça.",
+                "nodes": [
+                  "user",
+                  "os"
+                ],
+                "edges": [
+                  "user>api"
+                ]
+              },
+              {
+                "label": "A relevância passa a usar BM25",
+                "detail": "O termo que aparece muitas vezes NUM produto pesa mais; o termo comum a quase todo produto do catálogo pesa menos. É frequência do termo saturada contra raridade no corpus — mais sofisticado que o `ts_rank` do RDS, e é o motivo de a ordem dos resultados poder divergir entre os dois motores sem que isso seja bug.",
+                "nodes": [
+                  "api",
+                  "os"
+                ],
+                "edges": [
+                  "api>os"
+                ]
+              },
+              {
+                "label": "O atraso é observável, não ausente",
+                "detail": "O alarme em `CDCLatencyTarget` avisa quando a fila cresce além do aceitável — por exemplo, durante uma carga em lote do fornecedor. Sem essa métrica, o único jeito de descobrir atraso é um lojista reclamar que \"o produto não aparece\".",
+                "nodes": [
+                  "cw",
+                  "dms"
+                ],
+                "edges": [
+                  "cw>dms"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "annotated_formula",
+          "position": 2,
+          "data": {
+            "title": "O orçamento do atraso de sincronização, decomposto",
+            "formula": "atraso ≈ commit_no_rds + captura_do_wal + fila_de_apply + indexação_no_opensearch",
+            "parts": [
+              {
+                "symbol": "commit_no_rds",
+                "name": "O instante zero da medição",
+                "description": "O momento em que a transação é confirmada no RDS. É o ponto de partida de qualquer medição de atraso — sem ele, \"atraso\" não tem de onde contar."
+              },
+              {
+                "symbol": "captura_do_wal",
+                "name": "Decodificar o log de replicação",
+                "description": "Quanto tempo o slot de replicação lógica leva para transformar o registro binário do WAL em uma mudança de linha legível. Cresce com o volume de escrita concorrente no banco de origem."
+              },
+              {
+                "symbol": "fila_de_apply",
+                "name": "A espera para ser aplicado no destino",
+                "description": "Onde um pico de escrita se acumula: se o fornecedor sobe 500 mil linhas de uma vez, a fila cresce mais rápido do que o destino consegue absorver, e é esta parcela que domina o atraso total nesse cenário.",
+                "highlight": true
+              },
+              {
+                "symbol": "indexação_no_opensearch",
+                "name": "Analisar o texto e escrever no shard",
+                "description": "O tempo do próprio OpenSearch para tokenizar o campo e persistir no shard. Pequeno por documento, mas soma quando a fila descarrega em lote."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "A aplicação não ganhou complexidade nova",
+            "content": "É o ponto mais fácil de perder de vista: nenhuma linha do código de escrita mudou. A sincronização inteira mora em infraestrutura — parâmetro do banco, instância de replicação, tarefa do DMS — e não em lógica que alguém precisa manter e que pode esquecer de chamar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Como funciona, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Escrita e leitura seguem caminhos que não se cruzam no código. Isso é desconfortável na primeira leitura — \"cadê a chamada que sincroniza?\" — e é exatamente o ponto: não existe essa chamada."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "De uma escrita no RDS até ela aparecer buscável — e o caminho de leitura em paralelo",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1. Fornecedor atualiza preço/estoque",
+                "desc": "A integração grava um `UPDATE` na tabela `produtos` do RDS. Nenhum código aqui sabe que o OpenSearch existe."
+              },
+              {
+                "label": "2. O WAL registra a mudança",
+                "desc": "O Postgres escreve a mudança no write-ahead log antes de confirmar a transação — é o mecanismo de durabilidade que o CDC reaproveita, não um canal criado para isso."
+              },
+              {
+                "label": "3. O slot de replicação lógica decodifica o registro",
+                "desc": "Com `rds.logical_replication = 1`, o Postgres expõe as mudanças decodificadas por um slot dedicado. O DMS consome esse slot continuamente, em modo CDC."
+              },
+              {
+                "label": "4. O DMS transforma e envia ao OpenSearch",
+                "desc": "Cada linha muda vira um documento indexado (ou atualizado) no domínio OpenSearch. É aqui que a fila de aplicação pode acumular sob pico de escrita."
+              },
+              {
+                "label": "5. Em paralelo: o lojista digita o termo de busca",
+                "desc": "Independente do passo anterior, uma requisição de leitura chega à API a qualquer momento — os dois caminhos, escrita e leitura, não se sincronizam entre si."
+              },
+              {
+                "label": "6. A API roteia para o motor de busca",
+                "desc": "A consulta vai para o OpenSearch com `match` e `fuzziness: AUTO`, nunca para o RDS — o RDS deixou de fazer esse trabalho."
+              },
+              {
+                "label": "7. BM25 ordena, a resposta pagina de volta",
+                "desc": "O resultado volta ordenado por relevância — não por ordem de inserção — e paginado, porque o catálogo tem 2,1 milhões de itens e nenhum cliente rola essa lista inteira."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "json",
+            "filename": "busca.json",
+            "code": "// Requisicao de busca que a API monta para o OpenSearch, e a resposta que volta.\n// O campo \"fuzziness\" e a diferenca central em relacao a consulta no RDS.\n{\n  \"requisicao\": {\n    \"query\": {\n      \"match\": {\n        \"descricao\": {\n          \"query\": \"tenes azul\",\n          \"fuzziness\": \"AUTO\",\n          \"operator\": \"and\"\n        }\n      }\n    },\n    \"size\": 20,\n    \"from\": 0\n  },\n  \"resposta_resumida\": {\n    \"took_ms\": 18,\n    \"hits\": {\n      \"total\": { \"value\": 34 },\n      \"hits\": [\n        {\n          \"_id\": \"sku-00481932\",\n          // _score vem do BM25: frequencia do termo NO documento,\n          // penalizada pela frequencia do termo NO corpus inteiro.\n          \"_score\": 11.284,\n          \"_source\": { \"nome\": \"Tenis azul corrida\", \"preco\": 289.9 }\n        }\n      ]\n    }\n  }\n}"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "Por que _score pode divergir entre os dois motores",
+            "content": "`ts_rank_cd` no RDS pondera densidade de termos no documento. BM25 no OpenSearch pondera frequência do termo NO documento, saturada (o décimo primeiro \"tênis\" no texto pesa pouco a mais que o décimo), contra a raridade do termo NO corpus inteiro — um termo raro no catálogo, quando aparece, pesa mais do que um termo comum. São modelos de relevância diferentes; a mesma consulta pode legitimamente ordenar diferente nos dois motores sem que nenhum dos dois esteja errado."
+          }
+        },
+        {
+          "id": "b6_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "A normalização precisa ser a mesma dos dois lados",
+            "content": "A coluna `tsvector` do RDS passa por `unaccent`; o campo indexado no OpenSearch precisa do mesmo tratamento de acento antes de chegar ao analisador, ou \"tenis\" (sem acento) encontra resultado num motor e não no outro para o MESMO termo digitado. Divergência de normalização entre os dois caminhos é o tipo de bug que só aparece em teste manual, porque teste automatizado costuma usar termo já acentuado corretamente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Catálogo de 2,1 milhões de SKUs, atualizado continuamente por integração com fornecedores; busca hoje faz `ILIKE '%termo%'` direto na tabela do RDS — lenta sob carga e sem tolerância a erro de digitação. Equipe pequena, sem orçamento para operar um cluster de busca só porque parece mais profissional.",
+            "winner": "Resolver em dois estágios: primeiro um índice GIN sobre tsvector no próprio RDS; só introduzir OpenSearch com captura de mudança via DMS quando o GIN comprovadamente não bastar.",
+            "why": "O estágio 1 não pede recurso novo na fatura e resolve o problema que hoje é real e medido: consulta lenta por varredura completa. Ele NÃO resolve tolerância a erro de digitação nem tira carga de busca do banco de escrita — e é honesto reconhecer isso em vez de forçar OpenSearch cedo demais só porque parece a solução \"de verdade\". Quando a queixa de \"não encontra com erro de digitação\" virar requisito de negócio, ou quando a contenção entre busca e escrita for medida (não suposta), o estágio 2 se paga: ele resolve exatamente os dois requisitos que o primeiro deixou em aberto, sem reescrever nada do que já funciona.",
+            "alternatives": [
+              {
+                "name": "Elasticsearch autogerenciado em EC2",
+                "downside": "Mesma capacidade de busca do OpenSearch, mas a equipe passa a aplicar patch de segurança, gerenciar cluster e planejar capacidade — trabalho operacional que o serviço gerenciado da AWS absorve."
+              },
+              {
+                "name": "SaaS de busca terceirizado",
+                "downside": "Tolerância a erro e relevância prontas em minutos, mas o catálogo — preço incluso — passa a existir fora da conta AWS, com um provedor a mais no caminho crítico e cobrança por volume de indexação."
+              },
+              {
+                "name": "pg_trgm no lugar de tsvector/GIN",
+                "downside": "Dá similaridade por trigrama e tolera erro de digitação leve sem sair do Postgres, mas não pondera frequência de termo como `ts_rank_cd` ou BM25 — é comparação de sobreposição de trigramas, não relevância. Serve como paliativo de curto prazo, não substitui a decisão deste módulo."
+              },
+              {
+                "name": "Escrita dupla síncrona no código da aplicação",
+                "downside": "Parece mais simples de entender — \"eu controlo a sincronização\" — mas acopla duas transações que deveriam ser independentes: se o OpenSearch estiver fora do ar, ou a escrita no RDS falha junto, ou o índice fica divergente sem ninguém saber. É o antipadrão que a captura de mudança existe para evitar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Tipo de índice no RDS",
+                "GIN sobre tsvector gerado",
+                "GIN sobre pg_trgm; índice-B comum (não serve para conter)",
+                "índice invertido de verdade, com ranking por relevância embutido",
+                "reindexação em cada escrita da coluna indexada — pequeno por linha, soma em lote"
+              ],
+              [
+                "Normalização do texto",
+                "unaccent + configuração \"simple\"",
+                "\"portuguese\" com stemming completo",
+                "\"simple\" evita juntar \"tênis\" com \"tenista\"; unaccent resolve acento sem afetar plural",
+                "não expande sinônimo nem variação morfológica agressiva — troque para \"portuguese\" se isso virar requisito"
+              ],
+              [
+                "Criação do índice em produção",
+                "`CREATE INDEX CONCURRENTLY`",
+                "`CREATE INDEX` simples",
+                "não bloqueia escrita concorrente durante a construção",
+                "demora mais e não pode rodar junto com outra migration DDL na mesma tabela"
+              ],
+              [
+                "Sincronização RDS → OpenSearch",
+                "AWS DMS em modo CDC, lendo o WAL",
+                "escrita dupla síncrona; polling periódico da tabela inteira",
+                "zero código de sincronização na aplicação; não compete com o OLTP por SELECT",
+                "atraso de propagação, que precisa ser medido e alarmado — não é zero"
+              ],
+              [
+                "Tolerância a erro de digitação",
+                "fuzziness AUTO no OpenSearch",
+                "pg_trgm no RDS; nenhuma tolerância",
+                "distância de edição de verdade, calibrada pelo tamanho do termo",
+                "consultas fuzzy custam mais CPU por requisição que match exato"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: full-text nativo no RDS"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O estágio 1 inteiro é uma coluna gerada e um índice — nenhum recurso novo, nenhuma mudança de contrato para quem já escreve na tabela."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "sql",
+            "filename": "migration_gin_busca.sql",
+            "code": "-- migration_gin_busca.sql — o índice invertido dentro do próprio RDS\n\n-- unaccent normaliza \"tênis\" e \"tenis\" para o mesmo lexema. Sem isto, a busca\n-- textual nativa continuaria sensível a acento, que não é o mesmo problema\n-- que curinga à esquerda, mas frustra o usuário do mesmo jeito.\nCREATE EXTENSION IF NOT EXISTS unaccent;\n\n-- Coluna GERADA: recalculada pelo próprio Postgres a cada escrita, nunca pela\n-- aplicação. \"simple\" em vez de \"portuguese\" evita stemming agressivo demais\n-- para nome de produto (stemming juntaria \"tênis\" e \"tenista\", por exemplo).\nALTER TABLE produtos ADD COLUMN busca tsvector\n  GENERATED ALWAYS AS (\n    setweight(to_tsvector('simple', unaccent(coalesce(nome, ''))), 'A') ||\n    setweight(to_tsvector('simple', unaccent(coalesce(descricao, ''))), 'B')\n  ) STORED;\n\n-- CONCURRENTLY é a linha que mais importa nesta migration: sem ela, criar o\n-- índice pede ACCESS EXCLUSIVE na tabela inteira, e a integração de\n-- fornecedores para de escrever até o índice terminar de ser construído.\n-- Em 2,1 milhões de linhas isso não é segundos — é minutos de escrita travada.\nCREATE INDEX CONCURRENTLY idx_produtos_busca ON produtos USING GIN (busca);\n\n-- Sem isto o planejador decide com estatística desatualizada e pode preferir\n-- Seq Scan mesmo com o índice pronto — é a causa mais comum de \"criei o\n-- índice e continua lento\".\nANALYZE produtos;\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "Coluna gerada tem custo de escrita, e ele é do tamanho do texto",
+            "content": "Toda vez que `nome` ou `descricao` muda, o Postgres recalcula o `tsvector` inteiro da linha antes de confirmar a transação. Para uma descrição de produto isso é imperceptível; para um campo de texto longo — um manual, uma bula — a recomputação pode passar a aparecer na latência de escrita. Meça se o seu texto indexado for grande."
+          }
+        },
+        {
+          "id": "b8_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "O peso A/B não é decoração, é prioridade de campo",
+            "content": "`setweight(..., 'A')` no nome e `setweight(..., 'B')` na descrição fazem `ts_rank_cd` pontuar mais alto um produto cujo NOME contém o termo do que um cujo termo aparece só na descrição longa. Sem essa distinção, os dois pesam igual, e uma descrição extensa com o termo citado uma vez de passagem competiria de igual para igual com o nome exato."
+          }
+        },
+        {
+          "id": "b8_4",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "csharp",
+            "filename": "ProdutoBuscaRepository.cs",
+            "code": "// ProdutoBuscaRepository.cs — a consulta que usa o índice invertido do RDS\n\npublic sealed class ProdutoBuscaRepository\n{\n    private readonly NpgsqlDataSource _dataSource; // pool; nunca uma conexão por requisição\n\n    public ProdutoBuscaRepository(NpgsqlDataSource dataSource) => _dataSource = dataSource;\n\n    public async Task<IReadOnlyList<ProdutoResultado>> BuscarAsync(string termo, int limite = 20)\n    {\n        // websearch_to_tsquery aceita entrada de usuário sem quebrar: trata\n        // aspas, \"e\"/\"ou\" e hífen sem lançar erro de sintaxe, ao contrário de\n        // to_tsquery, que espera operadores já formatados.\n        const string sql = \"\"\"\n            SELECT id, nome, preco,\n                   -- ts_rank_cd pondera DENSIDADE dos termos no documento, não\n                   -- só a contagem — dois termos próximos pesam mais que dois\n                   -- termos espalhados no fim de uma descrição longa.\n                   ts_rank_cd(busca, websearch_to_tsquery('simple', @termo)) AS relevancia\n            FROM produtos\n            WHERE busca @@ websearch_to_tsquery('simple', @termo)\n            ORDER BY relevancia DESC\n            LIMIT @limite;\n            \"\"\";\n\n        await using var cmd = _dataSource.CreateCommand(sql);\n        cmd.Parameters.AddWithValue(\"termo\", unaccentar(termo));\n        cmd.Parameters.AddWithValue(\"limite\", limite);\n\n        var resultado = new List<ProdutoResultado>();\n        await using var reader = await cmd.ExecuteReaderAsync();\n        while (await reader.ReadAsync())\n        {\n            resultado.Add(new ProdutoResultado(\n                reader.GetGuid(0), reader.GetString(1), reader.GetDecimal(2), reader.GetFloat(3)));\n        }\n        return resultado;\n    }\n\n    // A normalização acontece nos dois lados: a coluna gerada já passa por\n    // unaccent(), e o termo de busca precisa do mesmo tratamento, senão\n    // \"tênis\" no banco nunca encontra \"tenis\" digitado sem acento.\n    private static string unaccentar(string termo) =>\n        termo.Normalize(NormalizationForm.FormD)\n             .Where(c => CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)\n             .Aggregate(new StringBuilder(), (sb, c) => sb.Append(c)).ToString();\n}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o pipeline de captura de mudança e o domínio OpenSearch"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O parâmetro do banco, a instância de replicação, os dois endpoints e a tarefa formam a ponte inteira. Repare que nenhum recurso aqui é código de aplicação."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "cdc.tf",
+            "code": "# cdc.tf — a ponte entre RDS e OpenSearch, sem escrita dupla no código\n\n# O interruptor que liga a captura de mudança. É parâmetro ESTÁTICO: exige\n# reboot da instância para valer. Ao aplicá-lo, o próprio RDS ajusta\n# wal_level, max_wal_senders, max_replication_slots e max_connections — não\n# defina esses quatro manualmente, ou a mudança automática pode conflitar.\nresource \"aws_db_parameter_group\" \"postgres_cdc\" {\n  name   = \"${var.projeto}-postgres-cdc\"\n  family = \"postgres16\"\n\n  parameter {\n    name         = \"rds.logical_replication\"\n    value        = \"1\"\n    apply_method = \"pending-reboot\"\n  }\n}\n\nresource \"aws_dms_replication_subnet_group\" \"principal\" {\n  replication_subnet_group_id          = \"${var.projeto}-dms\"\n  replication_subnet_group_description = \"Sub-redes privadas para a instância de replicação\"\n  subnet_ids                           = aws_subnet.privada[*].id\n}\n\nresource \"aws_dms_replication_instance\" \"principal\" {\n  replication_instance_id   = \"${var.projeto}-dms\"\n  replication_instance_class = \"dms.t3.medium\" # dimensione pelo volume de escrita, não pelo de leitura\n  allocated_storage          = 50\n  vpc_security_group_ids     = [aws_security_group.dms.id]\n  replication_subnet_group_id = aws_dms_replication_subnet_group.principal.id\n  publicly_accessible         = false\n}\n\nresource \"aws_dms_endpoint\" \"origem_rds\" {\n  endpoint_id   = \"${var.projeto}-origem-rds\"\n  endpoint_type = \"source\"\n  engine_name   = \"postgres\"\n  server_name   = aws_db_instance.principal.address\n  port          = 5432\n  database_name = \"cadencia\"\n  username      = \"dms_replicador\" # usuário dedicado, só com REPLICATION e SELECT em produtos\n  password      = data.aws_secretsmanager_secret_version.dms_credencial.secret_string\n}\n\nresource \"aws_dms_endpoint\" \"destino_opensearch\" {\n  endpoint_id   = \"${var.projeto}-destino-opensearch\"\n  endpoint_type = \"target\"\n  engine_name   = \"opensearch\"\n\n  elasticsearch_settings {\n    endpoint_uri            = \"https://${aws_opensearch_domain.busca.endpoint}\"\n    service_access_role_arn = aws_iam_role.dms_para_opensearch.arn\n    # Percentual de erro de FULL LOAD tolerado antes de a tarefa parar sozinha\n    # — protege contra indexar um catálogo pela metade sem ninguém notar.\n    full_load_error_percentage = 10\n    error_retry_duration       = 300\n  }\n}\n\nresource \"aws_dms_replication_task\" \"sincronizar_produtos\" {\n  replication_task_id      = \"${var.projeto}-sync-produtos\"\n  replication_instance_arn = aws_dms_replication_instance.principal.replication_instance_arn\n  source_endpoint_arn      = aws_dms_endpoint.origem_rds.endpoint_arn\n  target_endpoint_arn      = aws_dms_endpoint.destino_opensearch.endpoint_arn\n  # cdc-only pressupõe que o catálogo atual já foi carregado uma vez; para\n  # popular do zero, use \"full-load-and-cdc\" na primeira execução.\n  migration_type = \"cdc\"\n\n  table_mappings = jsonencode({\n    rules = [{\n      rule-type = \"selection\"\n      rule-id   = \"1\"\n      rule-name = \"produtos\"\n      object-locator = { schema-name = \"public\", table-name = \"produtos\" }\n      rule-action = \"include\"\n    }]\n  })\n}\n\nresource \"aws_opensearch_domain\" \"busca\" {\n  domain_name    = \"${var.projeto}-busca\"\n  engine_version = \"OpenSearch_2.15\"\n\n  cluster_config {\n    instance_type  = \"r6g.large.search\"\n    instance_count = 2 # 2 nós, 1 réplica por shard — sobrevive à perda de 1 nó\n  }\n\n  vpc_options {\n    subnet_ids         = [aws_subnet.privada[0].id]\n    security_group_ids = [aws_security_group.opensearch.id]\n  }\n\n  encrypt_at_rest { enabled = true }\n  node_to_node_encryption { enabled = true }\n\n  # Sem isto o domínio aceita requisição sem autenticação de usuário dentro da\n  # própria VPC — o security group limita QUEM alcança a porta, não QUEM pode\n  # ler cada documento depois de alcançá-la.\n  advanced_security_options {\n    enabled                        = true\n    internal_user_database_enabled = false\n    master_user_options {\n      master_user_arn = aws_iam_role.opensearch_admin.arn\n    }\n  }\n}\n\n# O papel que o DMS assume para escrever no OpenSearch. Ação restrita ao\n# domínio específico — não existe \"ESHttpPost em qualquer domínio\" aqui.\nresource \"aws_iam_role_policy\" \"dms_para_opensearch\" {\n  role = aws_iam_role.dms_para_opensearch.id\n  policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect   = \"Allow\"\n      Action   = [\"es:ESHttpPost\", \"es:ESHttpPut\", \"es:ESHttpGet\", \"es:ESHttpHead\"]\n      Resource = \"${aws_opensearch_domain.busca.arn}/*\"\n    }]\n  })\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Slot de replicação órfão enche o disco do RDS, e não avisa sozinho",
+            "content": "Enquanto existe um slot de replicação lógica ativo, o Postgres NÃO PODE descartar segmentos de WAL que o slot ainda não confirmou ter lido — mesmo que ninguém esteja consumindo. Se a tarefa do DMS for apagada sem que o slot seja explicitamente dropado, o WAL cresce indefinidamente até o armazenamento do RDS se esgotar. Isso é `perda de disponibilidade do banco de escrita inteiro`, não só da busca — trate a remoção do slot como parte obrigatória de desligar a tarefa, nunca como opcional."
+          }
+        },
+        {
+          "id": "b9_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "O `*` que não existe nesta política, de propósito",
+            "content": "A política do papel do DMS restringe `Resource` ao ARN do domínio OpenSearch específico. Diferente do `ecr:GetAuthorizationToken` do L03, as ações `es:ESHttp*` aceitam recurso específico — então não há justificativa para usar `*` aqui, e usá-lo autorizaria o DMS a escrever em qualquer domínio da conta."
+          }
+        },
+        {
+          "id": "b9_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "success",
+            "title": "Repovoar do zero é um comando, não um projeto",
+            "content": "Como o RDS continua sendo a fonte da verdade, apagar o índice do OpenSearch e rodar a tarefa de novo com `full-load-and-cdc` reconstrói o catálogo inteiro de busca. É o que torna o índice derivado seguro de operar: o pior caso de erro humano no OpenSearch tem recuperação conhecida, ao contrário de perder dado no RDS."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: a consulta com tolerância a erro"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O código de leitura muda de motor, não de forma: ainda é \"recebe termo, devolve lista ordenada por relevância\" — só que a implementação de relevância é outra."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "BuscaOpenSearchService.cs",
+            "code": "// BuscaOpenSearchService.cs — a mesma pergunta, motor diferente, resposta que pode divergir em ordem\n\npublic sealed class BuscaOpenSearchService\n{\n    private readonly OpenSearchClient _cliente;\n\n    public BuscaOpenSearchService(OpenSearchClient cliente) => _cliente = cliente;\n\n    public async Task<IReadOnlyList<ProdutoResultado>> BuscarAsync(string termo, int limite = 20)\n    {\n        var resposta = await _cliente.SearchAsync<ProdutoDocumento>(s => s\n            .Index(\"produtos\")\n            .Size(limite)\n            .Query(q => q\n                .Match(m => m\n                    .Field(f => f.Descricao)\n                    .Query(termo)\n                    // AUTO: 0-2 caracteres exige igualdade exata; 3-5 tolera\n                    // 1 edição; acima de 5, tolera 2. É a distância de edição\n                    // Damerau-Levenshtein, e é o que o tsvector do RDS não tem.\n                    .Fuzziness(Fuzziness.Auto)\n                    .Operator(Operator.And))));\n\n        if (!resposta.IsValid)\n        {\n            // Falha aqui NÃO significa catálogo vazio — pode ser domínio\n            // indisponível. Devolver lista vazia silenciosamente faria o\n            // lojista concluir \"não temos esse produto\" por um erro de infra.\n            throw new BuscaIndisponivelException(resposta.DebugInformation);\n        }\n\n        // _score vem do BM25 padrão do OpenSearch: frequência do termo NO\n        // documento, saturada, contra a frequência do termo NO corpus inteiro\n        // — por isso a ordem pode diferir do ts_rank do RDS sem ser bug.\n        return resposta.Hits\n            .Select(h => new ProdutoResultado(h.Source.Id, h.Source.Nome, h.Source.Preco, h.Score ?? 0))\n            .ToList();\n    }\n}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Implantar, e provar com número"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma aceita \"parece mais rápido\" como resultado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medições; nenhuma conclusão vem de \"parece mais rápido\"\n\nPROJETO=ffv-lab-busca\n\n# ── Prova 1: o plano muda de Seq Scan para Bitmap Index Scan ─────────────────\npsql -c \"EXPLAIN ANALYZE SELECT id FROM produtos WHERE descricao ILIKE '%tenis azul%';\"\n# Esperado ANTES: \"Seq Scan on produtos ... rows=2100000 ... Execution Time: ~1800 ms\"\npsql -c \"EXPLAIN ANALYZE SELECT id FROM produtos\n         WHERE busca @@ websearch_to_tsquery('simple', 'tenis azul');\"\n# Esperado DEPOIS: \"Bitmap Heap Scan ... Bitmap Index Scan on idx_produtos_busca\n#                    ... Execution Time: ~8 ms\"\n# Reprova: se o segundo comando ainda mostrar Seq Scan, rode ANALYZE produtos\n# — estatística desatualizada faz o planejador ignorar um índice existente.\n\n# ── Prova 2: tolerância a erro de digitação, RDS não tem; OpenSearch tem ─────\npsql -c \"SELECT count(*) FROM produtos\n         WHERE busca @@ websearch_to_tsquery('simple', 'tenes');\"\n# Esperado: 0 — \"tenes\" não é lexema de \"tênis\", é erro de digitação, não\n# variação gramatical, e o tsvector não corrige isso.\ncurl -s -X GET \"https://$OS_ENDPOINT/produtos/_search\" -H 'Content-Type: application/json' -d '\n  {\"query\":{\"match\":{\"descricao\":{\"query\":\"tenes\",\"fuzziness\":\"AUTO\"}}}}' \\\n  | jq '.hits.total.value'\n# Esperado: > 0 — o mesmo termo com erro encontra resultado no OpenSearch.\n\n# ── Prova 3: o atraso de sincronização é mensurável, não hipotético ──────────\npsql -c \"UPDATE produtos SET estoque = estoque - 1 WHERE id = '$SKU_TESTE';\"\nT0=$(date +%s%3N)\nuntil curl -s \"https://$OS_ENDPOINT/produtos/_doc/$SKU_TESTE\" | jq -e '.found' >/dev/null; do\n  sleep 0.2\ndone\necho \"atraso observado: $(( $(date +%s%3N) - T0 )) ms\"\n# Na base de exemplo, sob carga normal: 400-900 ms. Sob carga em lote do\n# fornecedor: até alguns segundos. MEÇA no seu ambiente — depende do volume\n# de escrita concorrente e da classe da instância de replicação.\n\n# ── Prova 4: a leitura de busca saiu do caminho do RDS ───────────────────────\naws cloudwatch get-metric-statistics --namespace AWS/RDS \\\n  --metric-name CPUUtilization --statistics Average --period 300 \\\n  --start-time \"$(date -u -d '-1 hour' +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --dimensions Name=DBInstanceIdentifier,Value=${PROJETO} --output table\n# Esperado: CPU do RDS estável durante um teste de carga de busca — se subir\n# junto com o teste, a busca ainda está batendo no banco relacional.\n\n# ── Prova 5: o índice do OpenSearch reconstrói a partir do RDS ───────────────\n# Prova de que OpenSearch é derivado, não fonte da verdade: apague o índice e\n# recarregue com uma tarefa full-load-and-cdc nova. Se o RDS não bastasse para\n# reconstruir, a arquitetura teria um problema mais sério que atraso.\ncurl -s -X DELETE \"https://$OS_ENDPOINT/produtos\"\naws dms start-replication-task --replication-task-arn \"$TASK_ARN\" \\\n  --start-replication-task-type reload-target\n# Esperado: contagem de documentos volta a bater com \"SELECT count(*) FROM produtos\"\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Plano de execução mudou",
+                "`EXPLAIN ANALYZE` antes e depois do índice",
+                "Seq Scan vira Bitmap Index Scan; tempo cai de ~1,8 s para dezenas de ms",
+                "se continuar Seq Scan com o índice criado, rode `ANALYZE produtos` — estatística desatualizada"
+              ],
+              [
+                "2 · Tolerância a erro de digitação",
+                "busca por \"tenes\" nos dois motores",
+                "zero no RDS (esperado); maior que zero no OpenSearch",
+                "zero também no OpenSearch indica fuzziness desligado ou campo errado na consulta"
+              ],
+              [
+                "3 · Atraso de sincronização é medível",
+                "escrever e cronometrar até aparecer no índice",
+                "centenas de ms sob carga normal, na base de exemplo",
+                "atraso crescente e não estabilizando indica fila de apply saturada — reveja a classe da instância de replicação"
+              ],
+              [
+                "4 · Busca saiu do caminho do RDS",
+                "CPU do RDS durante teste de carga de busca",
+                "CPU do RDS estável, sem correlação com o teste",
+                "CPU subindo junto indica que a busca ainda está caindo no RDS, não no OpenSearch"
+              ],
+              [
+                "5 · OpenSearch é derivado, não fonte",
+                "apagar índice e recarregar via DMS",
+                "contagem de documentos volta a bater com a contagem no RDS",
+                "se não bater, a tarefa de full load falhou parcialmente — cheque `full_load_error_percentage`"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Índice sem CONCURRENTLY em produção",
+                "rode `CREATE INDEX` (sem `CONCURRENTLY`) na tabela de produção durante o expediente",
+                "integração de fornecedores para de gravar; alerta de timeout de escrita",
+                "`pg_stat_activity` mostra a sessão do CREATE INDEX segurando lock ACCESS EXCLUSIVE",
+                "cancele a migration, recrie com `CONCURRENTLY`, aceite que ela demora mais"
+              ],
+              [
+                "Slot de replicação abandonado",
+                "apague a tarefa do DMS sem antes parar a tarefa e dropar o slot",
+                "armazenamento do RDS cresce sem explicação nos dias seguintes",
+                "`pg_replication_slots` mostra o slot com `active = false` e `restart_lsn` parado",
+                "`SELECT pg_drop_replication_slot(...)` e refazer o desligamento na ordem certa"
+              ],
+              [
+                "Fuzziness desligado por padrão",
+                "use `match` sem `fuzziness` explícito e busque um termo com erro de digitação real",
+                "busca com erro de digitação devolve zero resultado; lojista acha que o produto não existe",
+                "a query enviada ao OpenSearch não tem o campo `fuzziness`",
+                "defina `fuzziness: \"AUTO\"` explicitamente; não confie em padrão implícito"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "danger",
+            "title": "A combinação que apaga o catálogo de busca sem apagar o catálogo de verdade",
+            "content": "Excluir o índice do OpenSearch por engano não é irreversível — o RDS continua sendo a fonte de dado — mas, enquanto o índice não é reconstruído, TODA busca no aplicativo volta a zero resultado, para 2,1 milhões de produtos, ao mesmo tempo. É o tipo de incidente que parece pequeno no painel de infraestrutura e é enorme na tela do lojista."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25_0",
+      "type": "quiz",
+      "position": 13,
+      "data": {
+        "question": "Uma tabela de produtos tem um índice-B comum na coluna `descricao`. Mesmo assim, `WHERE descricao ILIKE '%tenis%'` faz uma varredura completa da tabela. Por quê?",
+        "options": [
+          "O curinga à esquerda torna a posição do termo desconhecida, e um índice-B — estrutura ordenada — não elimina candidato nenhum nesse padrão",
+          "A tabela tem linhas demais para qualquer índice ajudar",
+          "Faltou rodar ANALYZE depois de criar o índice",
+          "ILIKE nunca usa índice, só LIKE sensível a maiúsculas usa"
+        ],
+        "correctIndex": 0,
+        "explanation": "A causa é estrutural, não de manutenção: um índice-B organiza os valores em ordem, e essa ordem só ajuda quando se sabe o INÍCIO do que procurar — por isso `LIKE 'tenis%'` pode usar o índice, e `LIKE '%tenis%'` não pode, porque o termo pode estar em qualquer posição da string, e nenhuma ordenação elimina candidato nesse caso. A correção não é \"criar índice\", é criar um índice de OUTRO TIPO, desenhado para conter — como GIN sobre uma coluna tsvector.\n\nA primeira alternativa erra o mecanismo: volume de linhas afeta o CUSTO da varredura, mas não é a causa de o índice não ser usado — mesmo uma tabela pequena teria o mesmo problema estrutural. A terceira confunde índice-B ausente de uso com estatística desatualizada; aqui o índice simplesmente não SERVE para esse padrão de busca, nenhuma estatística muda isso. A quarta inventa uma regra que não existe: `ILIKE` e `LIKE` têm exatamente a mesma limitação de curinga à esquerda; a diferença entre eles é só sensibilidade a maiúsculas, não capacidade de usar índice."
+      }
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 14,
+      "data": {
+        "title": "Segurança: dois sistemas com o mesmo dado, dois raios de exposição"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Duplicar o catálogo em outro serviço duplica também a superfície de quem pode lê-lo. O RDS já tinha essa disciplina; o OpenSearch precisa da mesma, do zero."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Domínio OpenSearch acessível sem controle de acesso refinado",
+                "média",
+                "alto",
+                "`advanced_security_options` com usuário mestre; nunca `internal_user_database_enabled` solto",
+                "CloudTrail de chamadas `es:*`; auditoria de política do domínio",
+                "restringir a política, rotacionar credencial do usuário mestre"
+              ],
+              [
+                "Slot de replicação lógica exposto a credencial de longa duração",
+                "média",
+                "médio",
+                "usuário `dms_replicador` dedicado, só com `REPLICATION` e `SELECT` na tabela necessária",
+                "CloudTrail em `CreateEndpoint`; auditoria de conexões ao slot",
+                "revogar e recriar a credencial no Secrets Manager"
+              ],
+              [
+                "Slot de replicação órfão esgota armazenamento do RDS",
+                "baixa",
+                "alto",
+                "checklist de desligamento: parar tarefa → dropar slot → só então remover endpoint",
+                "alarme de `FreeStorageSpace` do RDS e de `pg_replication_slots` inativo",
+                "dropar o slot manualmente; escalar armazenamento como contenção imediata"
+              ],
+              [
+                "Dado de catálogo desatualizado no índice de busca engana o cliente sobre estoque",
+                "média",
+                "médio",
+                "alarme de `CDCLatencyTarget`; SLA interno de atraso máximo aceitável",
+                "comparar contagem e amostra entre RDS e OpenSearch periodicamente",
+                "pausar venda do item afetado até o índice reconciliar, se o atraso for crítico"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que o usuário do DMS não é o usuário da aplicação",
+            "content": "A aplicação usa um papel de execução com permissão só de leitura e escrita nas tabelas de negócio. O usuário `dms_replicador` precisa, além disso, do privilégio `REPLICATION`, que autoriza consumir slots lógicos — um privilégio que a aplicação em si nunca deveria ter. Separar os dois usuários limita o estrago de uma credencial vazada a um papel só."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "A busca ainda varre a tabela inteira?",
+                "`EXPLAIN` do plano em produção (amostragem)",
+                "Seq Scan reaparecendo indica estatística desatualizada ou índice corrompido",
+                "qualquer Seq Scan em produção"
+              ],
+              [
+                "A captura de mudança está funcionando?",
+                "DMS `CDCLatencySource` e `CDCLatencyTarget`",
+                "crescimento contínuo indica fila acumulando mais rápido que o apply",
+                "> 10 s sustentado por 5 min"
+              ],
+              [
+                "O slot de replicação está sendo consumido?",
+                "`pg_replication_slots.active`",
+                "`false` persistente é o sinal do slot órfão que enche o disco",
+                "qualquer `false` por mais de alguns minutos"
+              ],
+              [
+                "O RDS ainda faz o trabalho de busca?",
+                "`CPUUtilization` do RDS correlacionado com tráfego de busca",
+                "correlação indica que a migração de leitura para o OpenSearch não está completa",
+                "correlação visível no gráfico"
+              ],
+              [
+                "O índice de busca está saudável?",
+                "OpenSearch `_cluster/health` (status)",
+                "`yellow` indica réplica de shard não alocada; `red` indica shard primário perdido",
+                "diferente de `green`"
+              ],
+              [
+                "O catálogo de busca bate com a origem?",
+                "contagem periódica RDS vs. OpenSearch",
+                "divergência sustentada indica falha silenciosa na tarefa do DMS",
+                "diferença > 0,1% do total"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que some quando mais precisa dela",
+            "content": "Sob pico de escrita — uma carga em lote do fornecedor — `CDCLatencyTarget` é exatamente a métrica que sobe, e é exatamente quando ninguém está olhando o painel de replicação, porque a atenção vai para o painel de negócio. Alarme automático nesta métrica substitui a vigilância manual que a equipe pequena não tem."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão de buscas por dia"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 buscas/dia, catálogo de 2,1 M",
+                "GIN no RDS responde em poucos ms; nem precisa de OpenSearch",
+                "nada",
+                "nada — o estágio 1 já é suficiente e o estágio 2 seria adorno"
+              ],
+              [
+                "10 mil buscas/dia",
+                "GIN ainda responde bem; a contenção com escrita começa a aparecer em pico",
+                "CPU do RDS compartilhada entre busca e integração de fornecedores",
+                "medir a contenção antes de decidir — não migrar por suposição"
+              ],
+              [
+                "1 milhão de buscas/dia",
+                "RDS sozinho satura; é o volume que justifica o estágio 2",
+                "busca e OLTP competindo de verdade pelo mesmo recurso",
+                "OpenSearch com réplica de leitura; considerar mais de 2 nós para tolerância a falha de AZ"
+              ],
+              [
+                "Pico de escrita em lote do fornecedor",
+                "a fila de apply do DMS cresce mais rápido que o normal",
+                "atraso de sincronização visível no aplicativo — produto \"sumido\" temporariamente da busca",
+                "alarmar `CDCLatencyTarget`; se recorrente, redimensionar a instância de replicação"
+              ],
+              [
+                "Falha de AZ",
+                "nó do OpenSearch na AZ afetada some; réplica de shard assume",
+                "com `instance_count = 2` numa única AZ, a busca fica indisponível até substituição",
+                "distribuir os 2+ nós em AZs diferentes — é o mesmo raciocínio de Multi-AZ do RDS"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Custo: o que cada estágio acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "É a razão de o desenho ter dois estágios em vez de um: o primeiro literalmente não acrescenta recurso novo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Estágio 1 — GIN no RDS",
+                "qualquer volume até a contenção aparecer",
+                "espaço de armazenamento do índice (proporcional ao texto indexado) e CPU de reindexação por escrita",
+                "baixa e previsível",
+                "nenhuma; é o estágio mais barato possível"
+              ],
+              [
+                "Estágio 2 — OpenSearch + DMS, catálogo pequeno",
+                "2,1 M documentos, tráfego moderado",
+                "instância de replicação do DMS + 2 nós do domínio OpenSearch, ligados o tempo todo",
+                "fixa por hora, independente do volume de busca",
+                "dimensionar a instância de replicação pelo pico de escrita, não pela média"
+              ],
+              [
+                "Estágio 2 — alta escala",
+                "catálogo maior, múltiplos shards e réplicas",
+                "mais nós no domínio, mais storage de índice (o índice invertido soma ao dado original)",
+                "cresce com volume de documentos e de réplica",
+                "ajustar contagem de shards ao tamanho real; shard demais também custa"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Instância de replicação do DMS",
+                "hora ligada, pela classe escolhida",
+                "fica ligada o tempo todo em modo CDC contínuo — não é cobrança pontual de migração"
+              ],
+              [
+                "Domínio OpenSearch",
+                "hora ligada por nó + storage por GB",
+                "nó em VPC ainda cobra por hora mesmo sem nenhuma busca acontecendo"
+              ],
+              [
+                "Armazenamento do índice invertido",
+                "GB do índice, adicional ao dado original",
+                "um índice de texto pode pesar próximo do tamanho do dado que indexa"
+              ],
+              [
+                "Transferência entre RDS e domínio",
+                "geralmente de graça na mesma AZ/VPC",
+                "atravessar AZ para o domínio soma taxa de transferência entre zonas"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho que não aparece na fatura da AWS",
+            "content": "O tempo de suporte gasto respondendo \"por que a busca não encontra meu produto\" some quando fuzziness resolve o erro de digitação — isso não é linha de infraestrutura, é redução de chamado, e foi o motivo de negócio real por trás do estágio 2 na Cadência."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "atraso de sincronização medido e alarmado; slot de replicação com checklist de desligamento",
+                "checklist ainda é manual — depende de alguém seguir a ordem certa",
+                "automação que dropa o slot como parte do pipeline de destruição do ambiente",
+                "média"
+              ],
+              [
+                "Segurança",
+                "papel do DMS restrito ao domínio; usuário de replicação com privilégio mínimo",
+                "controle de acesso refinado do OpenSearch ainda usa usuário mestre único",
+                "IAM Identity Center federado no lugar de usuário mestre fixo",
+                "alta"
+              ],
+              [
+                "Confiabilidade",
+                "índice reconstrói do zero a partir do RDS; RDS continua sendo a fonte da verdade",
+                "2 nós numa única AZ não sobrevivem à falha dela",
+                "distribuir nós do domínio em pelo menos 2 AZs",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "busca saiu do caminho do OLTP; consulta usa índice de verdade nos dois motores",
+                "nenhum cache de consulta frequente ainda",
+                "cache de resultado para os termos mais buscados",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "estágio 1 sem custo novo; estágio 2 só introduzido com requisito medido",
+                "instância de replicação do DMS fica ligada mesmo fora de pico",
+                "avaliar DMS Serverless para o padrão de carga variável",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "um único pipeline de sincronização em vez de escrita duplicada em código",
+                "dois sistemas guardando o mesmo dado é redundância física, ainda que justificada",
+                "revisar periodicamente se o requisito que justificou o estágio 2 continua verdadeiro",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho novo: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "De LIKE cru a busca híbrida com IA — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "`ILIKE '%termo%'` direto na tabela. É onde a Cadência estava, e continua legítimo em catálogo pequeno ou ambiente de desenvolvimento.",
+                "note": "Risco resolvido: nenhum. Novo risco: cada busca varre a tabela inteira, e o custo cresce linearmente com o catálogo. Custo: zero — é o motivo de sobreviver tanto tempo."
+              },
+              {
+                "label": "Nível 2 — Este laboratório, estágio 1",
+                "instruction": "Coluna tsvector gerada, índice GIN, `ts_rank_cd` para ordenar por relevância.",
+                "note": "Risco resolvido: varredura completa. Novo risco: nenhuma tolerância a erro de digitação, e reindexação a cada escrita do campo indexado. Custo: espaço de índice, desprezível em CPU."
+              },
+              {
+                "label": "Nível 3 — Este laboratório, estágio 2",
+                "instruction": "OpenSearch com fuzziness, sincronizado por captura de mudança via DMS.",
+                "note": "Risco resolvido: falta de tolerância a erro e contenção com o OLTP. Novo risco: atraso de sincronização e um segundo sistema guardando o mesmo dado. Custo: nó do domínio + instância de replicação, fixos por hora."
+              },
+              {
+                "label": "Nível 4 — Alta escala",
+                "instruction": "Múltiplos shards e réplicas distribuídos em AZs, cache de consulta frequente, instância de replicação dimensionada pelo pico de escrita.",
+                "note": "Risco resolvido: falha de AZ derrubando a busca inteira. Novo risco: shard mal dimensionado degrada tanto quanto shard de menos. Custo: cresce com nós e réplica."
+              },
+              {
+                "label": "Nível 5 — Plataforma",
+                "instruction": "Busca como serviço compartilhado entre catálogos e times diferentes, com contrato de SLA de atraso de indexação e observabilidade própria.",
+                "note": "Risco resolvido: cada time reinventando o mesmo pipeline de sincronização. Novo risco: um domínio compartilhado vira ponto único de contenção entre times. Custo: diluído, mas a operação vira um produto interno."
+              },
+              {
+                "label": "Nível 6 — Dados e IA",
+                "instruction": "Busca híbrida: BM25 léxico combinado com similaridade vetorial, e reranqueamento por modelo — é o L85 e o L94.",
+                "note": "Risco resolvido: busca léxica não encontra sinônimo nem intenção (\"tênis para corrida\" não acha \"calçado esportivo\"). Novo risco: latência e custo por consulta sobem, e a relevância deixa de ser 100% explicável. Custo: chamada de modelo por busca, não mais só infraestrutura fixa."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Busca híbrida no nível 6 pressupõe um índice léxico funcionando — é o texto que ancora a comparação com o resultado vetorial. Quem tenta embeddings antes de ter a busca por palavra-chave resolvida está resolvendo o problema mais difícil primeiro, e sem forma de saber se o resultado é melhor do que o caminho mais simples que ainda não tentou."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não entra em lugar nenhum do mecanismo central, e forçá-la seria o antipadrão que a própria série critica. `ts_rank_cd` e BM25 são estatística clássica de recuperação de informação — frequência de termo, ponderada — não aprendizado de máquina. Nada aqui precisa de modelo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O lugar honesto onde IA agregaria é diferente do problema deste laboratório: encontrar produto por INTENÇÃO em vez de por PALAVRA. \"algo para correr no frio\" não bate com nenhum lexema literal de \"tênis térmico\", por melhor que seja o índice invertido — isso exige comparação semântica (embeddings), que é um mecanismo genuinamente diferente, não uma versão mais esperta do BM25."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "casar intenção do lojista com produto quando não há sobreposição literal de palavra"
+              ],
+              [
+                "Por que BM25 melhor calibrado não bastaria?",
+                "porque o limite é semântico, não de peso: nenhum ajuste de frequência faz \"correr no frio\" casar com \"térmico\" sem entender os dois conceitos"
+              ],
+              [
+                "De onde viriam os dados?",
+                "o próprio catálogo, para gerar embeddings de produto — reaproveitando o pipeline de sincronização deste módulo"
+              ],
+              [
+                "Qual o risco?",
+                "relevância deixa de ser 100% explicável, e latência/custo por busca sobem — cada consulta passa a chamar um modelo"
+              ],
+              [
+                "Por que não agora?",
+                "porque o catálogo ainda não tem busca léxica resolvida em produção — IA sobre um índice que não existe ainda é decoração"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b19_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"entender o que o lojista quis dizer\" e reescrever a consulta antes de mandar para o índice troca um mecanismo determinístico e barato — normalização de acento e stemming — por um probabilístico e mais lento, para resolver exatamente o problema que `unaccent` e `to_tsvector` já resolvem de graça. IA sobre texto tem lugar quando o problema é semântico, e \"tenes\" para \"tênis\" não é: é digitação."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "`ILIKE '%termo%'` direto na tabela de produção",
+                "é a primeira coisa que funciona, e funciona bem com poucos dados em desenvolvimento",
+                "curinga à esquerda impede QUALQUER índice-B; o custo cresce com o tamanho do catálogo",
+                "busca lenta que piora mês a mês, sem nenhuma mudança de código",
+                "coluna tsvector gerada + índice GIN",
+                "catálogo pequeno (poucos milhares de linhas) ou ambiente de teste"
+              ],
+              [
+                "`CREATE INDEX` sem `CONCURRENTLY` em produção",
+                "é o comando que aparece primeiro em qualquer tutorial, e roda mais rápido",
+                "pede lock ACCESS EXCLUSIVE na tabela inteira até terminar de construir",
+                "escrita travada por minutos, sem erro explícito — parece \"banco lento\"",
+                "`CREATE INDEX CONCURRENTLY`",
+                "janela de manutenção com escrita já pausada por outro motivo"
+              ],
+              [
+                "Escrita dupla síncrona no código para manter os dois índices iguais",
+                "parece mais fácil de raciocinar do que \"confiar num pipeline que ninguém vê\"",
+                "acopla duas transações independentes; falha de uma trava ou corrompe a outra",
+                "gravação no RDS falhando por causa de timeout do OpenSearch, ou os dois divergindo em silêncio",
+                "captura de mudança assíncrona via log de replicação",
+                "nunca em produção; aceitável só em protótipo descartável"
+              ],
+              [
+                "Tratar o OpenSearch como fonte de verdade do catálogo",
+                "parece redundante manter o dado em dois lugares, então \"por que não ler e escrever só ali\"",
+                "perde as garantias transacionais do RDS; OpenSearch não foi desenhado para ser sistema de registro",
+                "inconsistência de preço/estoque sem transação para investigar",
+                "RDS como fonte da verdade; OpenSearch como índice derivado, reconstruível",
+                "nunca — nem em protótipo, porque hábito é difícil de desfazer depois"
+              ],
+              [
+                "Apagar a tarefa do DMS sem dropar o slot de replicação",
+                "a tarefa \"some\" da lista, então parece que está tudo limpo",
+                "o Postgres retém WAL indefinidamente enquanto o slot existir, mesmo sem consumidor",
+                "armazenamento do RDS crescendo sem explicação óbvia nos dias seguintes",
+                "parar a tarefa, confirmar `active = false`, dropar o slot explicitamente, só então remover o endpoint",
+                "nunca é aceitável pular a ordem — o custo é sempre o mesmo"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Busca continua lenta mesmo com o índice GIN criado",
+                "estatística desatualizada faz o planejador preferir Seq Scan",
+                "compare o plano com e sem `SET enable_seqscan = off`",
+                "`EXPLAIN ANALYZE` mostrando Seq Scan apesar do índice existir",
+                "`ANALYZE produtos`; se persistir, `REINDEX INDEX CONCURRENTLY idx_produtos_busca`"
+              ],
+              [
+                "Produto recém-cadastrado não aparece na busca do OpenSearch",
+                "atraso normal de sincronização, ou tarefa do DMS parada",
+                "confira o status da tarefa e a métrica de atraso",
+                "console do DMS → status da tarefa; `CDCLatencyTarget`",
+                "se parada, reinicie a tarefa; se só atrasada, aguarde ou escale a instância de replicação"
+              ],
+              [
+                "Armazenamento do RDS crescendo sem explicação",
+                "slot de replicação lógica órfão retendo WAL",
+                "liste os slots e confira `active` e `restart_lsn`",
+                "`SELECT * FROM pg_replication_slots;`",
+                "dropar o slot órfão com `pg_drop_replication_slot`"
+              ],
+              [
+                "Escrita no RDS ficou mais lenta depois de habilitar CDC",
+                "overhead de gerar e transmitir WAL lógico, maior que o físico",
+                "compare `WAL generation rate` antes e depois de ligar `rds.logical_replication`",
+                "CloudWatch: `WriteIOPS` e taxa de geração de WAL",
+                "considere instância maior, ou reduza a frequência de commit em lote de escrita"
+              ],
+              [
+                "Busca com erro de digitação não encontra nada, mesmo no OpenSearch",
+                "consulta sem `fuzziness` explícito, ou campo errado",
+                "confira o corpo da consulta enviada, não só o resultado",
+                "log da aplicação com o JSON da requisição ao OpenSearch",
+                "definir `fuzziness: \"AUTO\"` explicitamente no campo certo"
+              ],
+              [
+                "Cluster OpenSearch em status \"yellow\"",
+                "réplica de shard não alocada, geralmente por nó insuficiente ou única AZ",
+                "consulte `_cluster/health` e a distribuição de shards por nó",
+                "`GET _cluster/health?level=shards`",
+                "aumentar contagem de nós ou distribuir em mais de uma AZ"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em parâmetro, pergunte: o problema está na ESCRITA (RDS, WAL, slot) ou na LEITURA (consulta, índice, motor)? As duas famílias de sintoma se parecem — \"a busca não funciona\" — mas apontam para metades diferentes do desenho, e mexer no lado errado não muda nada."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A ordem de desligamento importa mais aqui do que em qualquer outro laboratório da série: inverter a sequência deixa um slot de replicação órfão consumindo armazenamento."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Pare a tarefa do DMS ANTES de tocar em qualquer outra coisa.\naws dms stop-replication-task --replication-task-arn \"$TASK_ARN\"\naws dms wait replication-task-stopped --replication-task-arn \"$TASK_ARN\"\n\n# 2. Confirme e derrube o slot de replicacao logica no PROPRIO Postgres.\n#    O Terraform NAO administra isto — o slot e criado pelo DMS dentro do banco,\n#    nao e um recurso da AWS que o destroy enxergue.\npsql -c \"SELECT slot_name, active FROM pg_replication_slots;\"\npsql -c \"SELECT pg_drop_replication_slot('nome_do_slot');\"\n\n# 3. So agora derrube a infraestrutura administrada pelo Terraform.\nterraform destroy -auto-approve\n\n# 4. Confirme que o dominio OpenSearch realmente sumiu — ele NAO tem\n#    \"protecao contra delecao\" ligada por padrao, mas confirme mesmo assim,\n#    porque e a linha mais cara desta lista.\naws opensearch describe-domain --domain-name ffv-lab-busca 2>&1 | head -5\n\n# 5. Reverta o parametro no grupo de parametros do RDS, se o L14 nao for\n#    continuar usando replicacao logica para outra coisa.\naws rds describe-db-parameters --db-parameter-group-name ffv-lab-postgres-cdc \\\n  --query \"Parameters[?ParameterName=='rds.logical_replication']\"\n\n# 6. Prova final: nada com o nome do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab-busca --output table"
+          }
+        },
+        {
+          "id": "b22_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Slot de replicação lógica",
+                "não — não é recurso da AWS",
+                "sim, indiretamente: WAL retido",
+                "vive dentro do Postgres; só some com `pg_drop_replication_slot` explícito"
+              ],
+              [
+                "Instância de replicação do DMS",
+                "sim",
+                "sim, por hora, enquanto existe",
+                "cobrança para assim que criada, independente de estar processando algo"
+              ],
+              [
+                "Domínio OpenSearch",
+                "sim",
+                "sim, por nó-hora + storage",
+                "sem proteção contra deleção por padrão — confirme, não presuma"
+              ],
+              [
+                "Coluna tsvector e índice GIN no RDS",
+                "sim, se a migration for revertida",
+                "não isoladamente",
+                "faz parte do schema; sai junto se a tabela for descartada, não com o `terraform destroy` do estágio 2"
+              ],
+              [
+                "Grupo de parâmetros com `rds.logical_replication`",
+                "sim, se removido do Terraform",
+                "não",
+                "reverter exige outro reboot da instância — planeje a janela"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "terraform destroy não sabe que o slot existe",
+            "content": "O slot de replicação lógica não é um recurso do Terraform: ele foi criado pelo DMS dentro do próprio Postgres, e o `state` do Terraform nunca soube dele. Rodar `destroy` primeiro e verificar o slot depois inverte a ordem que este laboratório insiste em repetir — e é assim que a maioria dos slots órfãos desta série nasce."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Curinga à esquerda impede o índice-B",
+                "coluna tsvector gerada + índice GIN",
+                "índice invertido de verdade: lexema aponta direto para a linha, sem varrer nada"
+              ],
+              [
+                "Índice novo trava escrita concorrente",
+                "`CREATE INDEX CONCURRENTLY`",
+                "constrói sem lock exclusivo — custa tempo, não disponibilidade"
+              ],
+              [
+                "Sem tolerância a erro de digitação",
+                "OpenSearch com `fuzziness: AUTO`",
+                "distância de edição de verdade, calibrada pelo tamanho do termo"
+              ],
+              [
+                "Busca compete com OLTP por CPU",
+                "leitura de busca movida para o OpenSearch",
+                "o RDS volta a fazer só o trabalho de registro"
+              ],
+              [
+                "Sincronizar sem escrita dupla no código",
+                "AWS DMS lendo o WAL em modo CDC",
+                "lê o log, não a tabela; zero código de sincronização para manter"
+              ],
+              [
+                "Atraso de sincronização escondido vira incidente",
+                "alarme em `CDCLatencyTarget`",
+                "torna o atraso uma métrica visível, não uma surpresa do lojista"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Varredura completa a cada busca",
+                "índice GIN sobre tsvector",
+                "erro de digitação — GIN não tolera isso, só variação gramatical da mesma raiz"
+              ],
+              [
+                "Escrita travada ao criar índice",
+                "`CREATE INDEX CONCURRENTLY`",
+                "duas migrations DDL concorrentes na mesma tabela — ainda conflitam"
+              ],
+              [
+                "Busca sem resultado por erro de digitação",
+                "fuzziness AUTO no OpenSearch",
+                "erro semântico — \"algo para correr no frio\" não encontra \"tênis térmico\""
+              ],
+              [
+                "Slot de replicação órfão",
+                "checklist de desligamento em ordem",
+                "esquecimento humano — nada aqui é automático até o nível 5"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "A escrita do fornecedor grava só no RDS, exatamente como antes de qualquer coisa deste módulo.",
+              "O Postgres registra a mudança no WAL antes de confirmar a transação — mecanismo de durabilidade, reaproveitado.",
+              "O slot de replicação lógica decodifica a mudança e o DMS a consome continuamente.",
+              "O DMS transforma a linha em documento e o envia ao domínio OpenSearch.",
+              "Em paralelo, o lojista digita um termo — com ou sem erro de digitação.",
+              "A API roteia a consulta ao OpenSearch, nunca ao RDS, para o caminho de busca.",
+              "A consulta com `fuzziness: AUTO` tolera até 2 edições de digitação, conforme o tamanho do termo.",
+              "BM25 ordena por frequência do termo no documento contra a raridade no corpus.",
+              "O resultado paginado volta ao lojista, ordenado por relevância — não por ordem de cadastro.",
+              "O alarme de `CDCLatencyTarget` teria avisado se a fila de sincronização tivesse acumulado."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que LIKE '%termo%' não usa o índice mesmo existindo um na coluna?",
+            "answer": "Porque o índice existente é um índice-B, uma estrutura ORDENADA, e o curinga à esquerda torna a posição do termo dentro do texto desconhecida — não há intervalo ordenado para localizar. Um índice-B acelera \"começa com foo\" porque a ordem alfabética elimina candidatos; para \"contém foo em qualquer posição\" a ordem não elimina nenhum, e o planejador conclui, corretamente, que varrer a tabela inteira é tão rápido quanto tentar usar aquele índice. A correção não é criar OUTRO índice-B — é usar um tipo de índice diferente, como GIN sobre tsvector, desenhado para conter, não para ordenar."
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "GIN sobre tsvector já resolve tolerância a erro de digitação?",
+            "answer": "Não. `tsvector` normaliza VARIAÇÃO GRAMATICAL da mesma raiz — plural, alguns sufixos — mas \"tenes\" não é uma variação gramatical de \"tênis\", é um erro de teclado, e o Postgres não tem mecanismo nativo de distância de edição para isso. Quem precisa de tolerância a erro de digitação real precisa ou de uma extensão como `pg_trgm` (paliativo, sem ranking por frequência) ou de um motor com fuzziness de verdade, como o OpenSearch. É exatamente a fronteira que decide se o estágio 2 deste laboratório se justifica."
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Preciso trocar o RDS por OpenSearch para ter busca rápida?",
+            "answer": "Não, e essa é a economia central deste laboratório. Um índice GIN sobre uma coluna tsvector gerada, dentro do próprio RDS, transforma uma consulta de quase 2 segundos em poucos milissegundos, sem nenhum recurso novo na fatura. OpenSearch só se justifica quando o requisito é especificamente tolerância a erro de digitação ou desacoplar a carga de busca de um banco que também sofre escrita pesada — se nenhum dos dois for real e medido no seu caso, o GIN sozinho já resolve."
+          }
+        },
+        {
+          "id": "b24_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Como o Postgres sincroniza com o OpenSearch sem eu escrever código de sincronização?",
+            "answer": "Através de captura de mudança: o AWS DMS lê continuamente o log de replicação lógica do Postgres (o WAL decodificado por um slot dedicado) e aplica cada mudança de linha como um documento indexado no OpenSearch. A aplicação nunca chama o OpenSearch na hora de escrever — o pipeline inteiro roda como infraestrutura, fora do código de negócio, o que evita o antipadrão de escrita dupla síncrona: duas transações independentes acopladas pelo código, que falham ou divergem juntas."
+          }
+        },
+        {
+          "id": "b24_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "O que é BM25 e por que ele ordena melhor do que apenas filtrar?",
+            "answer": "BM25 é a função de relevância padrão do OpenSearch, e ela pondera quantas vezes o termo aparece NO documento contra quão raro esse termo é no CORPUS inteiro. A frequência no documento tem retorno decrescente — o vigésimo \"tênis\" no texto não pesa vinte vezes mais que o primeiro — e um termo raro que aparece pesa mais do que um termo comum a quase todo produto. Um filtro binário só diz \"contém ou não contém\"; BM25 diz também \"o quanto este documento parece ser sobre este termo\", que é a pergunta que ranking de busca de verdade responde."
+          }
+        },
+        {
+          "id": "b24_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Qual é o risco de esquecer de dropar o slot de replicação lógica?",
+            "answer": "O armazenamento do RDS cresce sem limite até esgotar. Enquanto um slot de replicação lógica existe, o Postgres é obrigado a reter todo segmento de WAL que aquele slot ainda não confirmou ter lido — mesmo que não haja mais nenhum consumidor do outro lado. Apagar a tarefa do DMS sem primeiro parar a tarefa e dropar o slot explicitamente deixa esse retenção acontecendo silenciosamente, e o primeiro sinal costuma ser um alarme de armazenamento quase cheio, dias depois, sem relação óbvia com a causa."
+          }
+        },
+        {
+          "id": "b24_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Um resultado pode demorar para aparecer na busca depois de cadastrado?",
+            "answer": "Sim, e isso é esperado, não um defeito: a sincronização é assíncrona, então existe um intervalo entre a escrita ser confirmada no RDS e o documento correspondente ficar buscável no OpenSearch. Sob carga normal esse atraso costuma ser de frações de segundo; sob um pico de escrita — uma carga em lote de milhares de produtos de uma vez — a fila de aplicação pode acumular e o atraso crescer para segundos. É por isso que o módulo trata esse atraso como métrica alarmada, não como algo a esconder do time de operação."
+          }
+        },
+        {
+          "id": "b24_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "O índice invertido duplica os dados do meu catálogo?",
+            "answer": "Sim, por definição — e esse é o custo aceito, não um efeito colateral indesejado. Um índice invertido guarda uma estrutura própria (termo normalizado → lista de documentos que o contêm) separada da linha original, seja dentro do próprio Postgres (o índice GIN ocupa espaço adicional de disco) ou num sistema externo como o OpenSearch (o documento inteiro é replicado lá). A alternativa a essa duplicação é não ter índice de busca nenhum, o que devolve o problema original: varrer tudo a cada consulta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b25_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "A aplicação da Cadência nunca teve nenhuma linha de código escrita para sincronizar com o OpenSearch, e ainda assim o índice de busca acompanha as escritas do RDS. Como isso é possível?",
+            "options": [
+              "Um gatilho (trigger) no banco chama a API REST do OpenSearch a cada INSERT ou UPDATE",
+              "O OpenSearch consulta a tabela do RDS inteira em intervalos regulares",
+              "O driver Npgsql grava simultaneamente no RDS e no OpenSearch dentro da mesma transação",
+              "O AWS DMS lê continuamente o log de replicação lógica (o WAL decodificado por um slot dedicado) e aplica cada mudança de linha como documento no OpenSearch"
+            ],
+            "correctIndex": 3,
+            "explanation": "A sincronização é captura de mudança (CDC): com `rds.logical_replication = 1` habilitado, o Postgres expõe as mudanças confirmadas através de um slot de replicação lógica, e o AWS DMS consome esse slot continuamente, aplicando cada alteração como um documento no domínio OpenSearch. Nenhum código de aplicação participa — é infraestrutura lendo o log de durabilidade que o banco já escreve por outro motivo.\n\nA primeira alternativa descreve um mecanismo real, mas não é o usado aqui, e tem um defeito grave: um gatilho síncrono chamando uma API externa dentro da transação de escrita acopla a gravação no RDS à disponibilidade do OpenSearch — se o segundo cair, o primeiro trava. A terceira inverte a direção e o custo: consultar a tabela inteira em intervalos regulares (polling) gera carga de leitura repetida no RDS, exatamente o que este desenho existe para evitar. A quarta descreve escrita dupla síncrona, o antipadrão nomeado explicitamente no módulo — duas transações independentes tratadas como uma só, que falham ou divergem juntas."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Uma busca por \"tênis corrida\" devolve os mesmos 40 produtos no RDS (com tsvector/GIN) e no OpenSearch, mas em ORDENS diferentes. Isso indica um bug em algum dos dois?",
+            "options": [
+              "Não necessariamente — ts_rank_cd e BM25 são modelos de relevância diferentes, e podem legitimamente ordenar de formas distintas o mesmo conjunto de resultados",
+              "Não, porque busca textual sempre ordena por ordem alfabética do campo indexado",
+              "Sim — os dois motores deveriam sempre concordar na ordenação de resultados idênticos",
+              "Sim — indica que o índice GIN está desatualizado em relação ao OpenSearch"
+            ],
+            "correctIndex": 0,
+            "explanation": "Divergir na ordem não é, por si, evidência de erro. `ts_rank_cd` pondera densidade de termos dentro do documento; BM25 pondera frequência do termo NO documento (com retorno decrescente) contra a raridade do termo no CORPUS inteiro. São fórmulas diferentes medindo \"relevância\" de jeitos diferentes, e aplicá-las ao mesmo conjunto de documentos pode — legitimamente — produzir ordens diferentes, sem que nenhum dos dois esteja calculando errado.\n\nA primeira alternativa assume que \"relevância\" é um valor absoluto e único, quando na verdade é uma métrica definida por cada motor; exigir concordância entre fórmulas diferentes não faz sentido matemático. A terceira confunde ordenação de RESULTADO com sincronização de DADO — os 40 produtos serem os mesmos nos dois já prova que os dados batem; o que diverge é só o critério de ordem. A quarta inventa um comportamento que nenhum dos dois motores tem: nem `ts_rank_cd` nem BM25 ordenam por ordem alfabética — os dois ordenam por pontuação de relevância calculada, cada um à sua maneira."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b26_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L14 concluído (réplica de leitura no RDS), SQL intermediário, índice e EXPLAIN à vontade"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "por que curinga à esquerda invalida índice-B; tsvector/GIN como índice invertido nativo do Postgres; captura de mudança via log de replicação lógica; fuzziness e BM25 no OpenSearch; até onde full-text nativo basta antes de justificar um motor de busca dedicado"
+              ],
+              [
+                "Limitação que fica",
+                "a relevância inteira, nos dois motores, é léxica — nenhum dos dois encontra produto por intenção quando não há sobreposição literal de termo"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L85 — recuperação híbrida, combinando busca léxica (o que este módulo constrói) com similaridade vetorial para cobrir a lacuna de intenção"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L94 (busca com IA) depende de já existir um índice léxico confiável para comparar contra; o pipeline de captura de mudança construído aqui é reaproveitável para qualquer índice derivado futuro, não só busca"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b26_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "PostgreSQL — Index Types",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "PostgreSQL — Full Text Search",
+                "code": true
+              },
+              {
+                "text": " — a base do porquê de curinga à esquerda invalidar índice-B e do funcionamento de tsvector/tsquery/GIN; "
+              },
+              {
+                "text": "Amazon OpenSearch Service — Fuzzy query",
+                "code": true
+              },
+              {
+                "text": " — a definição de distância de edição Damerau-Levenshtein e o comportamento do valor `AUTO`; e "
+              },
+              {
+                "text": "AWS DMS — Using a PostgreSQL database as a source",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "AWS DMS — Using Amazon OpenSearch Service as a target",
+                "code": true
+              },
+              {
+                "text": " — o requisito de `rds.logical_replication` e o funcionamento de OpenSearch como destino de captura de mudança. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "Os tempos de execução citados — cerca de 1,8 s para a varredura completa, dezenas de ms com o índice GIN, centenas de ms de atraso de sincronização — vêm de uma medição de exemplo com 2,1 milhões de linhas, e servem como ordem de grandeza, não como referência. O atraso de sincronização em especial depende do seu volume de escrita concorrente e da classe da instância de replicação escolhida: meça no SEU ambiente, sob a SUA carga de pico, antes de definir o limiar do alarme."
+          }
+        }
+      ]
+    }
+  ]
+}

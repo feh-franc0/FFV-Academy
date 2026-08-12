@@ -1,12 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 import { Download, Share2 } from 'lucide-react';
 import { useGameState } from '@/hooks/useGameState';
 import { BADGES_DEF, CURRICULUM, LEVELS, getLevelInfo } from '@/lib/curriculum';
 import { getRaw, setRaw } from '@/lib/storage';
 import { STORAGE_KEYS } from '@/lib/constants';
+import { BackButton } from '@/components/BackButton';
 
 const CARD_W = 800;
 const CARD_H = 420;
@@ -143,6 +143,9 @@ export function DevCardClient() {
   if (!state) {
     return (
       <div className="max-w-2xl mx-auto px-6 py-24 text-center">
+        {/* Título fora da condição de carregamento — ver a nota em ProgressoClient.tsx:
+           sem isto, o HTML servido responde 200 sem nenhum <h1>. */}
+        <h1 className="text-2xl font-bold mb-4">Meu Dev Card</h1>
         <div className="text-4xl mb-4">🃏</div>
         <p style={{ color: 'var(--ffv-muted)' }}>Carregando seu dev card…</p>
       </div>
@@ -152,13 +155,9 @@ export function DevCardClient() {
   return (
     <div style={{ background: 'var(--ffv-bg)', minHeight: '100vh', color: 'var(--foreground)' }}>
       <div className="max-w-3xl mx-auto px-6 py-12">
-        <Link
-          href="/progresso"
-          className="inline-flex items-center gap-1 text-xs font-mono mb-6 transition-opacity hover:opacity-70"
-          style={{ color: 'var(--ffv-muted)', letterSpacing: '0.06em' }}
-        >
-          ← PROGRESSO
-        </Link>
+        <BackButton href="/progresso" className="text-xs font-mono mb-6 transition-opacity hover:opacity-70 inline-flex items-center gap-1.5">
+          PROGRESSO
+        </BackButton>
 
         <div className="flex items-center gap-3 mb-8">
           <span style={{ fontSize: 36 }}>🃏</span>
@@ -176,9 +175,10 @@ export function DevCardClient() {
             className="rounded-2xl p-5 mb-6"
             style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
           >
-            <label className="block text-sm font-semibold mb-2">Seu nome no card</label>
+            <label htmlFor="devcard-name" className="block text-sm font-semibold mb-2">Seu nome no card</label>
             <div className="flex gap-3">
               <input
+                id="devcard-name"
                 type="text"
                 value={name}
                 onChange={e => setName(e.target.value)}
@@ -198,7 +198,7 @@ export function DevCardClient() {
                   setTimeout(generateCard, 100);
                 }}
                 className="px-5 py-2.5 rounded-xl font-semibold text-sm"
-                style={{ background: 'var(--ffv-blue)', color: '#fff', border: 'none', cursor: 'pointer' }}
+                style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)', border: 'none', cursor: 'pointer' }}
               >
                 Salvar
               </button>
@@ -239,7 +239,7 @@ export function DevCardClient() {
             type="button"
             onClick={handleDownload}
             className="flex items-center gap-2 px-5 py-3 rounded-xl font-semibold text-sm"
-            style={{ background: 'var(--ffv-blue)', color: '#fff', border: 'none', cursor: 'pointer' }}
+            style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)', border: 'none', cursor: 'pointer' }}
           >
             <Download size={16} />
             Download PNG

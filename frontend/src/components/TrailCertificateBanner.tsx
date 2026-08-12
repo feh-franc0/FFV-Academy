@@ -8,20 +8,31 @@
  * Reusa o componente Certificate.tsx (PNG via Canvas + nome local).
  */
 import { useState } from 'react';
-import { Certificate } from '@/components/Certificate';
+import dynamic from 'next/dynamic';
 import { useGameState } from '@/hooks/useGameState';
-import { CURRICULUM } from '@/lib/curriculum';
+// Import type-only — apagado no runtime. A trilha chega pronta como prop do
+// Server Component (`/aprenda/[slug]/page.tsx`), que já a resolvia para o
+// JSON-LD e a descartava. Até 11/ago/2026 este componente reimportava
+// `CURRICULUM` completo (~92 KB gz) para achar de novo a mesma trilha, em
+// TODA página de artigo.
+import type { Trail } from '@/lib/curriculum';
+import { readableTextColor } from '@/lib/readable-text';
+
+// Este banner renderiza (com o cedo-return abaixo) em TODA página de artigo,
+// mesmo para quem não concluiu a trilha. `Certificate` (canvas + currículo
+// completo, para o texto de compartilhar) só é preciso quando o botão é
+// clicado — estático, ele arrastava `CURRICULUM` para as 490 páginas.
+const Certificate = dynamic(() => import('@/components/Certificate').then(m => ({ default: m.Certificate })), { ssr: false });
 
 interface Props {
-  trailId: string;
+  trail: Trail | undefined;
 }
 
-export function TrailCertificateBanner({ trailId }: Props) {
+export function TrailCertificateBanner({ trail }: Props) {
   const { state } = useGameState();
   const [open, setOpen] = useState(false);
 
   if (!state) return null;
-  const trail = CURRICULUM.find(t => t.id === trailId);
   if (!trail) return null;
   const completed = new Set(state.completedModules);
   const allDone = trail.modules.every(m => completed.has(m.slug));
@@ -46,12 +57,12 @@ export function TrailCertificateBanner({ trailId }: Props) {
         <button
           onClick={() => setOpen(true)}
           className="px-4 py-2 rounded-md text-sm font-semibold"
-          style={{ background: trail.color, color: 'white' }}
+          style={{ background: trail.color, color: readableTextColor(trail.color) }}
         >
           Emitir certificado
         </button>
       </div>
-      {open && <Certificate trailId={trailId} onClose={() => setOpen(false)} />}
+      {open && <Certificate trailId={trail.id} onClose={() => setOpen(false)} />}
     </>
   );
 }

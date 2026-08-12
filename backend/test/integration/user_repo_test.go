@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,5 +146,100 @@ func Test_UserRepo_ListForAdmin_ReturnsTotal(t *testing.T) {
 	}
 	if len(users) != 2 {
 		t.Errorf("expected page size=2, got %d", len(users))
+	}
+}
+
+// Test_UserRepo_SoftDelete_ApagaDadoPessoal verifica o pedido de exclusão de
+// conta (LGPD art. 18) no que ele realmente promete.
+//
+// Antes de ago/2026, SoftDelete só escrevia `deleted_at`. Todos os testes de
+// exclusão passavam — porque testavam a coisa errada: que FindByEmail/FindByID
+// param de achar o usuário. Isso é sobre visibilidade, não sobre eliminação. O
+// e-mail, o telefone e o nome seguiam gravados, e o progresso inteiro também.
+//
+// Este teste olha as colunas e as tabelas derivadas diretamente, com SQL — é a
+// única forma de distinguir "invisível" de "apagado".
+func Test_UserRepo_SoftDelete_ApagaDadoPessoal(t *testing.T) {
+	pool, cleanup := StartPostgres(t)
+	t.Cleanup(cleanup)
+	SkipIfUsersMissingUpdatedAt(t, pool)
+
+	repo := postgres.NewUserRepo(pool)
+	ctx := context.Background()
+	u := newTestUser(t, "u-lgpd", "titular@example.com", "+5511987654399", "ref-lgpd")
+	if err := repo.Save(ctx, u); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// Dado derivado que precisa desaparecer junto.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO progress_snapshots (user_id, state, updated_at)
+		 VALUES ($1, '{"xp":500}'::jsonb, NOW())`, u.ID().String()); err != nil {
+		t.Fatalf("seed progresso: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO leaderboard_opt_ins (user_id, opted_in_at) VALUES ($1, NOW())`,
+		u.ID().String()); err != nil {
+		t.Fatalf("seed opt-in: %v", err)
+	}
+
+	if err := repo.SoftDelete(ctx, u.ID(), time.Now().UTC()); err != nil {
+		t.Fatalf("soft delete: %v", err)
+	}
+
+	var email, phone, name string
+	if err := pool.QueryRow(ctx,
+		`SELECT email, phone, name FROM users WHERE id = $1`, u.ID().String(),
+	).Scan(&email, &phone, &name); err != nil {
+		t.Fatalf("reler usuário: %v", err)
+	}
+
+	if email == "titular@example.com" {
+		t.Error("e-mail original continua gravado depois do pedido de exclusão")
+	}
+	if !strings.HasSuffix(email, "@deleted.invalid") {
+		t.Errorf("e-mail deveria virar tombstone .invalid, virou %q", email)
+	}
+	if phone != "" {
+		t.Errorf("telefone deveria estar vazio, está %q", phone)
+	}
+	if name != "" {
+		t.Errorf("nome deveria estar vazio, está %q", name)
+	}
+
+	for _, tabela := range []string{"progress_snapshots", "leaderboard_opt_ins", "leaderboard"} {
+		var n int
+		if err := pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM `+tabela+` WHERE user_id = $1`, u.ID().String(),
+		).Scan(&n); err != nil {
+			t.Fatalf("contar %s: %v", tabela, err)
+		}
+		if n != 0 {
+			t.Errorf("%s ainda tem %d linha(s) do titular excluído", tabela, n)
+		}
+	}
+}
+
+// Test_UserRepo_SoftDelete_LiberaEmailParaNovoCadastro documenta a consequência
+// desejada do tombstone: quem excluiu a conta pode voltar com o mesmo e-mail.
+// Sem o tombstone o UNIQUE bloquearia para sempre — exclusão viraria banimento.
+func Test_UserRepo_SoftDelete_LiberaEmailParaNovoCadastro(t *testing.T) {
+	pool, cleanup := StartPostgres(t)
+	t.Cleanup(cleanup)
+	SkipIfUsersMissingUpdatedAt(t, pool)
+
+	repo := postgres.NewUserRepo(pool)
+	ctx := context.Background()
+	antigo := newTestUser(t, "u-volta-1", "volta@example.com", "+5511987654388", "ref-volta-1")
+	if err := repo.Save(ctx, antigo); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if err := repo.SoftDelete(ctx, antigo.ID(), time.Now().UTC()); err != nil {
+		t.Fatalf("soft delete: %v", err)
+	}
+
+	novo := newTestUser(t, "u-volta-2", "volta@example.com", "+5511987654388", "ref-volta-2")
+	if err := repo.Save(ctx, novo); err != nil {
+		t.Fatalf("recadastro com o mesmo e-mail deveria funcionar, falhou: %v", err)
 	}
 }

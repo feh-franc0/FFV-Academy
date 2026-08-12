@@ -24,7 +24,10 @@ vi.mock('@/hooks/useAuth', () => ({
 vi.mock('@/lib/leaderboard-api', () => ({
   getLeaderboard: vi.fn().mockResolvedValue({ weekStart: '2026-04-20', items: [] }),
   getMyRank: vi.fn().mockResolvedValue(null),
-  getPublicLeaderboard: vi.fn().mockResolvedValue({ entries: [] }),
+  getPublicLeaderboard: vi.fn().mockResolvedValue({
+    status: 'ok',
+    dados: { period: 'weekly', entries: [], periodStart: '', periodEnd: '' },
+  }),
   getMyRankAll: vi.fn().mockResolvedValue([]),
 }));
 

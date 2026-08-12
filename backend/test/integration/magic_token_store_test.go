@@ -42,6 +42,42 @@ func Test_MagicTokenStore_StoreAndConsume_SecondReturnsNotFound(t *testing.T) {
 	}
 }
 
+func Test_MagicTokenStore_Peek_DoesNotDelete(t *testing.T) {
+	client, cleanup := StartRedis(t)
+	t.Cleanup(cleanup)
+	ctx := context.Background()
+
+	store := redisadapter.NewMagicTokenStore(client)
+	email, _ := identity.NewEmail("peek@example.com")
+	tok, err := identity.GenerateMagicToken(5*time.Minute, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("gen: %v", err)
+	}
+	if err := store.Store(ctx, email, tok); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	// Peek repetido não apaga o token — é exatamente o que corrige "um
+	// palpite errado queima o código correto".
+	for i := 0; i < 3; i++ {
+		got, err := store.Peek(ctx, email)
+		if err != nil {
+			t.Fatalf("peek #%d: %v", i, err)
+		}
+		if got.Value() != tok.Value() {
+			t.Errorf("value mismatch on peek #%d: %s vs %s", i, got.Value(), tok.Value())
+		}
+	}
+
+	// Só Consume apaga.
+	if _, err := store.Consume(ctx, email); err != nil {
+		t.Fatalf("consume after peeks: %v", err)
+	}
+	if _, err := store.Peek(ctx, email); !errors.Is(err, shared.ErrNotFound) {
+		t.Fatalf("peek after consume should be ErrNotFound, got %v", err)
+	}
+}
+
 func Test_MagicTokenStore_IncrAttempts_HonorsTTL(t *testing.T) {
 	client, cleanup := StartRedis(t)
 	t.Cleanup(cleanup)

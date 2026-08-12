@@ -19,7 +19,7 @@ func Test_CancelAttemptUseCase_Execute_ValidAttempt_Cancels(t *testing.T) {
 	simID := shared.SimuladoID("aws-clf")
 	attemptID := shared.NewAttemptID()
 
-	attempt := domsim.StartAttempt(attemptID, userID, simID, 90, now)
+	attempt := domsim.StartAttempt(attemptID, userID, simID, 90, []shared.QuestionID{"q1"}, now)
 	repo := &mockAttemptRepo{byID: map[shared.AttemptID]*domsim.Attempt{attemptID: attempt}}
 
 	uc := appsim.NewCancelAttemptUseCase(repo, nil, shared.FixedClock{T: now})
@@ -41,7 +41,7 @@ func Test_CancelAttemptUseCase_Execute_WrongOwner_ReturnsForbidden(t *testing.T)
 	simID := shared.SimuladoID("aws-clf")
 	attemptID := shared.NewAttemptID()
 
-	attempt := domsim.StartAttempt(attemptID, userID, simID, 90, now)
+	attempt := domsim.StartAttempt(attemptID, userID, simID, 90, []shared.QuestionID{"q1"}, now)
 	repo := &mockAttemptRepo{byID: map[shared.AttemptID]*domsim.Attempt{attemptID: attempt}}
 
 	uc := appsim.NewCancelAttemptUseCase(repo, nil, shared.FixedClock{T: now})
@@ -61,7 +61,7 @@ func Test_CancelAttemptUseCase_Execute_AlreadyFinished_ReturnsValidation(t *test
 	simID := shared.SimuladoID("aws-clf")
 	attemptID := shared.NewAttemptID()
 
-	attempt := domsim.StartAttempt(attemptID, userID, simID, 90, now)
+	attempt := domsim.StartAttempt(attemptID, userID, simID, 90, []shared.QuestionID{"q1"}, now)
 	_ = attempt.Finish(domsim.NewScore(domsim.ScoreResult{Value: 50}), now)
 	repo := &mockAttemptRepo{byID: map[shared.AttemptID]*domsim.Attempt{attemptID: attempt}}
 

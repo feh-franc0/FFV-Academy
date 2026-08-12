@@ -1,0 +1,2738 @@
+{
+  "slug": "lab-escolher-banco-pela-carga",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência cresceu. Trinta lojas viraram novecentas, e os 40 milhões de pedidos acumulados desde o "
+              },
+              {
+                "text": "L01",
+                "code": true
+              },
+              {
+                "text": " fizeram o relatório de faturamento — que sempre existiu — deixar de ser uma consulta rápida. O "
+              },
+              {
+                "text": "L07",
+                "code": true
+              },
+              {
+                "text": " já separou escrita de leitura com uma réplica e um pool dimensionado. O problema deste módulo é mais estreito e mais comum do que parece: mesmo com a réplica, o histórico de pedidos do cliente e o relatório de faturamento continuam competindo, porque os dois são leitura e os dois caem no MESMO lugar — réplica ou não. A fronteira que falta não é escrita versus leitura. É padrão de acesso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O time descreve a situação como \"o banco não aguenta\", e a frase esconde a pergunta certa: não aguenta O QUÊ? O histórico por cliente lê 20 linhas de uma chave conhecida e responde em 24 ms. O relatório por loja agrega três anos de dados e leva 41 segundos. Não é o MESMO tipo de carga em volume maior — é um tipo de carga DIFERENTE, e tratar as duas como \"leitura\" esconde que uma tem forma fixa e a outra muda toda semana."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório implementa a mesma funcionalidade — histórico paginado e relatório agregado — em três bancos: RDS for PostgreSQL (o que já existe), Aurora PostgreSQL (a mesma interface, armazenamento diferente) e DynamoDB (uma estrutura pensada para a pergunta conhecida). A decisão final não vem de qual \"parece mais rápido\" num teste isolado — vem de medir os dois padrões de acesso competindo, porque é assim que a produção realmente se comporta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Intermediário — depende do L07 (réplica de leitura, Multi-AZ, pool)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L07 concluído e no ar, .NET 8, Docker, Git, Terraform, AWS CLI"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 45 min · implementação 2 h 30 a 3 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Médio: soma um reader do Aurora e uma tabela DynamoDB sob demanda ao que já existia — a comparação é o que justifica"
+              },
+              {
+                "k": "Serviços",
+                "v": "RDS for PostgreSQL, Aurora PostgreSQL, DynamoDB, VPC endpoint de gateway, CloudWatch"
+              },
+              {
+                "k": "Volume atual",
+                "v": "900 lojas, 40 milhões de pedidos acumulados, 40 mil pedidos/dia, pico de 20× em campanha"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "histórico do cliente não pode competir com o relatório de faturamento, medido em p95"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "a equipe continua com duas pessoas — nenhuma solução pode exigir sharding manual nem tuning contínuo"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "a mesma feature medida nos três bancos, com p95 e custo em unidades, e uma decisão escrita — não sentida"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é um tutorial completo de modelagem single-table (isso é o L16) nem um guia de failover e Serverless v2 do Aurora (isso é o L15). Também não é um manifesto contra SQL ou a favor de NoSQL — os dois lados dessa disputa costumam vender a resposta antes de fazer a pergunta. Aqui a pergunta é mais estreita: dada UMA feature concreta, com duas consultas reais, qual banco serve cada uma, e por quê — com número, não com preferência."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com uma medição na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Listar as consultas reais de uma feature e classificar cada uma como caminho conhecido ou pergunta nova, antes de escolher tecnologia.",
+              "Explicar por que \"leitura\" não é uma categoria suficiente para decidir entre réplica, Aurora e DynamoDB.",
+              "Implementar a mesma consulta de histórico em SQL (RDS/Aurora) e em DynamoDB, com o mesmo contrato de paginação.",
+              "Medir p95 do histórico com e sem o relatório concorrente, nos três desenhos, e explicar a diferença pelo mecanismo, não pela marca do banco.",
+              "Calcular o custo em unidades de leitura do DynamoDB a partir de bytes e do fator de consistência, e decidir quando ligar ConsistentRead.",
+              "Implementar o padrão outbox para projetar dados do Aurora no DynamoDB sem perder escrita se a segunda gravação falhar.",
+              "Distinguir o standby de um RDS Multi-AZ de instância única de um reader do Aurora, e dizer qual serve tráfego de leitura.",
+              "Escrever o critério de decisão em forma de perguntas, para reaplicar a próxima vez que uma consulta nova aparecer."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Forma de acesso decide o banco",
+                "SAA-C03",
+                "a mesma feature medida nos três, não escolhida por preferência",
+                "reconhecer padrão de acesso conhecido vs. pergunta nova — não \"tipo de dado\""
+              ],
+              [
+                "Consistência eventual vs. forte no DynamoDB",
+                "SAA-C03, DVA-C02",
+                "o fator 0,5 / 1 / 2 na fórmula de custo de leitura",
+                "onde a leitura forte existe (tabela, LSI) e onde não existe (GSI, streams)"
+              ],
+              [
+                "Arquitetura de armazenamento do Aurora",
+                "SAA-C03, SAP-C02",
+                "volume de cluster único; réplicas leem o mesmo volume do writer",
+                "por que promover uma leitora no failover não espera \"alcançar\" o primário"
+              ],
+              [
+                "RDS Multi-AZ: o standby não serve leitura",
+                "SAA-C03",
+                "decision_box comparando com réplica de leitura e com reader do Aurora",
+                "redundância não é o mesmo que escala de leitura — são propósitos diferentes"
+              ],
+              [
+                "Custo de Scan vs. Query no DynamoDB",
+                "DVA-C02, SAA-C03",
+                "a fórmula: cobra pelo EXAMINADO, não pelo devolvido",
+                "por que FilterExpression não economiza capacidade nenhuma"
+              ],
+              [
+                "Endpoint de gateway vs. de interface",
+                "SAA-C03",
+                "dynamodb.tf usando vpc_endpoint_type = \"Gateway\"",
+                "S3 e DynamoDB usam gateway (sem ENI, sem cobrança); o resto usa interface (PrivateLink)"
+              ],
+              [
+                "Transação no DynamoDB custa o dobro",
+                "DVA-C02",
+                "outbox em vez de escrita dupla síncrona",
+                "por que a verdade transacional do pedido continua no banco relacional"
+              ],
+              [
+                "Chave de partição deriva da pergunta",
+                "DVA-C02, SAA-C03",
+                "PK = cliente, SK = pedido, porque é assim que a consulta chega",
+                "modelar pela consulta que existe, não pelo \"tipo de entidade\" do domínio"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve alta latência num relatório e oferece \"migrar para DynamoDB\" como alternativa de resposta correta. A armadilha é que DynamoDB não acelera uma agregação sobre um intervalo arbitrário — ele não tem chave para essa pergunta, e um Scan com filtro custa pelo que examina, não pelo que devolve. A resposta certa quase sempre é índice + réplica de leitura, não troca de banco."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Histórico não pode competir com o relatório",
+                "p95 estável mesmo com o relatório rodando ao lado",
+                "separa os dois caminhos em serviço, pool e — na produção — banco diferente"
+              ],
+              [
+                "p95 do histórico",
+                "abaixo de 30 ms, mesmo sob concorrência",
+                "empurra o caminho conhecido para uma estrutura por chave, não por plano de consulta"
+              ],
+              [
+                "Janela do relatório",
+                "até 30 s, GROUP BY sobre 3 anos de dados",
+                "exige linguagem de consulta e otimizador — fica no relacional, num reader isolado"
+              ],
+              [
+                "Integridade do pedido",
+                "total = soma dos itens, sempre",
+                "obriga transação sobre várias linhas — a verdade permanece no Aurora"
+              ],
+              [
+                "Frescor aceitável do histórico",
+                "atraso de poucos segundos é tolerável",
+                "autoriza projeção assíncrona via outbox, em vez de escrita síncrona nos dois bancos"
+              ],
+              [
+                "Equipe de duas pessoas, sem plantão",
+                "operação não pode exigir sharding manual nem tuning contínuo",
+                "billing sob demanda no DynamoDB e Aurora gerenciado — não EC2 com Postgres à mão"
+              ],
+              [
+                "Pico de campanha",
+                "20× o volume normal, em rajadas",
+                "DynamoDB sob demanda absorve o pico sem replanejar; o reader escala leitura, não escrita"
+              ],
+              [
+                "Rastreabilidade da decisão",
+                "saber qual consulta vai para qual banco",
+                "a fronteira é documentada como decisão, não descoberta em incidente às 3 da manhã"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: um Postgres para as duas cargas"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem hoje — inclusive depois do L07. A réplica resolveu a disputa entre ESCRITA e leitura; não resolveu a disputa entre duas leituras de forma oposta na MESMA instância ou réplica. O laboratório começa medindo essa disputa, porque um número torna o defeito discutível, e \"o relatório trava o histórico\" não."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Um Postgres para as duas cargas",
+            "caption": "Este desenho está no ar e atende: uma instância de RDS for PostgreSQL responde tanto ao histórico de pedidos do cliente quanto ao relatório de faturamento. Nenhuma peça está mal configurada. O defeito é que as duas consultas competem pela mesma CPU e pelo mesmo cache, e é o relatório que derruba o p95 do caminho do cliente. Percorra os passos e repare que a degradação é consequência aritmética de somar duas cargas opostas numa instância só.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cliente",
+                    "service": "user",
+                    "label": "Cliente no aplicativo",
+                    "note": "abre a tela \"meus pedidos\" e pagina; responde por 60% da leitura e é quem sente o p95"
+                  },
+                  {
+                    "id": "gerente",
+                    "service": "browser",
+                    "label": "Painel do gerente",
+                    "note": "pede faturamento por loja de hora em hora; uma requisição que lê três anos de dados"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB, um grupo de destino",
+                    "note": "não distingue as duas cargas: para ele são dois caminhos de URL com o mesmo destino"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada, uma AZ",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "api",
+                    "service": "fargate",
+                    "label": "API .NET 8, pool de 20",
+                    "note": "um único pool de conexões atende as duas rotas; o relatório ocupa conexão que o cliente esperava"
+                  },
+                  {
+                    "id": "rds",
+                    "service": "rds",
+                    "label": "RDS for PostgreSQL, Single-AZ",
+                    "note": "é o único lugar onde o dado existe: perder a instância é perder tudo desde o último backup"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Métricas do RDS",
+                    "note": "mostra CPU e leitura de disco subindo de hora em hora, sem dizer qual consulta as causou"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "cliente",
+                "to": "alb",
+                "label": "GET /clientes/{id}/pedidos, 20 por página",
+                "style": "solid"
+              },
+              {
+                "from": "gerente",
+                "to": "alb",
+                "label": "GET /relatorios/faturamento, 1× por hora",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "api",
+                "label": "as duas rotas caem no mesmo destino",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "rds",
+                "label": "as duas consultas saem do mesmo pool de conexões",
+                "style": "solid"
+              },
+              {
+                "from": "rds",
+                "to": "api",
+                "label": "histórico em 24 ms; relatório em 41 s",
+                "style": "solid"
+              },
+              {
+                "from": "rds",
+                "to": "cw",
+                "label": "CPUUtilization e ReadIOPS, agregados por instância",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Duas consultas com formas opostas, uma instância",
+                "detail": "O histórico lê 20 linhas de uma chave conhecida: é uma busca pontual em índice, e custa quase nada. O relatório lê três anos de pedidos para agregar por loja: o custo dele é proporcional ao TAMANHO DA TABELA, não ao tamanho da resposta. Somar as duas na mesma instância não é erro de configuração — é uma decisão que ninguém tomou de propósito.",
+                "nodes": [
+                  "api",
+                  "rds"
+                ],
+                "edges": [
+                  "api>rds"
+                ]
+              },
+              {
+                "label": "O histórico é barato porque existe um índice composto",
+                "detail": "Com índice em `(cliente_id, criado_em desc, id desc)`, a página de 20 pedidos é lida em profundidade de árvore, e o tempo não cresce com o total de pedidos na tabela. Sem esse índice, a mesma consulta varre a tabela inteira e o módulo teria outro assunto. Índice certo é o pré-requisito para a comparação deste laboratório ser honesta.",
+                "nodes": [
+                  "rds",
+                  "cliente"
+                ],
+                "edges": [
+                  "cliente>alb"
+                ]
+              },
+              {
+                "label": "O relatório evicta o cache que o cliente estava usando",
+                "detail": "Ao varrer 40 milhões de linhas, o relatório traz páginas de disco para a memória compartilhada e empurra para fora as páginas quentes do índice do histórico. Terminado o relatório, o histórico continua lento por alguns minutos: o índice tem de voltar ao cache. É o efeito que mais confunde, porque a piora sobrevive à consulta que a causou.",
+                "nodes": [
+                  "rds",
+                  "cw"
+                ],
+                "edges": [
+                  "rds>cw"
+                ]
+              },
+              {
+                "label": "A medição: p95 de 24 ms para 310 ms durante o relatório",
+                "detail": "Nas medições do exemplo, o p95 do histórico é de 24 ms em regime e de 310 ms enquanto o relatório roda — treze vezes pior, uma vez por hora, por cerca de 40 s. Nenhum erro aparece no log: são respostas 200 lentas. É o pior tipo de defeito, porque não dispara alarme de erro.",
+                "nodes": [
+                  "rds",
+                  "api"
+                ],
+                "edges": [
+                  "rds>api"
+                ]
+              },
+              {
+                "label": "Uma AZ, uma cópia, e nenhum destino de failover",
+                "detail": "Single-AZ significa que a recuperação de uma falha de instância é restaurar de backup: o RPO é a idade do último backup automático e o RTO é o tempo da restauração. Isso é aceitável em laboratório e é o que a arquitetura de produção muda primeiro — mas não é o defeito que este módulo resolve.",
+                "nodes": [
+                  "rds"
+                ],
+                "edges": [
+                  "api>rds"
+                ]
+              },
+              {
+                "label": "Por que a equipe está exatamente aqui",
+                "detail": "\"Usa Postgres porque é o que a gente sabe\" é a decisão de menor risco aparente, e ela é CORRETA enquanto existe uma carga só. O que a torna insuficiente não é o banco: é a segunda carga, que entrou depois e nunca foi objeto de decisão. Trocar de banco antes de listar as consultas seria repetir o mesmo erro com outro produto.",
+                "nodes": [
+                  "gerente",
+                  "api"
+                ],
+                "edges": [
+                  "gerente>alb",
+                  "alb>api"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Antes de mudar qualquer coisa, meça os dois padrões competindo. O script abaixo dispara o relatório e, em paralelo, mede o p95 do histórico — é a única forma honesta de expor o efeito, porque medir cada consulta isolada esconde exatamente o que se quer provar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "filename": "medir-a-competicao.sh",
+            "code": "# Rode ANTES de qualquer mudança. O numero daqui e a linha de base.\nCLIENTE=\"3f2a1c10-8e3a-4a11-9c2e-000000000001\"\nhey -z 20s -c 10 \"$BASE_URL/clientes/$CLIENTE/pedidos\" > /tmp/isolado.txt &\nISOLADO=$!\nwait $ISOLADO\ngrep \"95 %\" /tmp/isolado.txt   # linha de base: 24 ms\n\ncurl -s \"$BASE_URL/relatorios/faturamento?inicio=2026-01-01&fim=2026-08-01\" -o /dev/null &\nRELATORIO=$!\nhey -z 20s -c 10 \"$BASE_URL/clientes/$CLIENTE/pedidos\" > /tmp/concorrente.txt\nwait $RELATORIO\ngrep \"95 %\" /tmp/concorrente.txt\n# Na Cadencia: 24 ms isolado, 310 ms com o relatorio rodando — treze vezes pior,\n# sem NENHUM erro no log. E resposta 200 lenta, o pior tipo de defeito."
+          }
+        },
+        {
+          "id": "b4_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "A degradação sobrevive à consulta que a causou",
+            "content": "O relatório varre 40 milhões de linhas e empurra para fora do cache de memória as páginas quentes do índice do histórico. Terminado o relatório, o histórico continua lento por minutos — o índice tem de voltar ao cache sozinho, sob o tráfego normal. Quem mede só \"durante o relatório\" subestima o dano: o efeito persiste depois, e é esse rastro que mais confunde o diagnóstico em produção."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção: a fronteira é o padrão de acesso"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. Se você não conseguir apontar o requisito, a peça é adorno — e este desenho não tem nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A fronteira é o padrão de acesso: chave conhecida num banco, pergunta nova no outro",
+            "caption": "Não é o desenho anterior com uma caixa a mais: o caminho de leitura conhecido saiu do banco relacional e virou uma projeção com chave em DynamoDB, enquanto a pergunta nova ficou em SQL sobre uma réplica de leitura do Aurora, com serviço e pool próprios. A verdade transacional continua relacional, porque pedido tem invariante. Percorra os passos: cada peça nova rastreia um requisito da tabela anterior, e a fronteira entre os dois bancos é uma frase — \"esta consulta é conhecida de antemão?\".",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cliente",
+                    "service": "user",
+                    "label": "Cliente no aplicativo",
+                    "note": "faz o pedido e depois pagina o histórico; as duas operações passam a tocar bancos diferentes"
+                  },
+                  {
+                    "id": "gerente",
+                    "service": "browser",
+                    "label": "Painel do gerente",
+                    "note": "muda a pergunta toda semana; é a razão de existir um banco que aceita consulta não prevista"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública, duas AZs",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB com regra por caminho",
+                    "note": "separa as duas cargas já na borda, em dois grupos de destino, para que uma não ocupe a fila da outra"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada, duas AZs: escrita e caminho quente",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "api",
+                    "service": "fargate",
+                    "label": "Serviço de pedidos",
+                    "note": "escreve no relacional e lê o histórico no DynamoDB; nunca executa consulta analítica"
+                  },
+                  {
+                    "id": "ep",
+                    "service": "routetable",
+                    "label": "Rota de VPC endpoint (gateway)",
+                    "note": "gateway, não interface: entra na tabela de rotas da sub-rede, sem ENI e sem cobrança por hora"
+                  },
+                  {
+                    "id": "writer",
+                    "service": "aurora",
+                    "label": "Aurora PostgreSQL (writer)",
+                    "note": "guarda a invariante do pedido: total igual à soma dos itens, numa transação só"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada, duas AZs: projeção e pergunta nova",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "worker",
+                    "service": "fargate",
+                    "label": "Projetor da outbox",
+                    "note": "lê a fila de saída commitada e escreve a projeção; é o que impede pedido gravado e não projetado"
+                  },
+                  {
+                    "id": "relatorio",
+                    "service": "fargate",
+                    "label": "Serviço de relatório",
+                    "note": "pool e statement_timeout próprios: uma consulta ruim aqui não consome conexão do cliente"
+                  },
+                  {
+                    "id": "reader",
+                    "service": "aurora",
+                    "label": "Aurora PostgreSQL (reader)",
+                    "note": "lê o mesmo volume de cluster do writer, então não há cópia de dados nem atraso de replicação por WAL"
+                  }
+                ]
+              },
+              {
+                "label": "Regional, fora da VPC",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ddb",
+                    "service": "dynamodb",
+                    "label": "DynamoDB: projeção do histórico",
+                    "note": "chave de partição é o cliente, porque é assim que a pergunta chega; a chave É o padrão de acesso"
+                  }
+                ]
+              },
+              {
+                "label": "Observação e custo",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Métricas dos dois bancos",
+                    "note": "separa estrangulamento de lentidão: capacidade consumida de um lado, CPU e latência do outro"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "cliente",
+                "to": "alb",
+                "label": "POST /pedidos e GET /clientes/{id}/pedidos",
+                "style": "solid"
+              },
+              {
+                "from": "gerente",
+                "to": "alb",
+                "label": "GET /relatorios/faturamento",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "api",
+                "label": "regra de caminho /clientes/* e /pedidos",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "relatorio",
+                "label": "regra de caminho /relatorios/*",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "writer",
+                "label": "pedido, itens e linha de outbox no mesmo commit",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "ep",
+                "label": "Query pela chave do cliente, sem sair da rede da AWS",
+                "style": "solid"
+              },
+              {
+                "from": "ep",
+                "to": "ddb",
+                "label": "20 itens por página, cursor em LastEvaluatedKey",
+                "style": "solid"
+              },
+              {
+                "from": "worker",
+                "to": "writer",
+                "label": "lê a outbox pendente e marca processada",
+                "style": "solid"
+              },
+              {
+                "from": "worker",
+                "to": "ep",
+                "label": "PutItem da projeção, idempotente pelo id do pedido",
+                "style": "solid"
+              },
+              {
+                "from": "relatorio",
+                "to": "reader",
+                "label": "GROUP BY por loja, com statement_timeout de 30 s",
+                "style": "solid"
+              },
+              {
+                "from": "writer",
+                "to": "reader",
+                "label": "mesmo volume de cluster, lag usualmente abaixo de 100 ms",
+                "style": "dashed"
+              },
+              {
+                "from": "ddb",
+                "to": "cw",
+                "label": "ThrottledRequests e ConsumedReadCapacityUnits",
+                "style": "dashed"
+              },
+              {
+                "from": "reader",
+                "to": "cw",
+                "label": "CPU do reader, isolada da CPU do writer",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A pergunta que decide a fronteira",
+                "detail": "Antes de escolher tecnologia, escreva a lista de consultas. Duas delas sobraram nesta aplicação: \"os últimos pedidos deste cliente\" — conhecida, repetida milhares de vezes por hora, sempre com a mesma forma; e \"faturamento por loja no período\" — nova, diferente toda semana, poucas execuções. A primeira vira chave; a segunda continua em SQL. Nenhuma das duas decisões vem do tipo de dado.",
+                "nodes": [
+                  "api",
+                  "ddb",
+                  "reader"
+                ],
+                "edges": [
+                  "api>ep",
+                  "relatorio>reader"
+                ]
+              },
+              {
+                "label": "A verdade transacional continua relacional, e isso é decisão",
+                "detail": "Pedido tem invariante: o total precisa ser igual à soma dos itens, e as duas gravações precisam acontecer ou não acontecer. Isso é uma transação sobre várias linhas, com restrição declarada no banco. O DynamoDB tem transação, mas cada operação transacional consome o dobro da capacidade, e a restrição de integridade não existe como declaração — ela viraria código.",
+                "nodes": [
+                  "api",
+                  "writer"
+                ],
+                "edges": [
+                  "api>writer"
+                ]
+              },
+              {
+                "label": "A projeção é assíncrona, e a outbox é o que a torna correta",
+                "detail": "Escrever nos dois bancos dentro do mesmo request é a tentação, e ela perde pedidos: se a segunda escrita falhar, o commit da primeira já aconteceu. Gravar a intenção numa tabela de saída DENTRO da transação, e deixar um processo separado publicá-la, troca \"pode perder\" por \"pode atrasar\". Atraso é observável e recuperável; perda não é.",
+                "nodes": [
+                  "worker",
+                  "writer",
+                  "ddb"
+                ],
+                "edges": [
+                  "worker>writer",
+                  "worker>ep"
+                ]
+              },
+              {
+                "label": "O DynamoDB não está na VPC; a rota de gateway está",
+                "detail": "Esta é a distinção que a certificação cobra e que o desenho tem de afirmar corretamente: DynamoDB é um serviço regional, alcançado por API pública com autenticação. O que existe na sub-rede é uma entrada na TABELA DE ROTAS, sem interface de rede — diferente do endpoint de interface que Secrets Manager ou Bedrock usam. Sem ele, uma task em sub-rede privada só alcança a tabela passando pelo NAT Gateway, que cobra por hora ligada e por GB processado.",
+                "nodes": [
+                  "ep",
+                  "ddb",
+                  "api"
+                ],
+                "edges": [
+                  "api>ep",
+                  "ep>ddb"
+                ]
+              },
+              {
+                "label": "O relatório perdeu o poder de derrubar a escrita",
+                "detail": "Três coisas mudaram e as três são necessárias: a rota tem grupo de destino e serviço próprios, o pool de conexões é outro, e a consulta vai para o reader. Como as réplicas do Aurora leem o mesmo volume lógico do writer, o reader entrega o dado com lag usualmente muito abaixo de 100 ms — o relatório fica fresco sem tocar a instância que escreve.",
+                "nodes": [
+                  "relatorio",
+                  "reader",
+                  "writer"
+                ],
+                "edges": [
+                  "alb>relatorio",
+                  "writer>reader"
+                ]
+              },
+              {
+                "label": "Frescor é decisão de custo, não caixa de seleção",
+                "detail": "A projeção é eventual, e existe uma janela em que o pedido acabou de ser criado e ainda não está na tabela do histórico. Duas saídas legítimas: ler a primeira página do relacional logo após a escrita, ou marcar a leitura como fortemente consistente — que só existe na tabela base e consome o dobro da capacidade de uma leitura eventual. Escolher é dizer quanto vale um segundo.",
+                "nodes": [
+                  "ddb",
+                  "api"
+                ],
+                "edges": [
+                  "ep>ddb"
+                ]
+              },
+              {
+                "label": "Cada banco é observado pela sua própria falha",
+                "detail": "No relacional, o sinal é CPU, latência de consulta e conexões em espera; no DynamoDB, é estrangulamento e capacidade consumida — uma tabela pode estrangular uma partição com capacidade de sobra na tabela. Usar o mesmo painel para os dois esconde exatamente a falha característica de cada um.",
+                "nodes": [
+                  "cw",
+                  "ddb",
+                  "reader"
+                ],
+                "edges": [
+                  "ddb>cw",
+                  "reader>cw"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação ao desenho anterior não é \"mais um banco\": é que a pergunta \"onde este dado mora?\" deixou de ter uma resposta única. O caminho conhecido tem chave; a pergunta nova tem plano de execução. Tudo o mais — outbox, endpoint de gateway, pool isolado do relatório — existe para essa divisão funcionar sem perder dado nem coerência."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "annotated_formula",
+          "position": 3,
+          "data": {
+            "title": "O que uma leitura custa no DynamoDB, e por que consistência é uma decisão de dinheiro",
+            "formula": "unidades_de_leitura ≈ ⌈bytes_lidos ÷ 4 KB⌉ × fator_de_consistência",
+            "parts": [
+              {
+                "symbol": "bytes_lidos",
+                "name": "O que foi LIDO, não o que foi devolvido",
+                "description": "Numa Query com condição de chave, é o tamanho dos itens que casam com a condição. Num Scan com `FilterExpression`, é o tamanho de tudo o que foi varrido antes de o filtro descartar — e é por isso que filtrar não economiza capacidade nenhuma."
+              },
+              {
+                "symbol": "⌈ ÷ 4 KB ⌉",
+                "name": "Arredondamento para cima, por bloco de 4 KB",
+                "description": "Um item de 200 bytes e um item de 3,9 KB custam o mesmo bloco. Isso muda a modelagem: agrupar 20 pedidos pequenos numa página aproveita o bloco, e guardar um campo grande e raramente lido no mesmo item o desperdiça em toda leitura."
+              },
+              {
+                "symbol": "fator_de_consistência",
+                "name": "0,5 eventual · 1 forte · 2 transacional",
+                "description": "A documentação é explícita: leitura eventualmente consistente custa metade da fortemente consistente, e é o padrão. Leitura forte existe em tabela e em índice secundário local; em índice secundário GLOBAL e em stream ela não existe. Ligar `ConsistentRead` num caminho de alto volume dobra a conta desse caminho.",
+                "highlight": true
+              },
+              {
+                "symbol": "1 KB de escrita",
+                "name": "A escrita tem outro bloco, e o índice a repete",
+                "description": "A unidade de escrita é de 1 KB, e cada índice secundário global recebe uma cópia da escrita — então dois GSIs triplicam o custo de gravar. É o custo oculto mais comum: o índice foi criado para uma pergunta e passou a cobrar em toda escrita, para sempre."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "success",
+            "title": "O ajuste com maior efeito por decisão tomada",
+            "content": "Isolar o relatório num reader já resolve a maior parte do defeito medido na seção anterior, e custa uma instância — não uma reescrita. O DynamoDB entra por um motivo mais estreito: o caminho do cliente responde por 60% da leitura, e uma chave de partição entrega latência que não cresce nunca com o volume da tabela, o que uma réplica SQL, por melhor que seja, não garante sozinha."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Como funciona, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O pedido nasce no relacional e é PROJETADO no DynamoDB — nunca o contrário. A outbox é a peça que torna essa frase verdadeira mesmo quando algo falha no meio do caminho."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Do pedido criado à página do histórico, atravessando os dois bancos",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1. POST /pedidos chega ao serviço de pedidos",
+                "desc": "O corpo traz cliente, loja e itens. Nada é escrito antes de o total ser calculado no servidor: total que vem do cliente é dado sob controle de quem paga."
+              },
+              {
+                "label": "2. Uma transação, três gravações",
+                "desc": "Insere em `pedidos`, insere em `pedido_itens` e insere uma linha em `outbox_eventos` com o JSON do pedido. Como as três estão na mesma transação, não existe estado em que o pedido exista e o evento não."
+              },
+              {
+                "label": "3. O commit responde 201 ao cliente",
+                "desc": "A latência percebida é a do relacional, e só dela. A projeção acontece fora do caminho da requisição — é o que impede o DynamoDB de virar dependência de disponibilidade da escrita."
+              },
+              {
+                "label": "4. O projetor lê a outbox pendente",
+                "desc": "Um `SELECT ... FOR UPDATE SKIP LOCKED` de 100 linhas por vez, ordenado por id. `SKIP LOCKED` é o que permite rodar duas instâncias do projetor sem que elas disputem a mesma linha."
+              },
+              {
+                "label": "5. PutItem na projeção, idempotente",
+                "desc": "A chave é `PK = CLIENTE#<id>` e `SK = PEDIDO#<data ISO>#<id do pedido>`. Como a chave é derivada do pedido, reprocessar o mesmo evento sobrescreve o mesmo item e nada duplica — idempotência por construção, não por controle de estado."
+              },
+              {
+                "label": "6. A outbox é marcada como processada",
+                "desc": "Nesta ordem, e não na inversa. Marcar antes de projetar troca \"pode duplicar\" por \"pode perder\", e duplicar aqui é inofensivo porque o PutItem é idempotente."
+              },
+              {
+                "label": "7. GET /clientes/{id}/pedidos: uma Query, uma partição",
+                "desc": "Condição de chave `PK = :cliente AND begins_with(SK, \"PEDIDO#\")`, `ScanIndexForward = false` para o mais recente primeiro, `Limit = 20`. O tempo de resposta não depende de quantos pedidos existem na tabela."
+              },
+              {
+                "label": "8. A próxima página usa o cursor que o serviço devolveu",
+                "desc": "`LastEvaluatedKey` volta na resposta e é reenviado como `ExclusiveStartKey`. Não existe \"pular para a página 500\": paginação em DynamoDB é sequencial, e isso é restrição de desenho, não limitação a contornar."
+              },
+              {
+                "label": "9. GET /relatorios/faturamento vai para outro serviço e outro banco",
+                "desc": "SQL com `GROUP BY loja_id` sobre a réplica de leitura do Aurora, com `statement_timeout` de 30 s. É a consulta que não foi prevista quando a tabela do DynamoDB foi modelada — e é exatamente por isso que ela não vive lá."
+              }
+            ]
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "A linha que a transacao grava JUNTO com pedido e itens — no MESMO commit. O projetor le isto para escrever a projecao no DynamoDB; nunca o inverso."
+              }
+            ]
+          },
+          "position": 2
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "json",
+            "filename": "linha-da-outbox.json",
+            "code": "{\n  \"id\": 88214,\n  \"pedido_id\": \"b7a1f0b0-2c44-4e9a-9d31-000000009182\",\n  \"cliente_id\": \"3f2a1c10-8e3a-4a11-9c2e-000000000001\",\n  \"loja_id\": \"a10ecb4e-6f21-4a02-8b9d-000000000512\",\n  \"total\": 187.90,\n  \"status\": \"confirmado\",\n  \"criado_em\": \"2026-08-07T14:03:21.118Z\",\n  \"processado_em\": null\n}"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "Por que a outbox e não a escrita dupla direta",
+            "content": "Gravar no Aurora e no DynamoDB dentro do mesmo request parece mais simples, e é a tentação natural. Ela perde pedido: se a segunda escrita falhar depois do commit da primeira, não existe transação que desfaça as duas. A outbox move a segunda escrita para FORA do caminho crítico e a torna reexecutável — trocando \"pode perder\" por \"pode atrasar alguns segundos\", que é observável e recuperável."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "A mesma feature — histórico de pedidos por cliente com paginação e faturamento por loja no período — numa aplicação com 40 milhões de pedidos, 900 lojas, 40 mil pedidos por dia e um pico de 20× em campanha. Duas pessoas mantêm o sistema.",
+            "winner": "Aurora PostgreSQL como fonte de verdade, com o relatório numa réplica de leitura, e DynamoDB como projeção do único caminho de leitura conhecido",
+            "why": "A decisão não é \"qual banco é melhor\": é qual consulta vai para onde. O histórico por cliente é conhecido de antemão, sempre tem a mesma forma e responde por 60% da leitura — condições exatas em que uma chave de partição entrega latência que não cresce com o volume e custo que acompanha o uso. O relatório é o oposto: muda toda semana e agrega sobre tudo, e nenhuma chave o serve; ele exige uma linguagem de consulta e um plano de execução, que é o que o relacional é. Aurora entra em vez de RDS por um motivo rastreável a requisito: como as réplicas leem o mesmo volume de cluster do writer, dá para pôr o relatório num reader fresco sem manter uma segunda cópia dos dados nem conviver com atraso de replicação medido em segundos.",
+            "alternatives": [
+              {
+                "name": "Um Aurora só, com o índice certo e o relatório no reader",
+                "downside": "É a alternativa mais forte, e ganha na maioria dos casos reais — inclusive no seu, provavelmente. Ela resolve o defeito da arquitetura mínima com duas peças em vez de cinco, e não introduz consistência eventual em lugar nenhum. O gatilho declarado para sair dela é medido, não sentido: quando o p95 do histórico em regime não couber no orçamento de latência mesmo com o relatório isolado, ou quando escalar a leitura do caminho quente exigir réplica adicional cuja hora ligada custe mais que a projeção. Enquanto os dois números não aparecerem, o desenho de dois bancos é complexidade comprada adiantado."
+              },
+              {
+                "name": "Só DynamoDB, com pré-agregação por contadores",
+                "downside": "Funciona para as agregações que você previu: um item por loja e mês, atualizado com `ADD` a cada pedido. O problema é a pergunta seguinte — \"ticket médio por faixa de horário\", \"recorrência por bairro\" — que exige reprocessar o histórico inteiro para criar o contador que não existia. Você não perdeu a resposta; perdeu a capacidade de perguntar sem projeto."
+              },
+              {
+                "name": "Só RDS for PostgreSQL com uma réplica de leitura",
+                "downside": "Resolve a competição entre as duas cargas e é mais barato de operar que o Aurora. A diferença que pesa aqui é a natureza da replicação: a réplica de leitura do RDS é assíncrona e mantém a sua própria cópia dos dados, então o atraso varia com a carga de escrita e aparece em `ReplicaLag`. Para relatório de hora em hora isso é irrelevante; para painel que o gerente atualiza durante a campanha, começa a produzir número que não fecha."
+              },
+              {
+                "name": "RDS Multi-AZ com standby, esperando aliviar a leitura",
+                "downside": "Não alivia nada, e é o mal-entendido mais caro desta seção: a documentação diz que o standby de uma implantação Multi-AZ de INSTÂNCIA (um standby) dá suporte a failover e NÃO atende tráfego de leitura, em nenhuma circunstância. Existe uma variante mais nova — a implantação de CLUSTER Multi-AZ, com dois standbys — que pode servir leitura, mas é outro recurso, não o Multi-AZ clássico de instância única. Quem quer leitura precisa de réplica de leitura de verdade ou de um cluster Multi-AZ com standbys legíveis."
+              },
+              {
+                "name": "Redshift ou Athena para o relatório",
+                "downside": "É o desenho certo quando a pergunta nova passa a varrer volumes que não cabem numa réplica OLTP, ou quando ela precisa cruzar pedidos com dados que não estão no banco da aplicação. Aos 40 milhões de linhas com filtro de período, um `GROUP BY` com índice de cobertura ainda ganha em latência e em simplicidade — e é o nível 5 da evolução, não o de agora."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Onde vive o histórico do cliente",
+                "DynamoDB, chave = cliente",
+                "réplica SQL com o índice certo",
+                "latência que não cresce com o volume da tabela, e custo proporcional ao uso",
+                "consulta nova sobre o histórico não tem chave — precisaria de projeção adicional"
+              ],
+              [
+                "Onde vive o relatório",
+                "Aurora, no reader",
+                "DynamoDB com pré-agregação; Redshift/Athena",
+                "SQL responde a pergunta que muda toda semana sem projeto novo por variação",
+                "cresce com o volume da tabela; no nível 5 da evolução, isso vira o limite"
+              ],
+              [
+                "Como os dois bancos ficam coerentes",
+                "outbox + projetor assíncrono",
+                "escrita dupla síncrona; CDC direto do WAL (L29)",
+                "nunca perde pedido; atraso é observável em vez de invisível",
+                "histórico tem janela de segundos de atraso — decisão explícita, não acidente"
+              ],
+              [
+                "Consistência de leitura no DynamoDB",
+                "eventual por padrão",
+                "ConsistentRead=true em toda leitura",
+                "metade do custo no caminho de maior volume, e o atraso já é tolerado pela outbox",
+                "a página logo após criar um pedido pode não mostrá-lo por alguns segundos"
+              ],
+              [
+                "RDS ou Aurora para o writer",
+                "Aurora",
+                "RDS com réplica de leitura (L07)",
+                "reader lê o mesmo volume do writer — sem segunda cópia, sem lag medido em segundos",
+                "custo por instância um pouco maior que RDS equivalente"
+              ],
+              [
+                "Modelo de capacidade do DynamoDB",
+                "sob demanda (PAY_PER_REQUEST)",
+                "capacidade provisionada com auto scaling",
+                "absorve o pico de 20× sem replanejar, e a equipe não tem gente para tunar capacidade",
+                "custo por operação é maior que capacidade provisionada bem dimensionada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este desenho cria, e que este módulo não paga",
+            "content": "Dois bancos são dois modelos mentais e duas formas de medir \"estar no ar\". Se o projetor para e ninguém percebe, o histórico começa a ficar sistematicamente desatualizado sem nenhum erro visível ao cliente — porque cada leitura individual continua funcionando, só devolve um pedido a menos que deveria. A observabilidade da idade da fila da outbox, tratada na seção 16, é o que fecha esse buraco."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: os índices que tornam a comparação honesta"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Sem os dois índices abaixo, qualquer um dos três bancos varre a tabela inteira para ambas as consultas, e a diferença medida seria \"com índice\" contra \"sem índice\" — não entre padrões de acesso, que é o que este laboratório existe para mostrar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "sql",
+            "filename": "indices-historico-e-relatorio.sql",
+            "code": "-- indices-historico-e-relatorio.sql — os dois índices que tornam a\n-- comparação deste laboratório honesta. Sem eles, QUALQUER banco varre a\n-- tabela inteira, e a diferença medida seria entre \"com índice\" e \"sem\n-- índice\", não entre padrões de acesso.\n\n-- O histórico por cliente: busca pontual em profundidade de árvore.\n-- INCLUDE evita tocar a tabela para os campos que a listagem mostra\n-- (index-only scan), e CONCURRENTLY evita travar escrita durante a criação.\nCREATE INDEX CONCURRENTLY idx_pedidos_cliente_historico\n    ON pedidos (cliente_id, criado_em DESC, id DESC)\n    INCLUDE (loja_id, total, status);\n\n-- O relatório de faturamento por loja e período usa ESTE índice — a chave\n-- dele é a pergunta oposta à do histórico, e é por isso que um único índice\n-- não serve às duas cargas igualmente bem.\nCREATE INDEX CONCURRENTLY idx_pedidos_loja_periodo\n    ON pedidos (loja_id, criado_em)\n    INCLUDE (total);\n\n-- A tabela que faz a escrita virar decisão em vez de acidente: toda\n-- gravação de pedido grava também a intenção de projetar.\nCREATE TABLE outbox_eventos (\n    id            BIGSERIAL PRIMARY KEY,\n    pedido_id     UUID NOT NULL,\n    cliente_id    UUID NOT NULL,\n    loja_id       UUID NOT NULL,\n    total         NUMERIC(12,2) NOT NULL,\n    status        TEXT NOT NULL,\n    criado_em     TIMESTAMPTZ NOT NULL,\n    processado_em TIMESTAMPTZ\n);\n\n-- O projetor varre só o que falta processar; sem este índice parcial, a\n-- fila cresce e cada rodada do projetor voltaria a examinar linhas antigas\n-- já projetadas.\nCREATE INDEX CONCURRENTLY idx_outbox_pendente\n    ON outbox_eventos (id)\n    WHERE processado_em IS NULL;\n\n-- EXPLAIN (ANALYZE, BUFFERS) antes e depois de cada índice é a prova de que\n-- o planejador está USANDO o índice — \"eu criei o índice\" não é o mesmo que\n-- \"a consulta ficou mais barata\".\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "CONCURRENTLY existe para não travar a Cadência em produção",
+            "content": "Criar um índice sem `CONCURRENTLY` tira lock exclusivo de escrita na tabela pelo tempo da construção — em 40 milhões de linhas, isso são minutos de pedido não gravado. `CONCURRENTLY` constrói em segundo plano, ao custo de exigir duas varreduras da tabela em vez de uma. Em laboratório isso não importa; na Cadência real, é a diferença entre manutenção silenciosa e incidente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: Aurora — mesma interface, armazenamento diferente"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Trocar RDS por Aurora não muda uma linha de SQL da aplicação: o protocolo de fio é o mesmo Postgres. O que muda é como os bytes ficam guardados, e é essa diferença que sustenta o reader deste desenho."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "aurora.tf",
+            "code": "# aurora.tf — o cluster que troca RDS por Aurora: mesma interface SQL,\n# arquitetura de armazenamento diferente. É essa diferença que justifica um\n# reader fresco sem manter uma segunda cópia dos dados.\n\nresource \"aws_rds_cluster\" \"pedidos\" {\n  cluster_identifier = \"${var.projeto}-aurora\"\n  engine              = \"aurora-postgresql\"\n  engine_version      = \"16.4\"\n  database_name       = \"pedidos\"\n  master_username     = \"app_admin\"\n\n  # Segredo GERADO e rotacionado pelo Secrets Manager — nunca em texto aqui.\n  # A aplicação lê a connection string por ARN, na definição da task.\n  manage_master_user_password = true\n\n  db_subnet_group_name   = aws_db_subnet_group.privada.name\n  vpc_security_group_ids = [aws_security_group.banco.id]\n\n  storage_encrypted = true\n  kms_key_id         = aws_kms_key.app.arn\n\n  backup_retention_period = 7\n  preferred_backup_window = \"03:00-04:00\"\n\n  # Sem isto, `terraform destroy` apaga o cluster E o histórico de backup\n  # junto. O nome fica na seção de limpeza — é onde o custo esquecido mora.\n  final_snapshot_identifier = \"${var.projeto}-aurora-final-${formatdate(\"YYYYMMDD\", timestamp())}\"\n  skip_final_snapshot       = false\n\n  deletion_protection = true # removido explicitamente antes do destroy, de propósito\n}\n\nresource \"aws_rds_cluster_instance\" \"writer\" {\n  identifier          = \"${var.projeto}-aurora-writer\"\n  cluster_identifier  = aws_rds_cluster.pedidos.id\n  instance_class      = \"db.r6g.large\"\n  engine              = aws_rds_cluster.pedidos.engine\n  engine_version      = aws_rds_cluster.pedidos.engine_version\n  publicly_accessible = false\n}\n\n# A instância nova SE CONECTA ao volume que já existe — ela não copia dado\n# nenhum antes de começar a servir. É por isso que promover uma leitora a\n# escritora no failover não espera réplica \"alcançar\" o primário: as duas já\n# liam o mesmo volume de cluster.\nresource \"aws_rds_cluster_instance\" \"reader\" {\n  identifier          = \"${var.projeto}-aurora-reader\"\n  cluster_identifier  = aws_rds_cluster.pedidos.id\n  instance_class      = \"db.r6g.large\"\n  engine              = aws_rds_cluster.pedidos.engine\n  engine_version      = aws_rds_cluster.pedidos.engine_version\n  publicly_accessible = false\n\n  # Não é uma segunda cópia dos dados: é uma segunda porta de entrada no\n  # MESMO volume. O relatório lê daqui e nunca disputa CPU com o writer.\n}\n\noutput \"endpoint_escrita\" {\n  value       = aws_rds_cluster.pedidos.endpoint\n  description = \"sempre aponta para o writer atual, mesmo depois de um failover\"\n}\n\noutput \"endpoint_leitura\" {\n  value       = aws_rds_cluster.pedidos.reader_endpoint\n  description = \"balanceia entre as instâncias leitoras; é para onde o relatório aponta\"\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O volume de cluster é a peça que a maioria não desenha certo",
+            "content": "RDS Multi-AZ replica sincronamente PARA UM STANDBY, que mantém sua PRÓPRIA cópia dos dados. Aurora funciona diferente: existe um único volume de cluster, distribuído em três zonas de disponibilidade, e writer e leitoras se conectam a ELE — não a cópias independentes. É por isso que adicionar um reader não copia 40 milhões de linhas: ele só abre uma nova porta de entrada para o volume que já existe."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: DynamoDB — a projeção do caminho conhecido"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A chave de partição é o cliente porque é assim que a pergunta chega — não porque \"cliente\" é uma entidade natural do domínio. Se a pergunta fosse \"últimos pedidos desta loja\", a chave seria a loja; a modelagem segue a consulta, não o esquema mental do domínio."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "dynamodb.tf",
+            "code": "# dynamodb.tf — a projeção do único caminho de leitura CONHECIDO de\n# antemão. Chave de partição = cliente, porque é assim que a pergunta chega;\n# a chave É o padrão de acesso, não uma escolha de modelagem solta no ar.\n\nresource \"aws_dynamodb_table\" \"historico_pedidos\" {\n  name = \"${var.projeto}-historico-pedidos\"\n\n  # Sob demanda: o volume de escrita é 40 mil pedidos/dia, com pico de 20x\n  # em campanha, e ainda não justifica o esforço de dimensionar capacidade\n  # provisionada com auto scaling. Reavaliar quando o padrão de tráfego\n  # ficar previsível o suficiente para provisionar sem desperdiçar.\n  billing_mode = \"PAY_PER_REQUEST\"\n\n  hash_key  = \"PK\" # CLIENTE#<id>\n  range_key = \"SK\" # PEDIDO#<data ISO>#<id do pedido>\n\n  attribute {\n    name = \"PK\"\n    type = \"S\"\n  }\n  attribute {\n    name = \"SK\"\n    type = \"S\"\n  }\n\n  point_in_time_recovery {\n    enabled = true # restaura para qualquer segundo dos últimos 35 dias — a\n                    # rede de segurança contra escrita ruim do projetor\n  }\n\n  server_side_encryption {\n    enabled     = true\n    kms_key_arn = aws_kms_key.app.arn\n  }\n\n  deletion_protection_enabled = true # removido explicitamente antes do destroy\n\n  tags = {\n    Projeto = var.projeto\n  }\n}\n\n# Endpoint de GATEWAY — não de interface. A diferença custa caro confundir:\n# o de gateway entra na TABELA DE ROTAS da sub-rede, sem interface de rede\n# elástica e sem cobrança por hora. Só existe para S3 e DynamoDB; todo outro\n# serviço regional (Bedrock, Secrets Manager) usa endpoint de INTERFACE, com\n# ENI e cobrança por hora e por GB.\nresource \"aws_vpc_endpoint\" \"dynamodb\" {\n  vpc_id            = aws_vpc.principal.id\n  service_name      = \"com.amazonaws.${var.regiao}.dynamodb\"\n  vpc_endpoint_type = \"Gateway\"\n  route_table_ids   = aws_route_table.privada[*].id\n}\n\n# Política mínima da task role: a aplicação só lê e escreve NESTA tabela, e\n# só com as operações que o repositório usa. Nenhuma ação de administração\n# (CreateTable, DeleteTable) entra aqui — essa é responsabilidade do pipeline.\ndata \"aws_iam_policy_document\" \"acesso_historico\" {\n  statement {\n    effect = \"Allow\"\n    actions = [\n      \"dynamodb:Query\",\n      \"dynamodb:GetItem\",\n      \"dynamodb:PutItem\",\n    ]\n    resources = [aws_dynamodb_table.historico_pedidos.arn]\n  }\n}\n\noutput \"tabela_historico\" {\n  value       = aws_dynamodb_table.historico_pedidos.name\n  description = \"nome da tabela; a chave é CLIENTE#<id> / PEDIDO#<data>#<id>\"\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "Gateway, não interface — e a diferença é técnica, não só de preço",
+            "content": "O endpoint de VPC do DynamoDB é do tipo GATEWAY: entra na tabela de rotas da sub-rede, sem interface de rede elástica, sem cobrança por hora. Só S3 e DynamoDB têm essa opção; todo outro serviço regional — Secrets Manager, Bedrock, os demais — usa endpoint de INTERFACE, que cria uma ENI na sub-rede e cobra por hora e por GB. Configurar um endpoint de interface para o DynamoDB por hábito funciona, mas paga por algo que a AWS oferece de graça pela outra porta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: o código que lê os três, e o projetor que os liga"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A classe que atende RDS e Aurora é a MESMA — só a connection string aponta para um endpoint diferente. É a prova em código de que a diferença entre os dois está no armazenamento, não na interface que a aplicação enxerga."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "HistoricoRepositorioSql.cs",
+            "code": "// HistoricoRepositorioSql.cs — a MESMA classe atende RDS e Aurora: o\n// protocolo de fio é idêntico, porque a diferença entre os dois está na\n// arquitetura de armazenamento, não na interface SQL. Só a connection\n// string muda entre os dois ambientes.\n\npublic sealed class HistoricoRepositorioSql : IHistoricoRepositorio\n{\n    private readonly NpgsqlDataSource _fonte;\n\n    public HistoricoRepositorioSql(NpgsqlDataSource fonte) => _fonte = fonte;\n\n    public async Task<PaginaHistoricoSql> BuscarAsync(\n        Guid clienteId, DateTimeOffset? antesDe, int tamanho, CancellationToken ct)\n    {\n        // O índice idx_pedidos_cliente_historico é o que faz esta consulta\n        // custar quase nada: é uma busca em profundidade de árvore pela\n        // chave (cliente_id, criado_em DESC, id DESC), não uma varredura.\n        const string sql = \"\"\"\n            SELECT id, loja_id, total, status, criado_em\n            FROM pedidos\n            WHERE cliente_id = @cliente\n              AND (@antes_de::timestamptz IS NULL OR criado_em < @antes_de)\n            ORDER BY criado_em DESC, id DESC\n            LIMIT @tamanho\n            \"\"\";\n\n        await using var cmd = _fonte.CreateCommand(sql);\n        cmd.Parameters.AddWithValue(\"cliente\", clienteId);\n        cmd.Parameters.AddWithValue(\"antes_de\", (object?)antesDe ?? DBNull.Value);\n        cmd.Parameters.AddWithValue(\"tamanho\", tamanho + 1); // +1 revela se há próxima página\n\n        var itens = new List<PedidoResumo>();\n        await using var leitor = await cmd.ExecuteReaderAsync(ct);\n        while (await leitor.ReadAsync(ct))\n            itens.Add(new PedidoResumo(\n                leitor.GetGuid(0), leitor.GetGuid(1), leitor.GetDecimal(2),\n                leitor.GetString(3), leitor.GetFieldValue<DateTimeOffset>(4)));\n\n        var temProxima = itens.Count > tamanho;\n        if (temProxima) itens.RemoveAt(itens.Count - 1);\n\n        return new PaginaHistoricoSql(itens, temProxima ? itens[^1].CriadoEm : null);\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A versão DynamoDB não compartilha uma linha com a de cima: é outro SDK, outra forma de paginar, outro contrato. Essa diferença de forma é o preço de trocar plano de execução por chave."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "csharp",
+            "filename": "HistoricoRepositorioDynamo.cs",
+            "code": "// HistoricoRepositorioDynamo.cs — a mesma pergunta, respondida por chave em\n// vez de plano de execução. O tempo de resposta não depende de quantos\n// pedidos existem na tabela inteira: depende só do tamanho da PÁGINA.\n\npublic sealed class HistoricoRepositorioDynamo : IHistoricoRepositorioProjecao\n{\n    private readonly IAmazonDynamoDB _dynamo;\n    private readonly string _tabela;\n\n    public HistoricoRepositorioDynamo(IAmazonDynamoDB dynamo, IConfiguration config)\n    {\n        _dynamo = dynamo;\n        _tabela = config[\"DynamoDb:TabelaHistorico\"]!;\n    }\n\n    public async Task<PaginaHistoricoDynamo> BuscarAsync(\n        Guid clienteId, string? cursor, int tamanho, CancellationToken ct)\n    {\n        var pedido = new QueryRequest\n        {\n            TableName = _tabela,\n            KeyConditionExpression = \"PK = :cliente AND begins_with(SK, :prefixo)\",\n            ExpressionAttributeValues = new Dictionary<string, AttributeValue>\n            {\n                [\":cliente\"] = new($\"CLIENTE#{clienteId}\"),\n                [\":prefixo\"] = new(\"PEDIDO#\"),\n            },\n            ScanIndexForward = false, // mais recente primeiro\n            Limit = tamanho,\n            // Padrão da tabela é leitura eventualmente consistente — metade\n            // do custo da forte, e a projeção já tolera um atraso de\n            // segundos. NÃO ligue ConsistentRead aqui: é o caminho de maior\n            // volume, e dobrar o custo dele por padrão é o erro caro.\n            ConsistentRead = false,\n        };\n\n        if (cursor is not null)\n            pedido.ExclusiveStartKey = CursorCodec.Decodificar(cursor);\n\n        var resposta = await _dynamo.QueryAsync(pedido, ct);\n        var itens = resposta.Items.Select(MapearParaResumo).ToList();\n\n        // Não existe \"pular para a página 500\": o próximo cursor só existe\n        // se o DynamoDB devolveu LastEvaluatedKey. Paginação aqui é\n        // sequencial — restrição de desenho, não limitação a contornar.\n        var proximoCursor = resposta.LastEvaluatedKey is { Count: > 0 }\n            ? CursorCodec.Codificar(resposta.LastEvaluatedKey)\n            : null;\n\n        return new PaginaHistoricoDynamo(itens, proximoCursor);\n    }\n\n    private static PedidoResumo MapearParaResumo(Dictionary<string, AttributeValue> item) => new(\n        Guid.Parse(item[\"SK\"].S.Split('#')[2]),\n        Guid.Parse(item[\"loja_id\"].S),\n        decimal.Parse(item[\"total\"].N, CultureInfo.InvariantCulture),\n        item[\"status\"].S,\n        DateTimeOffset.Parse(item[\"SK\"].S.Split('#')[1]));\n}\n"
+          }
+        },
+        {
+          "id": "b11_4",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "csharp",
+            "filename": "ProjetorOutbox.cs",
+            "code": "// ProjetorOutbox.cs — lê a outbox commitada no Aurora e escreve a projeção\n// no DynamoDB. A idempotência vem da CHAVE, não de um controle de estado\n// separado: reprocessar o mesmo evento sobrescreve o mesmo item.\n\npublic sealed class ProjetorOutbox : BackgroundService\n{\n    private readonly NpgsqlDataSource _aurora;\n    private readonly IAmazonDynamoDB _dynamo;\n    private readonly string _tabela;\n    private readonly ILogger<ProjetorOutbox> _log;\n\n    protected override async Task ExecuteAsync(CancellationToken parar)\n    {\n        while (!parar.IsCancellationRequested)\n        {\n            var eventos = await BuscarPendentesAsync(lote: 100, parar);\n\n            foreach (var evento in eventos)\n            {\n                await _dynamo.PutItemAsync(new PutItemRequest\n                {\n                    TableName = _tabela,\n                    Item = new Dictionary<string, AttributeValue>\n                    {\n                        [\"PK\"] = new($\"CLIENTE#{evento.ClienteId}\"),\n                        // A chave deriva do PEDIDO, não de quando o projetor\n                        // rodou — reprocessar o mesmo pedido produz a MESMA\n                        // chave, e o PutItem apenas sobrescreve com o mesmo\n                        // conteúdo. É idempotência por construção.\n                        [\"SK\"] = new($\"PEDIDO#{evento.CriadoEm:O}#{evento.PedidoId}\"),\n                        [\"loja_id\"] = new(evento.LojaId.ToString()),\n                        [\"total\"] = new AttributeValue\n                            { N = evento.Total.ToString(CultureInfo.InvariantCulture) },\n                        [\"status\"] = new(evento.Status),\n                    },\n                }, parar);\n\n                // Marcar DEPOIS de projetar, nesta ordem. Inverter troca\n                // \"pode duplicar\" por \"pode perder\" — e duplicar aqui é\n                // inofensivo porque o PutItem é idempotente; perder não é.\n                await MarcarProcessadaAsync(evento.Id, parar);\n            }\n\n            if (eventos.Count == 0)\n                await Task.Delay(TimeSpan.FromSeconds(2), parar);\n        }\n    }\n\n    private async Task<List<EventoOutbox>> BuscarPendentesAsync(int lote, CancellationToken ct)\n    {\n        // FOR UPDATE SKIP LOCKED permite rodar DUAS instâncias do projetor\n        // sem que disputem a mesma linha — cada uma pula o que a outra já\n        // travou, em vez de esperar.\n        const string sql = \"\"\"\n            SELECT id, pedido_id, cliente_id, loja_id, total, status, criado_em\n            FROM outbox_eventos\n            WHERE processado_em IS NULL\n            ORDER BY id\n            LIMIT @lote\n            FOR UPDATE SKIP LOCKED\n            \"\"\";\n\n        await using var conexao = await _aurora.OpenConnectionAsync(ct);\n        await using var transacao = await conexao.BeginTransactionAsync(ct);\n        await using var cmd = new NpgsqlCommand(sql, conexao, transacao);\n        cmd.Parameters.AddWithValue(\"lote\", lote);\n\n        var eventos = new List<EventoOutbox>();\n        await using var leitor = await cmd.ExecuteReaderAsync(ct);\n        while (await leitor.ReadAsync(ct))\n            eventos.Add(new EventoOutbox(\n                leitor.GetInt64(0), leitor.GetGuid(1), leitor.GetGuid(2), leitor.GetGuid(3),\n                leitor.GetDecimal(4), leitor.GetString(5), leitor.GetFieldValue<DateTimeOffset>(6)));\n\n        await transacao.CommitAsync(ct); // libera os locks assim que a leitura termina\n        return eventos;\n    }\n\n    private Task MarcarProcessadaAsync(long id, CancellationToken ct) =>\n        _aurora.CreateCommand(\"UPDATE outbox_eventos SET processado_em = now() WHERE id = @id\")\n            .ExecuteNonQueryAsync(ct);\n}\n"
+          }
+        },
+        {
+          "id": "b11_5",
+          "type": "code_block",
+          "position": 5,
+          "data": {
+            "language": "csharp",
+            "filename": "RelatorioRepositorio.cs",
+            "code": "// RelatorioRepositorio.cs — a pergunta NOVA. Não existe chave para ela: é\n// GROUP BY sobre milhões de linhas, no READER, com teto de tempo próprio.\n\npublic sealed class RelatorioRepositorio\n{\n    // Este NpgsqlDataSource aponta para o ENDPOINT DE LEITURA do Aurora —\n    // outra connection string, outro pool, nunca o writer.\n    private readonly NpgsqlDataSource _leitor;\n\n    public RelatorioRepositorio(NpgsqlDataSource leitor) => _leitor = leitor;\n\n    public async Task<IReadOnlyList<FaturamentoPorLoja>> FaturamentoAsync(\n        DateOnly inicio, DateOnly fim, CancellationToken ct)\n    {\n        await using var conexao = await _leitor.OpenConnectionAsync(ct);\n\n        // Teto próprio: uma consulta ruim aqui não consome conexão do\n        // caminho do cliente, porque é outro pool — mas ainda pode ocupar\n        // CPU do reader por tempo demais. O timeout é a segunda linha de\n        // defesa, depois do isolamento de pool.\n        await using (var ajuste = conexao.CreateCommand())\n        {\n            ajuste.CommandText = \"SET statement_timeout = '30s'\";\n            await ajuste.ExecuteNonQueryAsync(ct);\n        }\n\n        const string sql = \"\"\"\n            SELECT loja_id, COUNT(*) AS pedidos, SUM(total) AS faturamento\n            FROM pedidos\n            WHERE criado_em >= @inicio AND criado_em < @fim\n            GROUP BY loja_id\n            ORDER BY faturamento DESC\n            \"\"\";\n        await using var consulta = new NpgsqlCommand(sql, conexao);\n        consulta.Parameters.AddWithValue(\"inicio\", inicio.ToDateTime(TimeOnly.MinValue));\n        consulta.Parameters.AddWithValue(\"fim\", fim.ToDateTime(TimeOnly.MinValue));\n\n        var linhas = new List<FaturamentoPorLoja>();\n        await using var leitor = await consulta.ExecuteReaderAsync(ct);\n        while (await leitor.ReadAsync(ct))\n            linhas.Add(new FaturamentoPorLoja(\n                leitor.GetGuid(0), leitor.GetInt64(1), leitor.GetDecimal(2)));\n        return linhas;\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b11_6",
+          "type": "callout",
+          "position": 6,
+          "data": {
+            "variant": "danger",
+            "title": "Escrever nos dois bancos fora da outbox perde pedido de verdade",
+            "content": "Se o serviço de pedidos chamar `PutItemAsync` diretamente após o `COMMIT` do Aurora, em vez de gravar a intenção na outbox, uma falha de rede entre as duas chamadas deixa o pedido gravado no banco de verdade e AUSENTE do histórico — sem nenhum erro devolvido ao cliente, que já recebeu 201. É perda silenciosa de dado, e é exatamente o tipo de falha que só aparece semanas depois, quando alguém procura um pedido que não existe na tela."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, medir e provar"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "medir-os-tres.sh",
+            "code": "#!/usr/bin/env bash\n# medir-os-tres.sh — a MESMA carga contra os três caminhos, com o relatório\n# rodando ao mesmo tempo. É a única forma honesta de comparar: medir cada\n# banco isolado esconde justamente o efeito que este laboratório existe\n# para mostrar.\nset -euo pipefail\n\nCLIENTE=\"3f2a1c10-8e3a-4a11-9c2e-000000000001\"\n\nmedir() {\n  local nome=\"$1\" url=\"$2\"\n  echo \"== $nome ==\"\n  hey -z 30s -c 20 -q 10 \"$url\" | grep -E \"50 % |95 % |99 % |Requests/sec\"\n}\n\n# Dispara o relatório em paralelo — é ele que estressa o caminho compartilhado.\ncurl -s \"$BASE_URL_RDS/relatorios/faturamento?inicio=2026-01-01&fim=2026-08-01\" -o /dev/null &\nRELATORIO_PID=$!\n\nmedir \"RDS único (arquitetura mínima)\"    \"$BASE_URL_RDS/clientes/$CLIENTE/pedidos?tamanho=20\"\nmedir \"Aurora com reader isolado\"          \"$BASE_URL_AURORA/clientes/$CLIENTE/pedidos?tamanho=20\"\nmedir \"DynamoDB (projeção)\"                \"$BASE_URL_DYNAMO/clientes/$CLIENTE/pedidos?tamanho=20\"\n\nwait \"$RELATORIO_PID\"\n\n# Nas medições de exemplo: RDS único p95 sobe de 22 ms para 340 ms com o\n# relatório rodando; Aurora com reader isolado mantém 24 ms; DynamoDB mantém\n# 11 ms e não varia com o volume da tabela nem com o relatório rodando ao\n# lado, porque a Query nunca toca a instância do relatório.\n"
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma aceita \"parece mais rápido\" como resultado — cada uma tem um número ou um estado esperado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medições; nenhuma conclusão vem de \"parece mais rápido\".\nset -euo pipefail\nCLIENTE=\"3f2a1c10-8e3a-4a11-9c2e-000000000001\"\n\n# ── Prova 1: o p95 do histórico não se move com o relatório rodando ─────────\n# No Aurora com reader isolado e no DynamoDB, o p95 sob concorrência com o\n# relatório deve ficar dentro de 20% do p95 isolado. No RDS único, ele sobe\n# de ordem de grandeza — é o defeito que a arquitetura mínima expõe.\nbash medir-os-tres.sh\n\n# ── Prova 2: o custo de ligar ConsistentRead ────────────────────────────────\n# Execute a mesma Query 1.000 vezes com ConsistentRead=false e depois com\n# true, e compare ConsumedReadCapacityUnits no CloudWatch. Esperado: a soma\n# com leitura forte é o DOBRO da soma com leitura eventual.\naws cloudwatch get-metric-statistics \\\n  --namespace AWS/DynamoDB --metric-name ConsumedReadCapacityUnits \\\n  --dimensions Name=TableName,Value=cadencia-historico-pedidos \\\n  --start-time \"$(date -u -d '10 min ago' +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --period 60 --statistics Sum --output table\n\n# ── Prova 3: o lag do reader do Aurora fica abaixo de 100 ms ────────────────\n# AuroraReplicaLag é medido pela PRÓPRIA réplica; valor alto sinaliza reader\n# sobrecarregado, não \"banco lento\" de forma genérica.\naws cloudwatch get-metric-statistics \\\n  --namespace AWS/RDS --metric-name AuroraReplicaLag \\\n  --dimensions Name=DBInstanceIdentifier,Value=ffv-lab-aurora-reader \\\n  --start-time \"$(date -u -d '10 min ago' +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --period 60 --statistics Average Maximum --output table\n# Esperado: média bem abaixo de 100 ms. Acima disso, o reader está recebendo\n# carga além do que aguenta, e o \"frescor\" deixou de ser garantido.\n\n# ── Prova 4: reprocessar o mesmo evento não duplica o item ──────────────────\n# Rode o projetor duas vezes sobre o MESMO evento (sem marcar como\n# processado entre as rodadas) e confirme que a contagem de itens não muda.\nANTES=$(aws dynamodb query --table-name cadencia-historico-pedidos \\\n  --key-condition-expression \"PK = :c\" \\\n  --expression-attribute-values \"{\\\":c\\\":{\\\"S\\\":\\\"CLIENTE#$CLIENTE\\\"}}\" \\\n  --select COUNT --query Count --output text)\n# ... reexecuta o PutItem do mesmo evento aqui ...\nDEPOIS=$(aws dynamodb query --table-name cadencia-historico-pedidos \\\n  --key-condition-expression \"PK = :c\" \\\n  --expression-attribute-values \"{\\\":c\\\":{\\\"S\\\":\\\"CLIENTE#$CLIENTE\\\"}}\" \\\n  --select COUNT --query Count --output text)\n[ \"$ANTES\" = \"$DEPOIS\" ] && echo \"OK: reprocessar não duplicou ($ANTES itens)\" \\\n  || echo \"FALHA DA PROVA: a contagem mudou de $ANTES para $DEPOIS\"\n\n# ── Prova 5: não existe \"pular para a página 500\" ────────────────────────────\n# Tente pedir uma página sem ExclusiveStartKey e sem ter percorrido as\n# anteriores: o resultado é sempre a PRIMEIRA página, nunca a que se \"pulou\"\n# para. Confirma que a paginação é sequencial por desenho, não por limitação\n# temporária do SDK.\ncurl -s \"$BASE_URL_DYNAMO/clientes/$CLIENTE/pedidos?tamanho=20&pagina=500\" | jq '.itens | length'\n# Esperado: os 20 itens mais recentes — a mesma primeira página, porque não\n# existe parâmetro de número de página, só cursor.\n"
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · p95 do histórico não se move com o relatório",
+                "laço de `hey` durante o relatório",
+                "Aurora e DynamoDB ficam dentro de 20% do p95 isolado",
+                "se o RDS único subir de ordem de grandeza, é a competição que este módulo resolve"
+              ],
+              [
+                "2 · ConsistentRead dobra o custo",
+                "ConsumedReadCapacityUnits antes/depois",
+                "a soma com leitura forte é o dobro da soma com leitura eventual",
+                "se não dobrar, confira se `ConsistentRead` realmente mudou entre as duas rodadas"
+              ],
+              [
+                "3 · Lag do reader do Aurora",
+                "`AuroraReplicaLag` no CloudWatch",
+                "média bem abaixo de 100 ms",
+                "lag alto indica reader sobrecarregado — o relatório pode estar grande demais para ele"
+              ],
+              [
+                "4 · Reprocessar não duplica",
+                "contar itens antes/depois de reprocessar um evento",
+                "contagem igual",
+                "contagem maior indica que a chave não está sendo derivada do pedido corretamente"
+              ],
+              [
+                "5 · Paginação é sequencial",
+                "pedir `pagina=500` sem cursor",
+                "devolve a primeira página, sempre",
+                "se \"pular\" para uma página específica funcionasse, o SDK estaria sendo usado errado"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três acontecem de verdade, e a primeira é a mais cara: ela perde dado sem avisar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Escrita dupla sem outbox",
+                "chame `PutItemAsync` direto após o commit do Aurora e derrube a rede entre as duas chamadas",
+                "pedido existe no relacional e nunca aparece no histórico — sem erro nenhum",
+                "compare a contagem de `pedidos` com a contagem de itens na tabela do DynamoDB",
+                "outbox: a segunda escrita passa a ser reexecutável, não uma corrida contra a rede"
+              ],
+              [
+                "ConsistentRead ligado no caminho de maior volume",
+                "defina `ConsistentRead = true` na Query do histórico e gere carga de pico",
+                "ConsumedReadCapacityUnits dobra e a tabela pode começar a estrangular no pico de campanha",
+                "`ConsumedReadCapacityUnits` e `ThrottledRequests` no CloudWatch",
+                "eventual por padrão; forte só onde a janela de segundos é genuinamente inaceitável"
+              ],
+              [
+                "Índice do relatório ausente",
+                "derrube `idx_pedidos_loja_periodo` e rode o relatório de novo",
+                "o relatório volta a competir com o histórico, mesmo isolado no reader",
+                "`EXPLAIN (ANALYZE, BUFFERS)` mostrando Seq Scan em vez de Index Scan",
+                "recriar o índice; o isolamento em outra instância não substitui o índice certo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A falha que não aparece em nenhum log de erro",
+            "content": "A escrita dupla sem outbox não gera exceção visível ao cliente: o `POST /pedidos` responde 201 normalmente, porque o Aurora commitou. O pedido só está ausente de uma tela SECUNDÁRIA — o histórico — e ninguém liga as duas coisas até um cliente reclamar que \"sumiu um pedido\". É perda de dado real, e é por isso que a outbox não é complexidade opcional neste desenho."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "A Cadência tem hoje uma Query pela chave de partição no DynamoDB para o histórico de pedidos por cliente — sempre a mesma forma. O time recebe um pedido novo: \"quantos clientes fizeram 3 ou mais pedidos numa mesma loja nos últimos 30 dias\". Qual é a decisão correta?",
+        "options": [
+          "Criar um índice secundário global no DynamoDB que agrupe pedidos por loja e responda a essa contagem diretamente",
+          "Rodar essa consulta como SQL, com GROUP BY e HAVING, contra o reader do Aurora — é uma pergunta nova, não o caminho já conhecido",
+          "Calcular o agregado a cada escrita, incrementando um contador por cliente e loja no próprio serviço de pedidos",
+          "Fazer um Scan com FilterExpression na tabela de histórico, já que os dados dos pedidos já estão lá"
+        ],
+        "correctIndex": 1,
+        "explanation": "A pergunta muda de forma — não é mais \"os pedidos deste cliente\", é uma contagem condicional cruzando cliente, loja e janela de tempo — e isso é o sinal que o módulo ensina a reconhecer: pergunta nova vai para onde existe um otimizador de consultas, não para onde existe uma chave fixa. O Aurora responde com GROUP BY e HAVING sem que ninguém precise desenhar um índice específico para ELA, e o reader isola o custo do caminho de escrita.\n\nA primeira alternativa comete o erro mais caro da série: desenhar um GSI para uma pergunta que ainda não se repetiu o suficiente para justificar manter um índice extra em toda escrita — e a próxima pergunta parecida (\"e por bairro?\") exigiria outro GSI. A terceira ignora como o DynamoDB cobra: um Scan com filtro é cobrado pelos bytes EXAMINADOS, não pelos devolvidos, então filtrar depois de escanear tudo não economiza nada. A quarta pré-calcula um contador que responde só a ESTA pergunta; a variação seguinte (\"e por faixa de horário?\") exigiria reprocessar o histórico inteiro para criar um contador novo — trocou a pergunta certa por uma resposta que só serve a uma pergunta fixa."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: dois bancos, duas superfícies"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada banco novo é uma credencial nova, uma política nova e um caminho novo de saída de dado. A superfície de risco não dobra por acaso — ela dobra porque há dois lugares onde o pedido do cliente existe."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Política de IAM com `dynamodb:*` sobre a tabela",
+                "média",
+                "alto",
+                "política mínima: só `Query`, `GetItem`, `PutItem`, restrita ao ARN da tabela",
+                "IAM Access Analyzer sobre o papel da task",
+                "derivar a política do uso real medido — é o L41"
+              ],
+              [
+                "Deleção acidental da tabela em ambiente errado",
+                "baixa",
+                "alto",
+                "`deletion_protection_enabled = true`, e ARNs com prefixo de ambiente distinto",
+                "CloudTrail em `DeleteTable`",
+                "restaurar do point-in-time recovery — janela de 35 dias"
+              ],
+              [
+                "Relatório lendo dado desatualizado usado para decisão financeira",
+                "média",
+                "médio",
+                "expor `AuroraReplicaLag` no mesmo painel que o relatório, com aviso se acima do limiar",
+                "alarme sobre `AuroraReplicaLag`",
+                "reexecutar contra o writer quando o lag ultrapassar o aceitável para a decisão"
+              ],
+              [
+                "Segredo do Aurora em variável de ambiente",
+                "baixa",
+                "alto",
+                "`manage_master_user_password = true`; leitura via Secrets Manager em tempo de execução",
+                "busca por padrão de credencial no grupo de logs",
+                "rotacionar e mover para `secrets` na definição de contêiner"
+              ],
+              [
+                "Enumeração de cliente pela chave de partição",
+                "baixa",
+                "médio",
+                "autorização por identidade do requisitante, não pelo `clienteId` do caminho",
+                "CloudWatch: taxa de `AccessDenied` por identidade",
+                "a chave de partição não é controle de acesso — a camada de aplicação é"
+              ],
+              [
+                "Tabela sem backup automatizado ativo",
+                "baixa",
+                "alto",
+                "`point_in_time_recovery.enabled = true` desde a criação",
+                "AWS Backup ou auditoria periódica de configuração",
+                "sem PITR, uma escrita ruim em massa não tem como voltar — habilitar não é retroativo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O escopo estreito que sustenta a política acima",
+            "content": "A política do papel de aplicação lista só três ações e um recurso: o ARN da tabela de histórico. Nenhuma ação administrativa (`CreateTable`, `DeleteTable`, `UpdateContinuousBackups`) está ali, porque a aplicação nunca precisa delas em tempo de execução — quem cria e configura a tabela é o pipeline de infraestrutura, com outro papel."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada banco tem uma falha característica, e usar o mesmo painel para os dois esconde justamente essa diferença."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "O histórico está competindo com o relatório?",
+                "p95 do histórico durante execução do relatório",
+                "volta o efeito que a arquitetura mínima expôs",
+                "> 20% acima do p95 isolado"
+              ],
+              [
+                "O DynamoDB está estrangulando?",
+                "`ThrottledRequests`",
+                "uma partição quente recebendo mais tráfego do que sua fatia de capacidade permite",
+                "qualquer valor > 0 sustentado"
+              ],
+              [
+                "Quanto a leitura está custando?",
+                "`ConsumedReadCapacityUnits`",
+                "ligar ConsistentRead sem perceber, ou GSI novo copiando escrita",
+                "variação > 2× sem mudança de tráfego"
+              ],
+              [
+                "O reader do Aurora está atrasado?",
+                "`AuroraReplicaLag`",
+                "reader sobrecarregado ou consulta grande demais para o hardware atual",
+                "> 100 ms sustentado"
+              ],
+              [
+                "A outbox está represando?",
+                "idade do evento mais antigo com `processado_em IS NULL`",
+                "projetor parado ou lento — histórico ficando sistematicamente desatualizado",
+                "> 60 s de idade do evento mais antigo"
+              ],
+              [
+                "O relatório está estourando o teto?",
+                "taxa de `statement_timeout` no log do Aurora",
+                "a consulta cresceu além do que o índice de cobertura resolve",
+                "> 1% das execuções"
+              ],
+              [
+                "Alguém alterou a tabela fora do pipeline?",
+                "CloudTrail em `UpdateTable`, `DeleteTable`",
+                "mudança de infraestrutura fora do caminho auditado",
+                "qualquer identidade fora da esperada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana quando olhada sozinha",
+            "content": "`ConsumedReadCapacityUnits` alto pode significar tráfego genuinamente maior — bom sinal de crescimento — ou pode significar que alguém ligou `ConsistentRead` num caminho de alto volume sem perceber o custo. As duas causas produzem o MESMO gráfico subindo; só o cruzamento com o volume de requisições distingue uma da outra."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 pedidos/dia, 1 loja",
+                "RDS único já resolve; nada compete de verdade",
+                "nada — separar bancos aqui é complexidade sem retorno",
+                "ficar no desenho mínimo"
+              ],
+              [
+                "40 mil pedidos/dia, 900 lojas (aqui)",
+                "histórico e relatório competem no mesmo nó",
+                "p95 do histórico sobe 13× durante o relatório",
+                "reader isolado + projeção DynamoDB"
+              ],
+              [
+                "400 mil pedidos/dia, pico de 20×",
+                "DynamoDB sob demanda absorve; o reader do Aurora começa a sentir o relatório crescendo com a base",
+                "relatório se aproxima do teto de 30 s mesmo com índice",
+                "considerar extração incremental para OLAP (nível 5 da evolução, L61)"
+              ],
+              [
+                "1 milhão de pedidos/dia",
+                "partição quente possível se um cliente concentra tráfego de forma incomum",
+                "estrangulamento LOCAL com capacidade global sobrando",
+                "sufixo de dispersão na chave de partição, se um único cliente for outlier real"
+              ],
+              [
+                "Falha de AZ",
+                "Aurora: failover para o reader promovido, que já lia o mesmo volume; DynamoDB: nenhum impacto visível, é multi-AZ por padrão",
+                "a aplicação precisa reconectar ao NOVO endpoint de escrita após o failover",
+                "testar o failover ensaiado — não presumir que a string de conexão se atualiza sozinha"
+              ],
+              [
+                "Pergunta nova aparece",
+                "nem SQL nem DynamoDB respondem sem esforço se o volume for grande demais para o reader",
+                "o relatório vira o gargalo de novo, agora do lado relacional",
+                "extração para camada analítica — é para isso que o nível 5 da evolução existe"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O gargalo que só aparece com o pico de campanha",
+            "content": "Capacidade sob demanda do DynamoDB absorve rajadas de tráfego dentro dos limites de escalonamento do serviço, mas uma ÚNICA chave de partição quente — por exemplo, um evento onde milhares de leituras miram um cliente só — pode estrangular mesmo com a tabela inteira tendo capacidade de sobra. É limite de PARTIÇÃO, não de tabela, e é o tipo de limite que só aparece sob carga real, nunca em teste com poucos clientes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Dois bancos novos custam mais que um, e a pergunta que importa não é \"quanto\", é \"essa diferença compra o quê\". Nenhum valor absoluto aqui: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que este texto."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "1 loja, poucas centenas de pedidos",
+                "uma instância Aurora extra (reader) e uma tabela DynamoDB quase ociosa",
+                "desprezível",
+                "nenhuma; separar bancos aqui é estudo, não produção"
+              ],
+              [
+                "Produção — a Cadência hoje",
+                "900 lojas, 40 mil pedidos/dia, pico de 20×",
+                "writer + reader do Aurora rodando 24/7, e leitura/escrita sob demanda no DynamoDB proporcional ao uso",
+                "previsível, cresce com o volume de pedidos",
+                "ConsistentRead=false no caminho de alto volume; índice de cobertura no relatório"
+              ],
+              [
+                "Alta escala",
+                "10× o volume atual, com pergunta analítica nova toda semana",
+                "o reader do Aurora se aproxima do teto de CPU para o relatório",
+                "o relacional passa a ser a linha que mais cresce",
+                "extrair para camada analítica (nível 5) em vez de aumentar a instância do reader"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Instâncias do Aurora",
+                "hora ligada por instância, writer e reader separadamente",
+                "reader ocioso ainda cobra hora inteira — não é elástico como o DynamoDB sob demanda"
+              ],
+              [
+                "Leitura do DynamoDB",
+                "unidade de leitura consumida",
+                "ConsistentRead dobra; Scan com filtro cobra pelo examinado, não pelo devolvido"
+              ],
+              [
+                "Escrita do DynamoDB",
+                "unidade de escrita consumida, replicada em cada GSI",
+                "cada GSI novo multiplica o custo de TODA escrita futura, para sempre"
+              ],
+              [
+                "Armazenamento do Aurora",
+                "GB-mês do volume de cluster",
+                "cresce com o dado, não com o número de instâncias — outra instância não dobra o custo de storage"
+              ],
+              [
+                "PITR do DynamoDB e backup do Aurora",
+                "GB-mês retido",
+                "proteção contra escrita ruim tem custo contínuo, não é \"de graça depois de ligar\""
+              ],
+              [
+                "Endpoint de gateway do DynamoDB",
+                "nada — sem cobrança por hora",
+                "é a exceção que vale conhecer: gateway não tem o custo por hora do endpoint de interface"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho que não aparece na fatura de infraestrutura",
+            "content": "O custo real do desenho mínimo não estava na conta da AWS — estava no tempo perdido toda vez que o relatório rodava e alguém no suporte respondia \"o app está lento\" sem saber por quê. Separar os caminhos custa duas instâncias e uma tabela; o que ele compra é um sistema onde o sintoma aponta direto para a causa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "consulta e banco documentados por decisão, não por acidente histórico",
+                "projetor sem alarme de atraso ainda é um ponto cego",
+                "alarme sobre idade do evento mais antigo pendente na outbox",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "política mínima por tabela, segredo por referência, PITR habilitado",
+                "autorização por `clienteId` ainda depende de disciplina na camada de aplicação",
+                "validar identidade do requisitante contra o cliente do caminho, sempre",
+                "alta"
+              ],
+              [
+                "Confiabilidade",
+                "outbox garante que pedido gravado sempre é projetado, mesmo com atraso",
+                "falha do projetor por tempo prolongado gera histórico sistematicamente desatualizado",
+                "alarme de atraso + reprocessamento automático com backoff",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "p95 do histórico deixou de variar com o relatório",
+                "reader do Aurora ainda escala verticalmente, não horizontalmente para o relatório",
+                "Aurora Serverless v2 para a carga variar sem redimensionar manualmente (L15)",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "DynamoDB sob demanda evita provisionar para o pico",
+                "writer e reader do Aurora cobram 24/7 mesmo fora do horário de pico",
+                "avaliar agendamento de capacidade ou Aurora Serverless v2",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "índice de cobertura reduz bytes examinados por consulta nos dois bancos",
+                "duas instâncias Aurora rodando full-time por decisão de disponibilidade",
+                "revisar o número de réplicas com dados de utilização real, não por precaução",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco e compra outro — e o topo chega a dado que nem SQL nem chave respondem bem."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "De um Postgres só a dados e IA — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Um RDS for PostgreSQL respondendo às duas cargas, sem índice dedicado a cada uma. É onde a Cadência estava antes deste laboratório.",
+                "note": "Risco resolvido: nenhum. Novo risco: as duas cargas competem pelo mesmo cache, e o efeito sobrevive à consulta que o causou. Custo: o mais baixo — uma instância só."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Aurora com writer e reader isolando o relatório, e DynamoDB como projeção do caminho conhecido, ligados por outbox.",
+                "note": "Risco resolvido: competição de cargas e escolha de banco por hábito em vez de decisão. Novo risco: dois modelos mentais, e um projetor que pode represar sem erro visível. Custo: duas instâncias Aurora 24/7 + DynamoDB proporcional ao uso."
+              },
+              {
+                "label": "Nível 3 — Aurora aprofundado (L15)",
+                "instruction": "Serverless v2 para a capacidade acompanhar o pico de 20× sem redimensionar manualmente, e failover ensaiado de verdade.",
+                "note": "Risco resolvido: capacidade fixa cara fora do pico ou insuficiente durante ele. Novo risco: escalonamento automático que não acompanha uma rajada mais rápida do que o serviço reage. Custo: paga pela capacidade usada, não pela reservada."
+              },
+              {
+                "label": "Nível 4 — DynamoDB aprofundado (L16)",
+                "instruction": "Single-table design cobrindo múltiplos padrões de acesso do domínio de pedidos, com GSIs deliberados em vez de um por pergunta que aparece.",
+                "note": "Risco resolvido: nova pergunta recorrente forçando volta ao relacional a cada vez. Novo risco: modelagem errada é cara de corrigir depois de a tabela estar em produção. Custo: cada GSI novo multiplica o custo de toda escrita futura."
+              },
+              {
+                "label": "Nível 5 — Separação OLTP/OLAP real (L61)",
+                "instruction": "Quando o relatório ultrapassa o que um reader aguenta, extração incremental para S3 e consulta via Athena ou Redshift.",
+                "note": "Risco resolvido: reader saturado por análise cada vez mais pesada sobre dado cada vez maior. Novo risco: o pipeline de extração vira dependência nova, com atraso e falha próprios. Custo: armazenamento analítico e processamento em lote."
+              },
+              {
+                "label": "Nível 6 — Dados, IA e resiliência regional (L58, L84)",
+                "instruction": "DR multi-região com failover ensaiado para os dois bancos, e busca semântica sobre o catálogo de pedidos quando a pergunta deixa de ter forma SQL ou de chave — \"pedidos parecidos com este\".",
+                "note": "Risco resolvido: perda regional, e pergunta que nem SQL nem chave respondem bem. Novo risco: complexidade operacional de manter DR e um índice vetorial sincronizados com dois bancos de origem. Custo: o mais alto da escada — duplicação regional e armazenamento vetorial."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "O nível 5 depende de o nível 2 já separar o caminho que MUDA (relatório) do caminho que É FIXO (histórico) — sem essa fronteira, não há \"o que extrair\" definido. E o nível 6 depende do 3: DR ensaiado sobre Aurora Serverless v2 se comporta diferente de DR sobre instâncias fixas. Pular etapa aqui não economiza trabalho, transfere a decisão que o nível anterior deveria ter tomado para um incidente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A decisão central deste módulo — qual banco serve qual consulta — é determinística: lista-se a consulta, classifica-se como conhecida ou nova, e a resposta segue. Um modelo não melhora essa classificação quando ela já pode ser respondida por uma regra escrita. Forçar IA aqui seria o antipadrão que a própria série existe para evitar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar honesto onde IA acrescentaria valor, e ele é modesto: identificar QUANDO uma pergunta nova está deixando de ser rara. Hoje o time descobre uma pergunta recorrente quando alguém reclama de lentidão; um classificador sobre o log de consultas ao relacional — texto do `WHERE`, frequência, tempo de execução — poderia sinalizar \"esta forma de consulta se repete o suficiente para virar uma projeção dedicada\" antes do incidente, não depois."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "detectar cedo quando uma consulta nova virou recorrente o bastante para merecer uma projeção dedicada"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "uma regra de limiar — \"mesma forma de consulta mais de N vezes por dia\" — cobre a maior parte; IA só se justifica se o log de consultas for volumoso e variado demais para regra fixa"
+              ],
+              [
+                "De onde viriam os dados?",
+                "`pg_stat_statements` do Aurora e os logs de consulta do DynamoDB — ambos já existem, sem infraestrutura nova"
+              ],
+              [
+                "Qual o risco?",
+                "sinalizar migração para uma pergunta que é sazonal, não recorrente — criar uma projeção cara para algo que só acontece uma vez por trimestre"
+              ],
+              [
+                "Por que não agora?",
+                "a Cadência tem duas consultas conhecidas, não um catálogo grande o suficiente para um classificador aprender algo que uma regra não cobre"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"decidir se esta consulta deveria ir para o DynamoDB\" troca um critério verificável — a consulta tem sempre a mesma forma? — por um julgamento probabilístico sobre uma decisão que tem resposta certa. Onde existe um teste determinístico, IA só acrescenta latência e a chance de errar com confiança."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Escolher banco por benchmark sintético",
+                "o benchmark é fácil de rodar e devolve um número bonito para justificar a decisão",
+                "benchmark isolado não reproduz duas cargas competindo, que é onde o defeito mora",
+                "a decisão \"vencedora\" no benchmark continua lenta em produção, sob carga real",
+                "medir os padrões de acesso REAIS, concorrentes, como neste laboratório",
+                "nunca como decisão final; serve só para eliminar candidatos claramente inviáveis"
+              ],
+              [
+                "Modelar DynamoDB copiando o schema relacional",
+                "é o modelo mental que já se tem, e \"uma tabela por entidade\" parece organizado",
+                "sem chave derivada da consulta, toda leitura recorrente vira Scan",
+                "`ConsumedReadCapacityUnits` alto para pouco tráfego, e latência que cresce com a tabela",
+                "modelar pela consulta que existe — a chave é a pergunta, não a entidade",
+                "nunca; é o erro de modelagem mais caro de desfazer depois de a tabela crescer"
+              ],
+              [
+                "Usar Scan com FilterExpression achando que filtra o custo",
+                "parece uma cláusula WHERE do SQL, e o SDK deixa fazer sem aviso nenhum",
+                "o custo é sobre o que foi EXAMINADO, não sobre o que sobrou depois do filtro",
+                "fatura de leitura alta para uma consulta que \"só\" devolve poucos itens",
+                "Query pela chave; se a pergunta não tem chave, ela pertence ao banco relacional",
+                "volume pequeno o bastante para o custo do exame ser irrelevante"
+              ],
+              [
+                "Ligar ConsistentRead em tudo por precaução",
+                "parece a opção mais segura — \"mais correto nunca é errado\"",
+                "dobra o custo do caminho de maior volume mesmo onde o atraso de segundos é tolerado",
+                "ConsumedReadCapacityUnits sobe sem mudança de tráfego, e o orçamento estoura no mês",
+                "eventual por padrão; forte só onde a janela de atraso é genuinamente inaceitável",
+                "operação financeira de valor único, tipo débito de saldo — não listagem"
+              ],
+              [
+                "Escrever nos dois bancos na mesma requisição, sem outbox",
+                "é o caminho óbvio, e funciona nos testes, onde nada falha no meio",
+                "perde pedido quando a segunda escrita falha depois do commit da primeira",
+                "pedido existe num banco e não no outro, sem nenhum erro registrado",
+                "outbox dentro da transação, projeção assíncrona e reexecutável",
+                "nunca em caminho que grava a verdade de negócio"
+              ],
+              [
+                "Migrar para DynamoDB porque \"é serverless e escala sozinho\"",
+                "é o discurso de marketing, e soa como resolver escala sem esforço de modelagem",
+                "sem listar as consultas primeiro, a modelagem vira tentativa e erro cara em produção",
+                "GSIs adicionados um a um, cada um triplicando o custo de escrita, até ninguém saber por quê",
+                "listar as consultas ANTES de escolher tecnologia — é a frase que abre este módulo",
+                "nunca como primeiro passo; é destino possível, não ponto de partida"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Relatório continua lento mesmo no reader",
+                "índice `idx_pedidos_loja_periodo` ausente ou não usado pelo planejador",
+                "`EXPLAIN (ANALYZE, BUFFERS)` na consulta do relatório",
+                "presença de Seq Scan em vez de Index Scan no plano",
+                "recriar o índice; confirmar que as colunas do WHERE batem com a ordem do índice"
+              ],
+              [
+                "DynamoDB estrangulando no pico de campanha",
+                "partição quente: um único cliente concentrando tráfego muito acima da média",
+                "compare `ConsumedReadCapacityUnits` por item de log com o volume total",
+                "`ThrottledRequests` correlacionado a poucas chaves de partição",
+                "sufixo de dispersão na chave, se um cliente for outlier genuíno, não erro de teste"
+              ],
+              [
+                "Histórico mostra pedido desatualizado ou ausente",
+                "projetor parado ou lento; outbox represada",
+                "idade do evento mais antigo com `processado_em IS NULL`",
+                "logs do serviço `ProjetorOutbox`; métrica de idade da fila",
+                "reiniciar o projetor; se recorrente, investigar por que ele para (exceção engolida?)"
+              ],
+              [
+                "Item duplicado aparece no histórico",
+                "a chave `SK` não está sendo derivada do pedido, e sim de quando o projetor rodou",
+                "compare `SK` de duas execuções do MESMO evento",
+                "código de construção da chave em `ProjetorOutbox.cs`",
+                "a chave tem de conter o id do PEDIDO, nunca um timestamp de processamento"
+              ],
+              [
+                "Custo de escrita do DynamoDB subiu sem mudança de tráfego",
+                "GSI novo adicionado sem considerar que ele replica toda escrita",
+                "compare unidades de escrita consumidas antes/depois da mudança de schema",
+                "histórico de alterações da tabela; número de GSIs ativos",
+                "avaliar se o GSI responde a uma pergunta genuinamente recorrente antes de mantê-lo"
+              ],
+              [
+                "Réplica do Aurora com lag alto",
+                "consulta do relatório grande demais para o hardware do reader, ou reader subdimensionado",
+                "`AuroraReplicaLag` correlacionado ao horário de execução do relatório",
+                "CloudWatch, métricas do reader especificamente",
+                "aumentar a classe de instância do reader, ou mover a agregação para camada analítica"
+              ],
+              [
+                "p95 do histórico sobe mesmo isolado no reader ou no DynamoDB",
+                "índice do histórico ausente, ou consulta deixou de usar a chave de partição",
+                "compare o plano de execução (SQL) ou os parâmetros da Query (DynamoDB) com o desenhado",
+                "`EXPLAIN` no relacional; parâmetros da `QueryRequest` no código",
+                "restaurar o uso da chave/índice — não adicionar capacidade para compensar"
+              ],
+              [
+                "Erro de serialização em transação concorrente no Aurora",
+                "duas transações tentando atualizar o mesmo pedido ao mesmo tempo, sob isolamento mais alto",
+                "mensagem de erro do Postgres sobre conflito de serialização",
+                "log da aplicação no momento da escrita concorrente",
+                "retry com backoff no nível da aplicação — é comportamento esperado, não bug"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em índice ou capacidade, pergunte: esta consulta ainda está usando a chave ou o índice que o desenho previu? A maioria dos sintomas de lentidão nos dois bancos tem a mesma raiz — uma consulta que deixou de bater exatamente na estrutura desenhada para ela, silenciosamente, depois de uma mudança de código."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório acrescenta duas peças que sobrevivem ao "
+              },
+              {
+                "text": "terraform destroy",
+                "code": true
+              },
+              {
+                "text": " por decisão explícita — e uma delas cobra por armazenamento até ser removida à mão."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "#!/usr/bin/env bash\n# limpar.sh — o que o destroy não leva, nomeado.\nset -euo pipefail\nPROJETO=\"${PROJETO:?defina PROJETO}\"\n\n# 1. Deletion protection do Aurora e do DynamoDB tem de sair ANTES do\n#    destroy, ou o Terraform falha no meio — e \"falha no meio\" com um\n#    cluster já sem writer é o pior estado para diagnosticar.\naws rds modify-db-cluster --db-cluster-identifier \"${PROJETO}-aurora\" \\\n  --no-deletion-protection --apply-immediately\naws dynamodb update-table --table-name \"${PROJETO}-historico-pedidos\" \\\n  --no-deletion-protection-enabled 2>/dev/null || true\n\nterraform destroy -auto-approve\n\n# 2. SNAPSHOT FINAL DO AURORA: por decisão deste módulo, ele NÃO é apagado\n#    pelo destroy (skip_final_snapshot = false). Ele cobra armazenamento\n#    até ser removido à mão.\naws rds describe-db-cluster-snapshots \\\n  --query \"DBClusterSnapshots[?contains(DBClusterSnapshotIdentifier, '${PROJETO}')].DBClusterSnapshotIdentifier\" \\\n  --output table\n# aws rds delete-db-cluster-snapshot --db-cluster-snapshot-identifier <nome>  # descomente quando decidir apagar\n\n# 3. TABELA DO DYNAMODB: se deletion_protection_enabled estava ligado e o\n#    passo 1 não rodou, o destroy falha e a tabela sobrevive cobrando por\n#    armazenamento e, se ainda houver tráfego de teste, por requisição.\naws dynamodb describe-table --table-name \"${PROJETO}-historico-pedidos\" \\\n  --query \"Table.TableStatus\" --output text 2>/dev/null || echo \"tabela já removida\"\n\n# 4. Endpoint de gateway do DynamoDB: sai com o destroy (é recurso Terraform\n#    comum), mas confira — ele não aparece como \"cobra parado\" porque\n#    endpoint de gateway não tem cobrança por hora, ao contrário do de\n#    interface.\n\n# 5. Prova final: nada com a tag do projeto de pé.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=\"$PROJETO\" \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table\n"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Cluster Aurora e instâncias",
+                "só com `deletion_protection` desligado antes",
+                "sim, por hora",
+                "proteção liga por padrão neste módulo; é intencional, não esquecimento"
+              ],
+              [
+                "Snapshot final do Aurora",
+                "não — `skip_final_snapshot = false`",
+                "sim, GB-mês",
+                "preserva o histórico de backup mesmo depois do cluster sumir; some por decisão de dado, não do destroy"
+              ],
+              [
+                "Tabela do DynamoDB",
+                "só com `deletion_protection_enabled` desligado antes",
+                "sim, PITR",
+                "mesma lógica do Aurora: a proteção existe para não apagar produção por engano"
+              ],
+              [
+                "Itens de PITR retidos",
+                "não se aplica — janela de 35 dias corridos",
+                "sim, GB-mês",
+                "continua cobrando por 35 dias mesmo depois de a tabela ser apagada"
+              ],
+              [
+                "Endpoint de gateway do DynamoDB",
+                "sim",
+                "não",
+                "é a exceção boa desta lista: gateway não tem cobrança por hora, ao contrário do de interface"
+              ],
+              [
+                "Grupo de logs da aplicação",
+                "depende de `skip_destroy`",
+                "sim, retenção",
+                "tem ciclo próprio; sobrevive ao serviço que o alimentava"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "O maior esquecimento de fatura deste laboratório",
+            "content": "Writer e reader do Aurora rodam 24 horas por dia, mesmo sem tráfego nenhum — ao contrário do DynamoDB sob demanda, que só cobra pelo uso. Um cluster de laboratório esquecido de pé por um mês custa muito mais que a tabela DynamoDB ao lado dele. Se você não vai seguir direto para o L15, derrube o cluster primeiro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Duas cargas de leitura competindo",
+                "reader do Aurora isolado para o relatório",
+                "CPU e cache separados, sem manter uma segunda cópia dos dados"
+              ],
+              [
+                "Histórico não pode crescer com a tabela",
+                "projeção no DynamoDB por chave de cliente",
+                "a chave É o padrão de acesso — tempo de resposta não depende do volume total"
+              ],
+              [
+                "Pergunta nova, sem forma fixa",
+                "SQL com GROUP BY sobre o reader",
+                "o otimizador de consultas monta um plano novo a cada pergunta; chave fixa não serve isso"
+              ],
+              [
+                "Integridade do pedido",
+                "transação no Aurora",
+                "restrição sobre várias linhas, declarada no banco — não código de aplicação"
+              ],
+              [
+                "Escrita dupla que pode falhar no meio",
+                "padrão outbox",
+                "troca \"pode perder pedido\" por \"pode atrasar alguns segundos\", que é observável"
+              ],
+              [
+                "Leitura de alto volume",
+                "eventual por padrão no DynamoDB",
+                "metade do custo, e a projeção já tolera o atraso que a consistência forte evitaria"
+              ],
+              [
+                "Sub-rede sem saída direta para o DynamoDB",
+                "endpoint de gateway",
+                "sem ENI, sem cobrança por hora — ao contrário do endpoint de interface"
+              ],
+              [
+                "Pico de 20× em campanha",
+                "DynamoDB sob demanda + reader isolado",
+                "absorve rajada sem replanejar capacidade, com a equipe que existe"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Relatório derrubando o histórico",
+                "reader isolado, pool próprio",
+                "consulta nova ainda maior que o reader aguenta — aí é hora do nível 5"
+              ],
+              [
+                "Perda de pedido na projeção",
+                "outbox com PutItem idempotente",
+                "atraso da projeção, que continua existindo — é tolerado, não eliminado"
+              ],
+              [
+                "Custo de leitura dobrando sem aviso",
+                "eventual por padrão",
+                "ninguém ligar ConsistentRead depois, sem revisão — isso é observabilidade, seção 16"
+              ],
+              [
+                "Duplicação ao reprocessar evento",
+                "chave derivada do pedido, não do horário",
+                "perda se o evento nunca for lido — é isso que o alarme de idade da outbox cobre"
+              ],
+              [
+                "Custo de NAT para tráfego ao DynamoDB",
+                "endpoint de gateway",
+                "tráfego a outros serviços regionais, que continuam precisando de endpoint de interface ou NAT"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Uma transação grava pedido, itens e a linha da outbox no Aurora, no mesmo commit.",
+              "O commit responde ao cliente — a latência percebida é só a do relacional.",
+              "O projetor lê a outbox pendente com SKIP LOCKED, sem disputar linha com outra instância.",
+              "Cada evento vira um PutItem cuja chave deriva do pedido, não do momento do processamento.",
+              "A outbox é marcada processada DEPOIS do PutItem — duplicar é inofensivo, perder não é.",
+              "O histórico responde por Query pela chave do cliente, eventual por padrão.",
+              "A próxima página usa o cursor devolvido — não existe pular para uma página específica.",
+              "O relatório roda em outro serviço, outro pool, contra o reader do Aurora, com teto de tempo.",
+              "A medição sob concorrência mostra o histórico estável enquanto o relatório roda ao lado.",
+              "A decisão de qual banco serve qual consulta fica escrita — não precisa ser redescoberta."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "lab-esco-des1",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Desafio — sem roteiro"
+      },
+      "children": [
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "O requisito",
+            "content": "Um requisito novo chegou: além da consulta por chave que o banco atual já atende bem, o produto agora precisa de busca textual livre (\"buscar pedidos que mencionem X na observação\"). Decida se o banco atual ainda serve ou se um segundo armazenamento é necessário, e implemente a escolha."
+          },
+          "id": "lab-esco-des2",
+          "position": 0
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "Critério de aceite — executável, não \"verifique se funciona\"",
+            "content": "Um documento curto (ou comentário no código) registra a decisão citando o eixo de carga que mudou — e a busca textual funciona com tempo de resposta aceitável num conjunto de pelo menos 1.000 registros de teste, não só nos 5 de exemplo."
+          },
+          "id": "lab-esco-des3",
+          "position": 1
+        },
+        {
+          "type": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "Dica 1: Volte à mesma pergunta que o laboratório original usou para escolher o banco: qual é o padrão de ACESSO, não qual é o tipo de dado — busca textual livre é um padrão de acesso novo, o dado pode continuar sendo o mesmo.",
+              "Dica 2: Antes de adicionar um banco novo, verifique se o banco atual já tem um recurso nativo para isso (ex: full-text search do Postgres) — um segundo sistema significa consistência eventual entre os dois, um custo real.",
+              "Dica 3: Se decidir por um índice separado, a pergunta que prova que você entendeu o trade-off é: o que acontece se o índice ficar desatualizado por alguns segundos em relação ao banco principal? A resposta tem que estar escrita, não implícita."
+            ]
+          },
+          "id": "lab-esco-des4",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "success",
+            "title": "Lembrete de limpeza",
+            "content": "Todo recurso que este desafio criar entra no mesmo `terraform destroy` do laboratório — nada fica para trás cobrando sozinho."
+          },
+          "id": "lab-esco-des5",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Aurora é mais rápido que RDS for PostgreSQL para a mesma consulta?",
+            "answer": "Para a mesma consulta isolada, não há diferença de mecanismo que garanta ganho: a interface SQL e o otimizador de consultas são os mesmos nos dois. O que muda é a arquitetura de armazenamento — o Aurora usa um volume de cluster distribuído em três zonas de disponibilidade, com réplicas de leitura lendo o MESMO volume do writer, sem cópia separada de dados nem espera de replicação por WAL. Isso é o que torna uma réplica de leitura barata de manter fresca, não velocidade de linha única. Se a sua consulta é lenta por falta de índice, trocar para o Aurora não resolve nada — o índice resolve nos dois bancos igualmente."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Preciso de um índice secundário global para listar os pedidos de um cliente no DynamoDB?",
+            "answer": "Não, se a chave de partição da tabela já for o cliente — que é o desenho deste laboratório. Um índice secundário global só é necessário quando existe uma SEGUNDA pergunta com forma diferente, por exemplo buscar pedidos por loja em vez de por cliente; cada GSI copia a escrita, então dois índices secundários triplicam o custo de gravar um item. Antes de criar um GSI, confirme que a pergunta é realmente nova e não uma variação da que a chave de partição já responde."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "DynamoDB substitui um banco relacional na mesma aplicação?",
+            "answer": "Raramente por completo, e este laboratório mostra o motivo: pedido tem uma invariante — o total precisa ser igual à soma dos itens — que é uma restrição sobre várias linhas, naturalmente expressa como transação e checagem declarada num banco relacional. O DynamoDB tem operações transacionais, mas cada uma consome o dobro da capacidade, e a integridade vira código de aplicação em vez de declaração no schema. A combinação comum é a verdade transacional no relacional e uma PROJEÇÃO no DynamoDB para o caminho de leitura conhecido — não a substituição de um pelo outro."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Por que o DynamoDB não tem leitura forte em GSI?",
+            "answer": "Porque um índice secundário global é replicado de forma assíncrona a partir da tabela base, e leitura forte exige ler o dado no mesmo instante em que a última escrita confirmada foi aplicada — uma garantia que a réplica assíncrona do índice não pode dar. A documentação da AWS é explícita: leitura fortemente consistente é suportada apenas em tabelas e em índices secundários locais, que compartilham a partição física com a tabela; GSIs e streams só oferecem leitura eventualmente consistente. Se a sua consulta exige forte consistência, ela precisa correr contra a tabela base ou um índice local, nunca um global."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "O standby do Multi-AZ do RDS serve para leitura?",
+            "answer": "Não, na implantação Multi-AZ de instância única — o formato mais comum. A documentação da AWS afirma diretamente que esse standby dá suporte a failover, mas NÃO atende tráfego de leitura; ele existe para assumir o papel de primário se algo falhar, não para dividir carga. Quem quer aliviar leitura precisa de uma réplica de leitura de verdade, com endpoint próprio, ou — como este laboratório escolhe — de um reader do Aurora, que lê o mesmo volume do writer. Existe uma variante mais nova, a implantação de cluster Multi-AZ com dois standbys, que pode servir leitura, mas é um recurso distinto do Multi-AZ de instância única."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Um Scan com filtro no DynamoDB sai mais barato?",
+            "answer": "Não. O custo de leitura é calculado sobre os bytes que o DynamoDB EXAMINOU, não sobre os que sobraram depois do filtro — um Scan de um milhão de itens com `FilterExpression` que devolve dez cobra pelo milhão inteiro. É o erro de raciocínio mais caro desta série: `FilterExpression` parece uma cláusula `WHERE` do SQL e se comporta de um jeito completamente diferente. Se a pergunta é recorrente, ela precisa de uma chave — de partição, de ordenação ou de índice — que reduza o que é examinado, não apenas o que é devolvido."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Preciso de NAT Gateway para acessar o DynamoDB?",
+            "answer": "Não, se você criar um VPC endpoint de GATEWAY para o DynamoDB — o mesmo mecanismo que o S3 usa, e diferente do endpoint de interface do Secrets Manager ou do Bedrock. O endpoint de gateway entra na tabela de rotas da sub-rede, sem interface de rede elástica e sem cobrança por hora: o tráfego para a tabela sai da VPC sem tocar a internet nem o NAT Gateway. Sem ele, a mesma chamada funciona, só que passando pelo NAT — que cobra por hora ligada e por gigabyte processado, para um tráfego que não precisava sair da rede da AWS."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Como decidir entre banco relacional e DynamoDB?",
+            "answer": "A resposta está na previsibilidade da pergunta, não no volume de dados nem na urgência. Se a consulta tem sempre a mesma forma — mesma chave, mesmo filtro, só o valor muda — ela é candidata a uma projeção com chave de partição, porque o tempo de resposta deixa de crescer com o tamanho da tabela. Se a pergunta muda com frequência, cruza colunas de formas diferentes ou exige agregação sobre um intervalo arbitrário, ela pertence ao banco relacional, onde o otimizador escolhe um plano para cada forma nova sem que você precise desenhar um índice para cada uma. Quem não consegue listar as consultas que a aplicação faz ainda não tem informação para decidir nenhuma das duas coisas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Uma Query pela chave de partição da TABELA (não um índice) lê 20 itens de 400 bytes cada — 8 KB no total — com leitura eventualmente consistente, o padrão da tabela. Um engenheiro liga ConsistentRead = true, achando que \"mais correto é sempre melhor\". O que muda?",
+            "options": [
+              "O custo em unidades de leitura dobra, porque leitura fortemente consistente custa o dobro da eventualmente consistente",
+              "A operação passa a falhar, porque a tabela é servida por um índice secundário global e GSIs não suportam leitura forte",
+              "Nada: leitura fortemente consistente tem o mesmo custo da eventual em uma Query",
+              "A latência cai, porque a leitura forte evita esperar a réplica responder"
+            ],
+            "correctIndex": 0,
+            "explanation": "A documentação é direta sobre o fator: leitura eventualmente consistente custa metade da fortemente consistente, e isso vale para tabela, índice local, índice global e stream. Ligar ConsistentRead num caminho de alto volume — que é justamente o do histórico, com 60% da leitura da aplicação — dobra a fatura desse caminho sem mudar nada que o usuário perceba, porque a projeção já tolera um atraso de segundos entre a escrita e a leitura.\n\nA primeira alternativa nega o fator de custo documentado, que é justamente o motivo de a leitura eventual ser o padrão e não uma economia oculta. A terceira aplica uma regra real — GSI não suporta leitura forte — ao cenário ERRADO: o enunciado deixa explícito que a Query é contra a chave da TABELA, onde leitura forte é suportada e só custa mais, não falha. A quarta inverte a relação entre consistência e latência: leitura forte pode até ADICIONAR latência, porque o DynamoDB precisa garantir que reflete a última escrita confirmada antes de responder — o contrário de \"evitar esperar\"."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Depois de ativar Multi-AZ (implantação de instância única) no RDS for PostgreSQL, o time aponta o relatório de faturamento para o endpoint do standby, esperando tirar carga de leitura do primário. O que acontece?",
+            "options": [
+              "Funciona apenas se o Performance Insights estiver habilitado no standby",
+              "Funciona, mas com replicação assíncrona, então o relatório pode mostrar dado de alguns segundos atrás",
+              "A conexão não serve para leitura: a documentação da AWS afirma que o standby de uma implantação Multi-AZ de instância não atende tráfego de leitura",
+              "Funciona: o standby aceita conexão de leitura e a carga do primário cai imediatamente"
+            ],
+            "correctIndex": 2,
+            "explanation": "O standby de uma implantação Multi-AZ de instância única existe para um propósito único — assumir o papel de primário se algo falhar — e a documentação da AWS é explícita ao afastar a segunda leitura dele: ele não atende tráfego de leitura, em nenhuma circunstância. Quem quer aliviar leitura precisa de uma réplica de leitura de verdade, com endpoint próprio, ou — como este laboratório escolhe — de um reader do Aurora, que lê o mesmo volume do writer sem manter cópia separada.\n\nA primeira alternativa é a suposição mais comum e mais cara: confunde REDUNDÂNCIA com ESCALA DE LEITURA, que são propósitos diferentes do mesmo par de instâncias. A terceira descreveria corretamente uma RÉPLICA DE LEITURA do RDS, que é assíncrona e mantém cópia própria — mas não descreve o standby Multi-AZ, que sequer aceita a conexão de leitura, então a característica de atraso citada não chega a se aplicar aqui. A quarta introduz uma condição que não existe: Performance Insights observa desempenho e não altera se a instância aceita tráfego de leitura. Vale registrar a exceção real: a implantação de CLUSTER Multi-AZ, com dois standbys, é outro modo e esse sim pode servir leitura — mas não é o cenário do enunciado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 29,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L07 no ar (réplica de leitura, Multi-AZ, pool de conexões), SQL básico, .NET 8, Terraform"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "classificar consulta como caminho conhecido ou pergunta nova; o fator de custo de consistência do DynamoDB; a arquitetura de volume único do Aurora; por que o standby Multi-AZ não serve leitura; o padrão outbox para projeção sem perda"
+              ],
+              [
+                "Limitação que fica",
+                "o relatório ainda cresce com o tamanho da tabela relacional; sob volume suficientemente maior, mesmo o reader isolado sente — é o gatilho para o nível 5"
+              ],
+              [
+                "Próximo módulo recomendado",
+                "L15 — Aurora de verdade: endpoint, Serverless v2 e failover ensaiado. Aprofunda o lado relacional deste laboratório"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L16 (DynamoDB para quem vem do SQL, single-table design) aprofunda o lado da projeção; L61 (OLTP vs. OLAP) resolve o nível 5 da evolução; L29 (streaming de mudança) é a alternativa a outbox quando o volume de eventos cresce"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "DynamoDB read consistency",
+                "code": true
+              },
+              {
+                "text": " — o fator de custo entre leitura eventual e forte, e onde cada uma é suportada; "
+              },
+              {
+                "text": "Configuring and managing a Multi-AZ deployment for Amazon RDS",
+                "code": true
+              },
+              {
+                "text": " — a distinção entre a implantação Multi-AZ de instância única (um standby, sem leitura) e a de cluster (dois standbys, com leitura). Os detalhes de arquitetura de armazenamento do Aurora citados — volume de cluster único, réplicas lendo o mesmo volume — são consistentes com a documentação pública da AWS sobre Aurora storage e replicação, mas não foram recotejados palavra por palavra nesta sessão; confira `Amazon Aurora storage` e `Replication with Amazon Aurora` antes de citar números específicos de latência de réplica em produção. Nenhum valor de preço aparece neste módulo por decisão: use o AWS Pricing Calculator."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "Os números de latência citados — 24 ms para o histórico, 41 s para o relatório, lag de réplica abaixo de 100 ms — são os medidos na aplicação de exemplo, com o volume declarado nesta seção, e servem como ordem de grandeza, não como referência. O limiar de \"20% acima do p95 isolado\" para considerar competição aceitável é uma escolha editorial deste módulo, não um valor documentado pela AWS — ajuste ao orçamento de latência real do seu produto."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -7,6 +7,7 @@ import { useGameState } from '@/hooks/useGameState';
 import { BADGES_DEF, CURRICULUM, getLevelInfo, getTrailProgress } from '@/lib/curriculum';
 import { getRaw, setRaw } from '@/lib/storage';
 import { STORAGE_KEYS } from '@/lib/constants';
+import { BackButton } from '@/components/BackButton';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -129,6 +130,9 @@ export function DevProfileClient() {
     return (
       <div style={{ background: 'var(--ffv-bg)', minHeight: '100vh', color: 'var(--foreground)' }}>
         <div className="max-w-4xl mx-auto px-6 py-24 text-center">
+          {/* Título fora da condição de carregamento — ver a nota em ProgressoClient.tsx:
+           sem isto, o HTML servido responde 200 sem nenhum <h1>. */}
+        <h1 className="text-2xl font-bold mb-4">Perfil Dev</h1>
           <div style={{ fontSize: 40, marginBottom: 12 }}>👤</div>
           <p style={{ color: 'var(--ffv-muted)' }}>Carregando perfil…</p>
         </div>
@@ -206,7 +210,7 @@ export function DevProfileClient() {
             className="inline-flex items-center gap-2 px-6 py-3 rounded-xl font-semibold text-sm"
             style={{
               background: 'var(--ffv-blue)',
-              color: '#fff',
+              color: 'var(--primary-foreground)',
               textDecoration: 'none',
             }}
           >
@@ -237,13 +241,9 @@ export function DevProfileClient() {
 
         <div className="relative max-w-4xl mx-auto">
           {/* Back nav */}
-          <Link
-            href="/progresso"
-            className="inline-flex items-center gap-1 text-xs font-mono mb-8 transition-opacity hover:opacity-70"
-            style={{ color: 'var(--ffv-muted)', letterSpacing: '0.06em', textDecoration: 'none' }}
-          >
-            ← PROGRESSO
-          </Link>
+          <BackButton href="/progresso" className="text-xs font-mono mb-8 transition-opacity hover:opacity-70 inline-flex items-center gap-1.5">
+            PROGRESSO
+          </BackButton>
 
           <div className="flex items-start gap-6 flex-wrap">
             {/* Avatar */}
@@ -270,6 +270,7 @@ export function DevProfileClient() {
                   <div className="flex items-center gap-2">
                     <input
                       type="text"
+                      aria-label="Seu nome"
                       value={nameInput}
                       onChange={e => setNameInput(e.target.value)}
                       onKeyDown={e => {
@@ -290,7 +291,7 @@ export function DevProfileClient() {
                       type="button"
                       onClick={handleSaveName}
                       className="px-3 py-1.5 rounded-lg text-xs font-semibold"
-                      style={{ background: 'var(--ffv-blue)', color: '#fff', border: 'none', cursor: 'pointer' }}
+                      style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)', border: 'none', cursor: 'pointer' }}
                     >
                       Salvar
                     </button>
@@ -366,7 +367,7 @@ export function DevProfileClient() {
                   <span style={{ fontSize: 12, color: 'var(--ffv-muted)' }}>
                     {state.xp.toLocaleString('pt-BR')} XP
                   </span>
-                  <span style={{ fontSize: 11, color: li.color, fontWeight: 700 }}>
+                  <span className="ffv-acento-texto" style={{ fontSize: 11, '--ffv-acento': li.color, fontWeight: 700 } as React.CSSProperties}>
                     {levelPct}% do nível
                   </span>
                 </div>
@@ -537,8 +538,8 @@ export function DevProfileClient() {
                     </p>
                   </div>
                   <span
-                    className="font-mono font-bold flex-shrink-0"
-                    style={{ fontSize: 12, color: t.color }}
+                    className="font-mono font-bold flex-shrink-0 ffv-acento-texto"
+                    style={{ fontSize: 12, '--ffv-acento': t.color } as React.CSSProperties}
                   >
                     {t.pct}%
                   </span>
@@ -554,7 +555,7 @@ export function DevProfileClient() {
                   />
                 </div>
                 {t.pct === 100 && (
-                  <p style={{ fontSize: 11, color: t.color, marginTop: 6, fontWeight: 700 }}>
+                  <p className="ffv-acento-texto" style={{ fontSize: 11, '--ffv-acento': t.color, marginTop: 6, fontWeight: 700 } as React.CSSProperties}>
                     ✓ Trilha concluída!
                   </p>
                 )}

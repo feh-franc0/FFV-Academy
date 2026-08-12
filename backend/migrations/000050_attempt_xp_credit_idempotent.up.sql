@@ -1,0 +1,16 @@
+-- Idempotência de crédito de XP por tentativa (auditoria de 11/ago/2026, pack
+-- prova-integra-e-anti-fraude, requisito "Crédito de XP... idempotente").
+--
+-- XP/badges/streak são um GameState CLIENTE (localStorage, sincronizado via
+-- LWW em progress_snapshots) — não há ledger de XP no servidor, e criar um
+-- exigiria mover todo o cálculo de gamificação pro backend. O requisito real
+-- e testável é mais estreito: "reabrir o resultado em outra aba não credita
+-- XP de novo" — a guarda que existia era uma chave em sessionStorage, que
+-- NÃO é compartilhada entre abas e não sobrevive a reload em aba nova.
+--
+-- Esta coluna não guarda XP nenhum: guarda só SE o cliente já reivindicou o
+-- crédito para esta tentativa. `POST /attempts/{id}/claim-xp` faz um UPDATE
+-- atômico que só afeta a linha quando xp_credited_at ainda é NULL — a
+-- primeira chamada (de qualquer aba, dispositivo ou reload) vence, e só ela
+-- recebe claimed=true.
+ALTER TABLE simulado_attempts ADD COLUMN IF NOT EXISTS xp_credited_at TIMESTAMPTZ;

@@ -1,0 +1,2410 @@
+{
+  "slug": "lab-api-serverless-onde-nao-serve",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O ambiente de homologação da Cadência ("
+              },
+              {
+                "text": "L01",
+                "code": true
+              },
+              {
+                "text": ", "
+              },
+              {
+                "text": "L03",
+                "code": true
+              },
+              {
+                "text": ") é uma cópia fiel de produção: mesmo Terraform, menos réplicas. Isso sempre funcionou bem para o time de QA testar a API de pedidos antes de cada publicação. O que ninguém tinha medido é que a task ECS Fargate de homologação fica ligada 24 horas por dia, sete dias por semana, mesmo nos dias em que nenhum teste roda."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "A diretoria fez a conta errada primeiro: olhou o número de horas ligadas e concluiu que o problema era \"Fargate é caro\". O número certo é outro — quantas dessas horas tiveram alguma requisição. Em homologação, a resposta é: muito poucas. O QA testa em rajadas de sprint, algumas dezenas de chamadas numa tarde, e depois o ambiente fica em silêncio por dias. A task não sabe disso: ela cobra pela reserva de vCPU e memória, esteja ocupada ou vazia."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório usa esse ambiente de baixo risco para responder uma pergunta maior: se a MESMA API — a rota "
+              },
+              {
+                "text": "GET /api/pedidos/{id}",
+                "code": true
+              },
+              {
+                "text": " que atravessa toda a série, dos laboratórios 1 a 21 — passasse a ser servida por API Gateway, Lambda e a tabela do "
+              },
+              {
+                "text": "L16",
+                "code": true
+              },
+              {
+                "text": " em vez de ECS Fargate, quando isso valeria a pena? A resposta não é \"sempre\" nem \"nunca\": é aritmética sobre volume, e este módulo mede os dois lados."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "I no catálogo — na prática depende de L11, L16 e L21; leia os três antes deste"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L01/L03 no ar, L11 (API Gateway), L16 (tabela pedidos_cadencia), L21 (Lambda .NET 8) concluídos"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 45 min · implementação 2 h a 2 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixíssimo em homologação; em produção depende do cruzamento medido na seção de custo"
+              },
+              {
+                "k": "Serviços",
+                "v": "API Gateway (HTTP API), Lambda, DynamoDB (tabela reaproveitada), CloudWatch"
+              },
+              {
+                "k": "Volume atual",
+                "v": "Homologação: poucas dezenas de chamadas/dia, intermitente. Produção (L03): ~9 mil/dia"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "custo proporcional ao uso em homologação, com paridade funcional total com produção"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "a rota migrada é só leitura, sem estado de longa duração nem WebSocket — é o que autoriza comparar direto contra o Fargate, sem ressalva de arquitetura"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "a mesma rota servida pelos dois modelos, um número medido de cada lado, e um critério escrito para decidir quando migrar produção também"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é a substituição definitiva do ECS Fargate em produção — a decisão sobre produção fica em aberto de propósito, porque depende de medir o SEU volume, não do exemplo. Também não é modelagem de dados: a tabela e as chaves são as que o L16 já validou, usadas por referência. E não é um segundo laboratório de cold start: o L21 já tratou o Init de uma função isolada; aqui o assunto é a soma dessa latência numa cadeia, e o modelo de cobrança por trás dela."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com uma medição na seção de implantação, não com a sensação de que \"serverless é mais barato\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que o mesmo binário .NET 8 muda de custo dependendo de quem cobra por ele — hora ligada ou invocação.",
+              "Escolher HTTP API em vez de REST API aqui, e justificar por que a decisão do L11 não se aplica.",
+              "Medir, com número do CloudWatch, a desproporção entre uso e cobrança do Fargate em homologação.",
+              "Derivar a fórmula do cruzamento entre custo fixo e custo variável, e calcular n* para um ambiente dado.",
+              "Explicar por que o cold start em cadeia (API Gateway → Lambda → DynamoDB) soma, mesmo sem nenhuma camada isolada ser lenta.",
+              "Reconhecer os três casos em que a curva do serverless NÃO vence: estado de longa duração, WebSocket persistente, volume alto e constante.",
+              "Migrar a rota de leitura para Lambda reaproveitando a tabela do L16, sem duplicar modelagem nem escrita.",
+              "Decidir, com critério escrito e não com moda, se uma rota ou ambiente deve permanecer em contêiner."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Modelo de cobrança: hora ligada vs invocação",
+                "DVA-C02, SAA-C03",
+                "a mesma API nos dois modelos, custo medido",
+                "que a escolha depende do PADRÃO de tráfego, não de qual serviço é mais moderno"
+              ],
+              [
+                "HTTP API vs REST API",
+                "DVA-C02",
+                "HTTP API aqui, porque não há parceiro nem cota",
+                "a decisão do L11 invertida: o mesmo par de opções, requisito diferente"
+              ],
+              [
+                "Concorrência da Lambda",
+                "DVA-C02, SAA-C03",
+                "1.000 execuções concorrentes por padrão, por conta/região",
+                "que o throttle do API Gateway (10.000 req/s padrão) e a concorrência da Lambda não são o mesmo número"
+              ],
+              [
+                "Cold start em cadeia",
+                "DVA-C02",
+                "soma de Init de cada camada, medida com integrationLatency e responseLatency",
+                "que nenhuma camada isolada precisa ser lenta para a soma incomodar"
+              ],
+              [
+                "Teto de execução da Lambda",
+                "DVA-C02, SAA-C03",
+                "15 minutos rígidos, contra nenhum teto no Fargate",
+                "por que processamento de longa duração não cabe em função, e não é caso de aumentar timeout"
+              ],
+              [
+                "Quando NÃO migrar para serverless",
+                "SAA-C03",
+                "os três casos em que a curva de custo não vence",
+                "reconhecer volume alto e constante, estado de longa duração, WebSocket persistente"
+              ],
+              [
+                "Lambda sem VPC alcançando serviço regional",
+                "DVA-C02",
+                "a função lê DynamoDB sem vpc_config",
+                "por que anexar VPC sem necessidade consome ENI e acrescenta latência ao Init"
+              ],
+              [
+                "Permissão de invocação: resource policy vs IAM role",
+                "DVA-C02",
+                "API Gateway usa aws_lambda_permission; o L21 usava role do agendamento",
+                "que \"quem pode chamar\" muda de mecanismo conforme o serviço de origem"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve uma função chamada com frequência crescente e pede quando ela deixa de ser mais barata que um servidor dedicado. A resposta errada mais comum é comparar preço unitário sem multiplicar pelo volume — \"Lambda custa centavos por milhão de chamadas\" é verdade e irrelevante isoladamente. A resposta certa é montar as duas curvas, uma constante e uma linear no volume, e achar onde elas se cruzam."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Custo proporcional ao uso em homologação",
+                "zero cobrança quando ninguém testa",
+                "exclui Fargate sempre ligado; obriga computação sob demanda"
+              ],
+              [
+                "Paridade funcional com a API de produção",
+                "mesmo contrato JSON, mesma rota",
+                "a função reaproveita o modelo de resposta do L01/L03, sem reescrever regra de negócio"
+              ],
+              [
+                "Sem VPC desnecessária",
+                "a função só toca DynamoDB, que é regional",
+                "Lambda sem vpc_config — decisão do L21, reafirmada aqui por razão idêntica"
+              ],
+              [
+                "Volume de produção como referência de decisão",
+                "~9 mil requisições/dia (L03)",
+                "é o número que entra na fórmula de cruzamento para decidir produção, não só homologação"
+              ],
+              [
+                "Sem tráfego de longa duração nem WebSocket",
+                "confirmado no contrato desta rota",
+                "autoriza comparar direto contra Fargate, sem ressalva de arquitetura"
+              ],
+              [
+                "Latência aceitável em homologação",
+                "QA tolera cold start ocasional",
+                "remove o argumento de UX para Provisioned Concurrency neste ambiente"
+              ],
+              [
+                "Rastreabilidade do cruzamento de custo",
+                "decisão documentada, não intuição",
+                "a seção de custo formaliza a fórmula com os dois modelos, sem preço decorado"
+              ],
+              [
+                "Reversibilidade",
+                "voltar para Fargate sem reescrever a API",
+                "a lógica de negócio fica isolada da hospedagem; só a camada de borda e execução muda"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: a homologação que cobra a mesma hora da produção"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem hoje, e ele é legítimo como ponto de partida: garante paridade de comportamento entre homologação e produção, com o menor esforço possível — copiar o Terraform. O laboratório começa medindo o defeito, porque \"acho que ninguém usa isso à noite\" é opinião, e um número do CloudWatch não é."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A homologação que cobra a mesma hora da produção",
+            "caption": "Este desenho publica e atende — é literalmente o Terraform do L01/L03, com menos réplicas. O defeito não é uma configuração ruim: é que a task não sabe que está em homologação, e cobra pela HORA que existe, não pelo teste que recebe. Percorra os passos e repare que a desproporção entre uso e cobrança é aritmética, não suspeita.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "qa",
+                    "service": "browser",
+                    "label": "QA da Cadência",
+                    "note": "testa em rajadas de sprint — algumas dezenas de chamadas em uma hora, depois nada por dias"
+                  }
+                ]
+              },
+              {
+                "label": "VPC homologação — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB (cópia do L01)",
+                    "note": "existe porque o Terraform de produção foi copiado inteiro; ninguém removeu o que homolog não usa igual"
+                  }
+                ]
+              },
+              {
+                "label": "VPC homologação — sub-rede privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "svc",
+                    "service": "ecs",
+                    "label": "Serviço ECS, desiredCount = 1",
+                    "note": "o mínimo que o Terraform de produção permite configurar; ainda assim é uma task inteira, o dia inteiro"
+                  },
+                  {
+                    "id": "task",
+                    "service": "fargate",
+                    "label": "Task .NET 8 (mesma imagem de produção)",
+                    "note": "sobe uma vez e fica no ar 24 horas, esperando o próximo teste chegar"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Métricas do ALB e do ECS",
+                    "note": "guarda os dois números que provam o desperdício: RequestCount quase zero, uptime constante"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "qa",
+                "to": "alb",
+                "label": "HTTPS, em rajadas de poucas dezenas por hora",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "svc",
+                "label": "encaminha só para alvo saudável",
+                "style": "solid"
+              },
+              {
+                "from": "svc",
+                "to": "task",
+                "label": "mantém 1 task viva, sempre",
+                "style": "solid"
+              },
+              {
+                "from": "task",
+                "to": "cw",
+                "label": "uptime contínuo, independente de tráfego",
+                "style": "dashed"
+              },
+              {
+                "from": "alb",
+                "to": "cw",
+                "label": "RequestCount por período",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A task herdou o desenho de produção, não o volume de produção",
+                "detail": "Nenhuma linha deste Terraform está tecnicamente errada — é o mesmo padrão do L01, válido para tráfego constante. O problema é usá-lo onde o tráfego é esporádico: o modelo de cobrança do Fargate não muda com o volume, só o comportamento da aplicação muda.",
+                "nodes": [
+                  "svc",
+                  "task"
+                ],
+                "edges": [
+                  "svc>task"
+                ]
+              },
+              {
+                "label": "A task existe 86.400 segundos por dia, testada ou não",
+                "detail": "Fim de semana, feriado, sprint sem QA disponível — nada disso desliga a task. Ela está lá pela mesma razão que estava na segunda-feira de manhã: alguém rodou `terraform apply` e nunca mais mexeu.",
+                "nodes": [
+                  "task"
+                ],
+                "edges": [
+                  "svc>task"
+                ]
+              },
+              {
+                "label": "O CloudWatch já tem o número; ninguém olhou os dois lados juntos",
+                "detail": "`RequestCount` do ALB e o tempo de execução da task moram no mesmo painel, em gráficos diferentes. Comparar os dois — não cada um isolado — é o que transforma \"parece que ninguém usa isso\" em um número que autoriza mudar algo.",
+                "nodes": [
+                  "cw"
+                ],
+                "edges": [
+                  "alb>cw"
+                ]
+              },
+              {
+                "label": "Cada rajada de QA é seguida de horas de silêncio, cobradas igual",
+                "detail": "Uma hora de teste intenso e onze horas de nada custam exatamente o mesmo que doze horas de teste constante, porque o Fargate cobra pela RESERVA de vCPU e memória, não pelo trabalho — a mesma aritmética do L21, um nível acima.",
+                "nodes": [
+                  "qa",
+                  "task"
+                ],
+                "edges": [
+                  "qa>alb"
+                ]
+              },
+              {
+                "label": "Por que alguém constrói homolog assim",
+                "detail": "\"Usar o mesmo Terraform de produção, com menos réplica\" é o caminho de menor atrito e garante paridade de comportamento. O que ele não garante — e ninguém pediu — é paridade de MODELO DE COBRANÇA, e são coisas diferentes.",
+                "nodes": [
+                  "svc",
+                  "alb"
+                ],
+                "edges": [
+                  "alb>svc"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A conta é simples e vale fazer antes de qualquer código: se o QA gera 40 requisições numa janela de 24 horas, e a task existe pelas 86.400 segundos do dia inteiro, a proporção de tempo em que ela está genuinamente atendendo alguém é próxima de zero — o resto é reserva de vCPU e memória, cobrada do mesmo jeito."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "filename": "medir-a-desproporcao.sh",
+            "code": "# Rode ANTES de mudar qualquer coisa. Compara RequestCount do ALB de homolog\n# com o tempo que a task ficou reservada na mesma janela.\naws cloudwatch get-metric-statistics --namespace AWS/ApplicationELB \\\n  --metric-name RequestCount --dimensions Name=LoadBalancer,Value=\"$ARN_ALB_HOMOLOG\" \\\n  --start-time \"$(date -u -d -7days +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --period 86400 --statistics Sum --query \"Datapoints[].Sum\" --output text\n# Na Cadencia, sete dias: 214 requisicoes no total, contra 604.800 segundos de\n# task reservada. Menos de 40 requisicoes por dia em media — e dois dos sete\n# dias, ZERO. A task nao soube da diferenca."
+          }
+        },
+        {
+          "id": "b4_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "Por que isto não apareceu antes",
+            "content": "Nenhum painel de custo separa \"task ligada\" de \"task ocupada\" por padrão — os dois aparecem juntos como \"custo de Fargate\". Só cruzando `RequestCount` com o tempo de vida da task, em duas consultas distintas, a desproporção fica visível. É o mesmo hábito de medir que o L03 usou para provar a janela de indisponibilidade em vez de estimá-la."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção (do ambiente de homologação)"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A tabela do DynamoDB não é nova — é a mesma do L16, alcançada por uma porta diferente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A mesma rota, sem nada ligado entre uma chamada e a próxima",
+            "caption": "Não é o desenho anterior com ALB trocado por API Gateway: é a ausência de qualquer processo entre 13h04 e 13h51, quando ninguém chama a API. Cada peça nova responde a uma linha da tabela de requisitos. Percorra os passos: o cruzamento de custo que decide entre este desenho e o anterior mora no passo 6.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "qa",
+                    "service": "browser",
+                    "label": "QA da Cadência",
+                    "note": "o mesmo padrão de tráfego esporádico do desenho anterior — nada mudou do lado de quem chama"
+                  }
+                ]
+              },
+              {
+                "label": "Borda — sem plano de uso",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "apigw",
+                    "service": "apigateway",
+                    "label": "API Gateway HTTP API",
+                    "note": "não REST: aqui não há parceiro nem cota a medir, então o tipo mais barato basta"
+                  }
+                ]
+              },
+              {
+                "label": "Computação sob demanda",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "fn",
+                    "service": "lambda",
+                    "label": "Função .NET 8, sem VPC",
+                    "note": "existe só durante a chamada; entre uma requisição e a próxima não há processo cobrando"
+                  }
+                ]
+              },
+              {
+                "label": "Identidade",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "iam_exec",
+                    "service": "iam",
+                    "label": "Papel de execução da função",
+                    "note": "só autoriza Query na tabela de pedidos e escrita no próprio log — nada além disso"
+                  }
+                ]
+              },
+              {
+                "label": "Leitura — tabela do L16, reaproveitada",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ddb",
+                    "service": "dynamodb",
+                    "label": "pedidos_cadencia (do L16)",
+                    "note": "projeção de leitura já existente; esta função não escreve nela, só consulta a chave base"
+                  }
+                ]
+              },
+              {
+                "label": "Observação e custo",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Concorrência, duração, throttles",
+                    "note": "é aqui que se vê o teto de 1.000 execuções concorrentes se aproximando, antes do 429 acontecer"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "qa",
+                "to": "apigw",
+                "label": "HTTPS, mesma rota GET /api/pedidos/{id}",
+                "style": "solid"
+              },
+              {
+                "from": "apigw",
+                "to": "fn",
+                "label": "integração proxy, payload 2.0",
+                "style": "solid"
+              },
+              {
+                "from": "iam_exec",
+                "to": "ddb",
+                "label": "autoriza só dynamodb:Query nesta tabela",
+                "style": "dashed"
+              },
+              {
+                "from": "fn",
+                "to": "ddb",
+                "label": "Query em PK = PEDIDO#<id>",
+                "style": "solid"
+              },
+              {
+                "from": "fn",
+                "to": "cw",
+                "label": "Init Duration e Billed Duration por chamada",
+                "style": "dashed"
+              },
+              {
+                "from": "apigw",
+                "to": "cw",
+                "label": "integrationLatency e responseLatency",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "HTTP API, não REST — a escolha do L11, decidida ao contrário",
+                "detail": "O L11 escolheu REST API porque o requisito era cota por parceiro, e só REST API tem plano de uso. Aqui não existe parceiro: é a mesma API interna das bandas 1-2. HTTP API custa menos por requisição e integra nativamente com Lambda — a escolha certa muda com o requisito, não é dogma de um tipo só.",
+                "nodes": [
+                  "apigw"
+                ],
+                "edges": [
+                  "qa>apigw"
+                ]
+              },
+              {
+                "label": "Sem VPC, porque o destino é regional",
+                "detail": "A função só fala com o DynamoDB, que não mora em sub-rede nenhuma. Anexar VPC aqui repetiria o erro que o L21 já nomeou: acrescentar provisionamento de interface de rede ao Init sem nenhum benefício, só latência.",
+                "nodes": [
+                  "fn",
+                  "ddb"
+                ],
+                "edges": [
+                  "fn>ddb"
+                ]
+              },
+              {
+                "label": "A leitura muda de hospedagem sem tocar na escrita",
+                "detail": "Esta função só faz `Query`. Quem grava em `pedidos_cadencia` continua sendo o processo de outbox do L16/L14, alimentado pelo Aurora — este laboratório não abre mão de consistência nenhuma porque não escreve nada novo.",
+                "nodes": [
+                  "fn",
+                  "ddb"
+                ],
+                "edges": [
+                  "fn>ddb"
+                ]
+              },
+              {
+                "label": "Cada camada soma o próprio Init; a requisição sente a soma",
+                "detail": "O API Gateway resolve a rota (sem cold start dele mesmo — é serviço gerenciado sem processo seu). A Lambda, se fria, paga Init. O DynamoDB responde sem cold start, mas a primeira chamada ao SDK dentro do Init da função é onde o cliente é construído. Nenhuma camada isolada precisa ser lenta para o total incomodar.",
+                "nodes": [
+                  "apigw",
+                  "fn",
+                  "ddb"
+                ],
+                "edges": [
+                  "apigw>fn",
+                  "fn>ddb"
+                ]
+              },
+              {
+                "label": "O limite de concorrência é uma parede real, não teórica",
+                "detail": "A conta tem 1.000 execuções concorrentes por padrão, compartilhadas entre TODAS as funções da região — não só esta. O próprio guia de decisão da AWS cita o descasamento: o API Gateway aceita até 10.000 requisições por segundo por padrão, a Lambda só até 1.000 de concorrência. Em rajada, o gargalo é a Lambda, não a borda.",
+                "nodes": [
+                  "fn",
+                  "cw"
+                ],
+                "edges": [
+                  "fn>cw"
+                ]
+              },
+              {
+                "label": "Por que isto não é o desenho anterior com uma caixa a menos",
+                "detail": "A mudança estrutural é a ausência de qualquer coisa cobrando entre 13h04 e 13h51. Tudo o mais neste desenho — papel escopado, throttle, alarme — existe para administrar essa ausência, não para substituir o ALB por outro nome.",
+                "nodes": [
+                  "apigw",
+                  "fn"
+                ],
+                "edges": [
+                  "apigw>fn"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação ao desenho anterior não é \"trocar ALB por API Gateway\" como troca de marca: é a ausência de qualquer processo entre uma chamada e a próxima. O ALB precisava de uma task viva para ter para onde encaminhar; o API Gateway não precisa de nada vivo até o instante em que alguém chama."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "annotated_formula",
+          "position": 3,
+          "data": {
+            "title": "Onde a curva do contêiner sempre ligado cruza a curva da API por invocação",
+            "formula": "custo_fargate ≈ (vCPU + memória) reservados × tempo_ligado   [constante]\ncusto_serverless(n) ≈ n × (requisição_apigw + invocação_lambda + duração_média × GB_segundo + leitura_dynamodb)   [cresce com n]\nn* : custo_fargate = custo_serverless(n*)",
+            "parts": [
+              {
+                "symbol": "tempo_ligado",
+                "name": "O relógio que o Fargate cobra",
+                "description": "Não depende de tráfego: é a duração em que a task existe, dormindo ou trabalhando. É por isso que o desenho mínimo deste laboratório custa o mesmo em domingo de feriado e em pico de sprint."
+              },
+              {
+                "symbol": "n",
+                "name": "A única variável do lado serverless",
+                "description": "O número de requisições no período é o que multiplica o custo marginal. Zero requisições, zero cobrança de computação — a contrapartida exata do requisito declarado para homologação.",
+                "highlight": true
+              },
+              {
+                "symbol": "requisição_apigw + invocação_lambda + GB_segundo + leitura_dynamodb",
+                "name": "O custo marginal por chamada",
+                "description": "Quatro parcelas que crescem juntas com o tráfego: a borda cobra por milhão de requisições, a função cobra por invocação e por GB-segundo de duração, o DynamoDB cobra por unidade de leitura. Nenhuma delas existe se a chamada não acontece."
+              },
+              {
+                "symbol": "n*",
+                "name": "O ponto em que trocar de lado passa a valer a pena",
+                "description": "Abaixo de n*, a soma variável ainda é menor que o fixo já pago — serverless vence. Acima, o fixo do Fargate já está comprado, esteja ele ocioso ou não, e a soma variável o ultrapassa. Calcule o SEU n* com os valores do Pricing Calculator para a sua região; o número muda, a forma da curva não."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "success",
+            "title": "O que este desenho custa quando ninguém testa",
+            "content": "Nada de computação. Não há task, não há vCPU reservado, não há memória cobrando entre sexta à noite e segunda de manhã. É a contrapartida exata do requisito de custo proporcional — e é também por isso que a seção de custo mais adiante formaliza onde essa vantagem para de existir."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Como funciona, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os nomes das etapas não são jargão de documentação: são a prova de onde cada parcela de latência é gerada — e de que a soma delas, não a pior parcela isolada, é o que o cliente sente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Uma chamada GET /api/pedidos/{id}, e onde cada relógio da cadeia corre",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1 · A requisição chega ao API Gateway",
+                "desc": "HTTP API resolve a rota e a integração — sem autorização de parceiro, porque não há plano de uso aqui. O tempo desta etapa é registrado em `$context.integrationLatency`."
+              },
+              {
+                "label": "2 · O Gateway invoca a Lambda por integração proxy",
+                "desc": "Payload no formato 2.0 (`APIGatewayHttpApiV2ProxyRequest`): o path, o método e os parâmetros de rota chegam prontos; não existe um envelope diferente por trás."
+              },
+              {
+                "label": "3 · Se o ambiente é novo, o Init roda antes do handler",
+                "desc": "Extensão, runtime `dotnet8` e código estático — o mesmo ciclo do L21, aqui vivendo atrás de uma chamada síncrona que alguém está esperando responder, não de um agendamento em segundo plano."
+              },
+              {
+                "label": "4 · O handler consulta a chave base da tabela do L16",
+                "desc": "`Query` com `KeyConditionExpression: PK = :pk`, sem condição de SK — devolve o item `METADADOS` (cabeçalho) e todos os `ITEM#<n>` numa chamada só, porque os dois vivem na mesma partição desde a modelagem do L16."
+              },
+              {
+                "label": "5 · A função monta a resposta e devolve ao Gateway",
+                "desc": "Mesmo formato JSON que a API em ECS Fargate sempre devolveu — é a prova de paridade funcional: o contrato não muda, só a hospedagem por trás dele."
+              },
+              {
+                "label": "6 · O Gateway entrega ao cliente e fecha o log de acesso",
+                "desc": "`$context.responseLatency` é o tempo total, do ponto de vista do cliente. A diferença entre ele e a soma das partes internas é a que às vezes some — vale medir, não supor."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A leitura muda de hospedagem sem tocar na escrita",
+            "content": "Esta função só executa `Query`. Quem grava em `pedidos_cadencia` continua sendo o processo de outbox que o L16 descreveu, alimentado pelo Aurora — nenhuma garantia de consistência foi trocada por outra. É também por isso que este laboratório evita o problema clássico de Lambda com banco relacional (exaustão de pool de conexão, exigindo RDS Proxy): a fonte já era DynamoDB, que não tem conexão para exaurir."
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "json",
+            "filename": "linha-de-log-de-acesso.json",
+            "code": "// Trecho do log de acesso do API Gateway (formato declarado em apigateway.tf).\n// E o dado que prova a cadeia de latencia, em vez de supor qual camada pesa.\n{\n  \"requestId\": \"a1b2c3d4-...\",\n  \"routeKey\": \"GET /api/pedidos/{id}\",\n  \"status\": \"200\",\n  // Tempo so da chamada a Lambda — inclui Init quando o ambiente esta frio.\n  \"integrationLatency\": \"812\",\n  // Tempo TOTAL, do ponto de vista do cliente — borda incluida.\n  \"responseLatency\": \"841\"\n}\n// A diferenca (841 - 812 = 29 ms) e o que o proprio Gateway gasta resolvendo\n// rota e formatando resposta — pequena aqui, mas e a parcela que cresce se um\n// dia entrar um autorizador ou transformacao de payload no meio."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "A Cadência quer parar de pagar hora cheia de Fargate num ambiente de homologação onde o QA testa em rajadas de sprint, com dias de silêncio entre elas — sem abrir mão de testar a mesma API que roda em produção, e usando o volume de produção do L03 (~9 mil requisições/dia) como referência para decidir se a mesma troca vale lá também.",
+            "winner": "API Gateway HTTP API + Lambda .NET 8 sem VPC + Query na tabela do L16, mantendo o ECS Fargate como está em produção — por enquanto",
+            "why": "O requisito central é custo proporcional ao uso, e é exatamente isso que o modelo de cobrança por invocação entrega: em homologação, com tráfego intermitente, a curva variável nunca se aproxima do que o Fargate cobra parado. HTTP API é a escolha certa porque não há parceiro nem cota — REST API cobraria mais por um recurso que o L11 tem e este módulo não precisa. Migrar SÓ a leitura, sem tocar na escrita, evita o problema clássico de Lambda com banco relacional (exaustão de conexão, RDS Proxy) porque a fonte já é DynamoDB, projeção do L16. Em produção, o mesmo cálculo aponta para o outro lado: 9 mil requisições/dia sustentadas já pagam boa parte do custo fixo do Fargate, e a decisão de migrar produção inteira depende de medir n* com o tráfego real, não de copiar a conclusão da homologação.",
+            "alternatives": [
+              {
+                "name": "Fargate com escala agendada para zero fora do horário comercial",
+                "downside": "Não exige reescrever nada e resolve boa parte do desperdício. Mas ainda cobra por hora nas janelas ligadas, não lida com QA testando fora do horário previsto, e o primeiro request da manhã paga o cold start do Fargate — 35 segundos a 2 minutos, pelo guia de decisão da própria AWS, contra 100 ms a 2 s da Lambda."
+              },
+              {
+                "name": "REST API com plano de uso, copiando o L11",
+                "downside": "Resolveria o problema errado: plano de uso administra cota de PARCEIRO. Aqui não existe parceiro, e pagar pelo tipo de API mais caro por um recurso que nunca vai ser usado é o antipadrão que este módulo nomeia mais adiante."
+              },
+              {
+                "name": "Provisioned Concurrency na Lambda desde o início",
+                "downside": "Eliminaria o cold start, mas cobra por ambiente reservado a cada hora — o mesmo problema de fundo que tirou o Fargate do desenho mínimo. QA tolera cold start ocasional; não há requisito de latência que justifique pagar por capacidade ociosa de novo, agora do lado da Lambda."
+              },
+              {
+                "name": "Migrar produção inteira para serverless junto com homologação",
+                "downside": "É o erro inverso do problema original: trocar de modelo por moda, sem calcular n*. Com 9 mil requisições/dia sustentadas, produção pode já estar do lado em que o Fargate vence — a decisão exige medir, não presumir que o que funcionou em homolog funciona em produção."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Tipo de API",
+                "HTTP API",
+                "REST API (do L11); WebSocket (não se aplica)",
+                "não há parceiro nem cota; HTTP API custa menos por requisição e basta",
+                "nenhum plano de uso disponível, caso um parceiro apareça depois"
+              ],
+              [
+                "Rede da função",
+                "sem VPC",
+                "anexada à mesma VPC do Fargate, \"por padrão\"",
+                "o destino é regional; VPC não muda o acesso, só consome ENI e soma latência ao Init",
+                "se um dia a função precisar falar com RDS, aí sim a VPC entra — e com RDS Proxy"
+              ],
+              [
+                "Fonte de leitura",
+                "tabela `pedidos_cadencia` do L16, por referência",
+                "nova tabela dedicada; leitura direta no Aurora via Lambda",
+                "evita duplicar modelagem e evita o problema clássico de Lambda com pool de conexão relacional",
+                "a leitura fica atrás da latência de propagação do outbox — milissegundos, não é tempo real de escrita"
+              ],
+              [
+                "Proteção de rajada",
+                "throttle no estágio + `reserved_concurrent_executions`",
+                "nenhuma proteção explícita; confiar no padrão da conta",
+                "duas camadas: uma contém o CLIENTE, a outra protege o RESTO da conta",
+                "uma rajada legítima acima do throttle recebe 429 — é ajustável, não é grátis de decidir"
+              ],
+              [
+                "Decisão sobre produção",
+                "adiada, condicionada à medição de n*",
+                "migrar produção junto, no mesmo laboratório",
+                "9 mil requisições/dia sustentadas podem já estar do lado do Fargate; migrar sem medir é dogma invertido",
+                "a API de produção continua em dois modelos até a decisão ser tomada com dado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este desenho cria, e que o módulo não paga",
+            "content": "A tabela `pedidos_cadencia` é alimentada por um outbox assíncrono a partir do Aurora — existe uma janela de propagação entre a escrita em produção e a leitura aqui aparecer atualizada. Para leitura de homologação e para o padrão de acesso do L16, isso já era aceito; se uma rota futura precisar de leitura fortemente consistente logo após a escrita, este caminho não serve sem revisão."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: a borda sem plano de uso"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "HTTP API entra aqui exatamente pela ausência do requisito que levou o L11 a escolher REST API. A permissão de invocação usa um mecanismo diferente do que o L21 usou para o agendamento — vale notar a diferença."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "apigateway.tf",
+            "code": "# apigateway.tf — a borda sem plano de uso, porque nao ha parceiro aqui\n\n# HTTP API, nao REST API: a distincao que o L11 fixou por causa de cota de\n# parceiro se aplica ao contrario aqui. Sem plano de uso a administrar, o tipo\n# mais barato e tambem o que menos coisa ha para configurar errado.\nresource \"aws_apigatewayv2_api\" \"pedidos\" {\n  name          = \"${var.projeto}-pedidos-serverless\"\n  protocol_type = \"HTTP\"\n}\n\n# Integracao PROXY: o Gateway repassa o payload inteiro (metodo, path, query,\n# corpo) e devolve a resposta da funcao sem reformatar nada no meio. E o modo\n# que exige menos configuracao de mapeamento, e o unico que este modulo usa.\nresource \"aws_apigatewayv2_integration\" \"pedidos\" {\n  api_id                 = aws_apigatewayv2_api.pedidos.id\n  integration_type       = \"AWS_PROXY\"\n  integration_uri        = aws_lambda_function.leitura_pedido.invoke_arn\n  payload_format_version = \"2.0\"\n}\n\nresource \"aws_apigatewayv2_route\" \"get_pedido\" {\n  api_id    = aws_apigatewayv2_api.pedidos.id\n  route_key = \"GET /api/pedidos/{id}\" # a MESMA rota que o ALB do L01/L03 sempre serviu\n  target    = \"integrations/${aws_apigatewayv2_integration.pedidos.id}\"\n}\n\nresource \"aws_apigatewayv2_stage\" \"producao\" {\n  api_id      = aws_apigatewayv2_api.pedidos.id\n  name        = \"$default\"\n  auto_deploy = true\n\n  # A primeira linha de defesa contra rajada: nao e cota de parceiro (nao ha\n  # parceiro), e sim protecao de conta contra pico que estoura a concorrencia\n  # da Lambda ou vira fatura inesperada — o \"ataque de negacao de carteira\"\n  # da secao de seguranca. O padrao da conta e mais alto; aqui e explicito.\n  default_route_settings {\n    throttling_burst_limit = 100\n    throttling_rate_limit  = 50\n  }\n\n  access_log_settings {\n    destination_arn = aws_cloudwatch_log_group.acesso_apigw.arn\n    # integrationLatency e responseLatency sao os dois numeros que provam a\n    # cadeia de latencia: o primeiro e so a chamada a Lambda; o segundo e o\n    # que o cliente sente, borda incluida.\n    format = jsonencode({\n      requestId         = \"$context.requestId\"\n      routeKey           = \"$context.routeKey\"\n      status              = \"$context.status\"\n      integrationLatency  = \"$context.integrationLatency\"\n      responseLatency     = \"$context.responseLatency\"\n    })\n  }\n}\n\nresource \"aws_cloudwatch_log_group\" \"acesso_apigw\" {\n  name              = \"/aws/apigateway/${var.projeto}-pedidos-serverless\"\n  retention_in_days = 30\n}\n\n# Politica de RECURSO, nao papel assumido: e assim que o API Gateway invoca\n# Lambda. E diferente do EventBridge Scheduler do L21, que usa uma role IAM\n# propria — cada servico de origem tem seu proprio mecanismo de \"quem pode\n# chamar\", e confundir os dois e um erro comum de quem generaliza cedo demais.\nresource \"aws_lambda_permission\" \"apigw_invoca\" {\n  statement_id  = \"AllowAPIGatewayInvoke\"\n  action        = \"lambda:InvokeFunction\"\n  function_name = aws_lambda_function.leitura_pedido.function_name\n  principal     = \"apigateway.amazonaws.com\"\n  # Escopado a ESTA api e a ESTA rota: nao \"*\", nao a api inteira sem rota.\n  source_arn = \"${aws_apigatewayv2_api.pedidos.execution_arn}/*/GET/api/pedidos/{id}\"\n}\n\noutput \"url_api_serverless\" {\n  value       = aws_apigatewayv2_stage.producao.invoke_url\n  description = \"URL da rota GET /api/pedidos/{id}, servida por API Gateway + Lambda\"\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Duas formas de \"quem pode chamar\", e por que confundi-las custa uma tarde",
+            "content": "O EventBridge Scheduler do L21 invoca a Lambda usando uma ROLE IAM que ele assume — identidade que age. O API Gateway invoca usando uma POLÍTICA DE RECURSO anexada à própria função (`aws_lambda_permission`) — permissão que a função concede a um principal. Tentar resolver o segundo caso com uma role, como se fosse o primeiro, não gera erro óbvio: a chamada simplesmente falha com acesso negado, sem dizer que o mecanismo esperado era outro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: a função sem VPC, com a concorrência sob controle"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O papel de execução autoriza uma ação só — `dynamodb:Query` na tabela do L16 — porque esta função não escreve nada. `reserved_concurrent_executions` é a peça que protege o resto da conta, não só esta rota."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "lambda.tf",
+            "code": "# lambda.tf — a funcao sem VPC, e a permissao estreita a uma Query so\n\ndata \"aws_iam_policy_document\" \"execucao_assume\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sts:AssumeRole\"]\n    principals {\n      type        = \"Service\"\n      identifiers = [\"lambda.amazonaws.com\"]\n    }\n  }\n}\n\nresource \"aws_iam_role\" \"execucao\" {\n  name               = \"${var.projeto}-leitura-pedido-execucao\"\n  assume_role_policy = data.aws_iam_policy_document.execucao_assume.json\n}\n\n# So Query na tabela do L16, e so escrita no proprio log. Nao ha PutItem,\n# UpdateItem nem DeleteItem aqui — esta funcao LE; quem escreve continua\n# sendo o outbox do L14/L16, alimentado pelo Aurora.\ndata \"aws_iam_policy_document\" \"execucao_permissoes\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"dynamodb:Query\"]\n    resources = [data.aws_dynamodb_table.pedidos.arn]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"logs:CreateLogStream\", \"logs:PutLogEvents\"]\n    resources = [\"${aws_cloudwatch_log_group.funcao.arn}:*\"]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"execucao\" {\n  role   = aws_iam_role.execucao.id\n  policy = data.aws_iam_policy_document.execucao_permissoes.json\n}\n\n# A tabela e um DATA SOURCE, nao um recurso novo: e a MESMA `pedidos_cadencia`\n# que o L16 modelou e o outbox do L14 alimenta. Recriá-la aqui duplicaria a\n# fonte de leitura e é exatamente o \"repetir em vez de reaproveitar\" que o\n# briefing deste laboratório pede para evitar.\ndata \"aws_dynamodb_table\" \"pedidos\" {\n  name = \"${var.projeto}-pedidos-cadencia\"\n}\n\nresource \"aws_cloudwatch_log_group\" \"funcao\" {\n  name              = \"/aws/lambda/${var.projeto}-leitura-pedido\"\n  retention_in_days = 30\n}\n\nresource \"aws_lambda_function\" \"leitura_pedido\" {\n  function_name = \"${var.projeto}-leitura-pedido\"\n  role          = aws_iam_role.execucao.arn\n  handler       = \"LeituraPedido::LeituraPedido.Function::FunctionHandler\"\n  runtime       = \"dotnet8\"\n  architectures = [\"arm64\"]\n  filename      = data.archive_file.pacote.output_path\n  timeout       = 10 # bem abaixo do teto de 900 s: e leitura, nao processamento de longa duracao\n  memory_size   = 512 # ponto de partida; a secao de provas mede e ajusta\n\n  # NENHUM vpc_config, pela mesma razao do L21: o destino (DynamoDB) e\n  # regional. Anexar VPC aqui so acrescentaria ENI ao Init sem beneficio, e\n  # consumiria da cota de 500 ENIs por VPC — que voce vai precisar inteira o\n  # dia em que uma rota de verdade precisar de RDS atras desta funcao.\n\n  # Protege o RESTANTE da conta: sem este teto, um pico nesta funcao pode\n  # consumir toda a concorrencia de 1.000 compartilhada com outras funcoes.\n  # E a resposta de infraestrutura ao risco de \"negacao de carteira\" da secao\n  # de seguranca — throttle na borda contem o CLIENTE; isto contem A CONTA.\n  reserved_concurrent_executions = 50\n\n  environment {\n    variables = {\n      TABELA_PEDIDOS = data.aws_dynamodb_table.pedidos.name\n    }\n  }\n\n  tracing_config {\n    mode = \"Active\" # X-Ray separa integrationLatency (borda) de Init/Invoke (funcao)\n  }\n}\n\noutput \"nome_funcao_leitura\" {\n  value       = aws_lambda_function.leitura_pedido.function_name\n  description = \"usado nos comandos de prova, para filtrar log e medir cold start\"\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "Reservar concorrência tira capacidade de outras funções",
+            "content": "A conta inteira compartilha 1.000 execuções concorrentes por padrão. Reservar 50 para esta função GARANTE essas 50, mas também as RETIRA do pool disponível para as demais 950 — incluindo a função de limpeza do L21. Em conta com poucas funções, o efeito é desprezível; em conta com dezenas, reservar sem medir o uso de todas é resolver um gargalo criando outro em silêncio."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o handler que lê a chave base do L16"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Nenhuma lógica de negócio nova aqui — a mudança é onde o código roda e como ele acessa o dado, não o que ele decide."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Function.cs",
+            "code": "// Function.cs — le a chave base do L16, sem tocar em nenhuma escrita\n\nusing Amazon.DynamoDBv2;\nusing Amazon.DynamoDBv2.Model;\nusing Amazon.Lambda.APIGatewayEvents;\nusing Amazon.Lambda.Core;\nusing Amazon.Lambda.RuntimeSupport;\nusing Amazon.Lambda.Serialization.SystemTextJson;\nusing System.Text.Json;\nusing System.Text.Json.Serialization;\n\nnamespace LeituraPedido;\n\npublic class Function\n{\n    // ── CODIGO ESTATICO: roda uma vez por ambiente, dentro do Init ───────────\n    // O cliente do DynamoDB e criado AQUI, igual ao padrao do L21 com o S3. E\n    // o motivo de o Init desta funcao ser dominado por Function init, nao por\n    // Runtime init: abrir o cliente e resolver credencial e o trabalho real.\n    private static readonly AmazonDynamoDBClient _ddb = new();\n    private static readonly string _tabela =\n        Environment.GetEnvironmentVariable(\"TABELA_PEDIDOS\")!;\n\n    private static async Task Main()\n    {\n        Func<APIGatewayHttpApiV2ProxyRequest, ILambdaContext, APIGatewayHttpApiV2ProxyResponse> handler\n            = FunctionHandler;\n        await LambdaBootstrapBuilder.Create(handler,\n                new SourceGeneratorLambdaJsonSerializer<ContextoSerializacao>())\n            .Build()\n            .RunAsync();\n    }\n\n    // ── HANDLER: roda a cada invocacao, quente ou fria ────────────────────────\n    public static async Task<APIGatewayHttpApiV2ProxyResponse> FunctionHandler(\n        APIGatewayHttpApiV2ProxyRequest evento, ILambdaContext ctx)\n    {\n        // Instrumento do laboratorio, igual ao L21: torna o cold start\n        // OBSERVAVEL na propria linha de log, sem depender so do REPORT.\n        ctx.Logger.LogInformation(\n            $\"inicio do handler, ambiente ativo ha {Environment.TickCount64} ms\");\n\n        if (!evento.PathParameters.TryGetValue(\"id\", out var id) || !Guid.TryParse(id, out _))\n        {\n            return Responder(400, new { erro = \"id invalido\" });\n        }\n\n        // Query na CHAVE BASE, exatamente como o L16 modelou: PK = PEDIDO#<id>,\n        // sem condicao de SK. Devolve o cabecalho (SK=METADADOS) e todos os\n        // itens (SK=ITEM#<n>) na MESMA chamada, porque os dois moram na mesma\n        // particao — a decisao que este modulo reaproveita, nao repete.\n        var resp = await _ddb.QueryAsync(new QueryRequest\n        {\n            TableName              = _tabela,\n            KeyConditionExpression = \"PK = :pk\",\n            ExpressionAttributeValues = new Dictionary<string, AttributeValue>\n            {\n                [\":pk\"] = new AttributeValue { S = $\"PEDIDO#{id}\" },\n            },\n        });\n\n        if (resp.Items.Count == 0)\n        {\n            return Responder(404, new { erro = \"pedido nao encontrado\" });\n        }\n\n        var cabecalho = resp.Items.First(i => i[\"SK\"].S == \"METADADOS\");\n        var itens = resp.Items.Where(i => i[\"SK\"].S.StartsWith(\"ITEM#\")).Count();\n\n        // Mesmo FORMATO que a API em ECS Fargate sempre devolveu — o contrato\n        // nao muda; so a hospedagem por tras dele mudou. E a prova de\n        // paridade funcional que a secao de implantacao vai medir.\n        return Responder(200, new\n        {\n            id,\n            total = decimal.Parse(cabecalho[\"total\"].N),\n            status = cabecalho[\"status\"].S,\n            itensCount = itens,\n        });\n    }\n\n    private static APIGatewayHttpApiV2ProxyResponse Responder(int status, object corpo) => new()\n    {\n        StatusCode = status,\n        Headers = new Dictionary<string, string> { [\"Content-Type\"] = \"application/json\" },\n        Body = JsonSerializer.Serialize(corpo),\n    };\n}\n\n[JsonSerializable(typeof(APIGatewayHttpApiV2ProxyRequest))]\n[JsonSerializable(typeof(APIGatewayHttpApiV2ProxyResponse))]\npublic partial class ContextoSerializacao : JsonSerializerContext\n{\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "Por que uma Query só basta",
+            "content": "Como o L16 modelou o cabeçalho e os itens do pedido na MESMA partição, uma `Query` sem condição de ordenação devolve os dois juntos. Se a tabela tivesse sido modelada como o desenho mínimo do L16 — uma tabela por entidade —, esta função precisaria de duas chamadas e uma junção em memória, repetindo o defeito que aquele laboratório já corrigiu."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Medir o cruzamento, antes de decidir qualquer coisa"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O script abaixo não decide nada sozinho: ele coleta os dois lados da fórmula da seção anterior, com dados REAIS da sua conta. O preço por unidade fica de fora de propósito — busque no AWS Pricing Calculator para a sua região."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "medir-cruzamento.sh",
+            "code": "#!/usr/bin/env bash\n# medir-cruzamento.sh — coleta os numeros REAIS dos dois lados; o preco por\n# unidade voce busca no Pricing Calculator para a sua regiao e cola abaixo.\nset -euo pipefail\n\nPROJETO=\"${PROJETO:?defina PROJETO}\"\nREGIAO=\"${REGIAO:-us-east-1}\"\nJANELA_HORAS=\"${1:-24}\"\n\necho \"== lado Fargate: quanto tempo a task ficou reservada ==\"\n# Em homologacao com 1 task, o tempo ligado e simplesmente a janela medida —\n# a task nao escala. Em producao, some o tempo de CADA task (elas se sobrepoem).\naws cloudwatch get-metric-statistics \\\n  --namespace ECS/ContainerInsights --metric-name TaskCount \\\n  --dimensions Name=ClusterName,Value=\"$PROJETO\" \\\n  --start-time \"$(date -u -d \"-${JANELA_HORAS} hours\" +%FT%TZ)\" \\\n  --end-time \"$(date -u +%FT%TZ)\" --period 3600 --statistics Average \\\n  --region \"$REGIAO\" --query 'Datapoints[].Average'\n\necho \"== lado serverless: quantas invocacoes, e a duracao media ==\"\naws cloudwatch get-metric-statistics \\\n  --namespace AWS/Lambda --metric-name Invocations \\\n  --dimensions Name=FunctionName,Value=\"${PROJETO}-leitura-pedido\" \\\n  --start-time \"$(date -u -d \"-${JANELA_HORAS} hours\" +%FT%TZ)\" \\\n  --end-time \"$(date -u +%FT%TZ)\" --period 3600 --statistics Sum \\\n  --region \"$REGIAO\" --query 'Datapoints[].Sum'\n\naws cloudwatch get-metric-statistics \\\n  --namespace AWS/Lambda --metric-name Duration \\\n  --dimensions Name=FunctionName,Value=\"${PROJETO}-leitura-pedido\" \\\n  --start-time \"$(date -u -d \"-${JANELA_HORAS} hours\" +%FT%TZ)\" \\\n  --end-time \"$(date -u +%FT%TZ)\" --period 3600 --statistics Average \\\n  --region \"$REGIAO\" --query 'Datapoints[].Average'\n\n# A partir daqui, aritmetica: cole os precos unitarios do Pricing Calculator\n# (vCPU-hora, GB-hora, milhao de requisicoes, GB-segundo da Lambda, unidade\n# de leitura do DynamoDB) e resolva n* = custo_fargate / custo_marginal.\n# NENHUM valor de preco esta neste script de proposito — ele envelhece mais\n# rapido do que este laboratorio, e varia por regiao.\necho \"cole os precos da sua regiao no Pricing Calculator e resolva n*\"\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O resultado não é um número — é uma FORMA de decidir",
+            "content": "Rodar este script em homologação e depois, meses adiante, em produção não deveria dar a mesma resposta. É esperado que homologação sempre favoreça serverless e que produção possa favorecer o Fargate — o script mede os dois lados; ele não presume qual vence."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar e provar"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco medições. Nenhuma delas aceita \"parece mais rápido\" ou \"parece mais barato\" como resultado — cada uma tem um número, e a quinta prova é a que mais gente pula."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medicoes; nenhuma conclusao vem de \"parece mais barato\"\n\nPROJETO=ffv-lab-serverless; REGIAO=us-east-1\nFUNCAO=\"${PROJETO}-leitura-pedido\"\n\n# ── Prova 1: o Fargate cobra em homolog mesmo sem requisicao ─────────────────\n# RequestCount do ALB no periodo, contra o tempo que a task ficou ligada.\naws cloudwatch get-metric-statistics --namespace AWS/ApplicationELB \\\n  --metric-name RequestCount --start-time \"$(date -u -d -24hours +%FT%TZ)\" \\\n  --end-time \"$(date -u +%FT%TZ)\" --period 3600 --statistics Sum \\\n  --region \"$REGIAO\" --query 'Datapoints[].Sum'\n# Esperado na Cadencia: menos de 40 requisicoes em 24 h, contra 24 h inteiras\n# de task reservada — a desproporcao que autoriza a migracao.\n\n# ── Prova 2: a proporcao de chamadas que pagam cold start no padrao real ────\nfor i in $(seq 1 5); do\n  aws lambda invoke --function-name \"$FUNCAO\" --region \"$REGIAO\" \\\n    --payload '{\"rawPath\":\"/api/pedidos/00000000-0000-0000-0000-000000000001\"}' \\\n    --cli-binary-format raw-in-base64-out /tmp/saida.json > /tmp/meta.json\n  sleep 3\ndone\naws logs filter-log-events --log-group-name \"/aws/lambda/${FUNCAO}\" \\\n  --region \"$REGIAO\" --filter-pattern \"REPORT\" \\\n  --start-time \"$(( $(date +%s%3N) - 120000 ))\" \\\n  --query 'events[].message' --output text\n# Esperado: a PRIMEIRA chamada traz Init Duration; com 3 s de intervalo, as\n# seguintes tendem a cair no mesmo ambiente quente e nao trazer.\n\n# ── Prova 3: a cadeia de latencia, medida em cada elo ─────────────────────────\naws logs filter-log-events \\\n  --log-group-name \"/aws/apigateway/${PROJETO}-pedidos-serverless\" \\\n  --region \"$REGIAO\" --filter-pattern '{ $.responseLatency > 0 }' \\\n  --query 'events[].message' --output text\n# Esperado: responseLatency >= integrationLatency, sempre. A diferenca entre\n# os dois e o que a borda gasta ALEM de chamar a funcao — mede, nao supoe.\n\n# ── Prova 4: paridade funcional entre os dois modelos de hospedagem ─────────\nID=00000000-0000-0000-0000-000000000001\ncurl -s \"https://$(terraform output -raw dominio_producao)/api/pedidos/${ID}\" > /tmp/via-fargate.json\ncurl -s \"$(terraform output -raw url_api_serverless)/api/pedidos/${ID}\" > /tmp/via-serverless.json\ndiff <(jq -S . /tmp/via-fargate.json) <(jq -S . /tmp/via-serverless.json) \\\n  && echo \"OK: mesmo contrato\" || echo \"FALHA: a hospedagem mudou a resposta\"\n\n# ── Prova 5: o teto de concorrencia, provocado de proposito ──────────────────\n# Dispara 60 chamadas em paralelo contra uma funcao com reserved=50, para ver\n# o 429 aparecer ANTES de tocar o teto de 1.000 da conta inteira.\nseq 1 60 | xargs -P60 -I{} curl -s -o /dev/null -w '%{http_code}\\n' \\\n  \"$(terraform output -raw url_api_serverless)/api/pedidos/${ID}\"\n# Esperado: parte das respostas em 429. E o reserved_concurrent_executions\n# fazendo o trabalho para o qual foi configurado — proteger o RESTO da conta.\n"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Fargate cobra sem requisição",
+                "RequestCount vs tempo ligado",
+                "menos de algumas dezenas de requisições contra 24h de reserva",
+                "se o número de requisições for alto, o desenho mínimo pode já estar correto para o volume"
+              ],
+              [
+                "2 · Proporção de cold start no padrão real",
+                "log REPORT em cinco chamadas espaçadas",
+                "a primeira traz Init Duration; as seguintes, em geral, não",
+                "todas trazendo Init indica ambiente sendo reciclado a cada chamada — investigue memória e concorrência"
+              ],
+              [
+                "3 · A cadeia de latência, medida por elo",
+                "log de acesso do API Gateway",
+                "responseLatency sempre ≥ integrationLatency",
+                "diferença grande e constante indica custo fixo da própria borda, não da função"
+              ],
+              [
+                "4 · Paridade funcional",
+                "mesma requisição nos dois caminhos, diff do JSON",
+                "corpos idênticos",
+                "divergência indica que a migração mudou o contrato — reprova o critério de aceite"
+              ],
+              [
+                "5 · O teto de concorrência existe de verdade",
+                "60 chamadas paralelas contra reserved=50",
+                "parte das respostas em 429",
+                "se todas passarem, `reserved_concurrent_executions` não está aplicado como esperado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "A rajada que estoura a conta inteira, não só esta função",
+            "content": "Sem `reserved_concurrent_executions`, um pico nesta rota consome da concorrência COMPARTILHADA de 1.000 execuções da conta/região — inclusive a fatia que outras funções críticas (como o job de limpeza do L21) precisam para funcionar. O sintoma não aparece nesta função: aparece em outra, sem relação óbvia, e o tempo de diagnóstico multiplica porque ninguém suspeita de uma função que nunca falhou antes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "VPC anexada por hábito",
+                "configure `vpc_config` apontando para a VPC do Fargate, sem necessidade real",
+                "Init Duration sobe de forma visível, sem mudança no código",
+                "X-Ray no segmento de Init; comparar antes/depois de remover o vpc_config",
+                "remova o vpc_config — o destino é regional e não ganha nada com isolamento de rede"
+              ],
+              [
+                "Concorrência reservada maior que o necessário",
+                "defina `reserved_concurrent_executions = 500` numa conta com poucas funções",
+                "outra função relacionada começa a ser throttled sem explicação aparente",
+                "métrica `ConcurrentExecutions` de TODAS as funções da conta, não só desta",
+                "reserve pelo uso medido, com margem — não pelo maior número que \"parece seguro\""
+              ],
+              [
+                "Fargate antigo continua rodando após a migração",
+                "não zere o `desired_count` do serviço ECS de homologação",
+                "a fatura não cai como esperado, mesmo com a rota migrada funcionando",
+                "CloudWatch do cluster ECS: task ainda com uptime contínuo",
+                "zere o serviço antigo — a economia só existe se as duas hospedagens não convivem"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "danger",
+            "title": "Pagar duas vezes pela mesma rota é o erro mais fácil de não perceber",
+            "content": "Enquanto o serviço ECS de homologação continuar com `desired_count` acima de zero, a Cadência paga a hora do Fargate E a invocação da Lambda para a mesma rota — sem nenhum dos dois estar \"errado\". A fatura simplesmente não cai, e como cada custo é pequeno isoladamente, a duplicidade passa despercebida por ciclos de cobrança inteiros. A seção de limpeza tem o passo exato, e ele não é opcional."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Uma API tem tráfego intermitente: algumas dezenas de chamadas em rajadas de sprint, com dias de silêncio entre elas. Do ponto de vista puramente de custo de computação, qual modelo tende a vencer, e por quê?",
+        "options": [
+          "ECS Fargate, porque contêiner sempre ligado é mais previsível para qualquer volume",
+          "API Gateway + Lambda, porque o custo variável não se acumula em períodos sem chamada",
+          "Os dois custam o mesmo, porque a AWS cobra igual por qualquer modelo de computação",
+          "Depende só da linguagem de programação usada no handler"
+        ],
+        "correctIndex": 1,
+        "explanation": "O que decide é a FORMA das duas curvas de custo contra o volume. O Fargate cobra pela reserva de vCPU e memória, constante independente de tráfego — em dias de silêncio, ele cobra o mesmo que em dias de pico de teste. A API Gateway + Lambda cobra por invocação e por duração: sem chamada, não há cobrança de computação nenhuma. Com tráfego intermitente e baixo, a soma das chamadas raramente se aproxima do que o contêiner já paga parado, e é exatamente esse o cenário deste laboratório.\n\nA primeira alternativa confunde previsibilidade de custo com menor custo — o Fargate é previsível, mas \"previsível\" não significa \"barato para este padrão de tráfego\": ele cobra o mesmo estando ocioso ou ocupado. A terceira ignora que os dois modelos têm estruturas de cobrança diferentes por desenho — um é fixo, o outro é variável, e eles não coincidem exceto num ponto específico (n*). A quarta troca a variável relevante: linguagem afeta duração e memória necessária, mas o modelo de cobrança (por hora vs por invocação) é decidido pelo serviço escolhido, não pela linguagem do handler."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o risco que o modelo de cobrança introduz"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Contêiner sempre ligado tem um teto de custo implícito: a capacidade reservada, esteja ela sob ataque ou ociosa. API por invocação não tem esse teto por padrão — cada chamada, legítima ou maliciosa, gera cobrança. É o risco novo que este modelo introduz, e que o Fargate do desenho mínimo simplesmente não tinha."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Ataque de negação de carteira (rajada de chamadas gerando cobrança)",
+                "baixa",
+                "médio",
+                "throttle no estágio do API Gateway + `reserved_concurrent_executions` na função",
+                "Cost Anomaly Detection e alarme de `Invocations`/`Throttles` fora do padrão",
+                "baixar o throttle temporariamente; investigar origem via log de acesso"
+              ],
+              [
+                "Concorrência de uma função consumindo a de outras",
+                "média",
+                "médio",
+                "`reserved_concurrent_executions` dimensionado por uso medido, não por \"número seguro\"",
+                "`ConcurrentExecutions` por função, comparado ao total da conta",
+                "reduzir a reserva da função ofensora; solicitar aumento de cota se o uso agregado justificar"
+              ],
+              [
+                "Permissão de invocação ampla demais no API Gateway",
+                "baixa",
+                "alto",
+                "`source_arn` escopado à API e à rota específicas, nunca `*`",
+                "CloudTrail em `AddPermission` fora do pipeline de Terraform",
+                "remover a permissão ampla; recriar escopada"
+              ],
+              [
+                "Papel de execução com escrita não usada",
+                "baixa",
+                "médio",
+                "política com só `dynamodb:Query`, nunca `dynamodb:*`",
+                "IAM Access Analyzer sobre o uso real da role",
+                "derivar a política do uso medido — é o mesmo hábito do L41"
+              ],
+              [
+                "Payload de path não validado alcançando a Query",
+                "média",
+                "baixo",
+                "validação do formato do `id` antes de montar a chave da partição",
+                "taxa de respostas 400 no log de acesso",
+                "corrigir a validação; nenhum dado sensível vaza porque a Query simplesmente não acha item"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que este risco não existia no desenho mínimo",
+            "content": "O Fargate do desenho mínimo já tinha pago pela capacidade antes de qualquer ataque acontecer — um pico de tráfego malicioso deixa a task ocupada, no limite atrasa resposta, mas não multiplica a fatura por chamada. A troca de modelo de cobrança que resolve o desperdício de homologação é a MESMA troca que abre esta superfície nova — throttle e concorrência reservada existem para fechá-la de volta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "Estamos perto do teto de concorrência da conta?",
+                "`ConcurrentExecutions` (todas as funções)",
+                "risco de throttle propagar para funções não relacionadas",
+                "> 80% da concorrência total da conta"
+              ],
+              [
+                "Esta função está sendo limitada?",
+                "`Throttles` da função",
+                "requisição rejeitada antes de chegar ao handler",
+                "qualquer valor > 0 fora de teste de carga"
+              ],
+              [
+                "Quanto do tempo total é Init?",
+                "`Duration` vs log `REPORT` com `Init Duration`",
+                "proporção de chamadas pagando cold start no padrão real de tráfego",
+                "acompanhar tendência, não valor fixo"
+              ],
+              [
+                "A borda está gastando tempo além da função?",
+                "diferença entre `responseLatency` e `integrationLatency`",
+                "custo fixo do próprio API Gateway, separado do trabalho da função",
+                "> algumas dezenas de ms constante"
+              ],
+              [
+                "A leitura no DynamoDB está sob throttling?",
+                "`ThrottledRequests` da tabela",
+                "a tabela do L16 está no limite do modo de capacidade configurado",
+                "qualquer valor > 0"
+              ],
+              [
+                "O custo está saindo do padrão esperado?",
+                "Cost Anomaly Detection na conta",
+                "sinal de tráfego anômalo antes de a fatura mensal confirmar",
+                "alerta imediato, não esperar o ciclo de cobrança"
+              ],
+              [
+                "Quantas requisições a rota realmente recebe?",
+                "`Count` de rota no API Gateway",
+                "é o número que entra em n* — sem ele, o cruzamento é estimativa, não medição",
+                "coletado continuamente, não só na migração"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que só aparece depois que já era tarde",
+            "content": "A fatura mensal é a métrica mais lenta de todas — ela confirma o problema semanas depois de ele começar. Cost Anomaly Detection e os alarmes de `Throttles`/`ConcurrentExecutions` existem para mover a detecção de \"no fim do mês\" para \"na mesma hora em que o padrão de tráfego mudou\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão, e falha de AZ"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 requisições/dia (homologação)",
+                "quase sempre cold start; custo desprezível",
+                "nada; é exatamente o caso deste laboratório",
+                "nada"
+              ],
+              [
+                "9 mil requisições/dia (produção, L03)",
+                "a maioria das chamadas cai em ambiente quente",
+                "o cruzamento começa a ficar interessante — depende da duração média e do horário de pico",
+                "medir n* com `medir-cruzamento.sh` usando o tráfego real de produção, não estimar"
+              ],
+              [
+                "1 milhão de requisições/dia sustentadas",
+                "~11,5 req/s constantes; concorrência sob pressão",
+                "o custo variável pode já ter ultrapassado o que um par de tasks Fargate custaria",
+                "recalcular n*; se o Fargate vencer, a rota volta para contêiner — é o L39/híbrido, não vergonha"
+              ],
+              [
+                "Pico súbito, muito acima do throttle configurado",
+                "429 no estágio, antes de qualquer erro de aplicação",
+                "usuário vê erro que não é da lógica de negócio, é de limite de borda",
+                "ajustar throttle com base em pico real medido, não em \"número redondo\""
+              ],
+              [
+                "Falha de uma AZ",
+                "API Gateway e Lambda são regionais: nenhuma reconfiguração necessária",
+                "no Fargate do L03, a mesma falha exige 2+ tasks em 2+ AZs para sobreviver",
+                "nenhuma ação aqui — é uma vantagem estrutural do modelo serverless, não uma configuração a lembrar"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A resiliência a falha de AZ não é escolha, é propriedade do serviço",
+            "content": "Diferente do L03, onde sobreviver a uma AZ exigia desenhar `desired_count` e sub-redes em pelo menos duas zonas, o API Gateway e a Lambda já distribuem execução entre AZs da região sem nenhuma configuração do autor do laboratório. É uma vantagem real do modelo — só não é a que decide entre os dois; quem decide é o custo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: as duas curvas, e onde elas se cruzam"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Esta é a seção central do laboratório. As duas dimensões — fixo e variável — não competem por serem baratas isoladamente: competem pela FORMA da curva contra o SEU volume."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "Qual curva domina",
+              "Por quê"
+            ],
+            "rows": [
+              [
+                "Homologação (este laboratório)",
+                "poucas dezenas de chamadas/dia, intermitente",
+                "variável, com folga larga",
+                "o custo fixo do Fargate já supera o variável do serverless mesmo em dias de pico de teste"
+              ],
+              [
+                "Produção pequena",
+                "~9 mil requisições/dia (L03), concentradas em horário comercial",
+                "depende da duração média por chamada — calcule, não assuma",
+                "é a zona onde o cruzamento realmente decide; a resposta muda com o p99 e o tamanho do payload"
+              ],
+              [
+                "Produção em alta escala",
+                "centenas de milhares a milhões de requisições/dia, tráfego constante",
+                "tende a fixo, especialmente com CPU/memória bem dimensionadas",
+                "a capacidade reservada, já comprada, para de ser desperdício e passa a ser a opção mais barata por chamada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "API Gateway",
+                "milhão de requisições, mais transferência de dados",
+                "HTTP API custa menos por requisição que REST API — a economia composta com o volume"
+              ],
+              [
+                "Lambda — invocação",
+                "por chamada, independente da duração",
+                "pequena isoladamente; soma linearmente com n, ao contrário do Fargate"
+              ],
+              [
+                "Lambda — duração",
+                "GB-segundo, proporcional a memória × tempo de execução",
+                "memória maior encurta o tempo (mais CPU) mas cobra mais por segundo — o ponto ótimo se mede, não se adivinha"
+              ],
+              [
+                "DynamoDB — leitura",
+                "unidade de leitura, sob demanda ou provisionada",
+                "a Query pela chave certa (herdada do L16) evita o Scan que multiplicaria este custo por ordens de grandeza"
+              ],
+              [
+                "Fargate — vCPU e memória",
+                "por segundo, com mínimo de um minuto, reservados o tempo todo",
+                "não cai a zero nunca enquanto a task existir, mesmo sem nenhuma requisição"
+              ],
+              [
+                "CloudWatch Logs e X-Ray",
+                "GB ingerido e traços amostrados",
+                "presente nos dois modelos; não é o que decide o cruzamento, mas soma dos dois lados"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "O custo oculto: negação de carteira é custo, não só risco de segurança",
+            "content": "No modelo por invocação, um pico de tráfego — malicioso ou apenas um teste de carga mal configurado — se traduz DIRETAMENTE em fatura maior, sem que nenhum limite de capacidade contenha o gasto sozinho. É a mesma preocupação da seção de segurança, vista pelo lado do custo: throttle e concorrência reservada não são só proteção de disponibilidade, são teto de gasto."
+          }
+        },
+        {
+          "id": "b17_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "success",
+            "title": "O ajuste com maior efeito por decisão tomada",
+            "content": "Migrar só a LEITURA, reaproveitando a tabela do L16, evita o maior custo oculto de uma migração apressada: reescrever acesso a dado do zero. A decisão mais barata deste laboratório não foi nenhuma configuração de Lambda — foi não duplicar o que o L16 já tinha resolvido."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "homologação sem infraestrutura ociosa para operar; um modelo de decisão escrito para produção",
+                "dois modelos de hospedagem convivendo até a decisão de produção ser tomada",
+                "medir n* de produção com tráfego real e decidir dentro de um prazo, não deixar em aberto",
+                "média"
+              ],
+              [
+                "Segurança",
+                "permissão escopada, throttle e concorrência reservada contendo rajada",
+                "ataque de negação de carteira ainda depende de alarme humano reagir a tempo",
+                "automatizar resposta a Cost Anomaly Detection (ex.: reduzir throttle via Lambda de resposta)",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "resiliência a falha de AZ sem configuração adicional, herdada do serviço",
+                "janela de propagação do outbox entre Aurora e a tabela lida aqui",
+                "já endereçada pelo desenho do L16; não é dívida nova deste módulo",
+                "baixa"
+              ],
+              [
+                "Eficiência de performance",
+                "cadeia de latência medida por elo, não estimada",
+                "cold start ainda existe no padrão de tráfego intermitente",
+                "considerar Provisioned Concurrency SE produção migrar e tiver requisito de latência",
+                "baixa, condicional"
+              ],
+              [
+                "Otimização de custos",
+                "fórmula de cruzamento escrita e mensurável, aplicável a qualquer rota futura",
+                "produção ainda paga os dois modelos até a decisão final",
+                "zerar o Fargate de homologação (seção de limpeza) e revisitar produção com dado",
+                "alta"
+              ],
+              [
+                "Sustentabilidade",
+                "capacidade não reservada quando não há uso — menos recurso físico ocioso",
+                "nenhum específico deste módulo",
+                "estender a mesma lógica a outros ambientes de baixo tráfego da Cadência",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: de \"copiar o Terraform de produção\" a decidir com dado"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO cada modelo de hospedagem vence, e o que se compra ao trocar de um para outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "De ambiente sempre ligado a decisão de hospedagem orientada a dado",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Uma função Lambda por trás de uma Function URL, sem API Gateway, para validar a lógica rápido.",
+                "note": "Risco resolvido: nenhum. Novo risco: sem throttle nem plano de uso, qualquer chamada externa que descubra a URL gera custo. Custo: quase zero, mas sem teto."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "API Gateway HTTP API + Lambda sem VPC + DynamoDB reaproveitado, em homologação.",
+                "note": "Risco resolvido: Fargate ocioso pagando hora vazia. Novo risco: limite de concorrência da conta compartilhado entre todas as funções. Custo: proporcional, baixíssimo neste volume."
+              },
+              {
+                "label": "Nível 3 — Produção com governança de custo",
+                "instruction": "Throttle explícito por rota, `reserved_concurrent_executions` dimensionado por uso medido, Cost Anomaly Detection com alarme.",
+                "note": "Risco resolvido: rajada de um cliente afetar todos; ataque de negação de carteira sem alarme. Novo risco: reserva mal dimensionada rouba capacidade de outra função. Custo: pequeno acréscimo fixo pela reserva."
+              },
+              {
+                "label": "Nível 4 — Alta escala, modelo híbrido",
+                "instruction": "Rotas de volume alto e constante voltam para contêiner (ECS atrás do mesmo API Gateway, via VPC Link do L11); rotas esporádicas continuam em Lambda.",
+                "note": "Risco resolvido: custo por invocação ultrapassando o de instância dedicada. Novo risco: duas hospedagens para operar e observar por rota. Custo: modelo misto, decidido peça a peça, não por rota inteira migrada de uma vez."
+              },
+              {
+                "label": "Nível 5 — Plataforma",
+                "instruction": "Múltiplas equipes, múltiplas APIs, cada rota escolhendo o modelo certo por padrão de tráfego medido, com tags de custo por rota.",
+                "note": "Risco resolvido: decisão de hospedagem feita uma vez e nunca revisitada. Novo risco: governança de quem decide o modelo de cada rota nova. Custo: FinOps como processo contínuo, não decisão pontual de um laboratório."
+              },
+              {
+                "label": "Nível 6 — Dados e IA",
+                "instruction": "O histórico de invocações, duração e custo por rota vira dado de decisão: um modelo simples aponta quando uma rota está se aproximando de n* antes da fatura confirmar.",
+                "note": "Risco resolvido: decisão de hospedagem reativa, só depois que a fatura assustou. Novo risco: histórico curto é ruído, não sinal — meses de dado, não semanas. Custo: baixo; o dado já existe no Cost Explorer e no CloudWatch."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Governança de custo por rota (nível 5) não funciona sem throttle e reserva já em produção (nível 3) — sem eles, uma rota nova sem proteção derruba o orçamento de todas as outras antes de qualquer painel de governança perceber. É a mesma lógica do L03: decoração sem a base anterior."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A decisão central deste laboratório — qual modelo de cobrança vence para um volume dado — é aritmética determinística: duas curvas, um ponto de cruzamento. Um modelo de IA não melhora essa conta; ele só teria trabalho a fazer se a pergunta fosse outra."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "A pergunta onde IA acrescentaria valor real é mais modesta: PREVER que uma rota está se aproximando de n* antes que a fatura confirme. Hoje a decisão de migrar (nos dois sentidos — de contêiner para serverless, ou de volta) é reativa, disparada por alguém notando o custo ou a latência depois do fato. Um modelo sobre o histórico de invocações, duração e tendência de crescimento poderia sinalizar \"esta rota cruza n* em N semanas, no ritmo atual\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "antecipar a aproximação do cruzamento de custo, em vez de reagir à fatura"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "uma regra simples (\"alarme quando custo variável passar de X% do fixo equivalente\") cobre a maior parte; IA só se justifica se o crescimento não for linear e a regra simples errar sistematicamente"
+              ],
+              [
+                "De onde viriam os dados?",
+                "CloudWatch (invocações, duração, ConcurrentExecutions) e Cost Explorer — nada que já não exista"
+              ],
+              [
+                "Qual o risco?",
+                "prever tendência a partir de poucas semanas de dado e recomendar migração prematura, gerando o trabalho de reescrever hospedagem sem necessidade real"
+              ],
+              [
+                "Por que não agora?",
+                "este laboratório tem um mês de dado gerado por si mesmo — insuficiente para qualquer tendência; a decisão aqui é a fórmula fechada, não a previsão"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"decidir se esta rota deveria ser serverless\" no lugar da fórmula de cruzamento troca um cálculo exato — que qualquer um pode auditar e refazer — por uma recomendação opaca que ninguém consegue verificar sem refazer o cálculo de qualquer forma. Onde existe fórmula fechada, IA não substitui: ela poderia, no máximo, decidir QUANDO rodar a fórmula de novo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Lambda anexada à VPC do Fargate \"para ficar igual\"",
+                "parece mais seguro e familiar a quem só conhece o padrão de contêiner",
+                "acrescenta ENI ao Init sem nenhum ganho — o destino é regional",
+                "cold start visivelmente maior, sem explicação óbvia no código",
+                "sem `vpc_config`, exceto quando o destino real exige (ex.: RDS)",
+                "nunca para destino regional; sempre que o destino mora em sub-rede privada"
+              ],
+              [
+                "REST API com plano de uso copiado do L11 sem reler o requisito",
+                "copiar o padrão que já funcionou em outro laboratório é o caminho de menor esforço",
+                "paga mais por requisição por um recurso — cota de parceiro — que não existe aqui",
+                "fatura de API Gateway maior que o necessário, sem nenhum parceiro configurado",
+                "HTTP API, quando não há cota nem chave de parceiro a administrar",
+                "quando um parceiro externo realmente aparecer para esta API"
+              ],
+              [
+                "Migrar tudo para serverless \"porque é mais barato\"",
+                "a homologação confirmou a economia, e generalizar parece natural",
+                "ignora que o custo variável cresce com volume — em produção de alto tráfego a conclusão pode se inverter",
+                "fatura de produção sobe após a migração, ao contrário do esperado",
+                "calcular n* com o volume real antes de migrar qualquer rota de produção",
+                "nunca sem medir; a decisão precisa do dado do ambiente específico"
+              ],
+              [
+                "Deixar o Fargate antigo rodando \"por precaução\" após migrar",
+                "parece mais seguro manter os dois até ter certeza",
+                "paga as duas hospedagens ao mesmo tempo, sem ganho de segurança real",
+                "a fatura não cai como a migração previa",
+                "zerar `desired_count` do serviço antigo, com rollback documentado se precisar voltar",
+                "só durante uma janela curta e definida de validação, nunca indefinidamente"
+              ],
+              [
+                "Comparar custo usando preço decorado de um artigo antigo",
+                "é mais rápido que abrir o Pricing Calculator",
+                "preço muda por região e ao longo do tempo; a decisão fica errada silenciosamente",
+                "a conta de cruzamento não bate com a fatura real, e ninguém sabe por quê",
+                "consultar o Pricing Calculator para a região no momento da decisão",
+                "nunca — nem como estimativa inicial, porque o erro não é visível até a fatura chegar"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "429 em rajada de tráfego normal",
+                "throttle do estágio configurado abaixo do pico real",
+                "compare o pico medido de `Count` com `throttling_rate_limit`/`burst_limit`",
+                "log de acesso do API Gateway; métricas de `4xx`",
+                "ajustar throttle com base em pico medido, não em número redondo"
+              ],
+              [
+                "429 só em algumas chamadas, sem padrão de horário",
+                "`reserved_concurrent_executions` menor que a concorrência real necessária",
+                "compare `ConcurrentExecutions` da função com o valor reservado",
+                "CloudWatch da função específica",
+                "aumentar a reserva, ou revisar se outra função está consumindo concorrência da conta"
+              ],
+              [
+                "Cold start em quase toda chamada, mesmo em produção",
+                "padrão de tráfego mais intermitente do que o esperado, ou memória subdimensionada",
+                "meça a proporção real com o script de provas; varie memória e remeça",
+                "log `REPORT`, campo `Init Duration`",
+                "se o requisito de latência justificar, considerar Provisioned Concurrency; senão, aceitar"
+              ],
+              [
+                "Resposta da rota serverless diverge da rota antiga",
+                "a função não replica exatamente o contrato JSON da API em Fargate",
+                "diff automatizado entre as duas respostas para a mesma requisição",
+                "prova de paridade funcional (seção de implantação)",
+                "ajustar o formato de resposta até o diff fechar vazio"
+              ],
+              [
+                "Fatura não caiu após a migração",
+                "o Fargate antigo continua com `desired_count` acima de zero",
+                "confira o serviço ECS de homologação no console ou via CLI",
+                "`describe-services` do cluster antigo",
+                "zerar o serviço antigo — é o passo de limpeza que este módulo cobra"
+              ],
+              [
+                "`ResourceNotFoundException` na Query do DynamoDB",
+                "nome da tabela errado na variável de ambiente, ou tabela em outra região",
+                "confira `TABELA_PEDIDOS` contra o nome real da tabela do L16",
+                "variável de ambiente da função; `describe-table` na região configurada",
+                "corrigir a variável; a tabela é reaproveitada, não recriada — não deveria haver divergência"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva, e o que NÃO apagar"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório cria pouco recurso novo — a maior parte do valor está em REMOVER o que a migração tornou redundante, sem tocar no que outros laboratórios ainda usam."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Zere o servico ECS de homologacao ANTES de destruir — e o passo que\n#    realmente gera a economia. Sem ele, os dois modelos convivem cobrando.\naws ecs update-service --cluster ffv-lab-homolog --service ffv-lab-homolog-api \\\n  --desired-count 0\naws ecs wait services-stable --cluster ffv-lab-homolog --services ffv-lab-homolog-api\n\n# 2. Derrube o que este laboratorio administra.\nterraform destroy -auto-approve\n\n# 3. GRUPOS DE LOGS: log group da funcao e do acesso do API Gateway tem\n#    retencao propria e sobrevivem ao servico que os alimentava.\naws logs delete-log-group --log-group-name /aws/lambda/ffv-lab-leitura-pedido 2>/dev/null || true\naws logs delete-log-group --log-group-name /aws/apigateway/ffv-lab-pedidos-serverless 2>/dev/null || true\n\n# 4. NAO APAGUE a tabela pedidos_cadencia nem o outbox do L16/L14 — este\n#    laboratorio so LEU dela. Ela continua servindo o L16 e qualquer outra\n#    rota que dependa da mesma projecao.\necho \"NAO rode aws dynamodb delete-table nesta tabela — ela pertence ao L16\"\n\n# 5. Prova final: nada com nome do projeto de pe, dos DOIS lados.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab-serverless \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table\naws ecs describe-services --cluster ffv-lab-homolog --services ffv-lab-homolog-api \\\n  --query \"services[0].desiredCount\" --output text"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "API Gateway e integração",
+                "sim",
+                "não",
+                "sem recurso reservado; cobrança é só por requisição, e para com o recurso"
+              ],
+              [
+                "Função Lambda",
+                "sim",
+                "não",
+                "mesma lógica: sem reserva além do log group"
+              ],
+              [
+                "Log group da função e do API Gateway",
+                "depende de `skip_destroy`",
+                "sim, retenção",
+                "ciclo próprio, sobrevive ao serviço que alimentava"
+              ],
+              [
+                "Tabela `pedidos_cadencia`",
+                "NÃO deve sair — não pertence a este laboratório",
+                "sim, se sair por engano",
+                "é do L16; apagá-la quebra qualquer outra rota que a use"
+              ],
+              [
+                "Serviço ECS de homologação antigo",
+                "não sai sozinho com `desired_count=0`",
+                "sim, se não for zerado",
+                "sobrevive até alguém zerar explicitamente — é o passo que este módulo cobra"
+              ],
+              [
+                "ALB de homologação (do L01)",
+                "sim, se destruído junto",
+                "sim, por hora, enquanto existir",
+                "considerar manter se homolog ainda tiver outra rota nele; senão, remover"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Fargate cobrando hora vazia em homologação",
+                "API Gateway (HTTP API) + Lambda sem VPC",
+                "custo por invocação cai a zero quando ninguém chama; hora reservada, não"
+              ],
+              [
+                "Cota de parceiro que não existe aqui",
+                "HTTP API, não REST API",
+                "a decisão do L11 ao contrário: sem requisito de plano de uso, o tipo mais barato basta"
+              ],
+              [
+                "Reescrever modelagem de dados do zero",
+                "tabela `pedidos_cadencia` do L16, por referência",
+                "Query na chave base já resolve cabeçalho + itens numa chamada; duplicar seria repetir o L16"
+              ],
+              [
+                "Cold start acrescentando latência sem necessidade",
+                "Lambda sem `vpc_config`",
+                "o destino (DynamoDB) é regional; VPC só somaria ENI ao Init"
+              ],
+              [
+                "Rajada virando fatura sem teto",
+                "throttle no estágio + `reserved_concurrent_executions`",
+                "uma camada contém o cliente, a outra protege o resto da conta"
+              ],
+              [
+                "Decisão de produção por opinião, não por dado",
+                "fórmula do cruzamento (n*)",
+                "duas curvas, um ponto de corte — calculável com o tráfego real, não estimável de orelhada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Fatura de rajada maliciosa",
+                "throttle + concorrência reservada",
+                "ataque distribuído abaixo do throttle configurado — é caso de WAF, fora de escopo aqui"
+              ],
+              [
+                "Cold start em cadeia",
+                "medição por elo (integrationLatency/responseLatency)",
+                "a causa raiz, se ela estiver no tamanho do pacote ou em dependência pesada — é o L21"
+              ],
+              [
+                "Migração sem necessidade real",
+                "fórmula de n* antes de decidir",
+                "decisão tomada sob pressão de prazo, ignorando o número calculado"
+              ],
+              [
+                "Pagar duas vezes pela mesma rota",
+                "zerar o serviço antigo na limpeza",
+                "esquecer o passo — nenhuma automação neste módulo faz isso sozinho"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "QA chama GET /api/pedidos/{id}; a chamada pode ir para o ALB antigo ou para a nova rota serverless, conforme a fase da migração.",
+              "No caminho novo, o API Gateway resolve a rota e invoca a função via integração proxy.",
+              "Se o ambiente está frio, a função paga Init: runtime, código estático, cliente do DynamoDB.",
+              "O handler faz uma Query só na chave base da tabela do L16 — cabeçalho e itens juntos.",
+              "A resposta sai no mesmo formato que a API em Fargate sempre devolveu.",
+              "O log de acesso registra integrationLatency e responseLatency, provando a soma da cadeia.",
+              "Em paralelo, o CloudWatch acumula invocações, duração e throttles — os números que alimentam n*.",
+              "O script de cruzamento cola esses números contra o custo do Fargate na mesma janela.",
+              "Abaixo de n*, a rota fica em serverless; acima, ela é candidata a voltar para contêiner.",
+              "A decisão fica escrita e revisitável — não é opinião de quem migrou primeiro."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Serverless sempre é mais barato que um contêiner sempre ligado?",
+            "answer": "Não — depende do volume e do padrão de tráfego, não da tecnologia em si. O Fargate cobra por hora reservada, constante independente do uso; a API Gateway + Lambda cobra por invocação, crescendo linearmente com o tráfego. Para volume baixo ou intermitente, como uma homologação testada em rajadas de sprint, a curva variável quase nunca alcança o custo fixo que o contêiner já paga parado. Para volume alto e constante, a conta se inverte: o custo fixo, já comprado, passa a ser mais barato por chamada do que somar invocação após invocação. A pergunta certa não é \"qual é mais barato\" — é \"onde as duas curvas se cruzam para o MEU volume\", e isso se calcula, não se adivinha."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Por que este laboratório usa HTTP API em vez de REST API, se o L11 usou REST API?",
+            "answer": "Porque o requisito que levou o L11 a escolher REST API — cota de parceiro administrada por plano de uso — não existe aqui. REST API é a única opção com chave de API e plano de uso; HTTP API não tem esse recurso, mas custa menos por requisição e integra nativamente com Lambda por proxy. A escolha entre os dois tipos não é questão de qual é \"melhor\" em geral: é qual recurso o requisito específico exige. Como esta rota não administra parceiro nenhum, pagar pelo tipo mais caro seria comprar um recurso que nunca seria usado."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Por que a função Lambda não fica dentro da mesma VPC do Fargate?",
+            "answer": "Porque o único destino que ela alcança — a tabela DynamoDB do L16 — é um serviço regional, não um recurso de sub-rede: DynamoDB não mora em VPC nenhuma, é alcançado por API. Anexar a função a uma VPC sem necessidade real acrescenta provisionamento de interface de rede (ENI) ao tempo de Init, consome da cota compartilhada de 500 ENIs por VPC, e não abre nenhum acesso que a função já não tivesse. A regra prática, herdada do L21: só anexe VPC quando o destino realmente mora dentro dela, como RDS ou ElastiCache."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "O que significa \"cold start em cadeia\", e por que ele importa mais aqui do que no L21?",
+            "answer": "Significa que, numa requisição que atravessa várias camadas gerenciadas — API Gateway, Lambda, DynamoDB —, cada uma pode somar sua própria parcela de latência, e o cliente sente o TOTAL, não a pior parcela isolada. No L21 a função era assíncrona, chamada por um agendamento, e ninguém esperava a resposta em tempo real — o cold start importava só como custo de tempo de execução cobrado. Aqui a mesma função responde a uma chamada síncrona de usuário, então a soma de Init do API Gateway (quase nula, é serviço gerenciado), da Lambda (o Init de fato) e da consulta ao DynamoDB compõe diretamente o tempo que alguém está esperando na tela."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Preciso de Provisioned Concurrency para eliminar o cold start desta API?",
+            "answer": "Não necessariamente — depende de existir um requisito de latência que o cold start realmente viole. Em homologação, o QA tolera uma resposta ocasionalmente mais lenta, e não há nenhuma perda de negócio associada a isso; pagar por capacidade reservada, ociosa na maior parte do tempo, reintroduziria exatamente o problema que motivou sair do Fargate. Se a mesma rota migrar para produção com um requisito de p99 explícito que o cold start quebra, aí sim Provisioned Concurrency — ou SnapStart, para runtimes compatíveis — entra na conta, com o próprio custo de reserva pesando contra o benefício."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Qual é a diferença entre o throttle do API Gateway e a concorrência reservada da Lambda?",
+            "answer": "O throttle do API Gateway limita quantas requisições por segundo a BORDA aceita antes de devolver 429 sem nem chamar a função — protege contra rajada do lado do cliente. A concorrência reservada da Lambda garante um teto de execuções simultâneas para ESTA função específica, retirando essa fatia do pool de 1.000 execuções compartilhado pela conta inteira — protege as OUTRAS funções contra esta consumir tudo. São duas camadas com propósitos diferentes: uma contém quem chama, a outra contém o efeito colateral sobre o resto da conta. Configurar só uma deixa a outra falha descoberta."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Migrar a leitura para Lambda não deveria migrar a escrita também, para ser consistente?",
+            "answer": "Não neste laboratório, e a diferença importa. A escrita de pedidos continua no fluxo original — aplicação em Fargate gravando no Aurora, com o outbox do L14 replicando para a tabela DynamoDB que o L16 modelou. Migrar só a leitura evita o problema clássico de Lambda com banco relacional: exaustão de pool de conexão sob concorrência alta, que exigiria RDS Proxy como camada adicional. Como o destino desta função é DynamoDB, que não tem conexão para exaurir, a migração fica mais simples exatamente por tocar só na metade do problema que já estava pronta para isso."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Como eu calculo o ponto em que compensa migrar minha própria API para serverless?",
+            "answer": "Meça os dois lados com o SEU tráfego, não com o exemplo deste módulo. Do lado do contêiner, o custo é constante: vCPU e memória reservados multiplicados pelo tempo que a task existe, independente de uso. Do lado serverless, o custo cresce linearmente com o número de requisições, multiplicado pelo custo marginal de cada uma — requisição na borda, invocação e duração na função, leitura no banco. Resolva a igualdade entre as duas fórmulas para achar n*, o número de requisições no período em que elas se cruzam: abaixo dele, serverless custa menos; acima, o contêiner já pago vence. Os valores unitários vêm do AWS Pricing Calculator para a sua região — eles mudam; a forma da conta, não."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Uma requisição atravessa API Gateway, Lambda e DynamoDB. O log mostra `integrationLatency` de 800 ms e `responseLatency` de 830 ms, e a linha REPORT da função mostra `Init Duration` de 750 ms nesta chamada específica. Qual conclusão os três números juntos sustentam?",
+            "options": [
+              "O DynamoDB é o gargalo, porque ele está fora do controle da aplicação",
+              "O API Gateway está mal configurado, porque gastou 30 ms além da integração",
+              "Os números são inconsistentes e a medição deveria ser refeita do zero",
+              "A maior parte da latência total veio do cold start da função, não do trabalho do handler nem da borda"
+            ],
+            "correctIndex": 3,
+            "explanation": "Somando as parcelas: dos 830 ms totais, 800 ms foram gastos entre o Gateway acionar a função e receber a resposta dela (integrationLatency), e dentro DESSA parcela, 750 ms — a maior fatia, de longe — foram só o Init da função, antes de qualquer linha do handler rodar. O trabalho real (Query no DynamoDB, montar a resposta) coube em cerca de 50 ms. A cadeia soma, mas neste caso específico ela não é distribuída igualmente: uma camada domina, e os números provam qual.\n\nA primeira alternativa erra o alvo: se o DynamoDB fosse o gargalo, ele apareceria dentro dos 50 ms restantes do trabalho do handler, não nos 750 ms de Init — que acontecem ANTES de qualquer chamada ao banco. A terceira interpreta 30 ms de diferença entre responseLatency e integrationLatency como erro de configuração, quando é exatamente o tempo esperado que a própria borda gasta resolvendo rota e formatando resposta — pequeno e normal. A quarta descarta os números por acharem \"estranhos\", mas eles são perfeitamente consistentes entre si: a soma bate, e cada camada está exatamente onde a arquitetura prevê que ela esteja."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Uma equipe mede n* para sua API e descobre que o volume de produção atual já está acima desse ponto — ou seja, o custo variável do modelo serverless já superaria o custo fixo do Fargate. O que essa medição, isoladamente, autoriza a equipe a concluir?",
+            "options": [
+              "Que, para o volume TOTAL medido, o contêiner sempre ligado é a opção de menor custo — não que serverless seja uma má tecnologia",
+              "Que a API nunca deveria ter sido considerada para migração serverless em nenhuma rota",
+              "Que o cálculo está errado, porque serverless é sempre mais barato em teoria",
+              "Que a equipe deve aumentar o throttle do API Gateway para resolver o problema"
+            ],
+            "correctIndex": 0,
+            "explanation": "n* é um resultado aritmético sobre O VOLUME MEDIDO, não um veredito sobre a tecnologia. Ele diz que, para a soma de requisições observada, a curva fixa do Fargate já ficou mais barata que a curva variável do serverless — nada mais. Isso é compatível com a mesma API ter rotas de baixo volume que continuam vencendo em serverless (como a homologação deste laboratório) enquanto a rota principal, de alto volume, favorece contêiner — é exatamente o nível 4 da evolução em camadas, o modelo híbrido.\n\nA primeira alternativa generaliza um resultado de VOLUME para uma proibição de TECNOLOGIA, ignorando que rotas diferentes da mesma API podem ter padrões de tráfego completamente diferentes. A terceira inverte a lógica do laboratório inteiro: não existe \"serverless sempre mais barato em teoria\" — a teoria AQUI é justamente que a resposta depende do volume, e este cenário é o caso em que ela aponta para o outro lado. A quarta confunde throttle — que limita taxa de requisição por segundo, protegendo contra rajada — com custo agregado por período, que é o que n* mede; ajustar throttle não muda o resultado da conta de custo nenhum bit."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L01/L03 no ar; L11 (API Gateway REST, VPC Link) e L16 (tabela pedidos_cadencia, GSIs) e L21 (Lambda .NET 8, Init/Invoke, IAM para invocação) concluídos e compreendidos, não só lidos"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "a fórmula do cruzamento entre custo fixo e custo variável; a diferença entre HTTP API e REST API aplicada ao contrário do L11; cold start em cadeia através de múltiplas camadas gerenciadas; os três casos legítimos em que serverless não vence; o mecanismo de permissão de recurso do API Gateway, distinto da role do EventBridge Scheduler do L21"
+              ],
+              [
+                "Limitação que fica",
+                "a decisão sobre migrar produção inteira permanece em aberto, condicionada a medir n* com tráfego real — este laboratório resolve homologação e entrega o método, não a resposta de produção"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L30 — quando o volume de produção cruza n* na direção contrária, o modelo híbrido (nível 4 da evolução em camadas) decide rota por rota, não a API inteira de uma vez"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "qualquer ambiente de baixo tráfego da Cadência (outros ambientes de homologação, painéis internos) pode reaproveitar o mesmo método de medição antes de decidir hospedagem"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "AWS Fargate or AWS Lambda?",
+                "code": true
+              },
+              {
+                "text": " — o guia de decisão oficial, fonte dos números de cold start (35 s–2 min no Fargate contra 100 ms–2 s na Lambda), do teto de execução (nenhum no Fargate, 15 minutos na Lambda) e dos dois modelos de cobrança comparados lado a lado; e "
+              },
+              {
+                "text": "Lambda quotas",
+                "code": true
+              },
+              {
+                "text": " — fonte da concorrência padrão de 1.000 execuções por conta/região, do limite de 10 requisições por segundo por ambiente de execução em invocação síncrona, da cota de 500 ENIs por VPC, e do descasamento citado pela própria AWS entre o throttle padrão do API Gateway (10.000 req/s) e a concorrência padrão da Lambda (1.000). Nenhum valor de preço aparece neste módulo por decisão: use o AWS Pricing Calculator para a sua região, porque preço envelhece mais rápido que o conteúdo e varia por localização."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "Os números de cold start e de concorrência citados são os que a documentação oficial da AWS publica como faixa e como padrão de conta — não são medições da Cadência, e cotas padrão mudam com o tempo e com o histórico de uso da conta (contas novas começam com cotas menores). O volume de homologação (poucas dezenas de chamadas/dia) e o de produção (~9 mil/dia, do L03) são os números de exemplo desta série — meça os SEUS no Console de Cotas de Serviço e no CloudWatch antes de aplicar qualquer conclusão deste módulo à sua conta."
+          }
+        }
+      ]
+    }
+  ]
+}

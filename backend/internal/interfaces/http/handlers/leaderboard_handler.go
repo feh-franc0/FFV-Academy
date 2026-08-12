@@ -20,7 +20,14 @@ func NewLeaderboardHandler(repo domleaderboard.Repository) *LeaderboardHandler {
 
 // GetWeekly retorna o ranking semanal.
 // GET /api/v1/leaderboard
+//
+// UserID só é preenchido na linha do PRÓPRIO usuário autenticado (para o
+// client destacar "essa linha sou eu") — nas demais linhas vem vazio, como no
+// endpoint público GetPublic. Antes desta correção o endpoint autenticado
+// devolvia o UUID de qualquer conta free logada nos top-50, enquanto a versão
+// pública da mesma lista já anonimizava por design.
 func (h *LeaderboardHandler) GetWeekly(w http.ResponseWriter, r *http.Request) {
+	requesterID := middleware.UserIDFromContext(r.Context())
 	weekStart := domleaderboard.WeekStart(time.Now().UTC())
 	entries, err := h.repo.GetWeekly(r.Context(), weekStart, 50)
 	if err != nil {
@@ -30,9 +37,13 @@ func (h *LeaderboardHandler) GetWeekly(w http.ResponseWriter, r *http.Request) {
 
 	dtos := make([]LeaderboardEntryDTO, len(entries))
 	for i, e := range entries {
+		userID := ""
+		if e.UserID == requesterID {
+			userID = e.UserID.String()
+		}
 		dtos[i] = LeaderboardEntryDTO{
 			Rank:     int64(e.Rank),
-			UserID:   e.UserID.String(),
+			UserID:   userID,
 			UserName: e.DisplayName,
 			Score:    e.XPGained,
 		}

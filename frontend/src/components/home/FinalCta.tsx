@@ -70,13 +70,14 @@ export function FinalCta() {
             style={{
               fontSize: 15,
               color: 'var(--ffv-muted)',
-              maxWidth: 480,
+              maxWidth: 500,
               margin: '0 auto 36px',
               lineHeight: 1.75,
             }}
           >
-            Cada dia que passa, outros devs estão ganhando XP, completando trilhas e entendendo os
-            internals que você ainda não aprendeu. O ranking não espera.
+            A IA não vai esperar você entender depois. A cada semana, a distância entre quem
+            constrói de verdade e quem só consome hype aumenta. Seu primeiro módulo leva 10
+            minutos — e é grátis pra sempre.
           </p>
 
           {isLoggedIn ? (
@@ -92,6 +93,7 @@ export function FinalCta() {
                 type="email"
                 required
                 autoComplete="email"
+                aria-label="Seu email"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
                 placeholder="voce@email.com"
@@ -100,7 +102,6 @@ export function FinalCta() {
                   background: 'var(--ffv-bg2)',
                   border: '1px solid var(--ffv-border)',
                   color: 'var(--foreground)',
-                  outline: 'none',
                   minWidth: 0,
                 }}
                 onFocus={e => (e.currentTarget.style.borderColor = 'var(--ffv-blue)')}
@@ -111,7 +112,7 @@ export function FinalCta() {
                 className="px-6 py-3 rounded-xl text-sm font-bold whitespace-nowrap transition-all hover:scale-[1.02] shrink-0"
                 style={{
                   background: 'linear-gradient(90deg, var(--ffv-blue), var(--ffv-purple))',
-                  color: '#fff',
+                  color: 'var(--primary-foreground)',
                   boxShadow: '0 8px 24px -6px color-mix(in srgb, var(--ffv-blue) 45%, transparent)',
                 }}
               >

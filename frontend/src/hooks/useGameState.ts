@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   loadState,
+  hasLocalState,
+  restoreFromBackup,
   completeModule,
   saveQuizScore,
   submitCardReview,
@@ -27,12 +29,18 @@ import {
   type LastArticle,
 } from '@/lib/engine';
 import type { ReviewQuality } from '@/lib/srs';
-import { getLevelInfo, getTrailProgress, CURRICULUM } from '@/lib/curriculum';
+import { getLevelInfo, getTrailProgress } from '@/lib/curriculum/queries-leves';
+// Índice LEVE, não o currículo completo. Este hook vive no layout raiz (via
+// SyncBanner), então o que ele importa entra no primeiro carregamento de todas
+// as rotas. Ele usa identidade da trilha e slug/título/XP dos módulos — não usa
+// `desc` nem `keywords`, que são ~124 KB dos 265 KB das trilhas.
+// Regerar com `node scripts/gerar-indice-leve.mjs`.
+import { CURRICULO_LEVE, TOTAL_MODULOS } from '@/lib/curriculum/indice-leve';
 import { GameStateStorage } from '@/lib/game-state-storage';
 import { STORAGE_KEYS } from '@/lib/constants';
 import { toast } from '@/lib/toast';
 import { playXPCoin, playLevelUp, playBadge, playPop, unlockAudio } from '@/lib/sounds';
-import { BADGES_DEF } from '@/lib/curriculum';
+import { BADGES_DEF } from '@/lib/curriculum/badges';
 
 /**
  * Problema do multi-tab:
@@ -146,6 +154,25 @@ export function useGameState() {
   useEffect(() => {
     setState(loadState());
 
+    // Fallback para o backup no IndexedDB — só quando o localStorage está
+    // GENUINAMENTE vazio (hasLocalState()===false), não em toda montagem.
+    // Sem essa checagem, um usuário novo (sem progresso em lugar nenhum)
+    // dispararia uma leitura assíncrona desnecessária a cada carregamento.
+    // O caso que isso cobre: o navegador evacuou o localStorage (Safari ITP,
+    // pressão de armazenamento) mas o IndexedDB — escrito em paralelo por
+    // debouncedSaveToIDB — ainda tem o progresso. Sem este fallback, o
+    // usuário via o dashboard zerado mesmo com o backup intacto ali do lado.
+    if (!hasLocalState()) {
+      loadAsync().then(fromIDB => {
+        if (fromIDB) {
+          restoreFromBackup(fromIDB);
+          setState(fromIDB);
+        }
+      }).catch(err =>
+        console.error('[useGameState] Falha ao consultar backup do IndexedDB', err)
+      );
+    }
+
     /**
      * Handler do evento 'storage':
      * - Disparado pelo browser quando OUTRA aba escreve no localStorage.
@@ -188,6 +215,15 @@ export function useGameState() {
     const next = loadState();
     setState(next);
     if (next) debouncedSaveToIDB(next);
+
+    if (!result.persisted) {
+      // A quota do localStorage estourou (ou a escrita falhou por outro
+      // motivo) — nada do que `completeModule` calculou em memória chegou a
+      // ser salvo. Comemorar aqui seria reportar sucesso que não aconteceu;
+      // `ConcluirModulo` usa `result.persisted` pra não mostrar "concluído".
+      toast.warn('Não foi possível salvar seu progresso', 'O armazenamento local está cheio. Libere espaço e tente de novo.');
+      return result;
+    }
 
     if (before && next && before.freezes > next.freezes) {
       playPop();
@@ -315,7 +351,7 @@ export function useGameState() {
 
   const levelInfo = state ? getLevelInfo(state.xp) : null;
 
-  const trailsProgress = CURRICULUM.map(trail => ({
+  const trailsProgress = CURRICULO_LEVE.map(trail => ({
     ...trail,
     ...getTrailProgress(trail.modules, state?.completedModules ?? []),
     unlocked: isTrailUnlocked(),
@@ -323,9 +359,7 @@ export function useGameState() {
 
   const overallPct = state
     ? Math.round(
-        (state.completedModules.length /
-          CURRICULUM.reduce((acc, t) => acc + t.modules.length, 0)) *
-          100
+        (state.completedModules.length / TOTAL_MODULOS) * 100
       )
     : 0;
 
@@ -357,7 +391,7 @@ export function useGameState() {
     if (!state) return [];
     const completed = new Set(state.completedModules);
     // Find trails ordered by % done (descending), ignore 100% done
-    const trailsByProgress = CURRICULUM
+    const trailsByProgress = CURRICULO_LEVE
       .map(t => ({
         trail: t,
         done: t.modules.filter(m => completed.has(m.slug)).length,

@@ -173,9 +173,10 @@ func run() error {
 
 	// ─── Application: Use Cases ─────────────────────────────────────────────────
 	const magicTokenTTL = 15 * time.Minute
-	// Em dev, limite alto para não bloquear durante testes manuais.
+	// Limite alto de tentativas só quando o bypass de dev está explicitamente
+	// ligado (nunca por env ausente — ver config.FeaturesConfig.AuthDevBypassEnabled).
 	magicMaxAttempts := int64(5)
-	if cfg.App.Env == "development" {
+	if cfg.Features.AuthDevBypassEnabled {
 		magicMaxAttempts = 999
 	}
 	// Cada use case recebe o logger via WithLogger para correlacionar logs com
@@ -183,12 +184,12 @@ func run() error {
 	// retrocompatibilidade — testes usam o construtor sem logger.
 	requestMagicLinkUC := appidentity.NewRequestMagicLinkUseCase(
 		magicTokenStore, userRepo, emailClient, clock,
-		magicTokenTTL, magicMaxAttempts, cfg.App.Env == "development",
+		magicTokenTTL, magicMaxAttempts, cfg.Features.AuthDevBypassEnabled,
 	).WithLogger(log)
 	verifyMagicLinkUC := appidentity.NewVerifyMagicLinkUseCase(
 		magicTokenStore, userRepo, refreshRepo, jwtService, clock, cfg.JWT.RefreshTokenTTL,
-		cfg.App.Env == "development",
-	).WithLogger(log)
+		cfg.Features.AuthDevBypassEnabled,
+	).WithLogger(log).WithMaxAttempts(magicMaxAttempts)
 	refreshTokenUC := appidentity.NewRefreshTokenUseCase(
 		refreshRepo, userRepo, jwtService, clock, cfg.JWT.RefreshTokenTTL,
 	)
@@ -198,14 +199,20 @@ func run() error {
 	updateProfileUC := appidentity.NewUpdateProfileUseCase(userRepo).WithLogger(log)
 	deleteAccountUC := appidentity.NewDeleteAccountUseCase(userRepo, refreshRepo, clock).WithLogger(log)
 
-	startAttemptUC := appsim.NewStartAttemptUseCase(attemptRepo, catalogProvider, clock)
-	answerQUC := appsim.NewAnswerQuestionUseCase(attemptRepo, catalogProvider, clock)
+	// questionRepo é usado tanto pelo motor de prova (sorteio server-side em
+	// StartAttempt, pontuação real em Finish/Resume) quanto pelo modo de
+	// estudo livre (studyH mais abaixo) — instanciado aqui, cedo, para os dois.
+	questionRepo := postgresinfra.NewQuestionRepo(pool)
+
+	startAttemptUC := appsim.NewStartAttemptUseCase(attemptRepo, catalogProvider, questionRepo, clock)
+	answerQUC := appsim.NewAnswerQuestionUseCase(attemptRepo, clock)
 	toggleFlagUC := appsim.NewToggleReviewFlagUseCase(attemptRepo, clock)
-	finishAttemptUC := appsim.NewFinishAttemptUseCase(attemptRepo, catalogProvider, clock)
-	resumeAttemptUC := appsim.NewResumeAttemptUseCase(attemptRepo, catalogProvider, clock)
+	finishAttemptUC := appsim.NewFinishAttemptUseCase(attemptRepo, catalogProvider, questionRepo, clock)
+	resumeAttemptUC := appsim.NewResumeAttemptUseCase(attemptRepo, catalogProvider, questionRepo, clock)
 	listAttemptsUC := appsim.NewListAttemptsUseCase(attemptRepo)
 	cancelAttemptUC := appsim.NewCancelAttemptUseCase(attemptRepo, auditService, clock)
 	reportQuestionUC := appsim.NewReportQuestionUseCase(questionReportRepo, auditService, clock)
+	claimXPCreditUC := appsim.NewClaimXPCreditUseCase(attemptRepo, clock)
 
 	exportDataUC := appidentity.NewExportUserDataUseCase(
 		userRepo, attemptRepo, certRepo, progressExportAdapter, purchaseExportAdapter,
@@ -250,12 +257,12 @@ func run() error {
 		requestMagicLinkUC, verifyMagicLinkUC, refreshTokenUC,
 		logoutUC, logoutAllUC, getProfileUC, updateProfileUC, deleteAccountUC,
 	).WithExportData(exportDataUC).WithUserStats(userStatsUC)
-	questionRepo := postgresinfra.NewQuestionRepo(pool)
 	simuladoH := handlers.NewSimuladoHandler(
 		catalogProvider, startAttemptUC, answerQUC, toggleFlagUC,
 		finishAttemptUC, resumeAttemptUC, listAttemptsUC,
 	).WithCancelAttempt(cancelAttemptUC).WithReportQuestion(reportQuestionUC).
-		WithQuestionRepo(questionRepo)
+		WithClaimXPCredit(claimXPCreditUC).WithQuestionRepo(questionRepo).
+		WithAttemptRepoForQuestions(attemptRepo)
 	progressH := handlers.NewProgressHandler(syncPushUC, syncPullUC)
 	preferencesH := handlers.NewPreferencesHandler(getPreferencesUC, updatePreferencesUC)
 	certH := handlers.NewCertificateHandler(issueCertUC, verifyCertUC, listCertsUC, baseURL)
@@ -279,7 +286,7 @@ func run() error {
 	newsH := handlers.NewNewsHandler(&pgxNewsRepo{pool: pool})
 	cheatH := handlers.NewCheatsheetsHandler(&pgxCheatsheetsRepo{pool: pool})
 	playH := handlers.NewPlaylistsHandler(&pgxPlaylistsRepo{pool: pool})
-	studyH := handlers.NewStudyHandler(questionRepo)
+	studyH := handlers.NewStudyHandler(questionRepo, attemptRepo)
 	adminQuestionsH := handlers.NewAdminQuestionsHandler(questionRepo)
 
 	// ─── Observabilidade: Prometheus ────────────────────────────────────────────

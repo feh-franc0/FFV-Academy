@@ -1,11 +1,16 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { BASE, social } from '@/lib/metadata-social';
+
+/** Uma definição só: serve à meta description e ao cartão social. */
+const DESCRICAO_CARTAO =
+  'Newsletter semanal, Discord (em breve), redes sociais e como participar da comunidade FFV Academy.';
 
 export const metadata: Metadata = {
-  title: 'Comunidade — FFV Academy',
-  description:
-    'Newsletter semanal, Discord (em breve), redes sociais e como participar da comunidade FFV Academy.',
-  alternates: { canonical: 'https://fernandofrancovalle.com/comunidade' },
+  title: 'Comunidade',
+  description: DESCRICAO_CARTAO,
+  alternates: { canonical: `${BASE}/comunidade` },
+  ...social({ titulo: `Comunidade — FFV Academy`, descricao: DESCRICAO_CARTAO, caminho: '/comunidade' }),
 };
 
 const CHANNELS = [
@@ -190,7 +195,7 @@ export default function ComunidadePage() {
                 <span style={{ fontSize: 28 }}>{item.icon}</span>
                 <h3 className="font-bold">{item.title}</h3>
                 <p className="text-sm flex-1" style={{ color: 'var(--ffv-muted)', lineHeight: 1.65 }}>{item.desc}</p>
-                <span className="text-sm font-bold mt-auto pt-2" style={{ color: item.color }}>{item.cta}</span>
+                <span className="text-sm font-bold mt-auto pt-2 ffv-acento-texto" style={{ '--ffv-acento': item.color } as React.CSSProperties}>{item.cta}</span>
               </a>
             ))}
           </div>

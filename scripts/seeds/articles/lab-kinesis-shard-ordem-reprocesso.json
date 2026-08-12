@@ -1,0 +1,2592 @@
+{
+  "slug": "lab-kinesis-shard-ordem-reprocesso",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência entra na Semana Cadência — a campanha anual de maior volume — com o painel de risco alimentado por um consumidor de eventos de pedido: "
+              },
+              {
+                "text": "pedido_criado",
+                "code": true
+              },
+              {
+                "text": ", "
+              },
+              {
+                "text": "pedido_pago",
+                "code": true
+              },
+              {
+                "text": ", "
+              },
+              {
+                "text": "pedido_separado",
+                "code": true
+              },
+              {
+                "text": ", "
+              },
+              {
+                "text": "pedido_cancelado",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "pedido_entregue",
+                "code": true
+              },
+              {
+                "text": ". Cada evento sai da Checkout API ("
+              },
+              {
+                "text": "L01",
+                "code": true
+              },
+              {
+                "text": "/"
+              },
+              {
+                "text": "L03",
+                "code": true
+              },
+              {
+                "text": ") direto para um stream Kinesis assim que acontece — não há tabela no meio, como havia no "
+              },
+              {
+                "text": "L29",
+                "code": true
+              },
+              {
+                "text": ". É a aplicação que decide publicar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "No primeiro dia de pico, dois sintomas apareceram juntos e pareceram o mesmo bug. O time de risco relatou pedidos cancelados minutos depois do pagamento — um padrão clássico de estorno fraudulento — sem que o alerta automático disparasse. E quando o alerta disparava, às vezes chegava com a ordem trocada: o sistema via "
+              },
+              {
+                "text": "pedido_cancelado",
+                "code": true
+              },
+              {
+                "text": " antes de qualquer registro de "
+              },
+              {
+                "text": "pedido_pago",
+                "code": true
+              },
+              {
+                "text": " para o mesmo pedido, o que não deveria ser logicamente possível."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A investigação levou dias porque nenhum log dizia \"evento perdido\". Os logs do produtor mostravam sucesso em toda chamada. A causa real estava numa única linha de código, escrita com uma intenção razoável — agrupar eventos do mesmo tipo — e que gerava os dois sintomas ao mesmo tempo, pelo mesmo motivo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado — depende do L29 (mas aqui não há CDC; é evento de aplicação)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L01/L03 no ar (Checkout API), noções de IAM e CloudWatch"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 45 min · implementação 2 h a 2 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo em prova de conceito; cresce com shard-hora provisionada e retenção estendida"
+              },
+              {
+                "k": "Serviços",
+                "v": "Kinesis Data Streams, Lambda, SQS, SNS, CloudWatch, KMS"
+              },
+              {
+                "k": "Volume atual",
+                "v": "~80 eventos/s em dia normal; pico de campanha até 3× isso, em rajadas de minutos"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "nenhum evento perdido em silêncio; ordem por pedido reconstituível"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "o pico é conhecido com margem de 3×; picos maiores exigem replanejar shard_count"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "stream particionado por pedido, produtor que trata falha parcial, e reprocesso provado a partir de TRIM_HORIZON"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é o L29. Lá o Streams captura mudança de ESTADO no banco — a tabela muda, o CDC reage. Aqui não existe necessariamente uma escrita em banco por trás do evento: é a aplicação que decide emitir \"pedido separado\" como parte do fluxo, e a chave de partição é uma decisão do código do produtor, não algo herdado da chave primária de uma tabela. Confundir os dois faz alguém procurar uma tabela que não existe."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que PutRecords devolve HTTP 200 mesmo com registros que falharam.",
+              "Derivar, a partir do hash MD5 da chave, por que a mesma chave sempre cai no mesmo shard.",
+              "Diagnosticar um hot shard a partir de métricas de throughput por ShardId.",
+              "Escolher chave de partição pela cardinalidade E pela pergunta de ordem que ela precisa responder.",
+              "Explicar por que resharding não corrige uma chave de partição genuinamente enviesada.",
+              "Configurar retenção estendida e reprocessar um trecho do stream a partir de TRIM_HORIZON ou AT_TIMESTAMP.",
+              "Tratar falha parcial de PutRecords reenviando só os registros marcados como falhos.",
+              "Configurar um destino de falha no event source mapping para que um registro ruim não trave o shard."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Capacidade fixa por shard",
+                "DVA-C02, SAP-C02",
+                "1.000 registros/s ou 1 MiB/s por shard, o que vier primeiro",
+                "por que dobrar shard_count não ajuda se a chave concentra tudo em um só"
+              ],
+              [
+                "Hash da chave de partição",
+                "DVA-C02, SAP-C02",
+                "MD5 mapeado contra o intervalo de hash do shard",
+                "a mesma chave produz sempre o mesmo hash, e cai sempre no mesmo shard"
+              ],
+              [
+                "PutRecords com falha parcial",
+                "DVA-C02",
+                "FailedRecordCount e ErrorCode por registro",
+                "por que HTTP 200 não é prova de que o lote inteiro foi gravado"
+              ],
+              [
+                "Ordem dentro do shard",
+                "SAP-C02, MLA-C01",
+                "garantida só lá — nunca entre shards",
+                "por que \"ordem global do stream\" não é um conceito que exista"
+              ],
+              [
+                "ParallelizationFactor",
+                "DVA-C02",
+                "até 10 lotes concorrentes por shard, preservando ordem por chave",
+                "a diferença entre concorrência (entre chaves) e ordenação (dentro da chave)"
+              ],
+              [
+                "Tipos de shard iterator",
+                "SAP-C02",
+                "TRIM_HORIZON, LATEST, AT_TIMESTAMP",
+                "quando cada um é a escolha certa para começar a ler"
+              ],
+              [
+                "Retenção e reprocesso",
+                "SAP-C02, MLA-C01",
+                "24h padrão, extensível até 8.760h (365 dias)",
+                "a retenção é o que HABILITA reprocessar; sem ela o dado já se foi"
+              ],
+              [
+                "Resharding e chave enviesada",
+                "SAP-C02",
+                "on-demand reparte igualmente e não isola a chave quente",
+                "por que a correção real é na chave, não no número de shards"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica dá N shards provisionados e pede o throughput total do stream, esperando a soma de N × 1 MiB/s. A resposta certa depende da distribuição real da chave: sob uma chave enviesada, o throughput útil é limitado pelo shard mais quente, não pela soma — os outros shards sobram capacidade que ninguém usa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não vira uma linha de configuração é intenção. A coluna da direita é onde cada um deixou marca no Terraform ou no código."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Nenhum evento perdido em silêncio",
+                "obrigatório",
+                "produtor inspeciona FailedRecordCount e reenvia só os registros que falharam"
+              ],
+              [
+                "Ordem por pedido reconstituível",
+                "obrigatório",
+                "chave de partição = id do pedido, nunca o tipo do evento"
+              ],
+              [
+                "Pico sustentado de até 3× o volume normal",
+                "declarado",
+                "8 shards provisionados com margem, mais SplitShard manual como plano de contingência"
+              ],
+              [
+                "Corrigir bug sem reingestão pela aplicação",
+                "desejado",
+                "retenção estendida a 168h (7 dias) + mapping de reprocesso a partir de TRIM_HORIZON/AT_TIMESTAMP"
+              ],
+              [
+                "Alerta de risco em segundos, não por varredura",
+                "obrigatório",
+                "Lambda via event source mapping, substituindo a função agendada anterior"
+              ],
+              [
+                "Registro ruim não pode travar o shard inteiro",
+                "obrigatório",
+                "bisect_batch_on_function_error habilitado, com destino de falha em SQS"
+              ],
+              [
+                "Nenhum segredo em variável de ambiente",
+                "obrigatório",
+                "ARN de tópico/fila por referência; criptografia do stream e da fila via KMS"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: a chave é o tipo do evento"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tinha no primeiro dia de campanha, e ele é legítimo como ponto de partida: publica de verdade, com uma decisão de particionamento que parece razoável. O laboratório começa medindo essa decisão — porque um número torna o hot shard discutível, e \"parece que está perdendo evento\" não."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Cinco chaves para o pico inteiro da campanha",
+            "caption": "Este desenho publica de verdade, com uma decisão só: a chave de partição é o TIPO do evento. Parece organização — agrupar eventos parecidos no mesmo lugar — e é exatamente essa lógica que concentra o pico inteiro em um shard e espalha os quatro estágios de um MESMO pedido em shards diferentes. Percorra os passos: o produtor nunca vê o próprio erro.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cliente",
+                    "service": "user",
+                    "label": "Cliente, Semana Cadência",
+                    "note": "gera de 2 a 4 eventos por pedido — criado, pago, às vezes separado, e cancelado ou entregue"
+                  }
+                ]
+              },
+              {
+                "label": "Aplicação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "checkout",
+                    "service": "fargate",
+                    "label": "Checkout API .NET 8",
+                    "note": "a mesma API do L01 e do L03; ganhou um publicador de eventos, sem mudar o resto do serviço"
+                  }
+                ]
+              },
+              {
+                "label": "Kinesis Data Streams — 3 shards, chave = tipo_evento",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "shard_criado",
+                    "service": "shard",
+                    "label": "Shard 0 — chave \"pedido_criado\"",
+                    "note": "recebe TODO pedido sem exceção; é o tipo de evento mais frequente do fluxo inteiro"
+                  },
+                  {
+                    "id": "shard_pago",
+                    "service": "shard",
+                    "label": "Shard 1 — chave \"pedido_pago\"",
+                    "note": "recebe só quem conclui o pagamento — uma fração bem menor do tráfego do shard 0"
+                  },
+                  {
+                    "id": "shard_cancelado",
+                    "service": "shard",
+                    "label": "Shard 2 — chave \"pedido_cancelado\"",
+                    "note": "quase ocioso: cancelamento é minoria mesmo no pico, e o shard sobra capacidade o dia todo"
+                  }
+                ]
+              },
+              {
+                "label": "Consumo",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "lambda",
+                    "service": "lambda",
+                    "label": "Lambda — alerta de fraude",
+                    "note": "lê shard por shard; nunca vê no mesmo lote o criado e o cancelado do mesmo pedido, porque vêm de shards diferentes"
+                  },
+                  {
+                    "id": "cloudwatch",
+                    "service": "cloudwatch",
+                    "label": "CloudWatch",
+                    "note": "mede bytes e registros por shard; é onde o shard quente vira número em vez de suspeita"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "cliente",
+                "to": "checkout",
+                "label": "inicia e evolui o pedido",
+                "style": "solid"
+              },
+              {
+                "from": "checkout",
+                "to": "shard_criado",
+                "label": "PutRecords, chave = tipo_evento",
+                "style": "solid"
+              },
+              {
+                "from": "checkout",
+                "to": "shard_pago",
+                "label": "PutRecords, chave = tipo_evento",
+                "style": "solid"
+              },
+              {
+                "from": "checkout",
+                "to": "shard_cancelado",
+                "label": "PutRecords, chave = tipo_evento",
+                "style": "solid"
+              },
+              {
+                "from": "shard_criado",
+                "to": "lambda",
+                "label": "GetRecords, ordem só garantida aqui dentro",
+                "style": "solid"
+              },
+              {
+                "from": "shard_pago",
+                "to": "lambda",
+                "label": "GetRecords, ordem só garantida aqui dentro",
+                "style": "solid"
+              },
+              {
+                "from": "shard_cancelado",
+                "to": "lambda",
+                "label": "GetRecords, ordem só garantida aqui dentro",
+                "style": "solid"
+              },
+              {
+                "from": "shard_criado",
+                "to": "cloudwatch",
+                "label": "IncomingBytes e IncomingRecords, por shard",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A chave é o tipo do evento, não o pedido",
+                "detail": "Parece uma decisão razoável: agrupar \"todo pedido_pago\" num lugar só soa organizado. O problema é a cardinalidade — só existem 5 valores possíveis de tipo de evento, contra milhares de pedidos por minuto no pico.",
+                "nodes": [
+                  "checkout",
+                  "shard_criado"
+                ],
+                "edges": [
+                  "checkout>shard_criado"
+                ]
+              },
+              {
+                "label": "O hash decide, e ele é determinístico",
+                "detail": "O Kinesis aplica MD5 à chave de partição e mapeia o resultado contra o intervalo de hash de cada shard. O hash da string `\"pedido_criado\"` é sempre o MESMO valor — então todo registro com essa chave cai, sempre, no mesmo shard.",
+                "nodes": [
+                  "shard_criado"
+                ],
+                "edges": [
+                  "checkout>shard_criado"
+                ]
+              },
+              {
+                "label": "Um shard carrega a criação de pedido do dia inteiro",
+                "detail": "Cada shard tem capacidade de escrita FIXA: 1.000 registros por segundo ou 1 MiB/s, o que vier primeiro — independente de quantos shards o stream tem no total. Concentrar um tipo de evento num shard só é concentrar o throughput do stream inteiro nesse teto.",
+                "nodes": [
+                  "shard_criado",
+                  "cloudwatch"
+                ],
+                "edges": [
+                  "shard_criado>cloudwatch"
+                ]
+              },
+              {
+                "label": "PutRecords devolve 200 mesmo quando um registro falhou",
+                "detail": "A chamada é um lote de até 500 registros, e a API processa cada um de forma independente: um registro throttled não derruba a chamada. O corpo da resposta traz `FailedRecordCount` e, por registro, um `ErrorCode` — e nada disso aparece se o código só confere o status HTTP.",
+                "nodes": [
+                  "checkout",
+                  "shard_criado"
+                ],
+                "edges": [
+                  "checkout>shard_criado"
+                ]
+              },
+              {
+                "label": "O mesmo pedido, em shards diferentes",
+                "detail": "Como a chave é o TIPO do evento, o \"criado\" e o \"cancelado\" do mesmo pedido vão para shards distintos. Cada shard é lido no seu próprio ritmo — a fila de leitura da Lambda em um shard não espera a do outro — então nada impede o consumidor de processar o cancelamento antes de ter visto o pagamento.",
+                "nodes": [
+                  "shard_criado",
+                  "shard_cancelado",
+                  "lambda"
+                ],
+                "edges": [
+                  "shard_criado>lambda",
+                  "shard_cancelado>lambda"
+                ]
+              },
+              {
+                "label": "Os shards ociosos não emprestam capacidade a ninguém",
+                "detail": "O throughput do stream não é a SOMA dos três shards — é limitado pelo pior deles no tráfego real. Enquanto o shard 0 satura, os shards 1 e 2 sobram capacidade e não há como redirecionar tráfego para eles sem mudar a chave.",
+                "nodes": [
+                  "shard_pago",
+                  "shard_cancelado"
+                ],
+                "edges": [
+                  "checkout>shard_pago",
+                  "checkout>shard_cancelado"
+                ]
+              },
+              {
+                "label": "Por que alguém particiona por tipo de evento",
+                "detail": "Porque parece a chave \"certa\" do ponto de vista de quem vai LER — separar por tipo facilita filtrar depois. É o raciocínio invertido: a chave de partição decide DISTRIBUIÇÃO de escrita, não organização de leitura, e as duas coisas raramente pedem a mesma chave.",
+                "nodes": [
+                  "checkout"
+                ],
+                "edges": [
+                  "checkout>shard_criado"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "medir-shard-quente.sh",
+            "code": "#!/usr/bin/env bash\n# medir-shard-quente.sh — prova o hot shard com numero, nao com suspeita\nset -euo pipefail\n\nSTREAM=\"${STREAM:?defina STREAM}\"\nINICIO=$(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%S) # GNU date; em macOS use -v-5M\n\nfor SHARD_ID in $(aws kinesis list-shards --stream-name \"$STREAM\" \\\n                    --query 'Shards[].ShardId' --output text); do\n  BYTES=$(aws cloudwatch get-metric-statistics \\\n    --namespace AWS/Kinesis --metric-name IncomingBytes \\\n    --dimensions Name=StreamName,Value=\"$STREAM\" Name=ShardId,Value=\"$SHARD_ID\" \\\n    --start-time \"$INICIO\" --end-time \"$(date -u +%Y-%m-%dT%H:%M:%S)\" \\\n    --period 300 --statistics Sum --query 'Datapoints[0].Sum' --output text)\n  echo \"$SHARD_ID: ${BYTES:-0} bytes em 5 min (teto do shard: 300.000.000 bytes)\"\ndone\n# Esperado ANTES da correcao: um shard perto do teto (1 MiB/s x 300s ~ 300 MB),\n# os outros dois em uma fracao pequena disso. Depois de trocar a chave para o\n# id do pedido, os oito shards do desenho de producao ficam dentro de 15% um\n# do outro — e essa e a prova de que a distribuicao mudou, nao so a contagem.\n"
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "A perda real não está no Kinesis — está no que o produtor faz com a resposta",
+            "content": "Se o código do produtor não confere `FailedRecordCount` e também não tem retry algum, um registro throttled é perdido de verdade e para sempre: não há como recuperá-lo depois, porque ele nunca chegou a existir no stream. Isso é distinto de um dado que existe e está apenas fora da janela de retenção — aqui, ele nunca foi gravado. É a perda irreversível deste laboratório, e ela mora inteiramente no lado do produtor, não do Kinesis."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A diferença estrutural em relação ao desenho anterior não é um shard a mais — é a chave de partição decidindo tudo de novo, mais dois caminhos de consumo que não existiam."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Chave por pedido, falha redirecionada, e um caminho só para reprocessar",
+            "caption": "A diferença estrutural não é mais um shard: é a IDENTIDADE que decide o shard. Com a chave = id do pedido, os eventos de UM pedido caem sempre no MESMO shard, e a ordem entre eles passa a existir de verdade. Um caminho novo e temporário — o reprocesso — existe só porque a retenção guardou o dado. Percorra os passos: cada peça nova rastreia a um requisito da seção anterior.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cliente",
+                    "service": "user",
+                    "label": "Cliente, Semana Cadência",
+                    "note": "o mesmo cliente do desenho anterior; nada muda do lado dele"
+                  }
+                ]
+              },
+              {
+                "label": "Aplicação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "checkout",
+                    "service": "fargate",
+                    "label": "Checkout API .NET 8",
+                    "note": "o publicador agora lê o corpo de PutRecords antes de dar o lote por concluído"
+                  }
+                ]
+              },
+              {
+                "label": "Kinesis — 8 shards, chave = id do pedido",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "shard_a",
+                    "service": "shard",
+                    "label": "Shard — faixa de hash A",
+                    "note": "recebe uma fatia proporcional do espaço de ids, não um tipo de evento inteiro"
+                  },
+                  {
+                    "id": "shard_b",
+                    "service": "shard",
+                    "label": "Shard — faixa de hash B",
+                    "note": "carga equivalente ao shard A: id de pedido tem cardinalidade alta e distribui quase uniforme"
+                  }
+                ]
+              },
+              {
+                "label": "Consumo em tempo real",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "lambda_rt",
+                    "service": "lambda",
+                    "label": "Lambda — alerta de fraude",
+                    "note": "event source mapping com paralelização por shard; ainda preserva ordem por chave dentro do lote"
+                  },
+                  {
+                    "id": "sns",
+                    "service": "sns",
+                    "label": "SNS — alerta ao time de risco",
+                    "note": "entrega em segundos; substitui o ciclo de polling que o painel de operação usava antes deste laboratório"
+                  }
+                ]
+              },
+              {
+                "label": "Falha tratada",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sqs",
+                    "service": "sqs",
+                    "label": "SQS — destino de falha",
+                    "note": "recebe o lote que esgotou as tentativas do mapping, para não travar o shard inteiro em retry infinito"
+                  }
+                ]
+              },
+              {
+                "label": "Reprocesso — temporário, só depois da correção",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "lambda_replay",
+                    "service": "lambda",
+                    "label": "Lambda — reprocessamento",
+                    "note": "mapping separado, iniciado em TRIM_HORIZON; existe só enquanto dura o replay"
+                  },
+                  {
+                    "id": "ddb",
+                    "service": "dynamodb",
+                    "label": "Tabela de resultado corrigido",
+                    "note": "recebe a saída do replay sem sobrescrever o que o consumidor em tempo real já gravou"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cloudwatch",
+                    "service": "cloudwatch",
+                    "label": "CloudWatch — alarmes",
+                    "note": "IteratorAge e throughput excedido por shard decidem se o consumidor acompanha o pico"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "cliente",
+                "to": "checkout",
+                "label": "inicia e evolui o pedido",
+                "style": "solid"
+              },
+              {
+                "from": "checkout",
+                "to": "shard_a",
+                "label": "PutRecords, chave = id do pedido",
+                "style": "solid"
+              },
+              {
+                "from": "checkout",
+                "to": "shard_b",
+                "label": "PutRecords, chave = id do pedido",
+                "style": "solid"
+              },
+              {
+                "from": "shard_a",
+                "to": "lambda_rt",
+                "label": "GetRecords, agora em ordem por pedido",
+                "style": "solid"
+              },
+              {
+                "from": "shard_b",
+                "to": "lambda_rt",
+                "label": "GetRecords, agora em ordem por pedido",
+                "style": "solid"
+              },
+              {
+                "from": "lambda_rt",
+                "to": "sns",
+                "label": "publica alerta de risco",
+                "style": "solid"
+              },
+              {
+                "from": "lambda_rt",
+                "to": "sqs",
+                "label": "lote esgotou as tentativas",
+                "style": "dashed"
+              },
+              {
+                "from": "shard_a",
+                "to": "lambda_replay",
+                "label": "GetShardIterator(TRIM_HORIZON), só após a correção",
+                "style": "dashed"
+              },
+              {
+                "from": "lambda_replay",
+                "to": "ddb",
+                "label": "grava resultado corrigido",
+                "style": "solid"
+              },
+              {
+                "from": "shard_a",
+                "to": "cloudwatch",
+                "label": "IteratorAgeMilliseconds e throughput excedido",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A chave passa a ser o id do pedido",
+                "detail": "Cardinalidade alta: cada pedido tem um id distinto, então o hash MD5 espalha o tráfego quase uniformemente pelos 8 shards. Não existe mais um shard \"dono\" de um tipo de evento — cada shard carrega uma fatia proporcional de PEDIDOS.",
+                "nodes": [
+                  "checkout",
+                  "shard_a"
+                ],
+                "edges": [
+                  "checkout>shard_a"
+                ]
+              },
+              {
+                "label": "O produtor lê a resposta antes de dar por certo",
+                "detail": "Depois de cada PutRecords, o código confere `FailedRecordCount`. Se for maior que zero, reconstrói um novo lote só com os registros que falharam — não reenvia os 500 originais — e tenta de novo com espera crescente.",
+                "nodes": [
+                  "checkout",
+                  "shard_a"
+                ],
+                "edges": [
+                  "checkout>shard_a"
+                ]
+              },
+              {
+                "label": "Ordem por pedido existe porque a chave garante o mesmo shard",
+                "detail": "Como todo evento de um pedido cai no mesmo shard, e o Kinesis preserva ordem dentro de um shard, a sequência criado → pago → cancelado chega ao consumidor na ordem em que aconteceu — não por sorte, por garantia do serviço.",
+                "nodes": [
+                  "shard_a",
+                  "lambda_rt"
+                ],
+                "edges": [
+                  "shard_a>lambda_rt"
+                ]
+              },
+              {
+                "label": "Falha do consumidor não é descarte: é redirecionamento",
+                "detail": "O mapping bisecta o lote com erro e tenta de novo um número limitado de vezes; esgotadas as tentativas, o lote inteiro vai para o destino de falha em vez de travar o shard — os registros seguintes continuam sendo processados.",
+                "nodes": [
+                  "lambda_rt",
+                  "sqs"
+                ],
+                "edges": [
+                  "lambda_rt>sqs"
+                ]
+              },
+              {
+                "label": "A retenção estendida é o que torna o reprocesso possível",
+                "detail": "Com o stream configurado para reter os dados por mais tempo que o padrão de 24 horas, um bug descoberto dias depois ainda encontra o evento original — sem essa janela, o dado já teria sido descartado e não haveria o que reler.",
+                "nodes": [
+                  "shard_a",
+                  "lambda_replay"
+                ],
+                "edges": [
+                  "shard_a>lambda_replay"
+                ]
+              },
+              {
+                "label": "Depois da correção, um consumidor temporário relê desde o início",
+                "detail": "Um novo event source mapping, com `starting_position = TRIM_HORIZON`, lê o shard do ponto mais antigo ainda retido. Ele escreve numa tabela separada — não toca o produtor nem o caminho em tempo real, que continuam publicando e alertando.",
+                "nodes": [
+                  "lambda_replay",
+                  "ddb"
+                ],
+                "edges": [
+                  "lambda_replay>ddb"
+                ]
+              },
+              {
+                "label": "Os alarmes dizem se o consumidor está acompanhando o pico",
+                "detail": "`IteratorAgeMilliseconds` alto significa que o consumidor está processando registros antigos e ficando para trás; throughput excedido no shard significa que o gargalo voltou a ser capacidade, não velocidade de leitura.",
+                "nodes": [
+                  "shard_a",
+                  "cloudwatch"
+                ],
+                "edges": [
+                  "shard_a>cloudwatch"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "O ajuste com maior efeito, e ele cabe numa linha de código",
+            "content": "Trocar a chave de partição de `evento.Tipo` para `evento.IdPedido` resolve os dois sintomas relatados pela Cadência ao mesmo tempo — distribuição de escrita e ordem por pedido — porque os dois tinham a MESMA causa. Não é coincidência: cardinalidade da chave é o parâmetro que decide as duas coisas simultaneamente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de um evento, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O nome de cada etapa não é jargão: é a prova de onde a ordem existe e onde ela para de existir. Dentro de um shard, ela é garantia de serviço; entre shards, ela não é garantida por absolutamente nada."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "De um clique no checkout ao alerta de fraude — passo a passo",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1 · O evento é serializado no produtor",
+                "desc": "O checkout monta o payload JSON do evento (id do pedido, tipo, instante, valor) e o acumula num lote — até 500 registros por chamada de `PutRecords`."
+              },
+              {
+                "label": "2 · A chave de partição é escolhida ANTES do envio",
+                "desc": "Esta é a decisão que o resto do módulo inteiro depende dela: chave de baixa cardinalidade concentra; chave de alta cardinalidade distribui."
+              },
+              {
+                "label": "3 · O Kinesis aplica MD5 e mapeia para o intervalo de hash de um shard",
+                "desc": "A mesma chave produz sempre o mesmo hash, e o mesmo hash cai sempre no mesmo shard — é isso que torna a ordem por chave possível, e a concentração também."
+              },
+              {
+                "label": "4 · O registro é gravado, ou falha, POR CONTA PRÓPRIA",
+                "desc": "Cada registro do lote tem seu próprio resultado. `PutRecords` devolve HTTP 200 mesmo que parte do lote tenha falhado — a falha mora em `FailedRecordCount`."
+              },
+              {
+                "label": "5 · O produtor reenvia só o que falhou",
+                "desc": "Descartar o lote inteiro reprocessa quem já teve sucesso; ignorar `FailedRecordCount` perde quem falhou. A resposta certa é reconstruir o lote só com os índices falhos."
+              },
+              {
+                "label": "6 · O consumidor lê por shard, em lotes, na ordem daquele shard",
+                "desc": "O event source mapping da Lambda entrega os registros de um shard na ordem em que chegaram a ELE — nunca em ordem global do stream, porque essa ordem não existe."
+              },
+              {
+                "label": "7 · Sucesso alerta; falha repetida vai ao destino configurado",
+                "desc": "Um lote processado com sucesso publica o alerta de fraude; um lote que falha repetidas vezes é isolado no destino de falha, sem travar os registros seguintes."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "json",
+            "filename": "evento-pedido.json",
+            "code": "// O payload que o Checkout API publica a cada transicao de estado do pedido.\n// IdPedido e a CHAVE DE PARTICAO — nao Tipo, que foi o desenho minimo.\n{\n  \"idPedido\": \"6f2a9e10-8b3c-4a71-9e2d-1c9f7a44b201\",\n  \"tipo\": \"pedido_cancelado\",\n  \"instante\": \"2026-08-08T14:03:12.418Z\",\n  \"valor\": 349.90,\n  // Motivo so existe em eventos de cancelamento; campos que nao se aplicam ao\n  // tipo simplesmente nao aparecem, em vez de irem como null.\n  \"motivo\": \"estorno_solicitado_pelo_cliente\"\n}"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "Por que o motivo do cancelamento importa para o consumidor",
+            "content": "É o dado que diferencia um cancelamento operacional (endereço inválido, item em falta) de um pedido de estorno depois do pagamento — que é o padrão que o alerta de fraude deste laboratório existe para pegar. Sem esse campo, toda a lógica do consumidor teria que inferir a partir de tempo decorrido, um sinal muito mais fraco."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Ingerir eventos de ciclo de vida do pedido (criado, pago, separado, cancelado, entregue) durante uma campanha com pico de até 3× o volume normal, com a exigência de que nenhum evento se perca em silêncio e que a ordem por pedido seja reconstituível.",
+            "winner": "Kinesis Data Streams em modo provisionado, chave de partição = id do pedido, com checagem de `FailedRecordCount` no produtor e retenção estendida para reprocesso",
+            "why": "O id do pedido tem a cardinalidade que o problema pede: distribui a escrita quase uniformemente E garante que os eventos de um mesmo pedido caiam no mesmo shard, que é a única forma de ter ordem entre eles sem um serviço de coordenação à parte. Modo provisionado importa aqui porque, sob chave enviesada, o modo on-demand reparte o shard igualmente sem isolar a chave quente — quem quer corrigir um shard específico precisa do controle granular que só o provisionado oferece.",
+            "alternatives": [
+              {
+                "name": "Amazon MSK (Kafka gerenciado)",
+                "downside": "Resolveria o mesmo problema com partições em vez de shards, mas cobra operação de cluster — nós, brokers, storage — que este time de duas pessoas não tem capacidade de manter. Justificável quando já existe investimento em Kafka."
+              },
+              {
+                "name": "SQS FIFO por grupo de mensagem",
+                "downside": "Resolveria a ordem por pedido com `MessageGroupId`, mas SQS não é reprocessável por janela de tempo: uma vez consumida e apagada, a mensagem não existe mais. Perde exatamente a capacidade de reprocesso que este laboratório exige."
+              },
+              {
+                "name": "Kinesis em modo on-demand",
+                "downside": "Remove a gestão manual de shards, mas — com uma chave ainda enviesada — sofre a mesma saturação: o modo divide o tráfego uniformemente ao escalar, sem detectar nem isolar a chave quente. É mais simples de operar, não corrige o desenho."
+              },
+              {
+                "name": "DynamoDB Streams (L29)",
+                "downside": "Resolve captura de mudança de ESTADO no banco, não emissão de evento de APLICAÇÃO. Aqui não há necessariamente uma escrita no banco por trás de cada evento — \"pedido separado\" pode ser um evento só de fluxo, sem persistência."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Chave de partição",
+                "id do pedido",
+                "tipo do evento; chave aleatória por chamada; id do cliente",
+                "resolve distribuição de escrita e ordem por pedido com a MESMA linha de código",
+                "eventos do mesmo cliente em pedidos diferentes não ficam agrupados — raramente é o que se quer aqui"
+              ],
+              [
+                "Modo do stream",
+                "provisionado, 8 shards",
+                "on-demand",
+                "permite SplitShard mirado numa chave específica se um hot shard reaparecer",
+                "exige acompanhar utilização e reprovisionar manualmente antes de picos maiores"
+              ],
+              [
+                "Tratamento de falha do produtor",
+                "reenviar só os registros com ErrorCode",
+                "descartar o lote inteiro; reenviar tudo de novo; ignorar e seguir",
+                "não reprocessa quem já teve sucesso, e não perde quem falhou",
+                "mais código no produtor do que um `PutRecords` simples"
+              ],
+              [
+                "Retenção do stream",
+                "168h (7 dias)",
+                "24h (padrão); 8.760h (365 dias, o teto)",
+                "cobre o horizonte real de detecção de bug de lógica sem pagar pelo teto",
+                "um bug descoberto no oitavo dia já não tem o dado original para reprocessar"
+              ],
+              [
+                "Falha do consumidor",
+                "bissecção de lote + destino de falha em SQS",
+                "sem destino de falha (padrão); DLQ direto sem bisseção",
+                "isola o registro ruim sem travar o shard nem descartar o lote inteiro sem investigar",
+                "mensagens na fila de falha exigem um processo humano de triagem"
+              ],
+              [
+                "Reprocesso",
+                "mapping temporário, separado, com destino próprio",
+                "reaproveitar o mesmo consumidor em tempo real",
+                "evita duplicar ação de negócio (alerta, estorno) por escrever no mesmo lugar duas vezes",
+                "mais um recurso temporário para lembrar de remover depois"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este desenho ainda tem, e que não é resolvida aqui",
+            "content": "O estado \"último evento visto por pedido\" no consumidor vive em memória, dentro da execução da Lambda. Ele não sobrevive a um ambiente reciclado, e duas invocações concorrentes do mesmo shard — o que o ParallelizationFactor permite — podem não compartilhar esse cache. Corrigir isso pede um estado externo persistido, e é uma decisão explicitamente fora do escopo, para não misturar \"ordem de entrega\" com \"onde guardar estado de negócio\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: o stream, com a lente do shard"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O Terraform abaixo não tem nada de exótico — é a métrica por shard e a retenção estendida que fazem a diferença entre este desenho e o mínimo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "kinesis.tf",
+            "code": "# kinesis.tf — o stream, com a lente do shard\n\nresource \"aws_kinesis_stream\" \"eventos_pedido\" {\n  name = \"${var.projeto}-eventos-pedido\"\n\n  # Provisionado, nao on-demand: sob chave enviesada, o on-demand reparte o\n  # trafego igualmente ao escalar e NAO isola a chave quente. So o modo\n  # provisionado da o controle granular (SplitShard mirado) para corrigir UM\n  # shard especifico sem recriar o stream inteiro.\n  stream_mode_details {\n    stream_mode = \"PROVISIONED\"\n  }\n  shard_count = 8 # dimensionado com margem sobre o pico de 3x o volume normal\n\n  # Retencao alem do padrao de 24h: e o que HABILITA o reprocesso depois de\n  # corrigir um bug no consumidor. 168h = 7 dias cobre o horizonte real de\n  # deteccao de um bug de logica; o teto documentado e 8760h (365 dias).\n  retention_period = 168\n\n  encryption_type = \"KMS\"\n  kms_key_id      = aws_kms_key.eventos.key_id\n\n  # Sem isto, CloudWatch so mostra metricas agregadas do STREAM. E a metrica\n  # POR SHARD que torna um shard quente visivel em vez de suspeita.\n  shard_level_metrics = [\n    \"IncomingBytes\",\n    \"IncomingRecords\",\n    \"WriteProvisionedThroughputExceeded\",\n    \"ReadProvisionedThroughputExceeded\",\n    \"IteratorAgeMilliseconds\",\n  ]\n}\n\n# O produtor so PRECISA escrever. Ler e responsabilidade do consumidor, com\n# um papel proprio — e e por isso que as duas policies abaixo sao distintas.\ndata \"aws_iam_policy_document\" \"publicar_eventos\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"kinesis:PutRecords\"]\n    resources = [aws_kinesis_stream.eventos_pedido.arn]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"kms:GenerateDataKey\", \"kms:Decrypt\"]\n    resources = [aws_kms_key.eventos.arn]\n  }\n}\n\n# Anexada ao MESMO task role da Checkout API do L01/L03 — nao criamos um\n# papel novo para o publicador, porque a identidade que escreve continua\n# sendo a mesma aplicacao.\nresource \"aws_iam_role_policy\" \"checkout_publica_eventos\" {\n  name   = \"${var.projeto}-publica-eventos\"\n  role   = aws_iam_role.checkout_task_role.id\n  policy = data.aws_iam_policy_document.publicar_eventos.json\n}\n\noutput \"stream_eventos_pedido_arn\" {\n  value = aws_kinesis_stream.eventos_pedido.arn\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que provisionado, e não on-demand, neste laboratório especificamente",
+            "content": "O modo on-demand escala automaticamente, mas divide o tráfego IGUALMENTE entre os shards novos ao crescer — sem detectar qual chave está concentrando a carga. Sob uma chave verdadeiramente enviesada, ele continua devolvendo exceção de throughput. O modo provisionado permite `SplitShard` mirado no shard específico que está quente, que é o controle que este laboratório quer demonstrar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o produtor que lê a resposta antes de dar por certo"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A mudança central do produtor não é a chave — é o que ele faz DEPOIS de chamar `PutRecords`. O código anterior da Cadência parava na primeira linha; este vai até o fim do corpo da resposta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "PublicadorEventoPedido.cs",
+            "code": "// PublicadorEventoPedido.cs — le a resposta de PutRecords antes de dar por certo\n\nusing Amazon.Kinesis;\nusing Amazon.Kinesis.Model;\n\npublic sealed class PublicadorEventoPedido\n{\n    private readonly IAmazonKinesis _kinesis;\n    private readonly string _stream;\n    private readonly ILogger<PublicadorEventoPedido> _log;\n\n    public PublicadorEventoPedido(IAmazonKinesis kinesis, string stream,\n        ILogger<PublicadorEventoPedido> log)\n    {\n        _kinesis = kinesis;\n        _stream = stream;\n        _log = log;\n    }\n\n    // A CHAVE e o id do pedido — nao o tipo do evento. E a linha que resolve\n    // os dois sintomas do laboratorio: distribui a escrita (cardinalidade\n    // alta) e garante que os eventos de UM pedido caiam no MESMO shard\n    // (ordem). Trocar esta linha de volta para \"evento.Tipo\" reintroduz os\n    // dois problemas ao mesmo tempo, porque tem a MESMA causa.\n    private static string ChaveDeParticao(EventoPedido evento) => evento.IdPedido.ToString();\n\n    public async Task PublicarLoteAsync(IReadOnlyList<EventoPedido> eventos,\n        CancellationToken ct = default)\n    {\n        var pendentes = eventos\n            .Select(e => new PutRecordsRequestEntry\n            {\n                PartitionKey = ChaveDeParticao(e),\n                Data = new MemoryStream(JsonSerializer.SerializeToUtf8Bytes(e)),\n            })\n            .ToList();\n\n        // Ate 4 tentativas: a primeira e as chamadas originais, as demais so\n        // reenviam quem falhou. Backoff exponencial com jitter evita que o\n        // proprio retry sincronizado piore o throttling que o causou.\n        for (var tentativa = 1; tentativa <= 4 && pendentes.Count > 0; tentativa++)\n        {\n            var resposta = await _kinesis.PutRecordsAsync(new PutRecordsRequest\n            {\n                StreamName = _stream,\n                Records = pendentes,\n            }, ct);\n\n            // O PONTO CENTRAL do laboratorio: a chamada acima NAO lanca\n            // excecao por falha parcial. HTTP 200 e devolvido mesmo com\n            // FailedRecordCount > 0 — quem so confere o status conclui\n            // sucesso com registros que nunca entraram no stream.\n            if (resposta.FailedRecordCount == 0)\n                return;\n\n            var proximaRodada = new List<PutRecordsRequestEntry>();\n            for (var i = 0; i < resposta.Records.Count; i++)\n            {\n                var item = resposta.Records[i];\n                if (item.ErrorCode is null) continue; // este teve sucesso\n\n                _log.LogWarning(\n                    \"registro {Indice} falhou na tentativa {Tentativa}: {Codigo} — {Mensagem}\",\n                    i, tentativa, item.ErrorCode, item.ErrorMessage);\n                proximaRodada.Add(pendentes[i]);\n            }\n\n            pendentes = proximaRodada;\n            if (pendentes.Count > 0)\n                await Task.Delay(BackoffComJitter(tentativa), ct);\n        }\n\n        if (pendentes.Count > 0)\n        {\n            // Esgotadas as tentativas do PRODUTOR — nao do stream. Isto e\n            // perda real e precisa ser tratado como incidente, nunca como\n            // log silencioso: metrica customizada + alarme, nao so LogError.\n            _log.LogError(\n                \"{Quantidade} eventos descartados apos {Tentativas} tentativas — dado perdido\",\n                pendentes.Count, 4);\n            throw new EventosPedidoNaoPublicadosException(pendentes.Count);\n        }\n    }\n\n    private static TimeSpan BackoffComJitter(int tentativa)\n    {\n        var baseMs = Math.Pow(2, tentativa) * 100;\n        var jitter = Random.Shared.Next(0, 100);\n        return TimeSpan.FromMilliseconds(baseMs + jitter);\n    }\n}\n\npublic sealed record EventoPedido(Guid IdPedido, string Tipo, DateTimeOffset Instante, decimal Valor);\n\npublic sealed class EventosPedidoNaoPublicadosException(int quantidade)\n    : Exception($\"{quantidade} eventos de pedido nao foram publicados apos esgotar as tentativas\");\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "Backoff sem jitter sincroniza os retries e piora o throttling",
+            "content": "Se vários produtores throttlam no mesmo instante — o que é comum num pico — e todos esperam exatamente o mesmo tempo antes de tentar de novo, a segunda tentativa colide de novo, em massa. O jitter aleatório espalha as tentativas no tempo e é o que torna o backoff exponencial eficaz na prática, não só na teoria."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o consumidor e o event source mapping"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O mapping é onde a garantia de ordem por chave, a paralelização e o destino de falha se encontram — os três Terraform diferentes, um objeto só."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "consumidor.tf",
+            "code": "# consumidor.tf — a Lambda em tempo real, o destino de falha, os alarmes\n\nresource \"aws_sqs_queue\" \"eventos_pedido_dlq\" {\n  name = \"${var.projeto}-eventos-pedido-dlq\"\n\n  # 14 dias: maior que a retencao do stream, para dar tempo de investigar um\n  # lote que falhou sem que a fila em si vire novo ponto de perda.\n  message_retention_seconds = 1209600\n  kms_master_key_id         = aws_kms_key.eventos.key_id\n}\n\nresource \"aws_lambda_function\" \"alerta_fraude\" {\n  function_name = \"${var.projeto}-alerta-fraude\"\n  role          = aws_iam_role.lambda_alerta_fraude.arn\n  handler       = \"FraudeFunction::FraudeFunction.Function::FunctionHandler\"\n  runtime       = \"dotnet8\"\n  timeout       = 30\n  memory_size   = 256\n\n  environment {\n    variables = {\n      SNS_TOPIC_ARN = aws_sns_topic.alerta_risco.arn\n    }\n  }\n}\n\nresource \"aws_lambda_event_source_mapping\" \"eventos_pedido_tempo_real\" {\n  event_source_arn  = aws_kinesis_stream.eventos_pedido.arn\n  function_name     = aws_lambda_function.alerta_fraude.arn\n  starting_position = \"LATEST\" # so o consumo normal comeca do fim; o replay usa outro mapping\n\n  batch_size                        = 100\n  maximum_batching_window_in_seconds = 2\n\n  # Ate 10 lotes concorrentes POR SHARD. O Lambda continua garantindo ordem\n  # por CHAVE de particao mesmo com paralelizacao > 1 — a concorrencia e\n  # entre chaves diferentes do mesmo shard, nao dentro da mesma chave.\n  parallelization_factor = 2\n\n  # Um erro no lote e re-tentado ate 3 vezes, bissectando o lote pela metade\n  # a cada tentativa — isola o registro ruim em vez de re-tentar o lote\n  # inteiro do mesmo jeito repetidamente.\n  bisect_batch_on_function_error = true\n  maximum_retry_attempts         = 3\n  maximum_record_age_in_seconds  = 3600\n\n  destination_config {\n    on_failure {\n      # Esgotadas as tentativas, o lote vai para ca — e o shard SEGUE lendo\n      # os proximos registros. Sem isto, um registro ruim travaria o shard\n      # inteiro, e essa e a diferenca entre \"um pedido com problema\" e\n      # \"todo o stream parado\".\n      destination_arn = aws_sqs_queue.eventos_pedido_dlq.arn\n    }\n  }\n}\n\nresource \"aws_sns_topic\" \"alerta_risco\" {\n  name              = \"${var.projeto}-alerta-risco\"\n  kms_master_key_id = aws_kms_key.eventos.key_id\n}\n\ndata \"aws_iam_policy_document\" \"lambda_le_stream\" {\n  statement {\n    effect = \"Allow\"\n    actions = [\n      \"kinesis:GetRecords\",\n      \"kinesis:GetShardIterator\",\n      \"kinesis:DescribeStreamSummary\",\n      \"kinesis:ListShards\",\n    ]\n    resources = [aws_kinesis_stream.eventos_pedido.arn]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"kms:Decrypt\"]\n    resources = [aws_kms_key.eventos.arn]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"sqs:SendMessage\"]\n    resources = [aws_sqs_queue.eventos_pedido_dlq.arn]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"sns:Publish\"]\n    resources = [aws_sns_topic.alerta_risco.arn]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"lambda_le_stream\" {\n  name   = \"${var.projeto}-lambda-le-stream\"\n  role   = aws_iam_role.lambda_alerta_fraude.id\n  policy = data.aws_iam_policy_document.lambda_le_stream.json\n}\n\n# Os dois alarmes que decidem se o consumidor acompanha o pico, e nao a\n# capacidade de escrita — que ja tem os seus proprios (nao mostrados aqui,\n# ja cobertos pelo shard_level_metrics do kinesis.tf).\nresource \"aws_cloudwatch_metric_alarm\" \"iterator_age\" {\n  alarm_name          = \"${var.projeto}-iterator-age-alta\"\n  namespace           = \"AWS/Lambda\"\n  metric_name         = \"IteratorAge\"\n  statistic           = \"Maximum\"\n  period              = 60\n  evaluation_periods  = 3\n  # 30s de atraso e tolerado; acima disso o consumidor esta perdendo o pico,\n  # nao so processando devagar.\n  threshold           = 30000\n  comparison_operator = \"GreaterThanThreshold\"\n  treat_missing_data  = \"notBreaching\"\n\n  dimensions = {\n    FunctionName = aws_lambda_function.alerta_fraude.function_name\n  }\n  alarm_actions = [aws_sns_topic.alerta_operacao.arn]\n}\n\nresource \"aws_cloudwatch_metric_alarm\" \"throughput_excedido\" {\n  alarm_name          = \"${var.projeto}-shard-throughput-excedido\"\n  namespace           = \"AWS/Kinesis\"\n  metric_name         = \"WriteProvisionedThroughputExceeded\"\n  statistic           = \"Sum\"\n  period              = 60\n  evaluation_periods  = 2\n  threshold           = 0\n  comparison_operator = \"GreaterThanThreshold\"\n  treat_missing_data  = \"notBreaching\"\n\n  dimensions = {\n    StreamName = aws_kinesis_stream.eventos_pedido.name\n  }\n  alarm_actions = [aws_sns_topic.alerta_operacao.arn]\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Parâmetro",
+              "Valor aqui",
+              "Por quê"
+            ],
+            "rows": [
+              [
+                "`starting_position`",
+                "`LATEST` no mapping principal",
+                "consumo em tempo real começa do agora; o reprocesso usa um mapping separado"
+              ],
+              [
+                "`parallelization_factor`",
+                "2",
+                "dobra o throughput de leitura por shard sem abrir mão de ordem por chave"
+              ],
+              [
+                "`bisect_batch_on_function_error`",
+                "true",
+                "isola o registro ruim em vez de re-tentar o lote inteiro do mesmo jeito"
+              ],
+              [
+                "`maximum_retry_attempts`",
+                "3",
+                "limite explícito; sem ele, o padrão tenta indefinidamente até expirar o registro"
+              ],
+              [
+                "`destination_config.on_failure`",
+                "fila SQS",
+                "o shard segue lendo os próximos registros mesmo com um lote isolado como falho"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: o consumidor em C#, e o limite do que ele sabe"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O handler processa um lote de um shard, na ordem em que o shard entregou. É simples de propósito: o laboratório prova ORDEM DE ENTREGA, não desenho de máquina de estados de fraude — misturar os dois esconderia qual dos dois está sendo testado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "FraudeFunction.cs",
+            "code": "// FraudeFunction.cs — le em ordem por pedido, e admite o limite do que sabe\n\nusing Amazon.Lambda.Core;\nusing Amazon.Lambda.KinesisEvents;\nusing Amazon.SimpleNotificationService;\n\nnamespace FraudeFunction;\n\npublic class Function\n{\n    private readonly IAmazonSimpleNotificationService _sns;\n    private readonly string _topicoArn = Environment.GetEnvironmentVariable(\"SNS_TOPIC_ARN\")!;\n\n    // Cache em memoria, valido so ENQUANTO a execucao ficar quente. Nao e um\n    // substituto para estado persistido: se o ambiente reciclar entre dois\n    // eventos do mesmo pedido, o ultimo estado visto se perde. Para producao\n    // de verdade isso pede uma tabela (DynamoDB), e essa decisao fica FORA\n    // do escopo deste laboratorio, que e sobre ordem de ENTREGA, nao sobre\n    // onde guardar estado de negocio — misturar os dois esconderia qual dos\n    // dois esta sendo provado.\n    private static readonly Dictionary<Guid, string> UltimoEventoVisto = new();\n\n    public Function(IAmazonSimpleNotificationService sns) => _sns = sns;\n\n    public async Task FunctionHandler(KinesisEvent evento, ILambdaContext contexto)\n    {\n        // Os registros deste lote pertencem TODOS ao mesmo shard, e chegam\n        // na ordem em que o shard os recebeu — e ela so é confiável porque\n        // a chave de particao é o id do pedido: todo evento de um pedido\n        // sempre cai neste MESMO shard.\n        foreach (var registro in evento.Records)\n        {\n            var dado = JsonSerializer.Deserialize<EventoPedidoLido>(\n                registro.Kinesis.Data);\n            if (dado is null) continue;\n\n            if (UltimoEventoVisto.TryGetValue(dado.IdPedido, out var anterior)\n                && anterior == \"pedido_cancelado\" && dado.Tipo == \"pedido_pago\")\n            {\n                // Deveria ser logicamente impossivel com a ordem preservada:\n                // pago depois de cancelado. Se isto disparar, o problema nao\n                // e o consumidor — e a garantia de shard sendo violada em\n                // algum ponto anterior (ex.: reprocesso escrevendo no\n                // caminho de tempo real por engano).\n                contexto.Logger.LogWarning(\n                    $\"ordem suspeita no pedido {dado.IdPedido}: pago apos cancelado\");\n            }\n\n            if (anterior == \"pedido_pago\" && dado.Tipo == \"pedido_cancelado\")\n            {\n                await _sns.PublishAsync(_topicoArn,\n                    $\"pedido {dado.IdPedido}: cancelado {SegundosDesde(anterior)}s apos o pagamento — revisar estorno\");\n            }\n\n            UltimoEventoVisto[dado.IdPedido] = dado.Tipo;\n        }\n    }\n\n    private static long SegundosDesde(string _) => 0; // ilustrativo: o calculo real usa o instante do evento anterior\n}\n\npublic sealed record EventoPedidoLido(Guid IdPedido, string Tipo, DateTimeOffset Instante, decimal Valor);\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Nunca aponte o mapping de reprocesso para o mesmo destino do tempo real",
+            "content": "Se o consumidor de replay publicar no MESMO tópico SNS que o consumidor em tempo real, cada evento reprocessado dispara um segundo alerta — e se a ação do outro lado do alerta for automática (bloquear conta, estornar valor), ela executa duas vezes. É dinheiro se movendo por engano, não só ruído de log. O destino do replay tem de ser sempre distinto, e a reconciliação entre os dois, um passo manual deliberado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar com número — não com \"chegou tudo\""
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma aceita \"parece que funcionou\": cada uma tem um comando e um resultado que aprova ou reprova."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medicoes; nenhuma conclusao vem de \"parece que chegou\"\n\nPROJETO=ffv-lab-kinesis\nSTREAM=\"${PROJETO}-eventos-pedido\"\n\n# ── Prova 1: o hot shard, com numero (ver medir-shard-quente.sh acima) ───────\n\n# ── Prova 2: PutRecords tem falha parcial mesmo devolvendo 200 ───────────────\n# Gera trafego concentrado numa unica chave, o suficiente para passar de\n# 1.000 registros/s NUM shard, e confere o corpo da resposta.\npython3 - <<'PY'\nimport boto3, json, time\nk = boto3.client(\"kinesis\")\nlote = [{\"Data\": json.dumps({\"i\": i}).encode(), \"PartitionKey\": \"pedido_criado\"}\n        for i in range(500)]\nfalhas_totais = 0\nfor _ in range(6):  # 6 x 500 = 3.000 registros contra um shard de 1.000/s\n    r = k.put_records(StreamName=\"ffv-lab-kinesis-eventos-pedido\", Records=lote)\n    falhas_totais += r[\"FailedRecordCount\"]\n    print(\"HTTP 200, FailedRecordCount =\", r[\"FailedRecordCount\"])\nprint(\"total de falhas parciais:\", falhas_totais)\nPY\n# Esperado: pelo menos uma das seis chamadas mostra FailedRecordCount > 0,\n# e TODAS retornam sem lancar excecao — a falha mora no corpo, nao no status.\n\n# ── Prova 3: os eventos do MESMO pedido chegam no MESMO shard ────────────────\naws kinesis list-shards --stream-name \"$STREAM\" \\\n  --query 'Shards[].{Id:ShardId,Faixa:HashKeyRange}' --output table\n# Compare o ShardId reportado nos logs da Lambda para dois eventos do mesmo\n# IdPedido: com chave = id do pedido, tem de ser o MESMO ShardId sempre.\n\n# ── Prova 4: a retenção realmente guarda o dado além de 24h ──────────────────\naws kinesis describe-stream-summary --stream-name \"$STREAM\" \\\n  --query 'StreamDescriptionSummary.RetentionPeriodHours' --output text\n# Esperado: 168 (7 dias). Se voltar 24, a mudança de retenção não foi aplicada\n# e o reprocesso da prova 5 vai falhar por falta de dado.\n\n# ── Prova 5: reprocesso a partir de TRIM_HORIZON encontra o evento antigo ────\nSHARD=$(aws kinesis list-shards --stream-name \"$STREAM\" \\\n  --query 'Shards[0].ShardId' --output text)\nITERADOR=$(aws kinesis get-shard-iterator --stream-name \"$STREAM\" \\\n  --shard-id \"$SHARD\" --shard-iterator-type TRIM_HORIZON \\\n  --query 'ShardIterator' --output text)\naws kinesis get-records --shard-iterator \"$ITERADOR\" \\\n  --query 'Records[0].{Sequencia:SequenceNumber,Chave:PartitionKey}' --output table\n# Esperado: um registro com SequenceNumber baixo (o mais antigo ainda retido),\n# nao o mais recente — confirma que TRIM_HORIZON aponta para o inicio, e nao\n# para \"agora\", que seria o comportamento de LATEST.\n"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "O que confirma",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Hot shard mensurado",
+                "um shard perto do teto, os outros ociosos",
+                "todos uniformes já indicaria chave corrigida — rode antes da correção"
+              ],
+              [
+                "2 · Falha parcial em PutRecords",
+                "FailedRecordCount > 0 em pelo menos uma chamada",
+                "zero falhas pode indicar volume insuficiente para saturar o shard de teste"
+              ],
+              [
+                "3 · Mesmo pedido, mesmo shard",
+                "o ShardId é idêntico para dois eventos do mesmo IdPedido",
+                "ShardId diferente indica que a chave de partição não é realmente o id do pedido"
+              ],
+              [
+                "4 · Retenção aplicada",
+                "`RetentionPeriodHours` retorna 168",
+                "retornar 24 significa que a mudança de retenção não foi aplicada ao stream"
+              ],
+              [
+                "5 · Reprocesso encontra o dado antigo",
+                "SequenceNumber baixo, não o mais recente",
+                "erro \"trim horizon\" indicaria dado já fora da janela de retenção"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Reprocessar: o caminho que a retenção paga"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Esta é a prova final do requisito central: corrigir um bug no consumidor sem tocar o produtor, e sem perder o que já tinha acontecido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "reprocessar.sh",
+            "code": "#!/usr/bin/env bash\n# reprocessar.sh — depois de corrigir o bug, relê o stream inteiro sem tocar o produtor\nset -euo pipefail\n\nPROJETO=\"${PROJETO:?defina PROJETO}\"\nSTREAM=\"${PROJETO}-eventos-pedido\"\nFUNCAO_REPLAY=\"${PROJETO}-reprocessamento\"\n\n# 1. Cria um mapping TEMPORARIO, separado do consumo em tempo real, que ja\n#    continua rodando com starting_position=LATEST sem interrupção.\nUUID=$(aws lambda create-event-source-mapping \\\n  --function-name \"$FUNCAO_REPLAY\" \\\n  --event-source-arn \"arn:aws:kinesis:us-east-1:$(aws sts get-caller-identity --query Account --output text):stream/$STREAM\" \\\n  --starting-position TRIM_HORIZON \\\n  --batch-size 200 \\\n  --query 'UUID' --output text)\necho \"mapping de reprocesso criado: $UUID\"\n\n# 2. Acompanha o IteratorAge caindo: quando chegar perto de zero, o replay\n#    alcançou o tempo real e pode ser desligado.\necho \"acompanhe com:\"\necho \"  aws lambda get-event-source-mapping --uuid $UUID --query 'LastProcessingResult'\"\necho \"  aws cloudwatch get-metric-statistics --namespace AWS/Lambda --metric-name IteratorAge \\\"\necho \"    --dimensions Name=FunctionName,Value=$FUNCAO_REPLAY --statistics Maximum --period 60 \\\"\necho \"    --start-time \\$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%S) --end-time \\$(date -u +%Y-%m-%dT%H:%M:%S)\"\n\nread -rp \"IteratorAge proximo de zero? apagar o mapping de reprocesso [s/N]: \" ok\nif [[ \"$ok\" == \"s\" ]]; then\n  aws lambda delete-event-source-mapping --uuid \"$UUID\"\n  echo \"mapping de reprocesso removido — o replay foi temporario, como deveria ser\"\nfi\n"
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Reprocessar fora da janela de retenção não tem correção possível",
+            "content": "Se o bug for descoberto no dia oito com retenção de sete, o dado do primeiro dia já foi descartado pelo Kinesis — de forma definitiva e irreversível. Não existe comando nem tipo de iterador que recupera isso; `TRIM_HORIZON` aponta para o mais antigo AINDA retido, não para o início absoluto do stream. A única prevenção é configurar a retenção pela cadência real de detecção de bugs, antes de precisar dela."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Um serviço publica 500 registros com PutRecords, recebe HTTP 200 e considera o lote publicado. Duas horas depois, descobre que 40 registros nunca chegaram ao stream. Qual é a explicação mais provável?",
+        "options": [
+          "O shard atingiu o limite de retenção e expirou os registros mais antigos",
+          "A resposta trazia FailedRecordCount = 40, e o código não verificou esse campo antes de considerar sucesso",
+          "A chave de partição usada não existia no momento do envio",
+          "O Kinesis descartou os registros silenciosamente por estarem corrompidos"
+        ],
+        "correctIndex": 1,
+        "explanation": "PutRecords processa cada registro do lote de forma independente e devolve HTTP 200 mesmo quando parte deles falha — a falha mora dentro do corpo da resposta, no campo FailedRecordCount, com um ErrorCode por registro (normalmente ProvisionedThroughputExceededException, quando o shard de destino está saturado). Um código que só confere o status HTTP conclui sucesso com até quarenta registros que nunca entraram no stream — é exatamente esse ponto cego que o laboratório resolve, reenviando apenas os registros marcados como falhos.\n\nA primeira alternativa erra o verbo: o Kinesis não descarta por corrupção, ele recusa por throughput e reporta isso explicitamente por registro. A terceira confunde o sintoma com outra causa: retenção expirada afeta releitura de dado antigo, não gravação — um PutRecords bem-sucedido nunca é revertido pela retenção. A quarta inventa uma restrição que não existe: a chave de partição é apenas uma string usada no hash; não há registro nem validação prévia de quais chaves são \"permitidas\"."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Chave de baixa cardinalidade",
+                "publique com chave = tipo_evento durante um teste de carga",
+                "um ShardId concentra quase todo IncomingBytes; os outros ficam perto de zero",
+                "CloudWatch, métrica por shard (`shard_level_metrics`)",
+                "trocar a chave para algo de alta cardinalidade e que agrupe o que precisa de ordem"
+              ],
+              [
+                "Produtor ignora FailedRecordCount",
+                "remova a checagem do campo no código e sature um shard de propósito",
+                "logs do produtor mostram sucesso; o consumidor nunca recebe parte dos eventos",
+                "comparar contagem publicada (log do produtor) com contagem consumida (métrica da Lambda)",
+                "reintroduzir a checagem de `FailedRecordCount` com reenvio dos registros falhos"
+              ],
+              [
+                "Mapping sem destino de falha",
+                "force uma exceção não tratada no handler e desabilite `destination_config`",
+                "o shard para de avançar; `IteratorAge` cresce sem limite para aquele shard",
+                "`get-event-source-mapping` → `LastProcessingResult`",
+                "habilitar destino de falha e `bisect_batch_on_function_error`"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "A falha que demora mais para ser notada",
+            "content": "Um shard travado por registro ruim não gera erro visível em nenhum painel padrão — ele simplesmente para de avançar, silenciosamente, enquanto os outros shards seguem normais. Sem um alarme específico em `IteratorAge` POR FUNÇÃO, o sintoma só aparece quando alguém nota que um subconjunto de pedidos parou de gerar alerta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Segurança: o que passa a trafegar por um caminho novo"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Eventos de pedido carregam valor monetário e, potencialmente, dado que identifica o cliente. Um caminho de streaming novo é um caminho novo de exposição, mesmo sem mudar o banco de dados."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Dado de pedido exposto na fila de falha",
+                "média",
+                "alto",
+                "criptografia KMS na fila; retenção da fila só o tempo de investigação",
+                "CloudTrail em `ReceiveMessage` fora do papel de investigação esperado",
+                "purgar mensagens após triagem; girar a chave KMS se houve exposição"
+              ],
+              [
+                "Produtor com permissão além de escrita",
+                "baixa",
+                "médio",
+                "política do produtor restrita a `kinesis:PutRecords` no ARN do stream",
+                "IAM Access Analyzer sobre uso real do papel",
+                "remover a ação não utilizada da política"
+              ],
+              [
+                "Reprocesso duplicando ação de negócio",
+                "média",
+                "alto",
+                "destino do mapping de replay sempre distinto do caminho em tempo real",
+                "comparar contagem de registros processados nos dois destinos",
+                "pausar o mapping de replay; reconciliar manualmente antes de reativar"
+              ],
+              [
+                "Chave de partição com dado sensível",
+                "média",
+                "médio",
+                "usar identificador interno (id do pedido), nunca e-mail ou documento, como chave",
+                "Macie sobre o payload armazenado no stream",
+                "trocar a chave; os registros antigos ainda carregam o dado até expirar pela retenção"
+              ],
+              [
+                "Alarme de throughput ignorado",
+                "alta",
+                "médio",
+                "alarme com ação em SNS de operação, não só visível no console",
+                "ausência de confirmação no canal de plantão dentro do prazo",
+                "escalonamento automático após N minutos sem resposta"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O papel de execução da Lambda de reprocesso não é o mesmo do tempo real",
+            "content": "Mesmo com política igualmente restrita, manter os dois papéis SEPARADOS torna possível revogar o acesso do reprocesso assim que o replay termina, sem afetar o consumo normal — que nunca deveria ficar sem permissão, nem por um segundo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel de ingestão responde"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "O consumidor está acompanhando o pico?",
+                "`IteratorAge` (Lambda)",
+                "crescendo, é atraso acumulando — o consumidor está processando dado cada vez mais velho",
+                "> 30.000 ms por 3 períodos de 1 min"
+              ],
+              [
+                "Algum shard está saturado na escrita?",
+                "`WriteProvisionedThroughputExceeded` por `ShardId`",
+                "qualquer valor acima de zero é throttling acontecendo agora",
+                "> 0, qualquer período"
+              ],
+              [
+                "A leitura está no limite do shard?",
+                "`ReadProvisionedThroughputExceeded`",
+                "mais de 5 `GetRecords`/s ou 2 MB/s sustentado no mesmo shard",
+                "tendência de subida, não só valor absoluto"
+              ],
+              [
+                "Quantos registros o produtor está perdendo?",
+                "métrica customizada a partir de `FailedRecordCount`",
+                "aumento sustentado indica throttling de escrita persistente, não picos isolados",
+                "> 1% do volume publicado em 5 min"
+              ],
+              [
+                "O destino de falha está recebendo mensagem?",
+                "`ApproximateNumberOfMessagesVisible` (SQS)",
+                "qualquer valor sustentado indica lotes esgotando as tentativas do mapping",
+                "> 0 por mais de 10 min"
+              ],
+              [
+                "A distribuição entre shards está uniforme?",
+                "`IncomingBytes` por `ShardId`, comparado entre shards",
+                "desvio grande entre o mais e o menos carregado é sinal de chave enviesada de novo",
+                "desvio > 30% entre o shard mais e o menos carregado"
+              ],
+              [
+                "O reprocesso está avançando?",
+                "`IteratorAge` da função de replay",
+                "caindo é o replay se aproximando do tempo real",
+                "acompanhar até ficar próximo de zero, então desligar o mapping"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana quando só um consumidor é observado",
+            "content": "Um stream pode ter mais de um consumidor lendo o mesmo shard — o tempo real e, temporariamente, o replay. `IteratorAge` é por FUNÇÃO, não por stream: olhar só a métrica do consumidor em tempo real esconde um replay que travou silenciosamente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão de eventos por dia"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 eventos/dia",
+                "um shard sobra capacidade o tempo todo",
+                "nada — é desperdício de shard-hora, não risco",
+                "considerar on-demand aqui especificamente, já que não há chave enviesada em jogo com tão pouco tráfego"
+              ],
+              [
+                "10 mil eventos/dia (~0,1/s de média)",
+                "um shard ainda cobre a média",
+                "rajadas de campanha podem saturar por minutos, mesmo com média baixa",
+                "dimensionar pelo PICO, não pela média — é o erro mais comum nesta faixa"
+              ],
+              [
+                "1 milhão eventos/dia (~12/s de média, picos bem maiores)",
+                "múltiplos shards se tornam obrigatórios",
+                "chave de alta cardinalidade deixa de ser boa prática e vira pré-condição",
+                "chave = id do pedido, 8+ shards, alarmes de throughput ativos desde o início"
+              ],
+              [
+                "Pico de campanha (3× o normal, em rajada)",
+                "mesmo com chave boa, o throughput agregado pode faltar",
+                "shard_count dimensionado para o normal não cobre o pico",
+                "`UpdateShardCount` ANTES do evento conhecido, nunca durante"
+              ],
+              [
+                "Falha de AZ",
+                "o Kinesis replica entre AZs automaticamente — o stream em si não cai",
+                "quem quebra é a aplicação produtora, se ela não for multi-AZ",
+                "é o plano de endereçamento e disponibilidade do L01/L02 cobrando de novo, não algo novo deste laboratório"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O gargalo que só aparece quando alguém dimensiona pela média",
+            "content": "Um volume de \"1 milhão de eventos por dia\" soa como 12 eventos por segundo, dentro da folga de um shard só. Mas eventos de pedido não chegam uniformemente: eles se concentram no horário comercial e explodem em campanha. Dimensionar shard_count pela média diária é o erro que a Semana Cadência expôs no primeiro dia de pico."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O modo provisionado cobra pelo que você RESERVA, não só pelo que usa — é a diferença central em relação ao on-demand, e o motivo de dimensionar com cuidado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "1 shard, tráfego de teste",
+                "shard-hora e unidade de PUT payload; retenção padrão de 24h",
+                "desprezível",
+                "nenhuma; otimizar aqui gasta atenção onde não há dinheiro em jogo"
+              ],
+              [
+                "Produção pequena",
+                "8 shards, campanha ocasional",
+                "shard-hora × 8, retenção estendida a 7 dias, invocações Lambda proporcionais ao volume",
+                "previsível e ligada ao número de shards, não ao tráfego real dentro deles",
+                "ajustar shard_count pelo pico real medido, não por margem arbitrária"
+              ],
+              [
+                "Alta escala",
+                "20+ shards, múltiplas campanhas por mês",
+                "shard-hora relevante na fatura; considerar enhanced fan-out se houver múltiplos consumidores",
+                "cresce com shard_count permanente, mesmo em dias sem campanha",
+                "reduzir shard_count fora de campanha, se o processo operacional suportar a mudança"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b18_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Shard provisionado",
+                "shard-hora, reservado independente de uso",
+                "shard ocioso fora de campanha continua cobrando — não é elástico como on-demand"
+              ],
+              [
+                "Unidade de PUT payload",
+                "a cada 25 KB de dado publicado, arredondado para cima",
+                "muitos registros pequenos custam mais que poucos registros grandes de mesmo total de bytes"
+              ],
+              [
+                "Retenção estendida",
+                "shard-hora adicional acima de 24h retidas",
+                "reter 365 dias \"por segurança\" sem uso real é o desperdício mais comum aqui"
+              ],
+              [
+                "Enhanced fan-out (se usado)",
+                "consumer-shard-hora e dado consumido",
+                "só se justifica com múltiplos consumidores competindo pelos mesmos 2 MB/s compartilhados"
+              ],
+              [
+                "Lambda (tempo real + replay)",
+                "invocações e duração",
+                "o replay soma ao mesmo medidor enquanto está ativo — mais um motivo para ser temporário"
+              ],
+              [
+                "SQS e SNS",
+                "requisições e notificações",
+                "valor baixo por unidade, mas cresce com volume de falha — que deveria ser exceção, não regra"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b18_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho de custo que não aparece na fatura de infraestrutura",
+            "content": "A diferença entre descobrir a fraude no minuto do cancelamento e descobrir na conciliação do mês seguinte é o valor do estorno em si — não uma linha de AWS. O custo que este laboratório ataca é o de decisão tardia, e ele nunca aparece no Cost Explorer."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "reprocesso roteirizado e reversível, com prova de que alcançou o tempo real",
+                "triagem da fila de falha ainda é manual",
+                "automatizar reclassificação de erro conhecido versus erro novo",
+                "média"
+              ],
+              [
+                "Segurança",
+                "chave de partição sem PII, criptografia KMS ponta a ponta, papéis separados",
+                "nenhum controle de schema impede um produtor futuro de incluir dado sensível na chave",
+                "validação de schema na borda de publicação",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "falha parcial tratada no produtor; falha do consumidor isolada, não bloqueante",
+                "estado de negócio do consumidor ainda em memória, não persistido",
+                "mover o cache de \"último evento visto\" para um armazenamento externo",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "chave de alta cardinalidade distribui quase uniformemente; ParallelizationFactor ajustado",
+                "shard_count fixo não se adapta sozinho a picos maiores que o previsto",
+                "automação de `UpdateShardCount` antes de campanhas conhecidas",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "retenção dimensionada pela cadência real de correção de bug, não pelo teto",
+                "shard_count permanente cobre o pico mesmo em dias normais",
+                "reduzir shards fora de campanha, se o processo operacional suportar",
+                "baixa"
+              ],
+              [
+                "Sustentabilidade",
+                "shard ocioso fora de pico é capacidade não usada, não trabalho desperdiçado",
+                "nenhum específico deste laboratório",
+                "acompanha a otimização de custos acima",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Da chave errada ao dado virando decisão — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Chave de partição por tipo de evento, produtor sem checar `FailedRecordCount`, um shard só. É onde a Cadência estava no primeiro dia de campanha.",
+                "note": "Risco resolvido: nenhum. Novo risco: perda silenciosa e ordem sem garantia entre estágios de um mesmo pedido. Custo: o mais baixo — um shard."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Chave = id do pedido, retry no produtor a partir de `FailedRecordCount`, destino de falha no consumidor, retenção estendida com reprocesso comprovado.",
+                "note": "Risco resolvido: perda silenciosa e ordem quebrada entre estágios. Novo risco: estado de negócio do consumidor ainda vive em memória, não sobrevive a reciclagem do ambiente. Custo: shard-hora provisionada + retenção."
+              },
+              {
+                "label": "Nível 3 — Produção com múltiplos consumidores",
+                "instruction": "Enhanced fan-out para consumidores que competiriam pelos mesmos 2 MB/s compartilhados; schema versionado no payload.",
+                "note": "Risco resolvido: um consumidor lento reduzindo a fatia de throughput dos outros. Novo risco: cada consumidor adicional é mais um ponto de falha a observar. Custo: consumer-shard-hora por consumidor registrado."
+              },
+              {
+                "label": "Nível 4 — Estado persistido e idempotência",
+                "instruction": "O \"último evento visto por pedido\" sai da memória da Lambda e vai para um armazenamento externo, com escrita idempotente por `SequenceNumber`.",
+                "note": "Risco resolvido: estado perdido em reciclagem de ambiente e dupla contagem em reentrega. Novo risco: o armazenamento externo vira dependência crítica do caminho de alerta. Custo: leitura e escrita por evento."
+              },
+              {
+                "label": "Nível 5 — Plataforma e governança",
+                "instruction": "Registro de schema centralizado, cotas de shard geridas por equipe, streams federados entre times com política de recurso.",
+                "note": "Risco resolvido: produtor de outro time publicando payload incompatível sem aviso. Novo risco: governança de schema vira gargalo de processo, não só de tecnologia. Custo: duplicação de infraestrutura de suporte por time."
+              },
+              {
+                "label": "Nível 6 — Dados e IA no reconhecimento do padrão",
+                "instruction": "O histórico de eventos retido vira DADOS de treino: em vez de uma regra fixa (\"cancelado logo após pago\"), um MODELO aprende sequências de transição que precedem fraude confirmada, com IA graduando o risco em vez de só sinalizar sim/não.",
+                "note": "Risco resolvido: regra fixa que não captura padrões novos de fraude, só os já catalogados. Novo risco: modelo treinado com poucos casos reais aprende ruído e gera falso positivo em pedido legítimo. Custo: baixo — o dado de treino já está retido no stream e no destino corrigido do replay."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Um modelo de detecção no nível 6 depende de sequência de eventos CONFIÁVEL — que só existe a partir do nível 2, quando a chave de partição passou a garantir ordem por pedido. Treinar um modelo sobre dados do nível 1, onde a ordem pode estar trocada, ensinaria o modelo a aprender o BUG, não o padrão de fraude."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não resolve o problema central, e forçá-la seria o antipadrão que a própria série critica. \"Como garantir que nenhum evento se perca e que a ordem por pedido exista\" tem resposta determinística: chave de alta cardinalidade, checagem de falha parcial, retenção dimensionada. Um modelo não melhora nenhuma das três."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar onde IA acrescentaria valor real, e é o Nível 6 da evolução: dado o histórico de transições de estado — agora confiavelmente ORDENADO por pedido, graças ao que este laboratório construiu — um classificador poderia graduar o risco de um padrão de eventos em vez de depender só de uma regra fixa como \"cancelado logo após pago\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b21_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "reconhecer padrões de sequência que precedem fraude e que uma regra fixa não cobre"
+              ],
+              [
+                "Por que uma regra não bastaria, eventualmente?",
+                "porque padrões de fraude mudam; uma regra fixa só pega o que já foi catalogado"
+              ],
+              [
+                "De onde viriam os dados?",
+                "do próprio stream retido e do destino corrigido do reprocesso — nenhuma coleta nova é necessária"
+              ],
+              [
+                "Qual o risco?",
+                "aprender de poucos casos confirmados e marcar pedido legítimo como suspeito; exige avaliação com dado retido e caminho de revisão humana"
+              ],
+              [
+                "Por que não agora?",
+                "porque a ordem confiável por pedido é PRÉ-CONDIÇÃO, e ela só passou a existir neste laboratório; não há histórico limpo suficiente ainda"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b21_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"decidir se o lote de PutRecords teve sucesso\" troca um sinal determinístico — `FailedRecordCount`, que é exato — por um probabilístico, sem nenhum ganho: o campo já responde a pergunta com certeza. IA sobre ingestão faz sentido quando o sinal é ambíguo; aqui ele não é."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Chave de partição = tipo do evento",
+                "parece organização: agrupar eventos parecidos no mesmo lugar",
+                "baixa cardinalidade concentra o tráfego real num shard e espalha o mesmo pedido entre shards",
+                "um ShardId concentra quase todo o IncomingBytes; ordem entre estágios de um pedido some",
+                "chave de alta cardinalidade que também mantenha junto o que precisa de ordem",
+                "nunca em produção; aceitável só em prova de conceito de baixíssimo volume"
+              ],
+              [
+                "Ignorar FailedRecordCount",
+                "o caminho feliz do SDK deixa isso fácil — `PutRecordsAsync` não lança exceção por falha parcial",
+                "HTTP 200 vira sinônimo de sucesso total, e parte do lote nunca chega ao stream",
+                "contagem publicada no produtor maior que a contagem consumida, sem erro visível",
+                "inspecionar `FailedRecordCount` e reenviar só os registros com `ErrorCode`",
+                "nunca; é o ponto cego mais caro da API"
+              ],
+              [
+                "Aumentar shard_count achando que resolve hot shard",
+                "é o menor número de linhas de Terraform que parece mexer no problema",
+                "resharding divide o INTERVALO de hash; uma chave constante cai sempre no mesmo lado da divisão",
+                "o número de shards sobe, o hot shard continua exatamente igual",
+                "diagnosticar a causa por métrica de shard ANTES de reprovisionar; corrigir a chave",
+                "só depois de confirmar que a chave já é de alta cardinalidade e o volume real cresceu"
+              ],
+              [
+                "Consumidor sem destino de falha",
+                "parece que \"sempre vai dar certo\", e configurar destino de falha soa como pessimismo",
+                "um registro ruim trava o shard inteiro em retry até expirar, sem isolar o problema",
+                "`IteratorAge` de um shard específico cresce sem limite enquanto os outros seguem normais",
+                "`bisect_batch_on_function_error` + destino de falha configurado desde o início",
+                "nunca em produção; aceitável em teste local onde parar tudo é o comportamento desejado"
+              ],
+              [
+                "Retenção no padrão de 24h em ambiente que precisa reprocessar",
+                "ninguém pensa em retenção até o dia em que precisa dela",
+                "um bug descoberto no segundo dia já não tem mais o dado do primeiro para reler",
+                "reprocesso falha com erro relacionado à janela de retenção",
+                "dimensionar a retenção pela cadência real de detecção de bug, com margem",
+                "só quando o consumidor é comprovadamente idempotente à distância de segundos, nunca de dias"
+              ],
+              [
+                "Reprocessamento escrevendo no mesmo destino do tempo real",
+                "parece reaproveitar código e economizar um recurso",
+                "duplica ação de negócio disparada pelo alerta — cada evento reprocessado dispara de novo",
+                "contagem de alertas maior que a contagem de eventos únicos processados",
+                "destino do replay sempre separado, com reconciliação manual antes de mesclar",
+                "nunca; é o antipadrão com maior potencial de dano financeiro deste módulo"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Métrica de um shard em 100% e throughput total baixo",
+                "hot shard por chave de baixa cardinalidade",
+                "compare `IncomingBytes` entre todos os `ShardId` do stream",
+                "CloudWatch, `shard_level_metrics`",
+                "trocar a chave de partição por algo de alta cardinalidade"
+              ],
+              [
+                "Produtor loga sucesso, evento nunca chega ao consumidor",
+                "`FailedRecordCount` ignorado no código do produtor",
+                "inspecione o corpo completo da resposta de `PutRecords`, não só o status",
+                "código do produtor",
+                "checar `FailedRecordCount` e reenviar os registros com `ErrorCode`"
+              ],
+              [
+                "Fraude vê \"cancelado\" antes de \"pago\" para o mesmo pedido",
+                "chave de baixa cardinalidade espalhando estágios do mesmo pedido em shards diferentes",
+                "compare o `ShardId` de dois eventos do mesmo `IdPedido` nos logs",
+                "logs do consumidor Lambda",
+                "chave de partição = id do pedido"
+              ],
+              [
+                "`IteratorAge` crescendo sem parar",
+                "consumidor mais lento que a taxa de chegada",
+                "CloudWatch `IteratorAgeMilliseconds` por função",
+                "métricas da Lambda",
+                "aumentar `ParallelizationFactor` ou otimizar a função"
+              ],
+              [
+                "`GetRecords` lança `ProvisionedThroughputExceededException`",
+                "mais de 5 chamadas/s ou 2 MB/s de leitura no mesmo shard",
+                "métrica de leitura por shard, correlacionada com número de consumidores",
+                "`ReadProvisionedThroughputExceeded`",
+                "considerar enhanced fan-out se houver múltiplos consumidores competindo"
+              ],
+              [
+                "Reprocesso não encontra o evento esperado",
+                "evento fora da janela de retenção",
+                "`describe-stream-summary` → `RetentionPeriodHours`, comparado com a idade do evento",
+                "configuração do stream",
+                "aumentar a retenção ANTES de precisar; não há recuperação retroativa"
+              ],
+              [
+                "Mapping de replay parece nunca terminar",
+                "`IteratorAge` da função de replay não estava sendo acompanhado",
+                "consulte a métrica antes de assumir que travou",
+                "CloudWatch, função de reprocessamento",
+                "acompanhar até `IteratorAge` ficar próximo de zero, então desligar o mapping"
+              ],
+              [
+                "`GetShardIterator` falha com iterador expirado",
+                "mais de 5 minutos entre a emissão do iterador e o uso em `GetRecords`",
+                "confira o intervalo entre as duas chamadas nos logs",
+                "código do consumidor manual (fora do event source mapping gerenciado)",
+                "solicitar um novo iterador; o event source mapping da Lambda já lida com isso sozinho"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em qualquer parâmetro, pergunte: o problema é de ESCRITA (o produtor não consegue publicar) ou de LEITURA (o consumidor não consegue acompanhar)? As duas famílias de métrica — `Write*` e `Read*`/`IteratorAge` — apontam para lados opostos do pipeline, e confundir uma pela outra faz alguém ajustar o lado que já funcionava."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório cria menos recurso que parece, mas dois deles sobrevivem ao "
+              },
+              {
+                "text": "terraform destroy",
+                "code": true
+              },
+              {
+                "text": " se você esqueceu de um passo antes."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "#!/usr/bin/env bash\n# limpar.sh — o que o destroy não leva\nset -euo pipefail\n\nPROJETO=ffv-lab-kinesis\n\n# 1. Derrube o que o Terraform administra.\nterraform destroy -auto-approve\n\n# 2. Se houve um mapping de reprocesso e ele nao foi apagado no fim do\n#    replay, ele continua lendo e pagando invocacao de Lambda para sempre.\naws lambda list-event-source-mappings --function-name \"${PROJETO}-reprocessamento\" \\\n  --query 'EventSourceMappings[].UUID' --output text | \\\n  xargs -n1 -I{} aws lambda delete-event-source-mapping --uuid {} 2>/dev/null || true\n\n# 3. FILA DE FALHA: guarda ate 14 dias de mensagens mesmo depois do stream\n#    sumir. Se houver algo pendente de investigar, salve antes de apagar.\naws sqs receive-message --queue-url \"$(aws sqs get-queue-url --queue-name ${PROJETO}-eventos-pedido-dlq --query QueueUrl --output text)\" \\\n  --max-number-of-messages 10 --query 'Messages[].Body' --output json 2>/dev/null || true\n\n# 4. GRUPOS DE LOGS da Lambda: tem ciclo proprio, nao cai com a funcao.\naws logs delete-log-group --log-group-name \"/aws/lambda/${PROJETO}-alerta-fraude\" 2>/dev/null || true\naws logs delete-log-group --log-group-name \"/aws/lambda/${PROJETO}-reprocessamento\" 2>/dev/null || true\n\n# 5. Prova final: nada com a tag do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=${PROJETO} \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table\n"
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Stream Kinesis",
+                "sim",
+                "sim, por shard-hora até ser destruído",
+                "nada de especial — mas confirme que não há mapping ativo apontando para ele"
+              ],
+              [
+                "Mapping de reprocesso",
+                "não, se não foi apagado ao fim do replay",
+                "sim, por invocação",
+                "não pertence ao ciclo de vida do Terraform se foi criado via script/console à parte"
+              ],
+              [
+                "Mensagens na fila de falha",
+                "a fila sim; o conteúdo não é recuperável depois",
+                "sim, até expirar",
+                "guarde o que precisa investigar antes de destruir — 14 dias de retenção não são infinitos"
+              ],
+              [
+                "Grupos de logs da Lambda",
+                "depende de `skip_destroy`",
+                "sim, por retenção",
+                "ciclo próprio, sobrevive à função que os alimentava"
+              ],
+              [
+                "Tabela de resultado do replay",
+                "sim, se em Terraform",
+                "sim, por armazenamento",
+                "confirme que o resultado já foi consumido pelo processo de negócio antes de apagar"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Evento perdido em silêncio no pico",
+                "produtor lê `FailedRecordCount` e reenvia só os que falharam",
+                "HTTP 200 não é prova de gravação; a falha mora no corpo da resposta"
+              ],
+              [
+                "Um shard satura enquanto outros ficam ociosos",
+                "chave de partição de alta cardinalidade",
+                "a mesma chave sempre cai no mesmo shard — cardinalidade baixa concentra por definição"
+              ],
+              [
+                "Estágios do mesmo pedido em shards diferentes",
+                "chave = id do pedido",
+                "ordem só existe DENTRO de um shard; a chave decide quem compartilha shard"
+              ],
+              [
+                "Registro ruim travando o shard inteiro",
+                "bissecção de lote + destino de falha em SQS",
+                "isola o problema sem parar os registros seguintes nem descartar sem investigar"
+              ],
+              [
+                "Bug de consumidor descoberto dias depois",
+                "retenção estendida + reprocesso a partir de TRIM_HORIZON/AT_TIMESTAMP",
+                "retenção é o que HABILITA reler; sem ela o dado já se foi de forma irreversível"
+              ],
+              [
+                "Reprocesso duplicando ação de negócio",
+                "destino do replay sempre separado do tempo real",
+                "evita disparar o mesmo alerta ou estorno duas vezes"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "O checkout serializa o evento e escolhe a chave de partição — id do pedido, não tipo.",
+              "PutRecords grava até 500 registros por chamada, cada um de forma independente.",
+              "O Kinesis aplica MD5 à chave e mapeia o resultado para o intervalo de hash de um shard.",
+              "A mesma chave cai sempre no mesmo shard — é isso que garante ordem por pedido.",
+              "O produtor confere FailedRecordCount e reenvia só os registros que falharam.",
+              "A Lambda lê por shard, em lotes, na ordem em que o shard recebeu.",
+              "Um lote com sucesso publica o alerta; um lote que falha repetidamente vai à fila de falha.",
+              "Se um bug é corrigido depois, um mapping temporário relê desde TRIM_HORIZON ou AT_TIMESTAMP.",
+              "O replay escreve num destino separado, e é desligado assim que alcança o tempo real."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b26_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que o Kinesis PutRecords não lança exceção quando um registro falha?",
+            "answer": "PutRecords foi desenhado para processar cada registro de um lote de até 500 de forma independente, e por isso a chamada devolve HTTP 200 mesmo quando parte deles falha. Dentro do corpo da resposta existe um contador `FailedRecordCount` mais um `ErrorCode` por registro que falhou — normalmente `ProvisionedThroughputExceededException`, quando o shard de destino está saturado. Tratar isso como sucesso porque o status HTTP é 200 é o erro mais comum em código de produção que usa esta API; o código correto sempre confere o contador antes de considerar o lote publicado."
+          }
+        },
+        {
+          "id": "b26_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Adicionar mais shards resolve um hot shard?",
+            "answer": "Não, se a causa for uma chave de partição de baixa cardinalidade. Um valor de chave constante — como um tipo de evento fixo — sempre produz o mesmo hash MD5, que sempre cai no mesmo shard, não importa quantos shards o stream tenha no total. A documentação de dimensionamento do Kinesis confirma isso mesmo para o modo on-demand: ao escalar, ele divide o tráfego igualmente entre os novos shards, sem detectar nem isolar a chave que está concentrando a carga. A correção real está na escolha da chave, não no número de shards provisionados."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Qual a diferença entre TRIM_HORIZON, LATEST e AT_TIMESTAMP?",
+            "answer": "Os três decidem de onde um novo consumidor começa a ler um shard, e cada um responde a uma necessidade diferente. TRIM_HORIZON aponta para o registro mais antigo AINDA retido no shard — útil para reprocessar tudo o que existe. LATEST aponta para depois do registro mais recente, ou seja, só o que chegar a partir de agora — é o padrão para consumo em tempo real. AT_TIMESTAMP aponta para um instante específico, e é a opção mais precisa quando você sabe exatamente quando um bug começou e quer reprocessar só o trecho afetado, sem reler dados que já estavam corretos."
+          }
+        },
+        {
+          "id": "b26_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Por que separar o consumidor de reprocesso do consumidor em tempo real?",
+            "answer": "Porque misturar os dois caminhos arrisca aplicar duas vezes a mesma ação de negócio — publicar um alerta de fraude ou registrar um estorno duas vezes é pior do que publicá-lo uma vez atrasado. Um event source mapping separado, com `starting_position` em `TRIM_HORIZON` ou `AT_TIMESTAMP`, lê o mesmo stream de forma independente e escreve num destino diferente do caminho em tempo real, permitindo comparar os dois resultados antes de decidir o que fazer com a diferença. Depois do replay alcançar o tempo real, o mapping temporário é removido."
+          }
+        },
+        {
+          "id": "b26_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "O que acontece com um registro que falha repetidamente no consumidor Lambda?",
+            "answer": "Com `bisect_batch_on_function_error` habilitado, o event source mapping divide o lote com erro ao meio e tenta de novo, isolando progressivamente o registro problemático em vez de reprocessar o lote inteiro do mesmo jeito repetidas vezes. Esgotado o número máximo de tentativas configurado, o lote inteiro é enviado ao destino de falha definido — tipicamente uma fila SQS — e o shard segue entregando os registros seguintes normalmente. Sem essa configuração, o comportamento padrão trava o shard inteiro no registro problemático até alguém intervir manualmente."
+          }
+        },
+        {
+          "id": "b26_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Quanto tempo um evento fica disponível para reprocesso?",
+            "answer": "A retenção configurada no stream decide isso sozinha, e o padrão é 24 horas — extensível até 8.760 horas (365 dias) por meio da API `IncreaseStreamRetentionPeriod`. Fora dessa janela, o registro é definitivamente descartado, e nenhum ponto de partida de iterador — nem `TRIM_HORIZON` — consegue recuperá-lo. Configurar a retenção pela cadência real de detecção de bugs do time, e não pelo padrão, é o que separa \"consigo corrigir e reprocessar\" de \"o dado já se foi\"."
+          }
+        },
+        {
+          "id": "b26_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "O ParallelizationFactor da Lambda quebra a ordem de processamento?",
+            "answer": "Não, desde que a ordem que importa seja por chave de partição, que é a garantia real que o Kinesis oferece. Aumentar o `ParallelizationFactor` permite até 10 lotes concorrentes por shard, mas o serviço continua entregando, para uma MESMA chave de partição, os registros na ordem em que chegaram — a concorrência acontece entre chaves diferentes do mesmo shard, não dentro da mesma chave. É uma forma de aumentar throughput de leitura sem abrir mão da ordem que este laboratório depende."
+          }
+        },
+        {
+          "id": "b26_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Vale a pena usar Kinesis para um volume baixo, tipo 10 eventos por dia?",
+            "answer": "Tecnicamente sim, mas raramente vale a complexidade operacional: um shard sozinho já suporta 1.000 registros por segundo, então 10 eventos por dia usam uma fração irrelevante da capacidade contratada, e o custo por shard-hora corre mesmo sem tráfego. Para esse volume, SNS ou uma chamada direta ao consumidor costumam resolver com menos peças para operar; Kinesis compensa quando existe throughput real para distribuir entre shards, ou necessidade real de reprocesso por janela de tempo — que é exatamente o caso deste laboratório."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b27_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Um stream Kinesis tem chave de partição = tipo_evento, com \"pedido_criado\" e \"pedido_cancelado\" mapeados para shards diferentes. Um mesmo pedido gera um evento de cada tipo. O que garante a ordem entre esses dois eventos, do ponto de vista do consumidor?",
+            "options": [
+              "O Kinesis ordena globalmente por timestamp de chegada, então a ordem é preservada mesmo em shards diferentes",
+              "A retenção estendida sincroniza o relógio dos shards e restabelece a ordem",
+              "O ParallelizationFactor da Lambda reordena os registros antes de entregar ao consumidor",
+              "Nada: a garantia de ordem do Kinesis vale só dentro de um shard, e os dois eventos estão em shards diferentes"
+            ],
+            "correctIndex": 3,
+            "explanation": "A garantia de ordem do Kinesis é explícita e estreita: registros com a MESMA chave de partição, dentro do MESMO shard, chegam ao consumidor na ordem em que foram gravados. Não existe ordem entre shards diferentes — cada shard é lido de forma independente, no seu próprio ritmo, e nada no serviço coordena a leitura de um shard com a de outro. Com a chave sendo o tipo do evento, \"pedido_criado\" e \"pedido_cancelado\" do MESMO pedido caem em shards distintos, e a ordem entre os dois deixa de ter qualquer garantia — a correção é trocar a chave para algo que mantenha os dois no mesmo shard, como o id do pedido.\n\nA primeira alternativa descreve um comportamento que o Kinesis nunca teve: não existe ordenação global por timestamp entre shards, e supor que existe é a origem do bug deste laboratório. A terceira confunde uma configuração de CONCORRÊNCIA com uma de ORDENAÇÃO: o ParallelizationFactor controla quantos lotes concorrentes um shard permite, preservando ordem por chave dentro dele — ele não toca em nada fora do próprio shard. A quarta atribui à retenção um papel que não é dela: retenção decide por quanto tempo o dado fica disponível para releitura, não como os shards se relacionam entre si."
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Um time corrige um bug no consumidor seis dias depois de ele começar a processar errado. O stream tem retenção de 7 dias. Qual configuração de start position permite reprocessar exatamente o que foi afetado, sem tocar no produtor?",
+            "options": [
+              "TRIM_HORIZON, porque é a única opção que funciona com retenção estendida",
+              "LATEST, porque garante que o consumidor comece a partir do estado mais atual do stream",
+              "Aumentar retroativamente a retenção para 14 dias e aguardar a próxima leitura automática",
+              "AT_TIMESTAMP, apontando para o instante em que o bug começou, sobre um novo event source mapping"
+            ],
+            "correctIndex": 3,
+            "explanation": "AT_TIMESTAMP é o ponto de partida mais preciso aqui: ele posiciona o iterador exatamente no instante em que o bug começou, evitando reprocessar dias de dados que já foram tratados corretamente antes do defeito. Um mapping temporário e separado do caminho em tempo real lê esse trecho e regrava o resultado corrigido, sem exigir nenhuma ação do produtor — o dado já está retido no stream havia seis dias, dentro da janela de sete.\n\nA primeira alternativa erra o objetivo: LATEST começa a partir de AGORA, ignorando completamente os seis dias de dado incorreto que precisam ser corrigidos — é a configuração certa para consumo normal, errada para reprocesso de um intervalo passado. A terceira superestima o TRIM_HORIZON: ele funciona com retenção estendida, mas não é a ÚNICA opção — e usá-lo aqui reprocessaria também o primeiro dia de dado que nunca teve problema, um custo desnecessário de tempo e de invocações. A quarta confunde duas operações diferentes: aumentar a retenção estende quanto tempo o dado FICA disponível daqui para frente; ela não cria nenhum mecanismo de \"leitura automática\", e um dado que ainda está dentro da janela de 7 dias já podia ser lido sem qualquer mudança de retenção."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b28",
+      "type": "section",
+      "position": 29,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b28_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "Checkout API no ar (L01/L03), IAM básico, CloudWatch. Contraste útil (não pré-requisito): L29"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "capacidade fixa por shard e o hash MD5 que mapeia chave a shard; falha parcial de PutRecords e o campo FailedRecordCount; ordem garantida só dentro do shard; retenção como pré-condição de reprocesso; os três tipos de shard iterator"
+              ],
+              [
+                "Limitação que fica",
+                "o estado \"último evento visto por pedido\" no consumidor vive em memória, não sobrevive a reciclagem de ambiente — decisão explícita, fora do escopo"
+              ],
+              [
+                "Próximo módulo da série",
+                "L64 — entrega e formato: Parquet, partição, arquivo pequeno. Onde os eventos que aqui aprenderam a chegar em ordem, sem perda, viram arquivo colunar consultável sem varrer tudo"
+              ],
+              [
+                "Data da última validação técnica",
+                "8 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b28_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Amazon Kinesis Data Streams — Terminology and concepts",
+                "code": true
+              },
+              {
+                "text": " — hash MD5 da chave contra o intervalo de hash do shard; "
+              },
+              {
+                "text": "Quotas and limits",
+                "code": true
+              },
+              {
+                "text": " — capacidade de escrita e leitura por shard, retenção padrão e máxima; "
+              },
+              {
+                "text": "PutRecords (API Reference)",
+                "code": true
+              },
+              {
+                "text": " — FailedRecordCount e ErrorCode por registro; "
+              },
+              {
+                "text": "GetShardIterator (API Reference)",
+                "code": true
+              },
+              {
+                "text": " — os três tipos de iterador e a expiração em 5 minutos; "
+              },
+              {
+                "text": "Choose the right mode to stream in",
+                "code": true
+              },
+              {
+                "text": " — por que o modo on-demand não isola chave enviesada ao escalar; e "
+              },
+              {
+                "text": "Lambda parameters for Kinesis event source mappings",
+                "code": true
+              },
+              {
+                "text": " — ParallelizationFactor preservando ordem por chave. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b28_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "O volume de 80 eventos/s em dia normal e o pico de 3× são os medidos na conta de exemplo da Cadência, e servem como ordem de grandeza, não como referência. O número de shards (8) e a retenção (168h) devem ser derivados do SEU volume real e da SUA cadência de detecção de bug — não copiados. O comportamento de resharding descrito para o modo on-demand está confirmado na documentação de dimensionamento; o comportamento específico do seu stream sob a sua distribuição de chave, meça antes de assumir."
+          }
+        }
+      ]
+    }
+  ]
+}

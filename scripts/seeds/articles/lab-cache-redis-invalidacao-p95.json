@@ -1,0 +1,2506 @@
+{
+  "slug": "lab-cache-redis-invalidacao-p95",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência é a mesma equipe do "
+              },
+              {
+                "text": "L01",
+                "code": true
+              },
+              {
+                "text": ", do "
+              },
+              {
+                "text": "L03",
+                "code": true
+              },
+              {
+                "text": " e do "
+              },
+              {
+                "text": "L07",
+                "code": true
+              },
+              {
+                "text": ": dois engenheiros, .NET 8 em ECS Fargate, PostgreSQL no RDS. O L07 resolveu a lentidão do painel gerencial com um índice e uma réplica de leitura. Seis meses depois, a rede cresceu para 1.200 lojas, e um sintoma novo apareceu num endpoint diferente: o catálogo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Antes de cada venda, o ponto de venda de cada loja consulta o preço e o alerta de estoque do produto pelo SKU. O catálogo tem 40 mil itens, mas o log de acesso mostra que 500 deles — os de giro rápido, os mesmos em quase toda loja — respondem por 80% das chamadas num intervalo de cinco minutos. Nas sextas à tarde, o p95 desse endpoint sobe de 8 ms para 340 ms, e a réplica de leitura do L07 chega a 80% de CPU."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O que torna isso interessante é que a consulta em si está correta: é a mesma que o L07 já indexou. Não é uma consulta ruim rodando devagar — é a consulta CERTA rodando milhares de vezes por minuto para responder exatamente a mesma pergunta. Índice e réplica resolvem consulta lenta; nenhum dos dois resolve consulta repetida."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Intermediário — depende do L07 no ar (réplica, Multi-AZ, pool)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L07 concluído, noção de cache-aside, `redis-cli` na máquina"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 40 min · implementação 1 h 30 a 2 h, incluindo o teste de debandada"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo a médio: um nó de ElastiCache cobra por hora ligada, independente de tráfego — bem menor que subir a classe da réplica"
+              },
+              {
+                "k": "Serviços",
+                "v": "ElastiCache Redis (grupo de replicação), RDS PostgreSQL (réplica do L07), CloudWatch, Secrets Manager"
+              },
+              {
+                "k": "Volume atual",
+                "v": "1.200 lojas, catálogo de 40 mil SKUs, 500 SKUs = 80% das chamadas, pico de ~3 mil chamadas/s às sextas 18h"
+              },
+              {
+                "k": "Sintoma medido",
+                "v": "p95 de 8 ms para 340 ms no pico; réplica em 80% de CPU respondendo à mesma pergunta repetidamente"
+              },
+              {
+                "k": "Requisito de negócio declarado",
+                "v": "preço pode ficar até 30 s desatualizado em geral; promoção manual tem de valer imediatamente"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "p95 medido antes e depois do cache, e uma regra de invalidação escrita — não \"cache limpo na mão quando alguém reclama\""
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é otimização de consulta — isso já foi feito no L07, e cachear consulta ruim é pagar hardware para não corrigir o índice; a ordem certa é otimizar primeiro, cachear depois. Também não é cache de sessão de usuário nem cache semântico de prompt de modelo: essa decisão de TTL aplicada a um domínio diferente é o L89, e ela usa exatamente o mecanismo construído aqui."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada objetivo se prova com um comando na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que 80% de consultas idênticas continuam caras mesmo com índice e réplica.",
+              "Nomear os três padrões de cache — cache-aside, write-through, write-behind — e o modo de falha de cada um.",
+              "Reproduzir a debandada de cache com TTL fixo e medir o pico que ela causa no banco.",
+              "Explicar por que TTL com jitter e trava de reconstrução eliminam a debandada sem eliminar o cache.",
+              "Diferenciar expiração (TTL) de invalidação explícita, e nomear o bug de leitura concorrente que a invalidação mal ordenada produz.",
+              "Desenhar a chave de cache de forma que ela decida a taxa de acerto, não a fragmente.",
+              "Implementar cache-aside em C#/.NET 8 com trava distribuída via `SET NX`.",
+              "Usar o endpoint primário do ElastiCache corretamente, sabendo que ele é imune a failover.",
+              "Medir p95 antes e depois do cache, com número — não com \"ficou mais rápido\"."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Cache-aside vs write-through",
+                "SAA-C03, DVA-C02",
+                "a aplicação decide o que e quando cachear, o RDS continua sendo a fonte",
+                "write-through grava cache e banco juntos; cache-aside só popula no miss"
+              ],
+              [
+                "Cold cache",
+                "SAA-C03",
+                "primeira leitura depois de deploy ou failover sempre bate no banco",
+                "que cache vazio não é bug — é o estado inicial esperado"
+              ],
+              [
+                "TTL e invalidação explícita",
+                "DVA-C02, SAA-C03",
+                "TTL com jitter no miss + `DEL` no caminho de escrita",
+                "TTL é expiração passiva; invalidação é decisão ativa da aplicação"
+              ],
+              [
+                "Debandada de cache (thundering herd)",
+                "SAA-C03, SOA-C02",
+                "reproduzida de propósito com TTL fixo em teste de carga",
+                "jitter e trava de reconstrução como as duas defesas complementares"
+              ],
+              [
+                "ElastiCache Multi-AZ e endpoints",
+                "SAA-C03, DVA-C02",
+                "endpoint primário imune a failover; réplica promovida automaticamente",
+                "diferença entre endpoint primário (escrita/leitura) e de leitura (round-robin)"
+              ],
+              [
+                "Política de evicção",
+                "DVA-C02",
+                "`volatile-lru`, o padrão: só expira quem tem TTL",
+                "por que toda chave — inclusive a de trava — precisa nascer com TTL"
+              ],
+              [
+                "Menor privilégio no acesso ao cache",
+                "SAA-C03",
+                "AUTH token via Secrets Manager, TLS em trânsito, security group restrito",
+                "por que Redis sem AUTH é acesso irrestrito a quem estiver na VPC"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A questão clássica descreve um catálogo lido milhares de vezes por minuto e escrito algumas vezes por dia, e pede o padrão de cache de menor custo operacional. Write-through parece \"mais correto\" porque soa mais consistente, e é a resposta errada: ele paga latência extra em TODA escrita para um dado que raramente muda, só para acelerar uma leitura que o cache-aside já acelera sem tocar no caminho de escrita."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A coluna da direita é a rastreabilidade: toda peça da arquitetura de produção aparece nela. Peça que não aparecesse teria sido retirada antes deste texto existir."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "p95 do catálogo no pico",
+                "abaixo de 20 ms",
+                "obriga cache na frente da réplica; réplica sozinha, mesmo indexada, não chega lá"
+              ],
+              [
+                "Tolerância a preço desatualizado, regra geral",
+                "até 30 s",
+                "vira o TTL base; é a resposta escrita à pergunta \"quanto tempo você tolera estar errado\""
+              ],
+              [
+                "Preço de promoção manual",
+                "tem de valer imediatamente",
+                "obriga invalidação explícita no caminho de escrita — TTL sozinho não cumpre isso"
+              ],
+              [
+                "Debandada sob pico de sexta-feira",
+                "não pode gerar pico equivalente no banco",
+                "obriga TTL com jitter e trava de reconstrução de execução única"
+              ],
+              [
+                "Sobreviver à queda de um nó de cache",
+                "sem derrubar o checkout",
+                "obriga Multi-AZ com failover automático no ElastiCache"
+              ],
+              [
+                "Orçamento do trimestre",
+                "não dobra a linha de banco (herdado do L07)",
+                "descarta subir a classe da réplica; o nó de cache é a opção mais barata para o mesmo ganho"
+              ],
+              [
+                "Acesso ao cache",
+                "só a aplicação, nunca de fora da VPC",
+                "obriga AUTH token via Secrets Manager, TLS em trânsito e security group restrito à task"
+              ],
+              [
+                "Corretude sob escrita concorrente",
+                "nunca servir dado mais velho que o próprio DEL",
+                "obriga a ordem commit → invalidação, e o TTL como teto para o caso raro que essa ordem não cobre"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b3_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que esta tabela inteira responde",
+            "content": "Cada linha acima é, no fundo, uma resposta diferente para \"quanto tempo você tolera estar errado\" — 30 s para o preço em geral, zero para a promoção manual, nunca para a chave que identifica o consumidor errado. Cache não decide isso sozinho; ele só implementa a resposta que o requisito já deu."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o cache de um nó só"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este desenho acelera de verdade fora do pico, com a menor implementação possível. O laboratório começa medindo o que ele entrega e o que ele esconde — porque um número torna o defeito discutível, e \"às vezes fica lento\" não."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O cache de um nó só, e a debandada que ele esconde até sexta-feira",
+            "caption": "Este desenho publica e acelera de verdade fora do pico: TTL fixo, um nó, sem trava. O defeito não está em nenhuma linha errada — está em duas ausências que passam despercebidas até 500 chaves expirarem no mesmo segundo. Percorra os passos e repare que a debandada é aritmética, não azar.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "pos",
+                    "service": "user",
+                    "label": "POS de 1.200 lojas",
+                    "note": "consulta preço e alerta de estoque antes de cada venda; é quem sente o p95 subir"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB do L01",
+                    "note": "só encaminha; não sabe nem precisa saber que existe cache atrás dele"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada: aplicação",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "task",
+                    "service": "fargate",
+                    "label": "Task .NET 8, cache-aside",
+                    "note": "decide sozinha ler o cache primeiro; nenhuma trava protege o momento do miss"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada: cache",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "cache",
+                    "service": "elasticache",
+                    "label": "Redis, um nó, sem Multi-AZ",
+                    "note": "guarda as 500 chaves quentes com o mesmo TTL fixo de 30 s, aquecidas juntas no deploy"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada: banco",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "replica",
+                    "service": "replica",
+                    "label": "Réplica de leitura (L07)",
+                    "note": "já indexada e roteada corretamente; sofre por VOLUME repetido, não por consulta ruim"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "pos",
+                "to": "alb",
+                "label": "HTTPS 443, GET /catalogo/produtos/{sku}",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "task",
+                "label": "encaminha por número de conexões",
+                "style": "solid"
+              },
+              {
+                "from": "task",
+                "to": "cache",
+                "label": "GET produto:{sku}",
+                "style": "solid"
+              },
+              {
+                "from": "cache",
+                "to": "replica",
+                "label": "no miss: a mesma consulta indexada do L07",
+                "style": "dashed"
+              },
+              {
+                "from": "replica",
+                "to": "cache",
+                "label": "popula com TTL fixo de 30 s, sem jitter",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A leitura pergunta primeiro ao cache",
+                "detail": "Cache-aside: a aplicação, não o banco nem o balanceador, decide consultar o Redis antes de qualquer coisa. Se a chave existe, a réplica nem é acionada — é aqui que 80% das chamadas deveriam parar.",
+                "nodes": [
+                  "task",
+                  "cache"
+                ],
+                "edges": [
+                  "task>cache"
+                ]
+              },
+              {
+                "label": "TTL fixo dá a mesma vida às 500 chaves quentes",
+                "detail": "As chaves foram aquecidas juntas, no primeiro minuto após o deploy, todas com 30 segundos de validade. Elas não vão morrer em momentos diferentes: vão morrer juntas, porque nasceram juntas e receberam o mesmo prazo.",
+                "nodes": [
+                  "cache"
+                ],
+                "edges": [
+                  "cache>replica"
+                ]
+              },
+              {
+                "label": "Quando o relógio expira, todo mundo erra ao mesmo tempo",
+                "detail": "No segundo em que o TTL zera, a próxima onda de requisições — que sob pico de sexta-feira pode ser centenas por segundo para o mesmo SKU — encontra a chave ausente simultaneamente. Não há dedo errado aqui: é o resultado matemático de compartilhar um relógio.",
+                "nodes": [
+                  "cache",
+                  "replica"
+                ],
+                "edges": [
+                  "cache>replica"
+                ]
+              },
+              {
+                "label": "Cada miss dispara a MESMA consulta, N vezes",
+                "detail": "Sem nada que sirva de fila ou trava, cada uma das N requisições que perderam a chave consulta a réplica de forma independente e idêntica. A réplica que o L07 dimensionou para tráfego distribuído recebe, por um instante, o equivalente a N cópias da mesma pergunta.",
+                "nodes": [
+                  "replica"
+                ],
+                "edges": [
+                  "cache>replica"
+                ]
+              },
+              {
+                "label": "O nó único é ponto único de falha do próprio alívio",
+                "detail": "Sem Multi-AZ, a queda do único nó de cache não degrada — ela remove o alívio inteiro de uma vez. Toda leitura passa a bater na réplica direto, sem trava e sem cache algum, no pior momento possível para isso acontecer.",
+                "nodes": [
+                  "cache"
+                ],
+                "edges": [
+                  "task>cache"
+                ]
+              },
+              {
+                "label": "Por que alguém publica assim",
+                "detail": "Porque funciona, e muito bem, fora da janela de debandada — que em teste manual ninguém reproduz sem querer. É a implementação mais curta que passa em qualquer teste local, e o defeito só aparece sob concorrência real.",
+                "nodes": [
+                  "pos",
+                  "task"
+                ],
+                "edges": [
+                  "pos>alb"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Antes de mudar qualquer coisa, meça o ganho real do cache aquecido, e depois provoque a debandada de propósito. Os dois números — o ganho e o pico — são a linha de base que justifica cada peça da arquitetura de produção."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "filename": "medir-p95.sh",
+            "code": "#!/usr/bin/env bash\n# medir-p95.sh — mede o p95 do endpoint de catalogo, antes e depois do cache\nset -euo pipefail\n\nURL=\"https://$(terraform output -raw dominio)/api/catalogo/produtos/COD-58231\"\n\n# hey: 50 conexoes simultaneas por 30 s, contra UM sku quente. O numero que\n# sai daqui e a linha de base — nada de \"parece mais rapido\".\nhey -z 30s -c 50 \"$URL\" | tee resultado.txt\n\ngrep -E \"50%|90%|95%|99%\" resultado.txt\n# Na Cadencia, sem cache: p95 de 340 ms (bate na replica a cada chamada).\n# Com cache aquecido: p95 de 4 ms — a diferenca e o que a seção de custo\n# compara contra subir a classe da replica para o mesmo ganho.\n"
+          }
+        },
+        {
+          "id": "b4_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "A debandada não é um bug raro — é aritmética sob pico",
+            "content": "Com 500 chaves aquecidas juntas e TTL fixo, o momento da expiração é PREVISÍVEL: é o segundo em que o deploy completou mais 30. No pico de sexta-feira, isso significa que centenas de requisições concorrentes para o MESMO SKU perdem a chave ao mesmo instante e caem, todas, na réplica — o equivalente a apagar o cache na hora de maior tráfego. Se a réplica não aguentar o pico duplicado, o catálogo para para as 1.200 lojas ao mesmo tempo, no horário de maior venda: é dinheiro parado, não só latência alta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A mudança estrutural não é \"adicionar um nó\": é a aplicação parar de confiar só no relógio do TTL para tudo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Chave global, trava de reconstrução e invalidação disparada pela escrita",
+            "caption": "A troca não é \"adicionar um nó\": é a aplicação parar de confiar só no relógio. O que muda é a existência de uma trava para o momento do miss e de um caminho de escrita que avisa o cache, não só o TTL. Percorra os passos: cada peça nova rastreia a uma linha da tabela de requisitos.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "pos",
+                    "service": "user",
+                    "label": "POS de 1.200 lojas",
+                    "note": "não sabe que existe trava nem invalidação; só percebe o p95 estável"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB do L01",
+                    "note": "inalterado; a mudança inteira é atrás dele"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada: aplicação",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "task",
+                    "service": "fargate",
+                    "label": "Task .NET 8, cache-aside + trava",
+                    "note": "no miss, disputa uma trava antes de consultar o banco; grava o preço e invalida na mesma transação lógica"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada: cache, Multi-AZ",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "cprim",
+                    "service": "elasticache",
+                    "label": "Redis primário",
+                    "note": "endpoint que a aplicação usa sempre; o DNS dele não muda quando há failover"
+                  },
+                  {
+                    "id": "crep",
+                    "service": "elasticache",
+                    "label": "Redis réplica, outra AZ",
+                    "note": "candidata a assumir; promovida automaticamente pela menor defasagem de replicação"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada: banco (L01/L07)",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "writer",
+                    "service": "postgres",
+                    "label": "Primário RDS",
+                    "note": "única fonte de verdade do preço; toda escrita passa por aqui antes de qualquer invalidação"
+                  },
+                  {
+                    "id": "replica",
+                    "service": "replica",
+                    "label": "Réplica de leitura (L07)",
+                    "note": "atende o miss do cache; assíncrona — é ela quem produz a corrida da seção de decisões"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Taxa de acerto e defasagem",
+                    "note": "mede acerto do cache, evicção de memória e atraso de réplica — três sinais diferentes"
+                  }
+                ]
+              },
+              {
+                "label": "Segredo",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sm",
+                    "service": "secretsmanager",
+                    "label": "AUTH token do Redis",
+                    "note": "lido em runtime pela task; nunca embutido em variável de ambiente nem em imagem"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "pos",
+                "to": "alb",
+                "label": "HTTPS 443 sem mudança perceptível",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "task",
+                "label": "encaminha por número de conexões",
+                "style": "solid"
+              },
+              {
+                "from": "task",
+                "to": "cprim",
+                "label": "GET produto:{sku} — chave sem id de loja",
+                "style": "solid"
+              },
+              {
+                "from": "cprim",
+                "to": "replica",
+                "label": "no miss, com trava: a mesma consulta do L07",
+                "style": "dashed"
+              },
+              {
+                "from": "replica",
+                "to": "cprim",
+                "label": "popula com TTL base 30 s + jitter até 10 s",
+                "style": "dashed"
+              },
+              {
+                "from": "cprim",
+                "to": "crep",
+                "label": "replicação assíncrona dentro do cluster",
+                "style": "dashed"
+              },
+              {
+                "from": "task",
+                "to": "writer",
+                "label": "grava novo preço, aguarda commit",
+                "style": "solid"
+              },
+              {
+                "from": "writer",
+                "to": "cprim",
+                "label": "DEL da chave, disparado só após o commit",
+                "style": "solid"
+              },
+              {
+                "from": "sm",
+                "to": "task",
+                "label": "AUTH token, renovado em runtime",
+                "style": "dashed"
+              },
+              {
+                "from": "cprim",
+                "to": "cw",
+                "label": "taxa de acerto, evicção, defasagem da réplica de cache",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A chave carrega o que decide a taxa de acerto",
+                "detail": "A chave é `produto:{sku}`, sem identificador de loja. O preço é o mesmo para as 1.200 lojas — incluir a loja fragmentaria um cache de 500 chaves em até 600 mil combinações quase idênticas, e a taxa de acerto desabaria mesmo sob tráfego alto.",
+                "nodes": [
+                  "task",
+                  "cprim"
+                ],
+                "edges": [
+                  "task>cprim"
+                ]
+              },
+              {
+                "label": "TTL com jitter espalha a expiração das 500 chaves quentes",
+                "detail": "Cada chave recebe 30 s mais um valor aleatório de até 10 s, sorteado por chave no momento em que ela é gravada. As 500 deixam de compartilhar um relógio, e a debandada some sem abrir mão do TTL como mecanismo.",
+                "nodes": [
+                  "replica",
+                  "cprim"
+                ],
+                "edges": [
+                  "replica>cprim"
+                ]
+              },
+              {
+                "label": "A trava garante que só uma requisição reconstrói",
+                "detail": "No miss, a aplicação tenta `SET NX` de uma chave de trava com prazo curto. Quem consegue consulta o banco e repovoa; quem não consegue espera um instante e tenta o cache de novo, em vez de repetir a mesma consulta ao banco.",
+                "nodes": [
+                  "cprim",
+                  "replica"
+                ],
+                "edges": [
+                  "cprim>replica"
+                ]
+              },
+              {
+                "label": "A escrita grava no banco primeiro, e só então invalida",
+                "detail": "O `DEL` só é enviado depois de o commit no primário ser confirmado. Inverter essa ordem deixaria uma janela em que o cache já está limpo mas o dado antigo ainda é o único que existe — pior do que não invalidar.",
+                "nodes": [
+                  "writer",
+                  "cprim"
+                ],
+                "edges": [
+                  "writer>cprim"
+                ]
+              },
+              {
+                "label": "Falha automática promove a réplica com menor atraso",
+                "detail": "Com Multi-AZ, a queda do nó primário promove a réplica de cache mais próxima do estado atual. O endpoint primário é um nome de DNS imune a essa troca: a aplicação não muda uma linha de configuração quando isso acontece.",
+                "nodes": [
+                  "crep",
+                  "cprim"
+                ],
+                "edges": [
+                  "cprim>crep"
+                ]
+              },
+              {
+                "label": "O painel observa taxa de acerto, não só latência",
+                "detail": "Latência baixa por si só não prova que o cache funciona — um cache vazio também responde rápido ao encaminhar tudo para a réplica, até ela saturar. A taxa de acerto é o sinal que separa \"rápido porque cacheado\" de \"rápido porque ainda coube\".",
+                "nodes": [
+                  "cprim",
+                  "cw"
+                ],
+                "edges": [
+                  "cprim>cw"
+                ]
+              },
+              {
+                "label": "A trava não é fila para 1.200 lojas",
+                "detail": "A trava só existe no instante do miss de UMA chave específica; fora dessa janela estreita, toda leitura segue direto ao Redis sem disputar nada. É uma peça cirúrgica, não um gargalo geral.",
+                "nodes": [
+                  "task",
+                  "cprim"
+                ],
+                "edges": [
+                  "task>cprim"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "annotated_formula",
+          "position": 2,
+          "data": {
+            "title": "Por quanto tempo você pode estar errado, na pior hipótese",
+            "formula": "janela_de_erro ≈ max(ttl_base + jitter_max, atraso_da_réplica_no_instante_do_miss)",
+            "parts": [
+              {
+                "symbol": "ttl_base",
+                "name": "O número que o negócio aceitou",
+                "description": "30 s — o que a área comercial chamou de \"pode ficar desatualizado por até tanto tempo\" para o preço em geral. É a resposta à pergunta do núcleo do módulo, escrita como configuração."
+              },
+              {
+                "symbol": "jitter_max",
+                "name": "O espalhamento que evita a debandada",
+                "description": "Até 10 s somados por chave, sorteados no momento de gravar. Custa uma linha e é o que impede 500 chaves de expirarem no mesmo segundo — o ajuste com maior efeito por linha alterada deste módulo.",
+                "highlight": true
+              },
+              {
+                "symbol": "atraso_da_réplica_no_instante_do_miss",
+                "name": "O caso raro que não é coberto pela ordem certa",
+                "description": "Se uma leitura em voo pegou o valor antigo na réplica assíncrona ANTES do commit e só grava no cache DEPOIS do DEL, a chave carrega o valor velho — mas nunca além do TTL, porque ele é o teto que vale mesmo quando a corrida acontece."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ajuste com maior efeito por linha alterada",
+            "content": "Das peças novas, a que mais reduz risco por menos código é o jitter: uma linha que soma um valor aleatório ao TTL elimina a sincronização das 500 chaves quentes sem exigir trava, invalidação nem nó novo. A trava de reconstrução resolve o que sobra — a concorrência DENTRO da janela de miss de uma única chave — e as duas juntas cobrem praticamente toda a debandada medida no teste de carga."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de uma leitura, e o de uma escrita, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os dois caminhos se cruzam num único ponto: a chave `produto:{sku}` no Redis. Entender a ORDEM em que cada um toca essa chave é o que separa uma invalidação que funciona de uma que parece funcionar em teste manual e falha sob concorrência real."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "O caminho de uma leitura, e o de uma escrita — e onde eles se cruzam",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "Leitura: GET produto:{sku} no Redis",
+                "desc": "A chave nunca leva identificador de loja — o preço é o mesmo para as 1.200 lojas."
+              },
+              {
+                "label": "HIT: devolve e mede o tempo",
+                "desc": "Caminho feliz, sub-5 ms no padrão medido. É onde 80% das chamadas deveriam parar."
+              },
+              {
+                "label": "MISS: disputa a trava com SET NX EX 5",
+                "desc": "Só quem consegue gravar a chave de trava segue para o banco; a trava expira sozinha em 5 s mesmo se o processo cair no meio, evitando impasse."
+              },
+              {
+                "label": "Quem NÃO conseguiu a trava: espera 150 ms e tenta o GET de novo",
+                "desc": "Se ainda não existir, consulta a réplica SEM popular o cache — evita competir com quem já está reconstruindo pela mesma escrita no Redis."
+              },
+              {
+                "label": "Quem conseguiu a trava: consulta a réplica do L07",
+                "desc": "Mesma consulta indexada; grava no cache com TTL base + jitter e libera a trava no `finally`."
+              },
+              {
+                "label": "Escrita: grava o novo preço no primário e aguarda o commit",
+                "desc": "A transação só é considerada concluída quando o RDS confirma — nada é anunciado antes disso."
+              },
+              {
+                "label": "Só então: DEL da chave, nunca SET com o valor novo",
+                "desc": "Gravar direto arriscaria formato diferente da leitura padrão; DEL força o próximo GET a reconstruir pela rota que já é testada."
+              },
+              {
+                "label": "A próxima leitura daquele SKU é um MISS garantido",
+                "desc": "E repovoa a partir do dado que acabou de ser commitado — não do que estava em trânsito antes da escrita."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que a leitura perdedora não popula o cache",
+            "content": "Quando a trava já está com outro processo, a leitura perdedora consulta a réplica diretamente, sem gravar o resultado no Redis. Se ela também gravasse, duas escritas concorrentes na mesma chave poderiam se sobrepor sem nenhuma garantia de qual delas vence — e a resposta certa não é \"a última que chegou\", é \"a que passou pela trava\"."
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O que fica gravado na chave produto:{sku}. \"versao\" acompanha a coluna do RDS e existe para auditoria — um job periodico pode comparar a versao no cache com a do banco e alertar se elas divergirem por mais tempo que o TTL deveria permitir."
+              }
+            ]
+          },
+          "position": 3
+        },
+        {
+          "id": "b6_3",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "json",
+            "filename": "valor-cacheado.json",
+            "code": "{\n  \"sku\": \"COD-58231\",\n  \"precoCentavos\": 129900,\n  \"estoqueAlerta\": 12,\n  \"versao\": 47,\n  \"cacheadoEm\": \"2026-08-07T18:03:11Z\"\n}"
+          }
+        },
+        {
+          "id": "b6_4",
+          "type": "paragraph",
+          "position": 5,
+          "data": {
+            "content": [
+              {
+                "text": "Repare no que NÃO está no envelope: nenhum campo de loja. A ausência é a decisão da seção de decisões tornada concreta — o mesmo valor serve as 1.200 lojas."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Reduzir o p95 do endpoint de catálogo de 340 ms para abaixo de 20 ms no pico de sexta-feira, sem dobrar a linha de banco do orçamento e sem servir preço de promoção manual desatualizado por mais que o tempo de uma escrita.",
+            "winner": "Cache-aside no ElastiCache Redis (Multi-AZ), TTL curto com jitter, trava de reconstrução no miss, e DEL disparado pela escrita depois do commit",
+            "why": "O cache-aside não pede reescrever o caminho de escrita da aplicação: o RDS continua sendo a única fonte de verdade, e o cache só é consultado e populado pela leitura. Isso combina bem com um sistema onde a leitura é 20 vezes mais frequente que a escrita — o padrão contrário, write-through, pagaria latência de escrita toda vez que um preço muda algumas vezes por dia, para acelerar uma leitura que já é rara em comparação. Um nó de ElastiCache custa uma fração do upgrade de instância de RDS que teria o mesmo efeito no p95, e ataca a causa real: consulta idêntica repetida, não consulta lenta — essa já foi resolvida no L07.",
+            "alternatives": [
+              {
+                "name": "Write-through",
+                "downside": "Toda escrita de preço passaria a gravar no cache de forma síncrona antes de confirmar sucesso ao operador. Para um dado que muda algumas vezes por dia e é lido milhares de vezes por minuto, isso adiciona latência ao caminho errado — o raro — para otimizar o caminho que o cache-aside já resolve."
+              },
+              {
+                "name": "Write-behind (write-back)",
+                "downside": "A escrita seria confirmada no cache e aplicada ao RDS depois, de forma assíncrona. Se o nó de cache falhar antes do flush, o preço novo nunca chega ao banco e ninguém percebe até aparecer errado no checkout — perda de dado financeiro que este catálogo não pode aceitar."
+              },
+              {
+                "name": "Aumentar a classe da réplica de leitura (alternativa do L07)",
+                "downside": "Deixa cada consulta mais rápida, mas continua pagando o custo de responder à MESMA pergunta centenas de vezes. É a mesma armadilha de cachear consulta ruim, invertida: aqui a consulta já é boa, o desperdício é a repetição."
+              },
+              {
+                "name": "Cache local em memória de cada task",
+                "downside": "Zero infraestrutura nova e a leitura mais rápida possível — mas cada task tem sua própria cópia, e uma invalidação por `DEL` não alcança todas ao mesmo tempo. O requisito de \"promoção vale imediatamente\" fica impossível de cumprir de forma coordenada."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Padrão de cache",
+                "cache-aside",
+                "write-through; write-behind",
+                "RDS continua fonte única; menor mudança no caminho de escrita",
+                "a primeira leitura depois de um miss ainda paga o custo total (cold read)"
+              ],
+              [
+                "TTL",
+                "30 s base + jitter de até 10 s",
+                "TTL fixo (debandada); TTL longo de 5 min",
+                "espalha a expiração das chaves quentes e ainda cobre a tolerância declarada",
+                "leitura entre o commit e a invalidação pode servir até o TTL de valor velho, se o `DEL` falhar"
+              ],
+              [
+                "Invalidação",
+                "`DEL` após o commit, disparado pela escrita",
+                "`SET` com o valor novo direto; TTL curto sem invalidação nenhuma",
+                "evita gravar formato diferente do que a leitura padrão produz; força releitura real",
+                "mais uma chamada de rede por escrita"
+              ],
+              [
+                "Trava de reconstrução",
+                "`SET NX` com expiração curta",
+                "sem trava (aceitar a debandada); fila externa via SQS",
+                "resolve com uma chamada, sem infraestrutura nova",
+                "quem não pegou a trava espera; a trava tem TTL próprio para não travar por processo morto"
+              ],
+              [
+                "Topologia do cache",
+                "grupo de replicação Multi-AZ, 2 nós",
+                "1 nó (desenho mínimo); cluster mode enabled (sharding)",
+                "falha de nó não derruba o catálogo para 1.200 lojas de uma vez",
+                "dobra o custo de nó em relação a 1 só; sharding seria complexidade sem necessidade no volume atual"
+              ],
+              [
+                "Chave de cache",
+                "apenas o SKU, global",
+                "SKU + identificador de loja",
+                "o dado é idêntico para as 1.200 lojas; incluir a loja fragmentaria em até 600 mil combinações",
+                "nenhum aqui — só mudaria se o preço variasse por loja, o que não é o caso"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: o grupo de replicação Multi-AZ"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença entre este recurso e um `aws_elasticache_cluster` avulso é exatamente o que o requisito de disponibilidade pede: `automatic_failover_enabled` e `multi_az_enabled` só existem em grupo de replicação."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "elasticache.tf",
+            "code": "# elasticache.tf — o grupo de replicacao Multi-AZ, e por que nao e um no so\n\nresource \"aws_elasticache_subnet_group\" \"cache\" {\n  name       = \"${var.projeto}-cache\"\n  subnet_ids = aws_subnet.privada[*].id\n}\n\nresource \"aws_elasticache_parameter_group\" \"cache\" {\n  name   = \"${var.projeto}-redis7\"\n  family = \"redis7\"\n\n  # O padrao da AWS ja e volatile-lru: sob pressao de memoria, so expira quem\n  # TEM ttl. Chave sem ttl nunca sai por essa politica — e e por isso que toda\n  # chave deste laboratorio nasce com ttl explicito, inclusive a de trava.\n  parameter {\n    name  = \"maxmemory-policy\"\n    value = \"volatile-lru\"\n  }\n}\n\nresource \"aws_elasticache_replication_group\" \"cache\" {\n  replication_group_id      = \"${var.projeto}-catalogo\"\n  description                = \"Cache de catalogo: cache-aside com invalidacao pela escrita\"\n  engine                     = \"redis\"\n  engine_version              = \"7.1\"\n  node_type                   = \"cache.r7g.large\"\n\n  # 1 primario + 1 replica: e o minimo que autoriza failover automatico. Um\n  # unico no (num_cache_clusters = 1) e o desenho MINIMO deste laboratorio, e\n  # o motivo de nao ir para producao esta na secao de decisoes.\n  num_cache_clusters          = 2\n  automatic_failover_enabled  = true\n  multi_az_enabled            = true\n\n  parameter_group_name        = aws_elasticache_parameter_group.cache.name\n  subnet_group_name           = aws_elasticache_subnet_group.cache.name\n  security_group_ids          = [aws_security_group.cache.id]\n\n  # AUTH exige criptografia em transito habilitada; sem os dois juntos o\n  # provider recusa o apply. E o par que fecha a exposicao da secao de\n  # seguranca.\n  at_rest_encryption_enabled  = true\n  transit_encryption_enabled  = true\n  auth_token                  = data.aws_secretsmanager_secret_version.cache_auth.secret_string\n\n  # Snapshot aqui NAO e backup de dado de negocio — o RDS continua sendo a\n  # unica fonte de verdade. Ele so acelera o reaquecimento apos substituicao\n  # de no, e por isso um dia de retencao basta.\n  snapshot_retention_limit    = 1\n\n  tags = { Projeto = var.projeto }\n}\n\nresource \"aws_security_group\" \"cache\" {\n  name   = \"${var.projeto}-cache\"\n  vpc_id = aws_vpc.principal.id\n\n  # So a task fala com o cache. Nao ha 0.0.0.0/0 nem faixa de sub-rede: a\n  # origem permitida e o security group DA TASK, por referencia.\n  ingress {\n    from_port       = 6379\n    to_port          = 6379\n    protocol         = \"tcp\"\n    security_groups  = [aws_security_group.task.id]\n  }\n}\n\n# Leitura do segredo com recurso especifico — nao ha \"*\" nesta politica.\ndata \"aws_iam_policy_document\" \"ler_segredo_cache\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"secretsmanager:GetSecretValue\"]\n    resources = [aws_secretsmanager_secret.cache_auth.arn]\n  }\n}\n\noutput \"endpoint_primario_cache\" {\n  value       = aws_elasticache_replication_group.cache.primary_endpoint_address\n  description = \"DNS que sempre resolve para o no primario — imune a failover\"\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Redis sem AUTH e sem TLS é acesso irrestrito dentro da VPC",
+            "content": "Sem `transit_encryption_enabled` e `auth_token`, qualquer processo que alcance a porta 6379 na mesma VPC lê e sobrescreve o catálogo inteiro sem autenticação nenhuma — preço, estoque, tudo. Os dois parâmetros são exigidos juntos pelo provedor: AUTH depende de criptografia em trânsito habilitada. Isso não é endurecimento opcional; é a diferença entre \"cache da aplicação\" e \"banco de dados sem senha na rede interna\"."
+          }
+        },
+        {
+          "id": "b8_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "Por que o Terraform expõe `primary_endpoint_address`, e não o IP de um nó",
+            "content": "Usar o endereço de um nó específico funciona no dia do deploy e quebra no primeiro failover, porque aquele nó pode deixar de ser o primário. O `primary_endpoint_address` é um nome de DNS mantido pela AWS que sempre aponta para quem estiver no papel de primário — o mesmo princípio do endpoint fixo que o L07 já usava para o RDS."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: cache-aside com trava, em C#"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A trava é a peça que faz a diferença entre o desenho mínimo e o de produção sob concorrência. Ela só protege o INSTANTE do miss — fora dele, toda leitura vai direto ao Redis sem disputar nada."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "ProdutoCacheService.cs",
+            "code": "// ProdutoCacheService.cs — cache-aside com trava de reconstrucao e invalidacao pela escrita\n\npublic sealed class ProdutoCacheService\n{\n    private readonly IConnectionMultiplexer _redis;\n    private readonly IProdutoRepository _repo; // consulta a REPLICA do L07, nao o primario\n    private static readonly Random _jitter = Random.Shared;\n\n    private const int TtlBaseSegundos = 30;       // o numero que o negocio aceitou tolerar\n    private const int JitterMaximoSegundos = 10;  // espalha a expiracao das chaves quentes\n    private const int TravaTimeoutSegundos = 5;   // teto: mesmo se o titular cair, a trava solta\n\n    public ProdutoCacheService(IConnectionMultiplexer redis, IProdutoRepository repo)\n    {\n        _redis = redis;\n        _repo = repo;\n    }\n\n    public async Task<ProdutoCacheDto?> ObterAsync(string sku)\n    {\n        var db = _redis.GetDatabase();\n\n        // A chave NAO leva loja: o preco e o mesmo para as 1.200 lojas, e\n        // incluir a loja fragmentaria um cache de 500 chaves em ate 600 mil.\n        var chave = $\"produto:{sku}\";\n\n        var cacheado = await db.StringGetAsync(chave);\n        if (cacheado.HasValue)\n            return JsonSerializer.Deserialize<ProdutoCacheDto>(cacheado!);\n\n        // MISS. So uma requisicao reconstroi; as outras aguardam um instante\n        // ou seguem direto ao banco SEM popular — a trava evita a debandada,\n        // nao o miss em si, que e inevitavel na primeira leitura de cada chave.\n        var chaveTrava = $\"trava:{chave}\";\n        var obteveTrava = await db.StringSetAsync(\n            chaveTrava, Environment.MachineName,\n            TimeSpan.FromSeconds(TravaTimeoutSegundos), When.NotExists);\n\n        if (!obteveTrava)\n        {\n            await Task.Delay(150); // quem tem a trava provavelmente ja publicou\n            var segundaTentativa = await db.StringGetAsync(chave);\n            if (segundaTentativa.HasValue)\n                return JsonSerializer.Deserialize<ProdutoCacheDto>(segundaTentativa!);\n\n            // Ainda sem cache: consulta a replica SEM popular, para nao\n            // competir por escrita no Redis com quem tem a trava.\n            return await ConsultarReplicaAsync(sku, populaCache: false);\n        }\n\n        try\n        {\n            return await ConsultarReplicaAsync(sku, populaCache: true);\n        }\n        finally\n        {\n            await db.KeyDeleteAsync(chaveTrava);\n        }\n    }\n\n    private async Task<ProdutoCacheDto?> ConsultarReplicaAsync(string sku, bool populaCache)\n    {\n        var produto = await _repo.BuscarPorSkuAsync(sku); // a mesma consulta indexada do L07\n        if (produto is null) return null;\n\n        if (populaCache)\n        {\n            var ttl = TimeSpan.FromSeconds(TtlBaseSegundos + _jitter.Next(0, JitterMaximoSegundos));\n            var db = _redis.GetDatabase();\n            await db.StringSetAsync($\"produto:{sku}\", JsonSerializer.Serialize(produto), ttl);\n        }\n\n        return produto;\n    }\n\n    public async Task InvalidarAposEscritaAsync(string sku)\n    {\n        // Chamado SO depois do commit no primario ser confirmado. DEL, nunca\n        // SET com o valor novo: gravar aqui arriscaria formato diferente do\n        // que a leitura padrao produz, e o proximo GET reconstroi certo.\n        var db = _redis.GetDatabase();\n        await db.KeyDeleteAsync($\"produto:{sku}\");\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A trava tem TTL próprio, e isso não é redundância",
+            "content": "Se o processo que segurou a trava morrer no meio da reconstrução — deploy, OOM, qualquer motivo — uma trava sem prazo ficaria presa para sempre, e nenhuma requisição conseguiria repovoar aquela chave. Os 5 s de `TravaTimeoutSegundos` são o teto de dano de uma falha desse tipo: pior caso, a chave fica sem repovoar por 5 s a mais, não para sempre."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: a escrita, e a ordem que decide a corrida"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O `AtualizarPrecoAsync` é o outro lado da chave: quem grava o preço também é quem avisa o cache, e a ordem entre as duas ações não é um detalhe de estilo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "PrecoService.cs",
+            "code": "// PrecoService.cs — a ordem que importa: commit primeiro, invalidacao depois\n\npublic sealed class PrecoService\n{\n    private readonly AppDb _db;\n    private readonly ProdutoCacheService _cache;\n\n    public PrecoService(AppDb db, ProdutoCacheService cache)\n    {\n        _db = db;\n        _cache = cache;\n    }\n\n    public async Task AtualizarPrecoAsync(string sku, decimal novoPreco)\n    {\n        await using var tx = await _db.Database.BeginTransactionAsync();\n\n        var produto = await _db.Produtos.SingleAsync(p => p.Sku == sku);\n        produto.PrecoCentavos = (int)(novoPreco * 100);\n        produto.Versao++;\n\n        await _db.SaveChangesAsync();\n        await tx.CommitAsync(); // so invalida DEPOIS do commit confirmado no primario\n\n        // Inverter esta ordem — invalidar antes do commit — abriria uma\n        // janela em que o cache ja esta vazio mas o dado antigo ainda e o\n        // UNICO que existe: pior do que nao ter invalidado nada.\n        await _cache.InvalidarAposEscritaAsync(sku);\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "dependencia.txt",
+            "code": "# Este laboratorio reaproveita a imagem do L03. A unica dependencia nova e o\n# cliente StackExchange.Redis, que entra no .csproj:\n#\n#   <PackageReference Include=\"StackExchange.Redis\" Version=\"2.8.16\" />\n#\n# Nao ha estagio de build novo nem porta nova exposta.\n"
+          }
+        },
+        {
+          "id": "b10_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "O bug que sobrevive à ordem certa: invalidar não é o mesmo que garantir",
+            "content": "Mesmo com o commit ANTES do `DEL`, uma leitura que já estava em voo para a réplica de leitura do L07 antes da escrita pode terminar DEPOIS do `DEL` — porque a réplica é assíncrona e pode não ter alcançado o commit ainda. Essa leitura grava o valor ANTIGO no cache, agora sem nenhuma trava impedindo. É o bug de \"apaguei e uma leitura concorrente repopulou com o valor velho\", e ele custa dinheiro quando o valor é preço: cliente paga menos que o preço correto até o TTL expirar. A ordem certa do código não elimina essa corrida — ela só garante que o pior caso é limitado pelo TTL, nunca indefinido. Para a promoção manual, que precisa valer no segundo seguinte, a rotina do operador confirma que a chave está ausente do Redis antes de anunciar sucesso — não confia só em o `DEL` ter sido enviado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Implantar, e provar com número"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma aceita \"ficou mais rápido\" como resultado — cada uma tem um número ou um estado esperado, e a segunda é a que mais gente pula por parecer destrutiva demais para rodar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provocar-debandada.sh",
+            "code": "#!/usr/bin/env bash\n# provocar-debandada.sh — reproduz a debandada de proposito, no desenho MINIMO\nset -euo pipefail\n\n# 1. Aquece as 500 chaves quentes de uma vez, TODAS com o MESMO ttl fixo —\n#    e exatamente o que o desenho minimo faz no deploy.\nfor sku in $(cat skus-quentes.txt); do\n  curl -s \"https://$(terraform output -raw dominio)/api/catalogo/produtos/$sku\" >/dev/null\ndone\necho \"500 chaves aquecidas juntas, ttl fixo de 30s\"\n\n# 2. Sustenta carga por mais de 30 s. Observe o CloudWatch da REPLICA durante\n#    a janela em torno do segundo 30: DatabaseConnections deve saltar.\nhey -z 90s -c 100 -m GET \\\n  $(sed 's|^|https://'\"$(terraform output -raw dominio)\"'/api/catalogo/produtos/|' skus-quentes.txt) \\\n  2>&1 | tail -5\n\naws cloudwatch get-metric-statistics \\\n  --namespace AWS/RDS --metric-name DatabaseConnections \\\n  --dimensions Name=DBInstanceIdentifier,Value=ffv-lab-replica \\\n  --start-time \"$(date -u -d '-2 min' +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --period 10 --statistics Maximum --output table\n# Esperado: um pico isolado por volta do segundo 30, e nao antes disso —\n# a assinatura de uma debandada sincronizada, nao de carga organica.\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medicoes; nenhuma conclusao vem de \"parece que melhorou\"\n\nPROJETO=ffv-lab; SKU=COD-58231\n\n# ── Prova 1: p95 antes e depois do cache aquecido ────────────────────────────\n# Rode medir-p95.sh com o cache frio (recem-implantado) e de novo com o\n# cache quente. Esperado: p95 cai de ~340 ms para a casa de um digito.\n\n# ── Prova 2: a debandada acontece no MINIMO e some na PRODUCAO ───────────────\n# provocar-debandada.sh no desenho minimo mostra pico isolado de\n# DatabaseConnections no ciclo do ttl. O MESMO script contra o desenho de\n# producao (ttl com jitter + trava) nao deve mostrar pico correlacionado —\n# a leitura de DatabaseConnections deve ficar estavel durante a janela.\n\n# ── Prova 3: a trava reduz N consultas identicas para 1 ──────────────────────\npsql \"$DATABASE_URL_REPLICA\" -c \\\n  \"SELECT calls FROM pg_stat_statements WHERE query LIKE '%produtos WHERE sku%'\"\n# Anote o valor de 'calls'. Provoque um miss simultaneo de 50 requisicoes na\n# MESMA chave (ab -n 50 -c 50). Sem trava, calls sobe por volta de 50; com\n# trava, sobe por volta de 1 — as outras 49 aguardaram ou pularam a populacao.\n\n# ── Prova 4: a invalidacao vale no proximo GET, nao no proximo TTL ───────────\ncurl -s \"https://.../api/catalogo/produtos/$SKU\" | jq .preco_centavos   # antes\ncurl -s -X PUT \"https://.../api/catalogo/produtos/$SKU/preco\" \\\n  -d '{\"precoCentavos\": 99900}'                                        # muda\ncurl -s \"https://.../api/catalogo/produtos/$SKU\" | jq .preco_centavos   # depois\n# Esperado: o terceiro comando ja devolve 99900, sem esperar os 30 s de ttl.\n\n# ── Prova 5: failover do cache, medido pela aplicacao ─────────────────────────\naws elasticache test-failover \\\n  --replication-group-id \"${PROJETO}-catalogo\" --node-group-id 0001\n( while true; do\n    curl -s -o /dev/null -w '%{http_code} ' \"https://.../api/catalogo/produtos/$SKU\"\n    sleep 0.2\n  done ) & LACO=$!\nsleep 60; kill $LACO\n# Esperado: nenhum erro de conexao — a aplicacao usa o endpoint primario, que\n# e o mesmo DNS antes e depois. Pode haver um breve aumento de latencia (cold\n# miss na chave recem-promovida), nao erro.\n"
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · p95 antes/depois do cache",
+                "`medir-p95.sh` com cache frio e depois quente",
+                "p95 cai de ~340 ms para a casa de um dígito",
+                "ganho pequeno indica taxa de acerto baixa — confira fragmentação de chave"
+              ],
+              [
+                "2 · debandada some na produção",
+                "`provocar-debandada.sh` no mínimo e na produção",
+                "pico isolado de `DatabaseConnections` some no desenho com jitter + trava",
+                "se o pico continuar na produção, o jitter não está sendo aplicado ou a trava falhou"
+              ],
+              [
+                "3 · trava reduz N consultas para 1",
+                "`pg_stat_statements` antes/depois de miss simultâneo",
+                "`calls` sobe por volta de 1, não por volta de N",
+                "se sobe por volta de N, a trava não está impedindo reconstrução concorrente"
+              ],
+              [
+                "4 · invalidação vale no próximo GET",
+                "GET, PUT de preço, GET imediato",
+                "o terceiro GET já devolve o preço novo, sem esperar o TTL",
+                "se ainda devolve o antigo, o `DEL` não foi disparado ou foi enviado antes do commit"
+              ],
+              [
+                "5 · failover sem erro de aplicação",
+                "`test-failover` mais laço de `curl` durante 60 s",
+                "nenhum código de erro; possível aumento breve de latência",
+                "erro de conexão indica que a aplicação está usando o endpoint fixo do nó, não o primário"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três produzem sintomas parecidos à primeira vista — \"o catálogo está lento de novo\" — e o que separa é onde se olha primeiro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Debandada de propósito",
+                "remova o jitter e a trava; aqueça as 500 chaves juntas com TTL fixo de 30 s",
+                "pico periódico de `DatabaseConnections` na réplica, a cada 30 s exatos",
+                "`CloudWatch` correlacionando o período do pico ao valor do TTL configurado",
+                "reintroduzir jitter por chave e `SET NX` como trava de reconstrução"
+              ],
+              [
+                "Chave fragmentada por loja",
+                "inclua o identificador da loja na chave: `produto:{loja}:{sku}`",
+                "taxa de acerto despenca mesmo sob tráfego alto; a réplica volta a receber quase tudo",
+                "`SCAN` contando a cardinalidade real de chaves — muito maior que os 500 SKUs esperados",
+                "remover o campo que fragmenta a chave; ela deve refletir o dado, não o consumidor"
+              ],
+              [
+                "Trava sem TTL",
+                "troque `SET NX EX 5` por `SET NX` sem prazo",
+                "um crash no titular da trava trava a reconstrução daquela chave para sempre",
+                "`TTL trava:produto:SKU` retornando `-1` no Redis",
+                "sempre definir expiração explícita na trava, nunca depender de remoção manual"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana durante o teste de debandada",
+            "content": "Latência média pode continuar baixa mesmo com a debandada acontecendo, porque ela dura poucos segundos dentro de uma janela de 30. Olhar só a média esconde o pico; o p99 e a contagem de conexões do banco no segundo exato da expiração é que denunciam o padrão."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25_0",
+      "type": "quiz",
+      "position": 13,
+      "data": {
+        "question": "O desenho mínimo aquece 500 chaves quentes de uma vez, todas com TTL fixo de 30 s. Sob o pico de sexta-feira, o que acontece quando o TTL expira?",
+        "options": [
+          "A réplica de leitura perde a conexão com o primário e para de aceitar consultas",
+          "O ALB começa a devolver 503 porque não há alvo saudável no grupo de destino",
+          "O cache para de funcionar porque o Redis atingiu o limite de memória",
+          "As 500 chaves expiram quase ao mesmo tempo, e a próxima onda de requisições gera até centenas de consultas idênticas simultâneas ao banco"
+        ],
+        "correctIndex": 3,
+        "explanation": "É debandada de cache por construção: chaves que nasceram juntas, com o mesmo prazo fixo, morrem juntas. No instante em que o TTL zera, todas as requisições concorrentes que pedem os SKUs quentes encontram a chave ausente ao mesmo tempo, e sem trava de reconstrução cada uma delas consulta o banco de forma independente — o equivalente a apagar o cache inteiro no pico de tráfego.\n\nA primeira alternativa confunde o sintoma com esgotamento de memória, que produziria evicção sob a política `volatile-lru` e não tem relação com o ciclo do TTL — 500 chaves pequenas não saturam a memória de um nó dimensionado para o catálogo. A terceira desloca o problema para a camada errada: o ALB não tem nenhuma relação com o estado do Redis, e o sintoma aparece na réplica de banco, não no balanceador. A quarta inventa uma falha de infraestrutura que o cenário não descreve — nada na descrição envolve queda de conexão entre primário e réplica de RDS, e a debandada acontece mesmo com as duas instâncias de banco saudáveis."
+      }
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 14,
+      "data": {
+        "title": "Segurança: o cache é uma cópia do catálogo, e precisa ser tratado como tal"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um nó de cache sem controle de acesso não é menos sensível que o banco: ele guarda preço e estoque de todo o catálogo, em texto legível, para quem alcançar a porta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Redis exposto sem AUTH/TLS na VPC",
+                "média",
+                "alto",
+                "AUTH token via Secrets Manager + `transit_encryption_enabled`",
+                "VPC Flow Logs com conexão à porta 6379 fora do security group da task",
+                "rotacionar o AUTH token e revisar o security group imediatamente"
+              ],
+              [
+                "AUTH token em log ou variável de ambiente",
+                "baixa",
+                "alto",
+                "token lido do Secrets Manager em runtime, nunca embutido em imagem nem log",
+                "busca por padrão de token nos grupos de log da aplicação",
+                "rotacionar o token e invalidar conexões abertas com o valor antigo"
+              ],
+              [
+                "Debandada derruba a réplica no pico de vendas",
+                "média",
+                "alto",
+                "TTL com jitter e trava de reconstrução, testados sob carga antes do deploy",
+                "alarme de `DatabaseConnections`/CPU correlacionado ao ciclo do TTL",
+                "aumentar o TTL de emergência via parâmetro e investigar depois com calma"
+              ],
+              [
+                "Preço errado servido por corrida de invalidação",
+                "baixa",
+                "alto",
+                "ordem commit → `DEL`; TTL como teto de exposição, nunca sem limite",
+                "job periódico comparando a versão cacheada com a versão do RDS",
+                "apagar a chave manualmente e checar o log de escrita daquele SKU"
+              ],
+              [
+                "Chave sem TTL sob política `volatile-lru`",
+                "baixa",
+                "médio",
+                "toda chave — dado e trava — nasce com TTL explícito no código",
+                "uso de memória do Redis crescendo sem evicção correspondente",
+                "corrigir o caminho que grava sem TTL e forçar expiração das chaves órfãs"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "O cache está sendo usado de verdade?",
+                "taxa de acerto (`GetTypeCmds` vs `GetMissCmds`)",
+                "queda é chave fragmentada ou TTL curto demais para o padrão de acesso",
+                "< 90% em horário comercial"
+              ],
+              [
+                "O nó está saturado de memória?",
+                "`DatabaseMemoryUsagePercentage`",
+                "sob `volatile-lru`, evicção começa a apagar chave viva antes do TTL",
+                "> 80%"
+              ],
+              [
+                "Há debandada em andamento?",
+                "`DatabaseConnections` da réplica correlacionado ao ciclo do TTL",
+                "pico periódico no mesmo intervalo do TTL é expiração sincronizada, não carga orgânica",
+                "pico > 3× a média fora do ciclo"
+              ],
+              [
+                "A réplica de cache está defasada?",
+                "`ReplicationLag` do grupo de replicação",
+                "leitura logo após um failover pode devolver dado mais velho que o esperado",
+                "> 1 s"
+              ],
+              [
+                "Alguém conectou fora da aplicação?",
+                "VPC Flow Logs na porta 6379",
+                "acesso fora do security group da task é o primeiro risco da tabela de segurança",
+                "qualquer origem fora do SG esperado"
+              ],
+              [
+                "A trava está vazando?",
+                "contagem de chaves `trava:*` fora do caminho quente, via `SCAN`",
+                "trava sem TTL nunca libera, e a reconstrução daquela chave para de acontecer",
+                "qualquer chave de trava com TTL `-1`"
+              ],
+              [
+                "Toda escrita de preço disparou invalidação?",
+                "log de escrita comparado à taxa de acerto no minuto seguinte",
+                "invalidação falhando silenciosamente serve preço velho sem nenhum alarme óbvio",
+                "qualquer escrita sem `DEL` correspondente"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "Nunca use `KEYS` em produção para essas medições",
+            "content": "`KEYS *` varre o espaço inteiro de chaves de forma bloqueante, num Redis de thread única — e trava as outras milhares de chamadas por segundo enquanto varre. `SCAN` itera em lotes pequenos sem bloquear, e é o comando certo para contar cardinalidade ou achar chave órfã, inclusive em produção sob carga."
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Taxa de acerto tem duas fontes, e elas às vezes discordam",
+            "content": "O comando `INFO stats` do próprio Redis expõe `keyspace_hits` e `keyspace_misses` acumulados desde o último restart do nó; as métricas do CloudWatch (`GetTypeCmds`, `GetMisses`) são por período e sobrevivem a um failover. Para decidir se a taxa de acerto piorou HOJE, use o CloudWatch — o `INFO stats` mistura o histórico inteiro do nó."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão, e falha de AZ"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 req/s",
+                "1 nó sem Multi-AZ já resolve; debandada não chega a aparecer",
+                "nada; é o cenário do desenho mínimo em ambiente de teste",
+                "nada"
+              ],
+              [
+                "3 mil req/s (pico atual)",
+                "2 nós Multi-AZ, TTL com jitter, trava de reconstrução",
+                "é exatamente o desenho de produção deste laboratório",
+                "nada além do já construído"
+              ],
+              [
+                "30 mil req/s",
+                "o throughput de COMANDOS do nó vira o teto antes da memória",
+                "latência sobe mesmo com taxa de acerto alta, porque o nó satura em requisições/s",
+                "considerar `cluster mode enabled` (sharding) — fora do escopo deste laboratório"
+              ],
+              [
+                "1 milhão de chamadas/s (catálogo público futuro)",
+                "um nó só não sustenta, mesmo shardeado sem cuidado",
+                "chave mal desenhada concentra tráfego num único shard (hot shard)",
+                "reprojetar a chave para distribuir hash, e avaliar cache de borda para o catálogo público — é o L17"
+              ],
+              [
+                "Falha de AZ durante o pico",
+                "failover automático promove a réplica com menor atraso",
+                "a aplicação não muda nada, porque usa o endpoint primário; há janela breve de cold miss",
+                "a prova 5 desta seção mede exatamente essa janela"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O gargalo que a memória não avisa",
+            "content": "Um nó de ElastiCache pode estar com memória sobrando e ainda assim saturar, porque o limite de comandos por segundo é separado do limite de memória. Dimensionar só pela quantidade de dado cacheado — sem olhar o throughput medido — é o erro mais comum ao planejar escala de cache."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "1 nó, sem Multi-AZ",
+                "um nó pequeno ligado durante o teste",
+                "desprezível",
+                "nenhuma; otimizar aqui é atenção gasta onde não há dinheiro em jogo"
+              ],
+              [
+                "Produção pequena (2 nós Multi-AZ)",
+                "3 mil req/s no pico",
+                "2 nós ligados 24/7, cobrando por hora independente de tráfego",
+                "previsível e fixa",
+                "dimensionar o tipo de nó pelo throughput de comandos medido, não pela intuição"
+              ],
+              [
+                "Alta escala (sharded)",
+                "30 mil+ req/s",
+                "múltiplos nós de partição, cada um com sua réplica",
+                "cresce com o número de shards, não com o volume lido do cache",
+                "cache continua muito mais barato que escalar RDS pelo mesmo ganho de leitura"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Nó do ElastiCache",
+                "hora ligada, por tipo de nó, independente de tráfego",
+                "ao contrário do RDS sob carga variável, o cache cobra fixo — dimensione pelo pico"
+              ],
+              [
+                "Transferência entre AZ",
+                "GB entre nó primário e réplica em AZs diferentes",
+                "tráfego de replicação interna do Multi-AZ soma, mesmo sendo pequeno por natureza"
+              ],
+              [
+                "Snapshot do cache",
+                "GB-mês armazenado",
+                "não é backup de negócio — existe só para acelerar substituição de nó"
+              ],
+              [
+                "Réplica de RDS herdada do L07",
+                "continua cobrando igual, agora atendendo menos",
+                "o cache reduz a CARGA na réplica; não elimina a necessidade dela"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "A comparação que justifica o laboratório",
+            "content": "Um nó de ElastiCache suficiente para o pico atual custa uma fração do upgrade de classe de réplica que teria o mesmo efeito no p95. E o cache ataca a causa real — volume de consulta idêntica repetida — enquanto uma réplica maior só deixaria cada cópia da mesma pergunta um pouco mais rápida."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "cache-aside com trava, invalidação pela escrita, painel de taxa de acerto",
+                "auditoria de divergência entre cache e banco ainda é manual",
+                "job periódico de reconciliação entre cache e RDS",
+                "média"
+              ],
+              [
+                "Segurança",
+                "AUTH + TLS, security group restrito à task, segredo via Secrets Manager",
+                "acesso de dentro da própria VPC continua sendo superfície de ataque",
+                "avaliar RBAC do Redis (grupos de usuário) em vez de token único",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "Multi-AZ com failover automático; TTL como teto de degradação sob qualquer corrida",
+                "cold cache logo após failover gera pico breve de leitura na réplica",
+                "pré-aquecer as chaves mais quentes assim que a promoção termina",
+                "média"
+              ],
+              [
+                "Eficiência de performance",
+                "p95 sub-20 ms no pico atual; chave desenhada para taxa de acerto alta",
+                "um nó só pode saturar throughput de comandos antes de saturar memória",
+                "`cluster mode enabled` quando o throughput medido exigir",
+                "baixa"
+              ],
+              [
+                "Otimização de custos",
+                "nó fixo mais barato que upgrade de réplica para o mesmo ganho de leitura",
+                "2 nós custam igual fora do pico, quando o tráfego é bem menor",
+                "avaliar redução programada de nó fora do horário de pico, se a AWS permitir",
+                "baixa"
+              ],
+              [
+                "Sustentabilidade",
+                "menos consultas idênticas repetidas significa menos ciclos de CPU no banco",
+                "armazenamento em memória permanece ligado mesmo ocioso fora do pico",
+                "nenhuma ação imediata; o volume atual justifica o custo fixo",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho novo: é a resposta a QUANDO o cache atual para de bastar. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "De sem cache até cache que decide a própria confiança — e o risco que cada nível troca",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Sem cache: toda leitura bate direto na réplica do L07. Era o estado da Cadência antes deste laboratório.",
+                "note": "Risco resolvido: nenhum. Novo risco: consulta idêntica repetida satura a réplica assim que o volume de lojas cresce. Custo: o mais baixo, sem recurso novo."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Cache-aside com TTL e jitter, trava de reconstrução, invalidação pela escrita, ElastiCache Multi-AZ.",
+                "note": "Risco resolvido: debandada e leitura duplicada. Novo risco: o cache é uma segunda fonte de verdade — corrida de invalidação pode servir dado velho por até um TTL. Custo: nó(s) fixos do ElastiCache, cobrando por hora ligada."
+              },
+              {
+                "label": "Nível 3 — Cache distribuído com sharding",
+                "instruction": "`cluster mode enabled`, múltiplas partições, cada uma com sua própria capacidade de comandos por segundo.",
+                "note": "Risco resolvido: throughput de comandos limitado a um nó só. Novo risco: chave mal desenhada cria hot shard, e rebalancear partição em produção exige cuidado. Custo: cresce com o número de shards, não com o tráfego servido."
+              },
+              {
+                "label": "Nível 4 — Cache na borda",
+                "instruction": "CDN ou similar na frente do catálogo público, fora da VPC, mais perto da loja fisicamente distante da região.",
+                "note": "Risco resolvido: latência geográfica para lojas longe da região. Novo risco: invalidação de borda é mais lenta e mais cara por chamada que um `DEL` no Redis. Custo: por solicitação servida na borda, geralmente menor por byte."
+              },
+              {
+                "label": "Nível 5 — Plataforma multi-time",
+                "instruction": "Vários times compartilhando o mesmo cluster de cache, com namespace de chave por domínio e cota de memória por time.",
+                "note": "Risco resolvido: um time não derruba o cache de outro por engano. Novo risco: governança de quem pode invalidar o quê. Custo: cluster maior, rateado por uso."
+              },
+              {
+                "label": "Nível 6 — Dados e IA",
+                "instruction": "Cache semântico para resposta de modelo, com TTL decidido pela confiança da resposta em vez de tempo fixo — o assunto do L89.",
+                "note": "Risco resolvido: reprocessar o modelo para a mesma pergunta reformulada. Novo risco: cache semântico pode servir resposta \"quase certa\" para uma pergunta diferente — falso positivo de similaridade. Custo: menor que reprocessar o modelo, desde que a taxa de acerto CERTO seja medida, não só a de acerto."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Sharding no nível 3 sem jitter e trava do nível 2 só distribui a debandada entre mais nós — cada partição sincroniza sua própria fatia de chaves e sofre o mesmo pico, em escala menor mas no mesmo instante. Quem pula o nível 2 leva o defeito consigo para o 3."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não decide TTL nem substitui a trava de reconstrução — as duas são aritmética e política de negócio escritas em código, e um modelo não melhora nenhuma das duas. Forçar IA aqui seria o antipadrão que a própria série critica."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar modesto onde IA acrescentaria valor: decidir quais das 40 mil SKUs pré-aquecer antes do pico de sexta, em vez de deixar o primeiro pedido de cada chave pagar o custo total de um cold read."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "escolher quais SKUs pré-aquecer antes do pico, além dos 500 mais vendidos óbvios, capturando sazonalidade que uma regra fixa não vê"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "uma regra simples — \"os 500 mais vendidos dos últimos 7 dias\" — já cobre os 80% medidos; IA só se justificaria para os 20% restantes, que hoje não é onde o p95 do módulo está sendo medido"
+              ],
+              [
+                "De onde viriam os dados?",
+                "histórico de vendas por SKU, calendário de promoções, e a própria taxa de acerto por chave já coletada pelo CloudWatch"
+              ],
+              [
+                "Qual o risco?",
+                "pré-aquecer SKU errado desperdiça memória do nó, e sob `volatile-lru` isso pressiona a evicção de chave que de fato importa"
+              ],
+              [
+                "Por que não agora?",
+                "a regra dos 500 mais vendidos já cobre a demanda medida; IA aqui otimizaria a margem, não o problema que motivou o laboratório"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b19_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para decidir o TTL de cada chave dinamicamente troca uma política auditável — um número que a área de negócio aprovou e que qualquer engenheiro lê no código — por uma decisão opaca que ninguém consegue explicar quando o preço errado aparece no checkout. TTL é política de negócio registrada, não previsão estatística."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Cache-aside sem trava de reconstrução",
+                "funciona perfeitamente fora do pico e é a implementação mais curta",
+                "debandada exatamente quando o sistema mais precisa do cache funcionando",
+                "pico periódico de conexões no banco no mesmo intervalo do TTL",
+                "`SET NX` com TTL curto como trava de execução única",
+                "tráfego baixo o suficiente para nunca haver miss concorrente na mesma chave"
+              ],
+              [
+                "Identificador de loja na chave de dado compartilhado",
+                "parece mais seguro, \"cada loja no seu canto\"",
+                "fragmenta um cache de 500 chaves em até 600 mil combinações quase idênticas",
+                "taxa de acerto baixa mesmo sob tráfego alto e concentrado nos mesmos SKUs",
+                "chave pelo identificador do DADO, não do consumidor",
+                "quando o dado realmente varia por loja — por exemplo, estoque local"
+              ],
+              [
+                "`SET` com valor novo em vez de `DEL` na invalidação",
+                "parece mais eficiente, \"já deixa pronto para a próxima leitura\"",
+                "risco de gravar formato diferente do que a leitura padrão produziria, sem nenhuma garantia de que é o valor mais recente sob escrita concorrente",
+                "cache com formato inconsistente aparecendo de forma esporádica e difícil de reproduzir",
+                "`DEL` e deixar o próximo `GET` repovoar pela rota já testada",
+                "quando existe só um escritor e o valor é trivial de serializar"
+              ],
+              [
+                "TTL igual para toda chave, sem jitter",
+                "é a primeira linha que funciona e todo tutorial faz assim",
+                "sincroniza a expiração das chaves quentes e produz debandada sob carga real",
+                "pico em formato de dente de serra nas métricas de conexão do banco",
+                "TTL base mais jitter aleatório sorteado por chave",
+                "tráfego baixo demais para haver miss concorrente relevante"
+              ],
+              [
+                "Cache local em memória de cada processo",
+                "zero infraestrutura nova, e é a leitura mais rápida que existe",
+                "cada task tem sua própria cópia, e invalidação nunca alcança todas ao mesmo tempo",
+                "preço desatualizado aparece em algumas lojas e não em outras, dependendo de qual task atendeu",
+                "cache compartilhado (Redis) para dado que precisa de invalidação coordenada",
+                "dado verdadeiramente imutável durante a vida do processo"
+              ],
+              [
+                "Cachear a consulta lenta em vez de corrigi-la",
+                "é mais rápido de implementar do que investigar o plano de execução",
+                "paga hardware de cache para esconder o defeito em vez de removê-lo — e toda chave nova ainda sofre o custo total no primeiro acesso",
+                "p95 melhora no painel, mas o plano de execução continua sendo uma varredura cara",
+                "otimizar a consulta primeiro (L07), cachear depois",
+                "nunca — é a ordem que este laboratório assume como pré-requisito"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Pico periódico de conexões no banco, sempre no mesmo intervalo",
+                "TTL sincronizado, sem jitter",
+                "correlacione o período do pico com o valor do TTL configurado",
+                "CloudWatch `DatabaseConnections` vs. tempo",
+                "adicionar jitter por chave e trava de reconstrução"
+              ],
+              [
+                "Taxa de acerto baixa mesmo sob tráfego alto",
+                "chave fragmentada por um campo que não deveria estar nela",
+                "conte a cardinalidade real de chaves com `SCAN`",
+                "padrão de chave no Redis vs. número esperado de SKUs",
+                "remover o campo que fragmenta a chave"
+              ],
+              [
+                "Preço antigo aparece minutos depois da alteração",
+                "invalidação não disparou, ou falhou silenciosamente",
+                "confira se o `DEL` foi de fato chamado no log da aplicação",
+                "log de escrita vs. TTL restante da chave (`TTL produto:SKU`)",
+                "garantir que a invalidação está no mesmo caminho do commit, com tratamento de erro"
+              ],
+              [
+                "Aplicação trava esperando o cache no miss",
+                "trava de reconstrução sem TTL, vazou",
+                "confira o TTL da chave de trava",
+                "`TTL trava:produto:SKU` retornando `-1`",
+                "sempre definir expiração explícita na trava"
+              ],
+              [
+                "Erro de autenticação depois de rotacionar o token",
+                "AUTH token rotacionado no Secrets Manager sem reconectar o cliente",
+                "confira a versão do segredo que a aplicação está lendo",
+                "logs de conexão do cliente Redis",
+                "reconectar com backoff ao detectar erro de auth, com sobreposição de versão do segredo"
+              ],
+              [
+                "Falha de nó não gerou failover",
+                "Multi-AZ ou failover automático desligado no grupo de replicação",
+                "confira a configuração do grupo",
+                "`describe-replication-groups` → `AutomaticFailover`",
+                "habilitar `automatic_failover_enabled` e `multi_az_enabled`"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em qualquer parâmetro, pergunte: o problema é de ACERTO (taxa de hit) ou de CORRETUDE (dado errado)? Taxa de acerto baixa aponta para chave ou TTL; dado errado aponta para invalidação. As duas famílias de sintoma se parecem no relatório do usuário — \"o catálogo está errado\" — e apontam para investigações completamente diferentes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O ElastiCache tem dois comportamentos de saída que surpreendem: um snapshot final pode sobreviver ao `destroy`, e o segredo no Secrets Manager entra numa janela de recuperação antes de sumir de verdade."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Derrube o que o Terraform administra.\nterraform destroy -auto-approve\n\n# 2. SNAPSHOT FINAL: se \"final_snapshot_identifier\" estava setado, ele\n#    sobrevive ao destroy e cobra GB-mes sozinho.\naws elasticache describe-snapshots --replication-group-id ffv-lab-catalogo \\\n  --query \"Snapshots[].SnapshotName\" --output table\naws elasticache delete-snapshot --snapshot-name <nome-do-snapshot> 2>/dev/null || true\n\n# 3. SEGREDO NO SECRETS MANAGER: por padrao entra em janela de recuperacao\n#    de 30 dias, continuando a cobrar taxa mensal ate a exclusao definitiva.\naws secretsmanager delete-secret \\\n  --secret-id ffv-lab-cache-auth --force-delete-without-recovery\n\n# 4. Confirme: nada com o nome do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table"
+          }
+        },
+        {
+          "id": "b22_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Grupo de replicação ElastiCache",
+                "sim",
+                "não",
+                "os dois nós saem junto com o grupo"
+              ],
+              [
+                "Snapshot final do cache",
+                "não, se identificador foi setado",
+                "sim, GB-mês",
+                "existe justamente para sobreviver ao destroy; precisa ser apagado à parte"
+              ],
+              [
+                "Segredo no Secrets Manager",
+                "entra em espera, não some",
+                "sim, taxa mensal",
+                "janela de recuperação padrão de 30 dias antes da exclusão real"
+              ],
+              [
+                "Security group do cache",
+                "sim",
+                "não",
+                "nenhuma pendência"
+              ],
+              [
+                "Réplica de RDS e demais recursos do L07",
+                "sim",
+                "sim, por hora",
+                "não fazem parte deste laboratório; confira a limpeza do L07 separadamente"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O snapshot final é a pendência que ninguém procura",
+            "content": "Ele não aparece na lista de recursos do Terraform depois do `destroy`, porque nunca foi gerenciado por ele — é um efeito colateral do provedor. Quem interrompe o laboratório sem rodar o passo 2 da limpeza acima descobre esse custo meses depois, numa fatura sem nenhum recurso \"vivo\" visível no console para explicá-lo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "80% das consultas idênticas batendo na réplica",
+                "cache-aside no ElastiCache",
+                "RDS continua fonte única; menor mudança no caminho de escrita existente"
+              ],
+              [
+                "500 chaves expirando no mesmo segundo",
+                "TTL base + jitter por chave",
+                "espalha a expiração sem abrir mão do TTL como mecanismo de tolerância"
+              ],
+              [
+                "N requisições reconstruindo a mesma chave ao mesmo tempo",
+                "trava `SET NX` no miss",
+                "só uma reconstrói; as outras esperam ou seguem sem popular"
+              ],
+              [
+                "Preço de promoção precisando valer imediatamente",
+                "`DEL` disparado pela escrita, após o commit",
+                "invalidação explícita cobre o que o TTL sozinho não cumpre"
+              ],
+              [
+                "Nó de cache como ponto único de falha",
+                "grupo de replicação Multi-AZ",
+                "failover automático promove a réplica com menor atraso, sem mudar o endpoint que a app usa"
+              ],
+              [
+                "Cache fragmentado por loja",
+                "chave só com o SKU, sem identificador de consumidor",
+                "a chave reflete o dado, que é idêntico para as 1.200 lojas"
+              ],
+              [
+                "Corrida entre leitura em voo e invalidação",
+                "TTL como teto do pior caso",
+                "a ordem certa reduz a chance da corrida; o TTL limita o dano quando ela acontece mesmo assim"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Debandada sob TTL sincronizado",
+                "jitter por chave",
+                "concorrência dentro da janela de UM miss — é a trava"
+              ],
+              [
+                "Reconstrução concorrente da mesma chave",
+                "trava `SET NX`",
+                "debandada entre chaves DIFERENTES expirando juntas — é o jitter"
+              ],
+              [
+                "Preço desatualizado além do tolerado",
+                "`DEL` disparado pela escrita",
+                "a corrida rara entre leitura em voo e o próprio `DEL`"
+              ],
+              [
+                "Corrida entre leitura em voo e invalidação",
+                "TTL como teto",
+                "valer no segundo seguinte — para isso, confirmar ausência da chave"
+              ],
+              [
+                "Queda de um nó de cache",
+                "Multi-AZ com failover automático",
+                "perda total de região — fora do escopo deste laboratório"
+              ],
+              [
+                "Acesso não autorizado ao cache",
+                "AUTH + TLS + security group restrito",
+                "processo comprometido DENTRO da task, que já tem a credencial"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "O POS pede o preço de um SKU; a aplicação consulta o cache primeiro.",
+              "HIT: devolve em poucos milissegundos, sem tocar o banco.",
+              "MISS: a aplicação disputa a trava de reconstrução daquela chave específica.",
+              "Quem ganha consulta a réplica do L07 e grava o resultado com TTL base + jitter.",
+              "Quem perde espera um instante e tenta o cache de novo, ou segue sem popular.",
+              "Uma alteração de preço grava no primário e aguarda o commit ser confirmado.",
+              "Só então a aplicação envia `DEL` para a chave — nunca `SET` com o valor novo.",
+              "A próxima leitura daquele SKU é um miss garantido, e repovoa do dado já commitado.",
+              "Se um nó de cache cai, o failover automático promove a réplica sem trocar o endpoint.",
+              "O painel mede taxa de acerto, não só latência — é o sinal que prova que o cache funciona."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Cache-aside ou write-through: qual usar para um catálogo de produtos?",
+            "answer": "Cache-aside, na grande maioria dos catálogos, porque a leitura costuma ser dezenas de vezes mais frequente que a escrita. Nesse padrão, o RDS continua sendo a única fonte de verdade e o cache só é populado quando alguém pede o dado — o caminho de escrita não muda em nada. Write-through inverte essa lógica: toda escrita grava no cache de forma síncrona antes de confirmar sucesso, o que faz sentido quando a leitura seguinte tem de ser imediatamente consistente e a escrita não pode absorver latência extra. Para um preço que muda algumas vezes por dia e é lido milhares de vezes por minuto, pagar latência em toda escrita para acelerar uma leitura que o cache-aside já resolve é a escolha mais cara."
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "O que é debandada de cache, e por que ela só aparece sob carga real?",
+            "answer": "Debandada de cache é quando muitas requisições perdem a mesma chave — ou várias chaves com o mesmo prazo de expiração — ao mesmo tempo, e todas caem no banco simultaneamente em vez de uma reconstruir e as outras aproveitarem. Ela só aparece sob carga real porque depende de CONCORRÊNCIA: em teste manual, uma pessoa faz uma requisição de cada vez, e nunca existem duas perdendo a mesma chave no mesmo milissegundo. É exatamente por isso que ela costuma ser descoberta em produção, no pico, e não em nenhum ambiente de teste convencional — é preciso reproduzi-la de propósito, com um teste de carga concorrente, como este laboratório faz."
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "TTL e invalidação explícita resolvem o mesmo problema?",
+            "answer": "Não — TTL é uma aposta de tempo, e invalidação explícita é uma garantia de evento. O TTL diz \"este dado pode ficar errado por até N segundos, e eu aceito esse risco em troca de não precisar avisar o cache toda vez que o dado muda\". A invalidação explícita diz \"no momento em que este dado mudou, eu removo ativamente a cópia velha\", e cobre o caso em que esperar o TTL inteiro não é aceitável — como uma promoção que precisa valer no minuto em que foi anunciada. Um sistema bem desenhado usa os dois juntos: TTL como rede de segurança para qualquer invalidação que falhe silenciosamente, e invalidação explícita para o caso em que a demora do TTL tem custo de negócio."
+          }
+        },
+        {
+          "id": "b24_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Por que a chave de cache não deve incluir o identificador da loja?",
+            "answer": "Porque incluir um identificador que não muda o valor do dado fragmenta um cache pequeno em milhares de cópias quase idênticas, e a taxa de acerto despenca mesmo sob tráfego alto. No catálogo da Cadência, o preço de um SKU é o mesmo para as 1.200 lojas — uma chave `produto:{loja}:{sku}` criaria até 600 mil combinações para um dado que só tem 40 mil valores distintos, e cada loja pagaria seu próprio cold read pelo mesmo produto que a loja vizinha já buscou segundos antes. A regra geral é desenhar a chave pelo que MUDA o valor do dado, não pelo que identifica quem está pedindo."
+          }
+        },
+        {
+          "id": "b24_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "O ElastiCache Multi-AZ substitui a réplica de leitura do RDS que já existe?",
+            "answer": "Não, e confundir os dois é um erro comum vindo direto do L07. O Multi-AZ do ElastiCache protege a DISPONIBILIDADE do próprio cache — se o nó primário do Redis cair, uma réplica de cache assume automaticamente. A réplica de leitura do RDS, construída no L07, continua existindo e continua sendo consultada em todo miss de cache: ela é a fonte que repovoa o Redis. As duas peças resolvem disponibilidade em camadas diferentes da mesma arquitetura, e nenhuma substitui a outra."
+          }
+        },
+        {
+          "id": "b24_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Preciso de trava de reconstrução mesmo com poucos usuários simultâneos?",
+            "answer": "Não com a mesma urgência, mas o custo de ter a trava é uma linha de código, então não há razão prática para omiti-la. A trava só importa quando duas ou mais requisições perdem a MESMA chave no mesmo instante — algo raro com tráfego baixo e quase garantido no pico de sexta-feira da Cadência, com centenas de POS consultando o mesmo produto de giro rápido. Sem a trava, o sistema funciona perfeitamente até o dia em que o tráfego cresce o suficiente para produzir a concorrência que a expõe — e nesse dia, geralmente é o pior momento para descobrir o problema pela primeira vez."
+          }
+        },
+        {
+          "id": "b24_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Por que usar DEL em vez de atualizar o cache direto na escrita?",
+            "answer": "Porque gravar o valor novo diretamente no cache durante a escrita arrisca introduzir um formato diferente daquele que a leitura padrão produziria, e não garante que é o valor mais recente quando há escrita concorrente na mesma chave. Usar `DEL` remove a responsabilidade de serializar corretamente do caminho de escrita e devolve ela ao caminho de leitura, que já é testado e é o único lugar do sistema que decide o formato do valor cacheado. O custo é uma chamada de rede a mais por escrita e um cold read na próxima leitura daquele SKU — barato comparado ao risco de inconsistência silenciosa."
+          }
+        },
+        {
+          "id": "b24_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "O endpoint primário do ElastiCache muda depois de um failover?",
+            "answer": "Não, e essa é a propriedade que torna o failover transparente para a aplicação. O endpoint primário é um nome de DNS que sempre resolve para o nó que está atuando como primário no momento — quando uma réplica é promovida durante um failover, a AWS propaga o novo endereço para esse mesmo nome, e a aplicação continua usando a mesma string de conexão sem nenhuma mudança de configuração. Isso é diferente do endpoint de leitura, que distribui conexões entre réplicas e não deve ser usado para escrita."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b25_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "A trava de reconstrução foi implementada com `SET NX`, sem prazo de expiração. Um processo trava no meio da reconstrução e nunca libera a chave de trava. Qual é a consequência mais provável?",
+            "options": [
+              "O ElastiCache promove automaticamente a réplica para resolver o impasse",
+              "Nenhuma requisição consegue reconstruir aquela chave até a trava ser removida manualmente ou o processo titular reiniciar, e todas caem para consulta direta ao banco",
+              "O cache passa a servir dado desatualizado indefinidamente, porque o valor antigo nunca é removido",
+              "Nenhuma; o Redis libera a trava automaticamente após alguns segundos de inatividade"
+            ],
+            "correctIndex": 1,
+            "explanation": "Sem prazo de expiração, a chave de trava fica presa exatamente como qualquer outra chave sem TTL sob a política `volatile-lru` — ela não é liberada por inatividade, nem por nenhum mecanismo automático. Toda requisição que tentar `SET NX` na mesma chave de trava vai falhar, porque a chave já existe, e cada uma delas cai no ramo de \"não conseguiu a trava\": espera, tenta o `GET` de novo, e segue para consultar o banco sem popular o cache. O sintoma é aquela chave específica nunca mais sendo repovoada, com toda leitura passando direto pelo banco.\n\nA primeira alternativa é o erro central do cenário: Redis não libera chave por inatividade — só por TTL explícito ou por comando de remoção, nenhum dos dois presente aqui. A segunda confunde trava com dado: a trava não é o valor cacheado, e o problema descrito não é servir dado velho, é não conseguir servir dado NENHUM do cache para essa chave. A quarta atribui ao ElastiCache uma capacidade que ele não tem: failover do grupo de replicação resolve queda de NÓ, não uma chave de aplicação presa por lógica de negócio — o Redis não sabe, e não deveria saber, o que uma chave chamada `trava:*` significa."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "A aplicação grava o novo preço no RDS, aguarda o commit, e só então envia `DEL` para a chave no Redis. Mesmo assim, um cliente às vezes recebe o preço antigo por até 30 segundos depois da alteração. Qual é a explicação mais provável?",
+            "options": [
+              "O `DEL` falhou silenciosamente porque a conexão com o Redis caiu no momento do envio",
+              "Uma leitura concorrente que começou antes do commit pode terminar depois do `DEL`, buscar o valor antigo na réplica assíncrona do L07 e regravar esse valor no cache",
+              "O TTL de 30 segundos configurado está sendo aplicado à chave de trava, não à chave de dado",
+              "O ElastiCache está com a política de evicção `allkeys-lru`, que ignora comandos `DEL`"
+            ],
+            "correctIndex": 1,
+            "explanation": "A ordem certa entre commit e `DEL` reduz a janela da corrida, mas não a elimina: uma leitura que já estava em voo para a réplica de leitura ANTES da escrita pode terminar DEPOIS do `DEL`, porque a réplica é assíncrona e pode não ter recebido o commit ainda. Essa leitura carrega o valor antigo e o grava no cache já sem nenhuma trava impedindo — e o valor fica lá até o próprio TTL expirar, o que bate exatamente com o \"até 30 segundos\" descrito no enunciado: o TTL é o teto que sempre vale, corrida ou não.\n\nA primeira alternativa descreveria uma falha persistente e sem relação com o número 30 — uma conexão caída não se corrige sozinha em exatos 30 segundos; o enunciado aponta para um limite temporal, não para uma falha de rede. A terceira confunde duas chaves diferentes: a chave de trava e a chave de dado têm ciclos de vida independentes, e um TTL aplicado à trava não tem como afetar quando a chave de PREÇO expira. A quarta erra a semântica de eviction: política de evicção decide o que é removido sob pressão de memória, e não intercepta nem ignora comandos explícitos como `DEL` — as duas coisas operam em momentos diferentes do ciclo de vida da chave."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b26_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L07 no ar (réplica de leitura, Multi-AZ do RDS, pool dimensionado), noção básica de Redis"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "os três padrões de cache e o modo de falha de cada um; debandada de cache e as duas defesas (jitter e trava); a diferença entre TTL e invalidação explícita; o bug de leitura concorrente que repopula com valor velho, e por que o TTL o limita sem eliminá-lo; desenho de chave como decisão de taxa de acerto"
+              ],
+              [
+                "Limitação que fica",
+                "a corrida entre leitura em voo e invalidação continua possível, limitada ao TTL — para a promoção que precisa valer no segundo seguinte, a rotina do operador confirma a ausência da chave antes de anunciar sucesso, o que este laboratório não automatiza"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L89 — custo e latência de GenAI, que aplica a mesma decisão de TTL (quanto tempo você tolera estar errado) a cache de prompt de modelo, um domínio onde \"errado\" custa token em vez de consulta ao banco"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L17 (upload direto ao S3) aparece na cadeia de evolução do catálogo, ainda que não reaproveite o cache diretamente; o padrão de decidir \"quanto tempo tolerar estar errado\" volta a aparecer lá para URL pré-assinada"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b26_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Minimizing downtime in ElastiCache by using Multi-AZ with Valkey and Redis OSS",
+                "code": true
+              },
+              {
+                "text": " — o mecanismo de failover automático e o comportamento do endpoint primário; "
+              },
+              {
+                "text": "Finding connection endpoints in ElastiCache",
+                "code": true
+              },
+              {
+                "text": " — a distinção entre endpoint primário e endpoint de leitura; "
+              },
+              {
+                "text": "Managing reserved memory for Valkey and Redis OSS",
+                "code": true
+              },
+              {
+                "text": " — a política de evicção padrão `volatile-lru`; e o whitepaper "
+              },
+              {
+                "text": "Database Caching Strategies Using Redis",
+                "code": true
+              },
+              {
+                "text": ", seção de validade de cache, que descreve jitter de TTL como defesa contra debandada. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "Os números de volume — 1.200 lojas, 500 SKUs quentes, p95 de 340 ms, 80% de CPU na réplica — são os medidos na aplicação de exemplo da Cadência, e servem como ordem de grandeza, não como referência. O TTL base de 30 s e o jitter de até 10 s valem para a tolerância de negócio DESTE catálogo; meça a sua própria tolerância antes de copiar o número. Da mesma forma, o throughput de comandos por segundo que satura um nó `cache.r7g.large` não foi medido neste laboratório — confirme na sua carga real antes de dimensionar por ele."
+          }
+        }
+      ]
+    }
+  ]
+}

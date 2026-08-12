@@ -8,7 +8,7 @@ export function generateStaticParams(): Params[] {
 }
 
 export const metadata = {
-  title: 'Resultado do simulado — FFV Academy',
+  title: 'Resultado do simulado',
   robots: { index: false, follow: false },
 };
 

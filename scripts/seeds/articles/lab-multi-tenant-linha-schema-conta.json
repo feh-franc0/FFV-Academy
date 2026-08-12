@@ -1,0 +1,2544 @@
+{
+  "slug": "lab-multi-tenant-linha-schema-conta",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Rotafácil é uma plataforma de rastreio e gestão de entregas usada por 340 lojas de e-commerce, entre elas a própria "
+              },
+              {
+                "text": "Cadência",
+                "code": true
+              },
+              {
+                "text": ", do "
+              },
+              {
+                "text": "L03",
+                "code": true
+              },
+              {
+                "text": ". Como a maioria dos SaaS B2B no primeiro ano, todos os clientes dividem a mesma infraestrutura: um banco, uma tabela de pedidos, uma coluna "
+              },
+              {
+                "text": "tenant_id",
+                "code": true
+              },
+              {
+                "text": " que identifica a loja dona de cada linha."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O incidente que abre este laboratório aconteceu num recurso novo: um painel de métricas agregadas que soma pedidos por categoria de produto. A consulta tem `JOIN` correto e filtro de data correto — só não tem `WHERE tenant_id`. Uma operadora da Sapataria Nordeste abriu o painel e viu, no total geral, um número grande demais para o próprio negócio. Era a soma dos 340 tenants, incluindo o faturamento da Cadência."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O contrato enterprise que a Rotafácil está negociando com uma rede maior exige, por cláusula, \"dados em infraestrutura de conta própria\". Isso não é exagero jurídico: é a mesma pergunta que o incidente acabou de responder na prática — no modelo atual, o vazamento entre clientes não é impossível, é só improvável até faltar uma linha de código. Um cliente que audita o fornecedor antes de assinar faz exatamente essa pergunta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Especialista — depende do L12 (Cognito) e do L31 (fronteira de serviço)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L12 e L31 concluídos, Postgres e Terraform intermediários, .NET 8"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 55 min · implementação 3 h a 4 h"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo para o modelo por linha; cresce por tenant no modelo por schema; alto por tenant no modelo por conta"
+              },
+              {
+                "k": "Serviços",
+                "v": "RDS (Postgres), DynamoDB (alternativa), IAM, Organizations, Cognito, Secrets Manager, EventBridge, Lambda, CloudWatch"
+              },
+              {
+                "k": "Volume atual",
+                "v": "340 lojas-tenant; a maior responde por 40% do volume total"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "nenhuma consulta pode devolver linha de outro tenant, mesmo com bug de aplicação"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "a maioria dos 340 tenants cabe numa única instância RDS; só os grandes ou com exigência contratual justificam isolamento físico — é a hipótese que autoriza o modelo bridge em vez de silo total"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "os três modelos de isolamento implementados — linha com RLS, schema, conta — com um teste automatizado que prova o vazamento e prova a correção"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é criptografia. KMS protege contra quem rouba o disco ou o backup, não contra um tenant autenticado lendo linha de outro — os dois são atacantes diferentes, e um SaaS precisa se proteger dos dois. Também não é isolamento de rede: colocar cada serviço numa VPC correta impede acesso de FORA da aplicação, mas o vazamento deste módulo acontece DENTRO da própria aplicação autenticada, numa consulta que o firewall nunca vê."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando ou um teste na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Provar, com teste automatizado, que uma consulta sem filtro de tenant vaza dado no modelo por linha sem RLS.",
+              "Implementar RLS obrigatória no Postgres e demonstrar que a MESMA consulta, sem nenhuma mudança no C#, deixa de vazar.",
+              "Propagar a identidade do tenant do login até a transação SQL sem que o cliente possa forjá-la.",
+              "Explicar por que `SET` de sessão é perigoso com pool de conexão, e usar `set_config` transacional em seu lugar.",
+              "Provisionar um schema por tenant e medir o custo operacional real de migrar N schemas em vez de um.",
+              "Criar uma conta AWS dedicada a um tenant via Organizations, com papel cross-account restrito por ExternalId.",
+              "Rodar um canário em produção que tenta vazar dado entre tenants a cada poucos minutos e aciona alarme.",
+              "Escolher, para um catálogo de clientes real, qual modelo cabe a cada faixa — e justificar por requisito, não por preferência pessoal."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Modelos de isolamento (silo, pool, bridge)",
+                "SAP-C02",
+                "os três modelos implementados lado a lado, com o mesmo dado",
+                "por que \"mais isolamento\" nem sempre é a resposta certa"
+              ],
+              [
+                "Row-Level Security",
+                "SAP-C02, DVA-C02",
+                "`FORCE ROW LEVEL SECURITY` e a política com `USING`/`WITH CHECK`",
+                "que RLS habilitada sem `FORCE` não protege o dono da tabela nem o papel de migration"
+              ],
+              [
+                "Raio de um incidente (blast radius)",
+                "SAP-C02",
+                "a fórmula que compara o alcance de um mesmo erro nos três modelos",
+                "que o raio muda com a fronteira escolhida, não com a quantidade de camadas de código"
+              ],
+              [
+                "Ruído entre inquilinos (noisy neighbor)",
+                "SAP-C02",
+                "o tenant de 40% do volume competindo por I/O com os pequenos",
+                "quando isolamento físico (schema ou conta) resolve o que RLS sozinha não resolve"
+              ],
+              [
+                "Guardrails de conta (SCP)",
+                "SAP-C02",
+                "Organizations + SCP como teto do modelo por conta",
+                "SCP não concede permissão, só limita o que o IAM local poderia permitir"
+              ],
+              [
+                "Confused deputy em papel cross-account",
+                "SCS-C02, SAP-C02",
+                "o papel que o time da plataforma assume na conta do tenant",
+                "por que a ausência de `ExternalId` é a vulnerabilidade, não a política em si"
+              ],
+              [
+                "Controle de acesso por atributo (ABAC) no DynamoDB",
+                "SAP-C02, SCS-C02",
+                "`dynamodb:LeadingKeys` como equivalente de RLS quando o banco é DynamoDB",
+                "que a condição amarra a chave de partição à identidade do chamador, não ao código da aplicação"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve RLS habilitada e pergunta por que um relatório rodado por um job de manutenção ainda devolve todos os tenants. A resposta não é \"a política está errada\" — é que o job roda com o papel DONO da tabela (o mesmo usado para migration), e sem `FORCE ROW LEVEL SECURITY` a política nunca se aplica ao dono. `ENABLE` liga a política; `FORCE` é quem a torna inescapável para quem tem privilégio de dono."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito não funcional que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Vazamento entre tenants",
+                "zero, mesmo com bug de aplicação",
+                "obriga RLS com `FORCE` como piso — a proteção não pode depender só do código correto"
+              ],
+              [
+                "Contrato enterprise exige conta própria",
+                "pelo menos 1 tenant grande",
+                "obriga o modelo por conta para esse segmento — é o que torna a arquitetura um bridge, não um pool puro"
+              ],
+              [
+                "Custo operacional por tenant pequeno",
+                "não pode crescer linearmente com o número de clientes",
+                "descarta silo total; mantém pool com RLS como padrão para os 330+ tenants pequenos"
+              ],
+              [
+                "Tempo de detecção de vazamento",
+                "minutos, não meses",
+                "obriga canário automatizado publicando métrica, não auditoria manual periódica"
+              ],
+              [
+                "Migration sem indisponibilidade perceptível",
+                "sim",
+                "no modelo por linha é um comando; no por schema é um laço sobre N schemas; no por conta é N migrations coordenadas"
+              ],
+              [
+                "Auditoria de acesso cross-account",
+                "obrigatória para o modelo por conta",
+                "`ExternalId` no papel assumido, sessão de no máximo 1 hora, CloudTrail habilitado na conta do tenant"
+              ],
+              [
+                "Volume do maior tenant",
+                "40% do total",
+                "motiva isolamento físico (schema ou conta) para esse tenant não competir por I/O com os pequenos"
+              ],
+              [
+                "Encerramento de contrato de um tenant",
+                "apagar 100% dos dados dele, sem tocar nos outros",
+                "no modelo por linha é `DELETE WHERE tenant_id`; no por schema é `DROP SCHEMA`; no por conta é fechar a conta — a granularidade cresce na mesma ordem"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: por linha, sem RLS — e o defeito é provado"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Rotafácil tem hoje, e ele é um ponto de partida legítimo: atende 340 lojas com uma tabela e uma instância. O laboratório começa por PROVAR o defeito, não descrevê-lo — porque \"esqueça o WHERE\" soa a detalhe até virar um número real na tela de um cliente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Uma tabela, trezentos clientes, um filtro que depende de memória",
+            "caption": "Este desenho publica e atende os 340 lojistas com uma tabela só — é barato e é o que a maioria dos SaaS B2B tem no primeiro ano. O defeito não está em nenhuma configuração errada: está em uma coluna que existe mas que nada além do bom senso do time obriga a filtrar. Percorra os passos até o ponto em que o filtro falta, e note que o Postgres nunca saberia dizer que algo deu errado.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Operador da loja-cliente",
+                    "note": "autenticado como tenant A; é quem vê o vazamento primeiro, no próprio painel"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB",
+                    "note": "só encaminha; não sabe nem precisa saber que existe conceito de tenant"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada, aplicação",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "api",
+                    "service": "fargate",
+                    "label": "API Rotafácil (.NET 8)",
+                    "note": "cada repositório escreve o próprio WHERE tenant_id; nada verifica se ele existe"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada, dados",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "db",
+                    "service": "rds",
+                    "label": "RDS Postgres — tabela pedidos, 340 tenants",
+                    "note": "uma tabela comum para o motor; tenant_id é só mais uma coluna, sem significado especial"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "HTTPS 443, token do tenant A",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "api",
+                "label": "encaminha a requisição",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "db",
+                "label": "SQL — o filtro de tenant é o que o desenvolvedor escreveu",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O token diz quem é o tenant; a rota decide se pergunta",
+                "detail": "O JWT do operador carrega a identidade da loja, mas nada nesta arquitetura obriga a aplicação a usá-la. A informação existe; a aplicação de fato usá-la em CADA consulta é um hábito, não uma garantia estrutural.",
+                "nodes": [
+                  "user",
+                  "alb"
+                ],
+                "edges": [
+                  "user>alb"
+                ]
+              },
+              {
+                "label": "A maioria das consultas filtra — por hábito, não por garantia",
+                "detail": "As rotas mais antigas têm `WHERE tenant_id = @id` porque quem as escreveu lembrou. Isso funciona há dois anos, e é exatamente o que esconde o problema: funcionar por acaso repetido parece funcionar por desenho.",
+                "nodes": [
+                  "api",
+                  "db"
+                ],
+                "edges": [
+                  "api>db"
+                ]
+              },
+              {
+                "label": "Um endpoint novo — o painel de métricas agregadas — esqueceu o filtro",
+                "detail": "O relatório junta `pedidos` com `produtos` por categoria para mostrar tendência de venda. A cláusula `JOIN` tem condição; o `WHERE` de tenant, não. O SQL é válido, compila, os testes de unidade passam — porque os testes usam um único tenant fake.",
+                "nodes": [
+                  "api",
+                  "db"
+                ],
+                "edges": [
+                  "api>db"
+                ]
+              },
+              {
+                "label": "Para o motor do banco, não existe \"tenant\" — existe uma tabela",
+                "detail": "O RDS Postgres não tem nenhum conceito de fronteira de cliente. Ele executa exatamente a consulta que recebeu, e uma consulta sem filtro é, do ponto de vista do banco, uma consulta perfeitamente válida que devolve todas as linhas pedidas.",
+                "nodes": [
+                  "db"
+                ],
+                "edges": [
+                  "api>db"
+                ]
+              },
+              {
+                "label": "O vazamento aparece na resposta, não em nenhum log de erro",
+                "detail": "Não há exceção, não há linha 500, não há alarme. O operador do tenant A abre o painel e vê, entre os números, um total que não bate — porque ele inclui pedidos do tenant B. O incidente é descoberto por quem foi vazado, não por quem vazou.",
+                "nodes": [
+                  "user",
+                  "api"
+                ],
+                "edges": [
+                  "alb>api"
+                ]
+              },
+              {
+                "label": "Por que alguém escreve assim",
+                "detail": "Porque o `WHERE tenant_id` é uma linha a mais em cada consulta nova, e nada no compilador, no linter ou no code review estrutural obriga a escrevê-la. A pressão de prazo aposta que quem escrever vai lembrar — e na maioria das vezes lembra, o que é justamente o que torna o dia em que não lembra invisível até o cliente reclamar.",
+                "nodes": [
+                  "api"
+                ],
+                "edges": [
+                  "api>db"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A medição abaixo é a versão manual da prova: a mesma rota que vazou em produção, chamada de verdade contra a base de exemplo deste laboratório."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "filename": "prova-vazamento.sh",
+            "code": "# prova-vazamento.sh — o vazamento medido, antes de qualquer teste automatizado\n# Rodado contra a base de EXEMPLO deste laboratorio (340 tenants semeados).\n\n$ psql \"$DATABASE_URL\" -c \\\n  \"SELECT tenant_id, count(*) FROM pedidos GROUP BY tenant_id ORDER BY 2 DESC LIMIT 3\"\n              tenant_id               | count\n---------------------------------------+-------\n 3f29a7c1-...-cadencia                 |  1842\n 7b41f0aa-...-sapataria-nordeste       |   931\n 9c02e5bb-...-armarinho-tres-marias    |   604\n\n# Autenticado como operador da Sapataria Nordeste, chamando a rota nova:\n$ curl -s -H \"Authorization: Bearer $TOKEN_SAPATARIA\" \\\n  \"$HOST/painel/metricas-agregadas\" | jq '.totalGeral, .tenantsNaResposta'\n274193.50\n[\"cadencia\", \"sapataria-nordeste\", \"armarinho-tres-marias\", \"... 337 outros\"]\n\n# O numero e a soma de TODOS os 340 tenants. Uma operadora que so deveria\n# enxergar a propria loja recebeu o faturamento de 339 concorrentes junto.\n"
+          }
+        },
+        {
+          "id": "b4_4",
+          "type": "paragraph",
+          "position": 4,
+          "data": {
+            "content": [
+              {
+                "text": "E a versão automatizada — a que fica no repositório e roda em todo commit, em vez de depender de alguém lembrar de testar manualmente:"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_5",
+          "type": "code_block",
+          "position": 5,
+          "data": {
+            "language": "csharp",
+            "filename": "VazamentoEntreTenantsTests.cs",
+            "code": "// VazamentoEntreTenantsTests.cs — a prova do defeito, nao a descricao dele\n//\n// Roda contra um Postgres real via Testcontainers (nao mock: RLS e uma\n// garantia do MOTOR, e so o motor de verdade prova ou desmente ela). Semeia\n// dois tenants na mesma tabela e chama a consulta exata do endpoint que\n// vazou em producao -- sem NENHUMA linha de contexto de tenant por baixo,\n// porque o desenho minimo nao tem nenhuma.\n\npublic class VazamentoEntreTenantsTests : IAsyncLifetime\n{\n    private readonly PostgreSqlContainer _pg =\n        new PostgreSqlBuilder().WithImage(\"postgres:16\").Build();\n\n    public async Task InitializeAsync() => await _pg.StartAsync();\n    public async Task DisposeAsync() => await _pg.DisposeAsync();\n\n    [Fact(DisplayName = \"Consulta sem WHERE tenant_id devolve mais de um tenant\")]\n    public async Task PainelDeMetricas_NaoFiltraTenant()\n    {\n        await using var ds = NpgsqlDataSource.Create(_pg.GetConnectionString());\n        await CriarTabelaSemRlsAsync(ds);   // so a tabela; nenhuma politica\n\n        await SemearAsync(ds, tenantId: TenantCadencia, quantidadeDePedidos: 1842);\n        await SemearAsync(ds, tenantId: TenantSapatariaNordeste, quantidadeDePedidos: 931);\n\n        // A MESMA consulta do endpoint /painel/metricas-agregadas que vazou em\n        // producao: agrega pedidos por tenant, sem clausula de tenant nenhuma.\n        await using var cmd = ds.CreateCommand(\n            \"SELECT tenant_id, SUM(total) FROM pedidos GROUP BY tenant_id\");\n        await using var reader = await cmd.ExecuteReaderAsync();\n\n        var tenantsNaResposta = new HashSet<Guid>();\n        while (await reader.ReadAsync())\n            tenantsNaResposta.Add(reader.GetGuid(0));\n\n        // FALHA DE PROPOSITO no desenho minimo -- e a prova gravada do\n        // defeito, nao uma descricao dele. Uma unica sessao autenticada como\n        // Sapataria Nordeste nao deveria enxergar o tenant Cadencia junto.\n        Assert.True(tenantsNaResposta.Count == 1,\n            $\"VAZAMENTO CONFIRMADO: {tenantsNaResposta.Count} tenants distintos \" +\n            \"apareceram na resposta de uma unica sessao autenticada.\");\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b4_6",
+          "type": "callout",
+          "position": 6,
+          "data": {
+            "variant": "danger",
+            "title": "Isto não é um bug raro — é o pior incidente que um SaaS B2B pode ter",
+            "content": "Vazamento de dado entre clientes quebra a premissa básica de contratar um SaaS multi-tenant: que os dados de uma empresa não aparecem para a concorrente que usa o mesmo sistema. Diferente de um 500 ou de uma lentidão, este incidente não se explica com \"instabilidade temporária\" — ele é motivo de rescisão de contrato, de notificação regulatória quando há dado pessoal envolvido, e de meses reconstruindo a confiança de quem foi vazado. O custo de engenharia para evitá-lo (as próximas seções) é ordens de grandeza menor que o custo de explicá-lo depois."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção: por linha, com RLS obrigatória"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A diferença estrutural em relação ao desenho anterior não é \"mais uma caixa\": é que a fronteira de tenant deixa de morar no código da aplicação e passa a morar no motor do banco."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O banco aplica o filtro; a aplicação só declara quem está perguntando",
+            "caption": "A fronteira sai do código da aplicação e desce para o Postgres: com `FORCE ROW LEVEL SECURITY`, nenhuma consulta — nem a de um desenvolvedor que esqueceu o filtro — lê linha de outro tenant, porque o motor recusa antes de devolver qualquer coisa. A claim de tenant chega assinada desde a Cognito, e um vigia próprio tenta vazar dado a cada poucos minutos para provar, em produção, que a proteção continua de pé.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Operador da loja-cliente",
+                    "note": "a identidade dele nunca decide sozinha o que ele vê — quem decide é o banco"
+                  }
+                ]
+              },
+              {
+                "label": "Identidade",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cognito",
+                    "service": "cognito",
+                    "label": "Cognito — pool de usuários",
+                    "note": "autentica o operador e delega a claim de tenant ao gatilho, em vez de expor um atributo livre"
+                  },
+                  {
+                    "id": "pretoken",
+                    "service": "lambda",
+                    "label": "Pré-geração de token (v2)",
+                    "note": "só a versão 2 do gatilho adiciona claim ao ACCESS token; a versão 1 só alcança o ID token"
+                  }
+                ]
+              },
+              {
+                "label": "Segredo",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "secretsmgr",
+                    "service": "secretsmanager",
+                    "label": "Credencial do banco",
+                    "note": "lida em runtime pela task; nunca gravada em variável de ambiente da imagem"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB",
+                    "note": "segue sem saber o que é tenant; a fronteira não mora aqui, mora no banco"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada, aplicação",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "api",
+                    "service": "fargate",
+                    "label": "API Rotafácil (.NET 8)",
+                    "note": "abre transação e declara o tenant com set_config antes de qualquer SELECT"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada, dados",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "db",
+                    "service": "rds",
+                    "label": "RDS Postgres — RLS obrigatória",
+                    "note": "FORCE ROW LEVEL SECURITY recusa linha fora do tenant declarado, mesmo sem WHERE"
+                  }
+                ]
+              },
+              {
+                "label": "Observação contínua",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "eventbridge",
+                    "service": "eventbridge",
+                    "label": "Regra agendada",
+                    "note": "dispara o canário independente de qualquer deploy ou incidente reportado"
+                  },
+                  {
+                    "id": "canario",
+                    "service": "lambda",
+                    "label": "Canário de vazamento",
+                    "note": "tenta ler dado do tenant B autenticado como tenant A; sucesso na leitura é falha do sistema"
+                  },
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Alarme de vazamento",
+                    "note": "dispara em minutos, não em reclamação de cliente — é a diferença entre detectar e ser avisado"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "cognito",
+                "label": "login com e-mail e senha",
+                "style": "solid"
+              },
+              {
+                "from": "cognito",
+                "to": "pretoken",
+                "label": "invoca antes de emitir o token",
+                "style": "dashed"
+              },
+              {
+                "from": "pretoken",
+                "to": "cognito",
+                "label": "devolve a claim tenant_id assinada",
+                "style": "dashed"
+              },
+              {
+                "from": "cognito",
+                "to": "user",
+                "label": "access token com a claim tenant_id",
+                "style": "solid"
+              },
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "Authorization: Bearer <token>",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "api",
+                "label": "encaminha a requisição",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "db",
+                "label": "set_config(app.tenant_id) e só então consulta",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "secretsmgr",
+                "label": "busca a credencial de conexão",
+                "style": "dashed"
+              },
+              {
+                "from": "eventbridge",
+                "to": "canario",
+                "label": "aciona a cada 5 minutos",
+                "style": "solid"
+              },
+              {
+                "from": "canario",
+                "to": "db",
+                "label": "tenta ler linha de outro tenant",
+                "style": "dashed"
+              },
+              {
+                "from": "canario",
+                "to": "cw",
+                "label": "publica métrica de vazamento detectado",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A claim de tenant é emitida, não declarada pelo cliente",
+                "detail": "A versão 2 do gatilho de pré-geração de token roda DENTRO do fluxo de autenticação e escreve a claim no access token — o mesmo token que a API vai validar. Um atributo customizado comum some no access token; só a claim explícita do gatilho sobrevive até a API.",
+                "nodes": [
+                  "cognito",
+                  "pretoken"
+                ],
+                "edges": [
+                  "cognito>pretoken",
+                  "pretoken>cognito"
+                ]
+              },
+              {
+                "label": "O cliente recebe um token que ele não pode forjar",
+                "detail": "A claim vem assinada pela Cognito. O operador não pode editar o próprio token para se passar por outro tenant — só pode enviar o que recebeu.",
+                "nodes": [
+                  "cognito",
+                  "user"
+                ],
+                "edges": [
+                  "cognito>user"
+                ]
+              },
+              {
+                "label": "A aplicação lê o tenant do token; nunca decide sozinha",
+                "detail": "O middleware valida a assinatura do JWT e extrai a claim. Não há parâmetro de URL, corpo de requisição nem cabeçalho customizado que sirva de fonte alternativa — reduz a superfície de onde o tenant poderia vir errado.",
+                "nodes": [
+                  "alb",
+                  "api"
+                ],
+                "edges": [
+                  "alb>api"
+                ]
+              },
+              {
+                "label": "Cada transação declara o tenant antes de perguntar qualquer coisa",
+                "detail": "`SELECT set_config('app.tenant_id', @id, true)` roda como primeira instrução da transação. O terceiro argumento `true` é o equivalente parametrizável de `SET LOCAL`: o valor esquece sozinho ao fim da transação, então uma conexão reaproveitada pelo pool nunca herda o tenant da requisição anterior.",
+                "nodes": [
+                  "api",
+                  "db"
+                ],
+                "edges": [
+                  "api>db"
+                ]
+              },
+              {
+                "label": "O banco aplica o filtro mesmo se o SQL não pedir",
+                "detail": "Com `FORCE ROW LEVEL SECURITY`, a política vale até para o dono da tabela. Um `SELECT *` sem `WHERE` — o mesmo erro do desenho anterior — devolve só as linhas do tenant declarado, porque o Postgres reescreve a consulta antes de executar, e a aplicação não tem como contornar isso por engano.",
+                "nodes": [
+                  "db"
+                ],
+                "edges": [
+                  "api>db"
+                ]
+              },
+              {
+                "label": "Um vigia próprio prova a proteção em produção, sem esperar reclamação",
+                "detail": "O canário se autentica como um tenant de teste e tenta, de propósito, ler uma linha marcada como pertencente a outro. Se conseguir, o alarme dispara em minutos — antes de qualquer cliente notar, e sem depender de ninguém reportar.",
+                "nodes": [
+                  "eventbridge",
+                  "canario",
+                  "cw"
+                ],
+                "edges": [
+                  "eventbridge>canario",
+                  "canario>db",
+                  "canario>cw"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Repare no que NÃO mudou: a consulta em `PedidosRepositorio.ListarAsync` continua sem `WHERE tenant_id`, exatamente como no desenho mínimo. O que muda é que agora existe uma política de RLS entre o SQL escrito e o dado devolvido — e é essa camada, não a disciplina de quem escreve a query, que garante o isolamento."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "annotated_formula",
+          "position": 3,
+          "data": {
+            "title": "Quanto do raio de um incidente cada modelo contém",
+            "formula": "raio_do_incidente ≈ tenants_alcançáveis(fronteira) × valor_médio_por_tenant",
+            "parts": [
+              {
+                "symbol": "fronteira = linha",
+                "name": "Uma tabela, filtro na consulta (com ou sem RLS)",
+                "description": "Sem RLS: um WHERE esquecido alcança TODOS os tenants da tabela — o raio é o negócio inteiro. Com RLS: o raio cai para zero em teoria, mas continua sendo um único banco físico, então uma falha do PRÓPRIO Postgres (não do isolamento lógico) ainda afeta todos."
+              },
+              {
+                "symbol": "fronteira = schema",
+                "name": "Um schema Postgres por tenant, mesma instância",
+                "description": "Um erro de aplicação que ignora o search_path alcança só o schema conectado — mas uma instância RDS lenta, em manutenção ou sem espaço em disco ainda afeta todos os schemas nela.",
+                "highlight": true
+              },
+              {
+                "symbol": "fronteira = conta",
+                "name": "Uma conta AWS por tenant",
+                "description": "Não existe rede, IAM nem credencial que alcance a conta vizinha por padrão. O raio de um erro de aplicação, de uma credencial vazada ou de uma instância derrubada fica contido na própria conta — ao custo de operar N vezes a infraestrutura."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "success",
+            "title": "O critério de aceite, numa frase",
+            "content": "O mesmo teste que falhava no desenho mínimo (`VazamentoEntreTenantsTests`) passa a rodar contra este desenho e passa — sem NENHUMA linha de `WHERE tenant_id` escrita à mão. Se o teste só passar depois de um desenvolvedor adicionar filtro manual em algum lugar, a arquitetura de produção não está pronta: a garantia teria voltado a depender de memória humana."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de uma consulta, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A claim de tenant não nasce num formulário nem num cabeçalho customizado: ela nasce num gatilho da Cognito, disparado antes de o token ser emitido, e chega à API já assinada."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Do login à linha filtrada — onde cada verificação acontece",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1. Login",
+                "desc": "O operador autentica na Cognito com e-mail e senha, ou federado via SSO da própria loja."
+              },
+              {
+                "label": "2. Pré-geração de token",
+                "desc": "O gatilho lê o tenant do perfil do usuário no pool e escreve a claim `custom:tenant_id` no access token — versão 2 do gatilho, porque só ela alcança o access token."
+              },
+              {
+                "label": "3. Cliente guarda e envia o token",
+                "desc": "O front-end envia `Authorization: Bearer <access token>` em toda requisição; nenhum campo de tenant é enviado separadamente pelo cliente."
+              },
+              {
+                "label": "4. ALB encaminha",
+                "desc": "O balanceador não inspeciona claim nenhuma — apenas roteia para a API, em sub-rede privada."
+              },
+              {
+                "label": "5. Middleware valida a assinatura e extrai a claim",
+                "desc": "A API valida o JWT contra as chaves públicas da Cognito e lê `tenant_id` do payload já verificado — nunca de um parâmetro que o cliente controla."
+              },
+              {
+                "label": "6. Transação abre e declara o tenant",
+                "desc": "`BEGIN`, depois `SELECT set_config('app.tenant_id', @id, true)`, e só então as consultas do caso de uso."
+              },
+              {
+                "label": "7. O Postgres reescreve a consulta pela política de RLS",
+                "desc": "Toda cláusula `USING` das políticas é combinada com o `WHERE` original antes da execução — de forma transparente para quem escreveu o SQL."
+              },
+              {
+                "label": "8. Commit encerra o escopo do tenant",
+                "desc": "`SET LOCAL`/`set_config(..., true)` some ao fim da transação; a próxima requisição na mesma conexão pooled começa sem herdar nada da anterior."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "json",
+            "filename": "access-token-decodificado.json",
+            "code": "// access token decodificado (payload) -- o que a API realmente recebe\n{\n  \"sub\": \"3f29a7c1-...\",\n  \"iss\": \"https://cognito-idp.us-east-1.amazonaws.com/us-east-1_XXXXXXX\",\n  \"client_id\": \"5g8h...\",\n  \"token_use\": \"access\",\n  \"scope\": \"rotafacil-api/pedidos.leitura\",\n  // Esta claim NAO existe por padrao no access token. Ela so aparece porque\n  // o gatilho de pre-geracao de token, versao 2, foi configurado para\n  // escreve-la em accessTokenGeneration.claimsToAddOrOverride -- a versao 1\n  // do gatilho so alcanca o ID token, que a API nunca ve.\n  \"custom:tenant_id\": \"7b41f0aa-2222-4444-8888-sapataria-nordeste\",\n  \"exp\": 1723046400,\n  \"iat\": 1723042800\n}\n"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "A armadilha do atributo customizado comum",
+            "content": "Um atributo customizado do perfil do usuário (`custom:tenant_id` cadastrado direto no pool) aparece no ID TOKEN por padrão — e não no access token, que é o que a maioria das APIs valida em cada requisição. Confiar nisso sem testar produz uma claim que existe no login e desaparece na primeira chamada de API. É por isso que este módulo usa o gatilho de pré-geração de token na versão 2: ela escreve explicitamente em `accessTokenGeneration.claimsToAddOrOverride`, o único caminho documentado para uma claim de aplicação chegar ao access token."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Uma plataforma B2B com 340 lojas-cliente, a maioria pequena e algumas grandes (a maior responde por 40% do volume), sem orçamento para operar infraestrutura dedicada por cliente, mas com um incidente de vazamento real já registrado e um contrato enterprise em negociação que exige isolamento \"em conta própria\".",
+            "winner": "Bridge: pool por linha com RLS obrigatória para a maioria dos tenants, e conta AWS dedicada para o punhado de tenants grandes ou com exigência contratual",
+            "why": "Nenhum dos três modelos sozinho serve aos dois extremos do catálogo de clientes. Silo por conta para 340 lojas pequenas multiplicaria o custo operacional por 340 sem benefício proporcional — a maioria delas não gera tráfego nem risco que justifique uma conta inteira. Pool por linha sem exceção deixaria o tenant grande (40% do volume) competindo por capacidade com os pequenos e sujeito ao MESMO raio de incidente que eles, apesar de ter exigência contratual maior. O modelo bridge aplica RLS como piso universal (nenhum tenant fica sem proteção de banco) e reserva conta dedicada para onde o contrato ou o volume justificam o custo — que é exatamente o que o whitepaper da AWS chama de estratégia mista.",
+            "alternatives": [
+              {
+                "name": "Silo total: uma conta por tenant, desde o primeiro cliente",
+                "downside": "Isolamento máximo, mas o custo de on-boarding, patch, monitoramento e suporte multiplica por 340 desde o primeiro dia — inviável para tenants que pagam uma fração do que uma conta dedicada custa para operar."
+              },
+              {
+                "name": "Pool total: uma tabela com RLS, sem exceção para ninguém",
+                "downside": "Mais barato e mais simples de operar, mas o tenant grande compete por I/O e CPU com os pequenos (ruído de vizinhança), e nenhuma cláusula contratual de \"dados em conta própria\" pode ser cumprida sem migrar depois — sob pressão, com o cliente já dentro."
+              },
+              {
+                "name": "Schema por tenant para todos",
+                "downside": "Isolamento melhor que linha, pior que conta, mas migração de schema deixa de ser UM comando e passa a ser um laço sobre 340 conexões — o tempo de deploy cresce com o número de tenants, não com o tamanho da mudança."
+              },
+              {
+                "name": "Adiar a decisão até o incidente acontecer",
+                "downside": "É a situação real que abre este laboratório: o vazamento já ocorreu com pool sem RLS. Corrigir depois do incidente custa a confiança do cliente vazado, não só a engenharia."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Fronteira padrão para a maioria dos tenants",
+                "linha, com RLS obrigatória",
+                "linha sem RLS; schema para todos",
+                "zero custo adicional de infraestrutura por tenant pequeno",
+                "continua sendo um banco físico só — falha de instância afeta todos os tenants pool ao mesmo tempo"
+              ],
+              [
+                "Como declarar o tenant na sessão",
+                "`set_config(..., true)` por transação",
+                "`SET LOCAL` direto; `SET` de sessão; variável de aplicação em memória",
+                "`set_config` aceita parâmetro ligado; `SET` não aceita e convida a montar SQL por concatenação",
+                "uma instrução extra no início de toda transação que toca a tabela"
+              ],
+              [
+                "Claim de tenant no token",
+                "gatilho de pré-geração de token, versão 2",
+                "atributo customizado simples; claim no ID token; header customizado enviado pelo cliente",
+                "é o único caminho que coloca a claim no ACCESS token, assinado e não forjável pelo cliente",
+                "uma função Lambda a mais para manter e versionar"
+              ],
+              [
+                "Detecção de vazamento",
+                "canário ativo, autenticado, tentando vazar de propósito",
+                "auditoria de log manual; revisão de código; alarme só em erro de aplicação",
+                "prova a proteção em produção de forma contínua, não só no ambiente de teste",
+                "uma tabela de dado sintético e uma Lambda agendada a mais para operar"
+              ],
+              [
+                "Isolamento para o tenant contratual grande",
+                "conta AWS dedicada via Organizations",
+                "schema dedicado com cota de recurso; réplica de leitura exclusiva",
+                "é a única fronteira que cumpre \"dados em conta própria\" de forma literal e auditável",
+                "on-boarding, patch e monitoramento passam a existir por tenant, não só por plataforma"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que o modelo por linha cria, e que este módulo não esconde",
+            "content": "Mesmo com RLS, todos os tenants pool continuam numa única instância RDS: manutenção, upgrade de versão e uma falha de AZ afetam os 330+ tenants ao mesmo tempo. Isso é aceitável para a maioria — é o trade-off que o requisito de custo por tenant pequeno pede — mas não é isolamento de infraestrutura, é isolamento de DADO. Quem precisa das duas coisas está no segmento que vai para o modelo por conta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: RLS no Postgres, e por que FORCE não é opcional"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A trava central deste laboratório mora aqui. Sem `FORCE ROW LEVEL SECURITY`, a política vale para a maioria das conexões e não vale para exatamente as que mais importam: o papel dono da tabela, tipicamente o mesmo usado para rodar migration."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "sql",
+            "filename": "rls.sql",
+            "code": "-- rls.sql — a fronteira desce do codigo da aplicacao para o motor do banco\n\n-- O papel que a aplicacao usa NUNCA pode ter BYPASSRLS nem ser dono da tabela.\n-- Sao os dois jeitos silenciosos de a protecao abaixo nao valer para ninguem.\nCREATE ROLE app_rotafacil LOGIN PASSWORD '(via Secrets Manager, nunca aqui)'\n  NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;\n\nGRANT SELECT, INSERT, UPDATE, DELETE ON pedidos TO app_rotafacil;\nGRANT USAGE ON SCHEMA public TO app_rotafacil;\n\n-- Habilita a politica de linha na tabela.\nALTER TABLE pedidos ENABLE ROW LEVEL SECURITY;\n\n-- FORCE fecha a brecha mais comum: sem ele, o DONO da tabela (tipicamente o\n-- papel que roda migration) continua ignorando a politica. Isso pega quem usa\n-- o mesmo papel para aplicacao e para migration -- erro comum de day one.\nALTER TABLE pedidos FORCE ROW LEVEL SECURITY;\n\n-- A politica. USING filtra LEITURA; WITH CHECK filtra ESCRITA -- sem o\n-- segundo, um INSERT ou UPDATE poderia gravar tenant_id de outro cliente,\n-- mesmo que a leitura subsequente ja estivesse protegida.\nCREATE POLICY isolamento_por_tenant ON pedidos\n  USING      (tenant_id = current_setting('app.tenant_id', true)::uuid)\n  WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);\n\n-- O segundo argumento `true` de current_setting evita excecao quando a\n-- variavel de sessao nao foi definida (conexao sem contexto de tenant): a\n-- politica compara tenant_id com NULL, que nunca e verdadeiro, e a consulta\n-- devolve ZERO linhas em vez de estourar erro. Fail-closed, nao fail-open --\n-- uma conexao que \"esqueceu\" de declarar o tenant nao ve nada, nunca ve tudo.\n\n-- Indice composto: toda politica de RLS vira um predicado extra em CADA\n-- consulta, entao tenant_id precisa estar na esquerda de todo indice usado\n-- por rota quente, ou o ganho de RLS custa um scan sequencial por chamada.\nCREATE INDEX idx_pedidos_tenant_criado ON pedidos (tenant_id, criado_em DESC);\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "O papel de aplicação com BYPASSRLS anula tudo isto em silêncio",
+            "content": "Um papel com o atributo `BYPASSRLS` — ou um superusuário — ignora toda política de RLS, `FORCE` ou não. Não há erro, não há aviso: as consultas simplesmente voltam a devolver todos os tenants, exatamente como no desenho mínimo. A causa mais comum é conveniência de operação: alguém cria o papel de aplicação copiando o de administração \"para não ter que lidar com permissão depois\". Audite com `SELECT rolname, rolbypassrls FROM pg_roles` e trate qualquer `t` fora dos papéis de operação como incidente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o contexto de tenant por transação, em C#"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A claim chega assinada; falta levá-la, sem intermediário que o cliente controle, até a consulta. O middleware extrai a claim do token já validado; o repositório declara o tenant como primeira instrução de CADA transação que toca uma tabela com RLS."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "TenantContext.cs",
+            "code": "// TenantContext.cs — a claim assinada vira contexto de sessao, por transacao\n\npublic sealed class TenantContextMiddleware\n{\n    private readonly RequestDelegate _proximo;\n\n    public TenantContextMiddleware(RequestDelegate proximo) => _proximo = proximo;\n\n    public async Task InvokeAsync(HttpContext ctx)\n    {\n        // A claim so existe porque o gatilho de pre-geracao de token (v2) a\n        // escreveu no access token. Se ela nao estiver aqui, a requisicao nao\n        // tem tenant -- e e rejeitada, nao assumida como \"publica\".\n        var raw = ctx.User.FindFirst(\"custom:tenant_id\")?.Value;\n        if (!Guid.TryParse(raw, out var tenantId))\n        {\n            ctx.Response.StatusCode = StatusCodes.Status403Forbidden;\n            return;\n        }\n\n        ctx.Items[\"TenantId\"] = tenantId;\n        await _proximo(ctx);\n    }\n}\n\n// Repositorio base: TODA consulta passa por aqui, e a declaracao do tenant e\n// a PRIMEIRA instrucao da transacao -- antes de qualquer SELECT do caso de uso.\npublic abstract class RepositorioComTenant\n{\n    private readonly NpgsqlDataSource _dataSource;\n    private readonly IHttpContextAccessor _http;\n\n    protected RepositorioComTenant(NpgsqlDataSource dataSource, IHttpContextAccessor http)\n    {\n        _dataSource = dataSource;\n        _http = http;\n    }\n\n    protected async Task<NpgsqlConnection> AbrirComTenantAsync(NpgsqlTransaction tx)\n    {\n        var tenantId = (Guid)_http.HttpContext!.Items[\"TenantId\"]!;\n\n        // `SET LOCAL app.tenant_id = @id` NAO existe como comando parametrizavel\n        // -- o protocolo SET nao aceita bind parameter. `set_config(..., true)`\n        // e a forma segura e parametrizavel: o terceiro argumento `true` e\n        // exatamente o que `SET LOCAL` faz -- o valor vale so ate o COMMIT ou\n        // ROLLBACK da transacao atual.\n        //\n        // Isto e o que torna seguro reusar conexao de um pool: a proxima\n        // transacao na MESMA conexao fisica nao herda o tenant_id da anterior,\n        // porque ele nunca sobreviveu ao fim da transacao passada.\n        await using var cmd = new NpgsqlCommand(\n            \"SELECT set_config('app.tenant_id', $1, true)\", tx.Connection, tx);\n        cmd.Parameters.AddWithValue(tenantId.ToString());\n        await cmd.ExecuteNonQueryAsync();\n\n        return tx.Connection!;\n    }\n}\n\npublic sealed class PedidosRepositorio : RepositorioComTenant\n{\n    public PedidosRepositorio(NpgsqlDataSource ds, IHttpContextAccessor http) : base(ds, http) { }\n\n    public async Task<IReadOnlyList<Pedido>> ListarAsync(NpgsqlTransaction tx)\n    {\n        var conn = await AbrirComTenantAsync(tx);\n\n        // Sem WHERE tenant_id. De proposito: a linha abaixo e IDENTICA ao\n        // endpoint que vazou no desenho minimo. A diferenca inteira do\n        // resultado vem da politica de RLS que o banco aplica por baixo.\n        await using var cmd = new NpgsqlCommand(\"SELECT id, tenant_id, total FROM pedidos\", conn, tx);\n        await using var reader = await cmd.ExecuteReaderAsync();\n\n        var pedidos = new List<Pedido>();\n        while (await reader.ReadAsync())\n            pedidos.Add(new Pedido(reader.GetGuid(0), reader.GetGuid(1), reader.GetDecimal(2)));\n        return pedidos;\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O pool de conexão é onde este desenho quebra se alguém usar `SET` puro",
+            "content": "Com `Npgsql` (como com qualquer driver que faz pooling), uma conexão física é reaproveitada entre requisições de tenants DIFERENTES. `SET app.tenant_id = ...` de sessão sobrevive ao fim da transação — a próxima requisição a pegar aquela conexão do pool herdaria o tenant da anterior até declarar o seu, e uma requisição que só faz leitura rápida pode nem chegar a declarar nada antes de consultar. `set_config(..., true)` evita isso porque o valor expira automaticamente no `COMMIT` ou `ROLLBACK`, não no fim da conexão."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o modelo por schema, e o preço que ele cobra depois"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Isolamento melhor que por linha: um erro de aplicação que ignora o `search_path` alcança, no pior caso, o schema conectado — não a base inteira. O preço aparece na operação, não no desenho: uma migration que era um comando vira um laço."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "sql",
+            "filename": "provisionar_schema.sql",
+            "code": "-- provisionar_schema.sql — o preco do isolamento por schema: on-boarding vira DDL\n\n-- Chamado pela funcao de on-boarding quando um tenant novo assina o plano\n-- \"schema dedicado\". O nome do schema NUNCA vem direto do input do usuario --\n-- vai por um identificador interno gerado pela aplicacao, para impedir\n-- injecao via nome de schema (identifiers nao aceitam parametro ligado).\nCREATE OR REPLACE FUNCTION provisionar_schema_tenant(p_tenant_slug text)\nRETURNS void AS $$\nDECLARE\n  v_schema text := 'tenant_' || p_tenant_slug;\nBEGIN\n  EXECUTE format('CREATE SCHEMA %I', v_schema);\n\n  -- Clona a estrutura de um schema-molde (`_template`) mantido em migration.\n  -- Isto e o efeito colateral que o modelo por schema cobra: uma migration\n  -- que no modelo por linha e UM comando aqui vira um loop sobre N schemas.\n  EXECUTE format(\n    'CREATE TABLE %I.pedidos (LIKE _template.pedidos INCLUDING ALL)', v_schema);\n  EXECUTE format(\n    'CREATE TABLE %I.itens_pedido (LIKE _template.itens_pedido INCLUDING ALL)', v_schema);\n\n  -- O papel de aplicacao ganha USAGE apenas no schema deste tenant -- ele\n  -- continua sem enxergar os outros 339 por falta de GRANT, nao por politica.\n  EXECUTE format('GRANT USAGE ON SCHEMA %I TO app_rotafacil', v_schema);\n  EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO app_rotafacil', v_schema);\nEND;\n$$ LANGUAGE plpgsql;\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "migrar_todos_os_schemas.sh",
+            "code": "#!/usr/bin/env bash\n# migrar_todos_os_schemas.sh — a migration que era um comando virou um laco\nset -euo pipefail\n\n# No modelo por linha, aplicar uma migration e UM `dotnet ef database update`.\n# Aqui, e este laco -- e ele cresce linearmente com o numero de tenants no\n# plano \"schema dedicado\", nao com o tamanho da mudanca.\nSCHEMAS=$(psql \"$DATABASE_URL\" -tAc \\\n  \"SELECT nspname FROM pg_namespace WHERE nspname LIKE 'tenant_%'\")\n\nfalhas=0\nfor schema in $SCHEMAS; do\n  echo \"migrando ${schema}...\"\n  # search_path troca o alvo do runner de migration SEM duplicar a conexao.\n  if ! psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 \\\n       -c \"SET search_path TO ${schema}, public;\" \\\n       -f migrations/2026_08_07_add_coluna_prioridade.sql; then\n    echo \"FALHOU em ${schema} -- os demais continuam, mas este tenant fica na versao antiga\" >&2\n    falhas=$((falhas+1))\n  fi\ndone\n\n# Uma migration parcialmente aplicada -- alguns schemas na v42, outros na v41\n# -- e o modo de falha caracteristico deste modelo, e ele nao existe no\n# modelo por linha (onde ha uma tabela so, uma transacao so).\necho \"concluido: ${falhas} schema(s) com falha\"\n[ \"$falhas\" -eq 0 ]\n"
+          }
+        },
+        {
+          "id": "b10_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "Migration parcial é o modo de falha que só existe neste modelo",
+            "content": "No modelo por linha há uma tabela e uma transação de migration. Aqui, se o laço falha no schema 214 de 340 — por lock, por espaço em disco, por timeout — os primeiros 213 já estão na versão nova e os demais não. O sistema fica com tenants em versões de schema DIFERENTES ao mesmo tempo, e o código da aplicação precisa tolerar as duas por um período, ou o script precisa ser idempotente e recomeçável pelo ponto da falha."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: o modelo por conta, para quem exige a fronteira mais forte"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Não existe rede, IAM nem credencial que alcance, por padrão, a conta vizinha. É a única fronteira deste laboratório que continua de pé mesmo se o código da aplicação tiver um bug de isolamento — porque o bug simplesmente não tem como atravessar a fronteira de conta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "conta.tf",
+            "code": "# conta.tf — o modelo por conta: a fronteira e a propria conta AWS\n\n# Uma conta de membro por tenant grande. O nome e o e-mail raiz sao gerados\n# pela plataforma, nunca digitados a mao -- isso e o que permite este\n# recurso ser criado por automacao de on-boarding, nao por ticket manual.\nresource \"aws_organizations_account\" \"tenant\" {\n  for_each = var.tenants_enterprise   # ex.: { \"cadencia\" = {...}, \"outraloja\" = {...} }\n\n  name      = \"rotafacil-tenant-${each.key}\"\n  email     = \"aws-tenant-${each.key}@rotafacil.example.com\"\n  parent_id = aws_organizations_organizational_unit.tenants_enterprise.id\n\n  # SCPs anexados a esta OU sao o TETO do que a conta pode fazer, mesmo que\n  # o IAM local permita mais -- e a fronteira de governanca que nenhum\n  # `Resource: \"*\"` de dentro da conta consegue furar.\n  role_name = \"OrganizationAccountAccessRole\"\n\n  lifecycle {\n    prevent_destroy = true   # fechar conta por engano perde os dados do tenant\n  }\n}\n\n# O time da plataforma acessa a conta do tenant assumindo um papel -- nunca\n# com credencial de longa duracao criada dentro da conta do cliente.\ndata \"aws_iam_policy_document\" \"confianca_cross_account\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sts:AssumeRole\"]\n\n    principals {\n      type        = \"AWS\"\n      identifiers = [var.conta_plataforma_arn]\n    }\n\n    # ExternalId evita o problema do \"deputado confuso\": sem ele, qualquer\n    # entidade que descubra o ARN do papel na conta do tenant poderia\n    # assumi-lo. Com ele, so quem tambem conhece o segredo compartilhado passa.\n    condition {\n      test     = \"StringEquals\"\n      variable = \"sts:ExternalId\"\n      values   = [var.external_id_por_tenant[each.key]]\n    }\n  }\n}\n\nresource \"aws_iam_role\" \"acesso_plataforma\" {\n  provider           = aws.tenant_account\n  for_each           = var.tenants_enterprise\n  name               = \"PlataformaRotafacilAcesso\"\n  assume_role_policy = data.aws_iam_policy_document.confianca_cross_account.json\n  max_session_duration = 3600   # credencial de sessao curta, nunca de longa duracao\n}\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "ExternalId ausente transforma o papel cross-account num convite",
+            "content": "Sem a condição `sts:ExternalId`, qualquer entidade que descubra o ARN do papel `PlataformaRotafacilAcesso` na conta do tenant — e ARN de papel não é segredo, aparece em log e em erro de permissão — pode tentar assumi-lo. Com o `ExternalId`, só quem também conhece o valor compartilhado entre as duas contas passa. Esta é a defesa contra o \"problema do deputado confuso\" que a certificação de segurança cobra por nome, e a defesa inteira é uma condição de uma linha que é fácil esquecer porque, sem ela, o `assume-role` também funciona — só que para qualquer um."
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "Para o tenant que ainda está no plano DynamoDB em vez de RDS, o equivalente funcional de RLS não é um recurso do banco — é uma condição de política de IAM que amarra a chave de partição à identidade de quem chama:"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_4",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "json",
+            "filename": "dynamodb-tenant-policy.json",
+            "code": "{\n  \"// comentario\": \"policy de exemplo -- JSON real nao aceita comentario\",\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [{\n    \"Effect\": \"Allow\",\n    \"Action\": [\"dynamodb:GetItem\", \"dynamodb:Query\"],\n    \"Resource\": \"arn:aws:dynamodb:us-east-1:111122223333:table/pedidos\",\n    \"Condition\": {\n      \"ForAllValues:StringLike\": {\n        \"dynamodb:LeadingKeys\": [\"${aws:PrincipalTag/tenant_id}*\"]\n      }\n    }\n  }]\n}\n"
+          }
+        },
+        {
+          "id": "b11_5",
+          "type": "paragraph",
+          "position": 5,
+          "data": {
+            "content": [
+              {
+                "text": "`dynamodb:LeadingKeys` exige que a chave de partição da linha acessada comece pelo valor da tag de sessão `tenant_id` do papel assumido — geralmente obtida de `sts:AssumeRole` com tags de sessão (ABAC), uma por login. Sem essa condição, uma credencial do DynamoDB tem acesso a QUALQUER partição da tabela, e o isolamento volta a depender só do código."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Construir: o canário que tenta vazar dado em produção, de propósito"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Todos os testes até aqui rodam antes do deploy. Este roda DEPOIS, contra o ambiente real, a cada poucos minutos — porque a única prova que importa de verdade é a de que a proteção continua de pé hoje, não a de que ela estava de pé quando o código foi revisado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "filename": "canario.py",
+            "code": "# canario.py — o vigia que tenta vazar dado a cada 5 minutos\nimport os\nimport boto3\nimport psycopg\n\nTENANT_TESTE = os.environ[\"TENANT_TESTE_ID\"]          # tenant so para o canario\nTENANT_ALVO = os.environ[\"TENANT_ALVO_ID\"]            # tenant \"vizinho\" no teste\ncloudwatch = boto3.client(\"cloudwatch\")\n\ndef handler(event, context):\n    with psycopg.connect(os.environ[\"DATABASE_URL\"]) as conn:\n        with conn.cursor() as cur:\n            # Declara o tenant de teste -- exatamente como a API declararia.\n            cur.execute(\"SELECT set_config('app.tenant_id', %s, true)\", (TENANT_TESTE,))\n\n            # Tenta, de proposito, ler uma linha marcada como pertencente ao\n            # tenant \"vizinho\". Numa fronteira que funciona, zero linhas.\n            cur.execute(\n                \"SELECT count(*) FROM pedidos WHERE tenant_id = %s\", (TENANT_ALVO,)\n            )\n            vazou = cur.fetchone()[0]\n\n        conn.rollback()  # o set_config e transacional; isto tambem o descarta\n\n    cloudwatch.put_metric_data(\n        Namespace=\"Rotafacil/IsolamentoTenant\",\n        MetricData=[{\n            \"MetricName\": \"LinhasVazadasNoCanario\",\n            \"Value\": float(vazou),\n            \"Unit\": \"Count\",\n        }],\n    )\n\n    if vazou > 0:\n        # Nao levanta excecao silenciosa -- o alarme do CloudWatch e quem\n        # acorda alguem, mas o log entra na trilha de qualquer forma.\n        print(f\"ALERTA: canario leu {vazou} linha(s) do tenant vizinho\")\n\n    return {\"linhasVazadas\": vazou}\n"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que o canário usa `rollback`, não `commit`",
+            "content": "O canário lê de propósito, nunca escreve dado real, e desfaz a própria transação ao final. Isso o torna seguro de rodar em produção continuamente: na pior das hipóteses ele confirma um vazamento (e isso é exatamente o que se quer detectar cedo) — ele nunca cria, nunca altera, nunca cobra espaço em disco além dos poucos milissegundos da própria consulta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Implantar, e provar com número — não com sensação"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Quatro provas. Nenhuma conclusão vem de \"parece que funcionou\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "VazamentoEntreTenantsTests.cs (produção)",
+            "code": "// VazamentoEntreTenantsTests.cs — o MESMO ataque, contra o desenho de producao\n//\n// O teste da secao anterior falhava (vermelho) porque nao havia fronteira\n// nenhuma abaixo da aplicacao. Este arquivo reusa o mesmo ataque -- a mesma\n// consulta sem WHERE -- mas agora contra a infraestrutura real deste modulo:\n// tabela com FORCE ROW LEVEL SECURITY e o repositorio que declara o tenant\n// via set_config antes de consultar.\n\npublic class VazamentoEntreTenantsTests : IAsyncLifetime\n{\n    private readonly PostgreSqlContainer _pg =\n        new PostgreSqlBuilder().WithImage(\"postgres:16\").Build();\n\n    public async Task InitializeAsync() => await _pg.StartAsync();\n    public async Task DisposeAsync() => await _pg.DisposeAsync();\n\n    [Fact(DisplayName = \"Com RLS obrigatoria, a mesma consulta sem WHERE nunca vaza\")]\n    public async Task PainelDeMetricas_NuncaExpoeOutroTenant()\n    {\n        await using var ds = NpgsqlDataSource.Create(_pg.GetConnectionString());\n        await AplicarRlsSqlAsync(ds);   // executa rls.sql sobre o container real\n\n        await SemearAsync(ds, tenantId: TenantCadencia, quantidadeDePedidos: 1842);\n        await SemearAsync(ds, tenantId: TenantSapatariaNordeste, quantidadeDePedidos: 931);\n\n        var http = new HttpContextAccessorFalso(tenantId: TenantSapatariaNordeste);\n        var repo = new PedidosRepositorio(ds, http);\n\n        await using var conn = await ds.OpenConnectionAsync();\n        await using var tx = await conn.BeginTransactionAsync();\n\n        // O MESMO SQL sem WHERE do teste anterior -- o repositorio nunca\n        // filtra por tenant no C#. Quem filtra e a politica no Postgres.\n        var pedidos = await repo.ListarAsync(tx);\n\n        Assert.All(pedidos, p => Assert.Equal(TenantSapatariaNordeste, p.TenantId));\n        // Verde: nenhuma linha da Cadencia atravessou, mesmo com a consulta\n        // exatamente igual a que vazou no desenho minimo.\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "#",
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que a reprovação significa"
+            ],
+            "rows": [
+              [
+                "1",
+                "O mesmo teste que falhava agora passa",
+                "dotnet test --filter VazamentoEntreTenantsTests",
+                "1 de 1 aprovado, sem nenhum WHERE tenant_id novo no C#",
+                "se falhar, a política de RLS não está ativa ou o papel usado no teste tem BYPASSRLS"
+              ],
+              [
+                "2",
+                "A política existe e está com FORCE ligado",
+                "psql -c \"SELECT relforcerowsecurity FROM pg_class WHERE relname='pedidos'\"",
+                "t (true)",
+                "f significa que o dono da tabela — e qualquer job que rode com esse papel — continua vendo tudo"
+              ],
+              [
+                "3",
+                "O canário não encontra vazamento na conta compartilhada",
+                "aws lambda invoke --function-name canario-isolamento saida.json && cat saida.json",
+                "{\"linhasVazadas\": 0}",
+                "qualquer valor acima de zero é um incidente ativo, não um teste que falhou"
+              ],
+              [
+                "4",
+                "O papel cross-account recusa assumir sem o ExternalId certo",
+                "aws sts assume-role --role-arn arn:...:role/PlataformaRotafacilAcesso --role-session-name teste",
+                "AccessDenied (sem --external-id) e sucesso só com o valor correto",
+                "sucesso sem ExternalId é a vulnerabilidade de deputado confuso, aberta"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "A prova que mais importa é a primeira, não a última",
+            "content": "É tentador correr para o canário e para a conta cross-account, que parecem mais sofisticados. Mas a prova 1 é a que sustenta 330+ dos 340 tenants: se ela falhar, nenhuma das outras três compensa, porque a maioria dos clientes está no modelo por linha, não no por conta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Uma tabela tem `ALTER TABLE pedidos ENABLE ROW LEVEL SECURITY` e a política de isolamento criada, mas um job de manutenção que roda com o papel dono da tabela continua lendo todos os tenants. Qual é a causa mais provável?",
+        "options": [
+          "A tabela precisa de uma trigger de auditoria para aplicar a política",
+          "Falta ALTER TABLE ... FORCE ROW LEVEL SECURITY",
+          "O índice composto (tenant_id, ...) não foi criado",
+          "A política foi escrita com WITH CHECK em vez de USING"
+        ],
+        "correctIndex": 1,
+        "explanation": "ENABLE ROW LEVEL SECURITY liga a política para a maioria das conexões, mas o dono da tabela fica de fora dela por padrão — é exatamente o caso do job de manutenção, que tipicamente roda com o mesmo papel usado para criar e alterar a tabela. FORCE ROW LEVEL SECURITY é o comando que estende a política também ao dono, fechando essa brecha específica.\n\nA primeira alternativa troca a função das duas cláusulas: USING filtra leitura e WITH CHECK filtra escrita, mas nenhuma das duas, sozinha ou junta, muda o comportamento do dono da tabela — isso é papel do FORCE. A terceira confunde desempenho com correção: um índice ausente deixaria a consulta lenta, não incorreta: mesmo sem índice, a política filtraria certo para quem não é dono. A quarta inventa um mecanismo que não existe no RLS do Postgres — não há trigger de auditoria necessária para a política funcionar; auditoria é adicional e opcional, não pré-requisito."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três falhas abaixo foram provocadas de propósito nesta base de exemplo, para que o sintoma fique reconhecível antes de acontecer em produção."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha provocada",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Papel de aplicação recriado a partir do papel de migration (herdou dono da tabela)",
+                "RLS parece configurada certa, mas consultas seguem devolvendo todos os tenants",
+                "`SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = 'app_rotafacil'`",
+                "criar papel de aplicação isolado do papel de migration, sem `BYPASSRLS` nem posse da tabela"
+              ],
+              [
+                "Middleware usa `SET app.tenant_id` (sessão) em vez de `set_config(..., true)`",
+                "vazamento intermitente — só aparece sob carga, quando o pool reaproveita conexão entre tenants",
+                "log de auditoria do Postgres mostrando `app.tenant_id` de um tenant numa transação de outro",
+                "trocar por `set_config` com o terceiro argumento `true`, transacional"
+              ],
+              [
+                "Papel cross-account sem `sts:ExternalId` ou com o mesmo valor para todos os tenants",
+                "`assume-role` funciona vindo de qualquer entidade que tenha o ARN do papel",
+                "a política de confiança (`assume_role_policy`) do papel na conta do tenant",
+                "ExternalId único por tenant, gerado pela plataforma, nunca reaproveitado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A segunda falha é a mais perigosa das três, e a mais silenciosa",
+            "content": "Ela só se manifesta sob concorrência real — os testes de integração comuns, que rodam um request de cada vez, não a pegam. Ela chega a produção passando por toda a suíte de testes, e o primeiro sinal costuma ser um cliente reportando dado que não é dele, exatamente como no incidente que abriu este módulo. É também o motivo pelo qual o canário da seção anterior roda continuamente: ele é o único mecanismo deste desenho capaz de pegar esta falha específica antes de um cliente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Segurança: onde cada modelo pode falhar, e como isso é detectado"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O risco central deste laboratório — vazamento entre tenants — muda de forma conforme o modelo, mas nunca chega a zero sozinho. Cada linha abaixo é um jeito real de a fronteira falhar, não um risco genérico de checklist."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Consulta sem filtro de tenant (modelo por linha, sem RLS)",
+                "Alta",
+                "Crítico — vazamento de dado de negócio entre clientes",
+                "RLS com FORCE como padrão de todo repositório novo",
+                "canário contínuo + teste automatizado no CI",
+                "revogar acesso do endpoint, notificar tenants afetados, corrigir a política"
+              ],
+              [
+                "Papel de aplicação com BYPASSRLS ou dono da tabela",
+                "Média",
+                "Crítico — anula a proteção inteira sem sintoma visível",
+                "papel de aplicação separado do papel de migration, nunca superusuário",
+                "auditoria periódica de `pg_roles`; alarme se um papel novo ganhar o atributo",
+                "remover o atributo, forçar rotação de credencial, revisar quem criou o papel"
+              ],
+              [
+                "`SET` de sessão em vez de `set_config` transacional",
+                "Média",
+                "Alto — vazamento intermitente sob carga, difícil de reproduzir",
+                "lint de código que proíbe `SET` fora de `set_config(..., true)` em código de acesso a dado",
+                "log de auditoria do Postgres cruzado com o tenant esperado por requisição",
+                "trocar a chamada, e auditar quantas requisições passaram pela conexão contaminada"
+              ],
+              [
+                "Papel cross-account sem `ExternalId` único por tenant",
+                "Baixa",
+                "Crítico — qualquer entidade com o ARN pode assumir o papel",
+                "ExternalId gerado pela plataforma, armazenado no Secrets Manager, nunca reaproveitado",
+                "CloudTrail na conta do tenant, alarme em `AssumeRole` fora do papel esperado",
+                "rotacionar o ExternalId, revisar sessões assumidas no período"
+              ],
+              [
+                "Tenant grande consumindo I/O do banco compartilhado",
+                "Alta em pico",
+                "Médio — degradação para os tenants pequenos, não vazamento de dado",
+                "migrar o tenant de maior volume para schema ou conta dedicados",
+                "métrica de latência por tenant via `pg_stat_statements` etiquetada",
+                "mover o tenant identificado para isolamento físico"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "RLS não substitui o menor privilégio em IAM — soma-se a ele",
+            "content": "Um papel de aplicação sem `BYPASSRLS` ainda pode ter permissão de IAM excessiva na conexão com o banco (por exemplo, acesso administrativo ao RDS via IAM que permita trocar o próprio papel de conexão). RLS protege a CONSULTA; a política de IAM da credencial que a task usa para se conectar protege o CAMINHO até a consulta. As duas fronteiras são independentes e nenhuma cobre a ausência da outra."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "list",
+          "position": 0,
+          "data": {
+            "ordered": false,
+            "items": [
+              "O canário encontrou alguma linha vazada nos últimos 5 minutos?",
+              "Algum papel de conexão ganhou BYPASSRLS desde a última auditoria?",
+              "Qual tenant está consumindo I/O ou tempo de CPU desproporcional ao próprio volume?",
+              "Alguma sessão assumiu o papel cross-account fora da janela e do ExternalId esperados?",
+              "Quantos schemas estão em versão de migration diferente da mais recente, e há quanto tempo?"
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Alarme",
+              "Métrica",
+              "Limiar inicial",
+              "Por que este limiar"
+            ],
+            "rows": [
+              [
+                "Canário de vazamento",
+                "LinhasVazadasNoCanario (custom, CloudWatch)",
+                "> 0 em qualquer avaliação",
+                "não existe valor aceitável acima de zero — é vazamento confirmado, não tendência"
+              ],
+              [
+                "Papel com BYPASSRLS fora do esperado",
+                "contagem via job agendado sobre pg_roles",
+                "> 0 papéis fora da lista de exceção",
+                "a lista de exceção (superusuário de operação) é pequena e conhecida; qualquer novo é desvio"
+              ],
+              [
+                "Latência de consulta por tenant",
+                "p99 de `pg_stat_statements` etiquetado por tenant_id",
+                "3× a mediana dos tenants pool",
+                "sinal de ruído de vizinhança antes de virar reclamação"
+              ],
+              [
+                "AssumeRole fora do papel esperado",
+                "CloudTrail Insights na conta do tenant",
+                "qualquer AssumeRole de identidade não cadastrada",
+                "a lista de quem pode assumir o papel é pequena e não deveria crescer sem revisão"
+              ],
+              [
+                "Schemas divergentes de versão",
+                "contagem de schemas != versão da migration mais recente",
+                "> 0 por mais de 1 hora",
+                "divergência curta é esperada durante o rollout; persistente é migration travada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "A métrica que mais economiza tempo de diagnóstico",
+            "content": "O canário é o único sinal desta lista que responde \"vazou?\" diretamente, sem inferência. As outras métricas apontam CONDIÇÕES que aumentam o risco (um papel com privilégio a mais, uma sessão fora do esperado); o canário mede o EVENTO em si, executando o próprio ataque que se quer prevenir."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão de pedidos — e falha de AZ"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Ordem de grandeza",
+              "Modelo por linha (RLS)",
+              "Modelo por schema",
+              "Modelo por conta",
+              "Falha de AZ"
+            ],
+            "rows": [
+              [
+                "10 tenants, tráfego baixo",
+                "sobra folga na mesma instância pequena",
+                "sem ganho perceptível; overhead de N schemas não se paga ainda",
+                "inviável — custo fixo por conta não se justifica para 10 clientes pequenos",
+                "RDS Multi-AZ cobre todos os tenants pool com um único failover"
+              ],
+              [
+                "10 mil pedidos/dia agregados",
+                "RLS acrescenta um predicado por consulta; índice composto (tenant_id, ...) mantém o plano de execução saudável",
+                "schema começa a compensar para os tenants no top 10% de volume",
+                "ainda restrito aos tenants com exigência contratual, não por volume",
+                "cada schema falha e recupera junto — mesma instância"
+              ],
+              [
+                "1 milhão de pedidos/dia, tenant maior com 40%",
+                "o tenant grande compete por I/O com os pequenos mesmo protegido por RLS — RLS isola DADO, não CAPACIDADE",
+                "schema dedicado para o tenant grande reduz o ruído, mas ainda compete por CPU/memória da instância",
+                "conta dedicada dá ao tenant grande sua própria capacidade, sem competir com ninguém",
+                "o tenant em conta própria escolhe sua própria estratégia de Multi-AZ, independente dos demais"
+              ],
+              [
+                "Falha de AZ na instância pool",
+                "todos os 300+ tenants pool sofrem o mesmo failover ao mesmo tempo",
+                "idem — schema não isola infraestrutura, só namespace lógico",
+                "o tenant em conta própria tem seu próprio raio de falha, isolado dos demais",
+                "—"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O efeito que só aparece quando você procura",
+            "content": "RLS resolve o isolamento de DADO em qualquer escala — a política não fica mais fraca com mais tenants. O que não escala junto é a CAPACIDADE compartilhada: adicionar RLS não muda o fato de que 340 tenants competem pelo mesmo CPU e pela mesma memória de uma instância RDS. Confundir as duas coisas é o erro mais comum de quem acabou de implementar RLS e assume que \"resolveu multi-tenant\" — resolveu a metade que era sobre dado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Custo: o que cada modelo acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Nenhum valor absoluto abaixo: os modelos diferem em QUANTAS unidades de infraestrutura existem, e essa é a dimensão que decide o custo — calcule os números da sua conta no AWS Pricing Calculator."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Modelo por linha (pool + RLS)",
+              "Modelo por schema (bridge)",
+              "Modelo por conta (silo)"
+            ],
+            "rows": [
+              [
+                "Protótipo — poucos tenants pequenos",
+                "1 instância RDS para todos; custo cresce com uso agregado, não com contagem de tenant",
+                "não se justifica ainda — overhead de gestão de schema sem volume que o compense",
+                "inviável — custo fixo mínimo por conta (suporte, guardrails, monitoramento) não se paga"
+              ],
+              [
+                "Produção pequena — 340 tenants, a maioria pequena",
+                "uma instância dimensionada para o agregado; é o cenário deste laboratório",
+                "reservado para o top 5–10% por volume — algumas dezenas de schemas, gerência ainda simples",
+                "reservado para os poucos tenants com exigência contratual — cada conta soma custo fixo de governança"
+              ],
+              [
+                "Alta escala — 10 mil+ tenants",
+                "uma instância só não aguenta; passa a exigir múltiplas instâncias por faixa de tenant (sharding), o que reintroduz parte da complexidade do schema",
+                "centenas de schemas — o laço de migration da seção 11 vira o gargalo operacional dominante",
+                "dezenas a centenas de contas — custo de CloudTrail, Config e Security Hub multiplicando por conta se torna a linha visível"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b18_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "O que dominam os cenários",
+              "Onde o custo se esconde"
+            ],
+            "rows": [
+              [
+                "Modelo por linha",
+                "parece \"grátis\" por tenant, mas o tenant grande sozinho pode forçar upgrade de instância para todos os outros — o custo dele é socializado"
+              ],
+              [
+                "Modelo por schema",
+                "a fatura de infraestrutura cresce pouco; o custo real é hora de engenharia operando N migrations, não visível na fatura da AWS"
+              ],
+              [
+                "Modelo por conta",
+                "CloudTrail, Config, GuardDuty e Security Hub cobram POR CONTA — 50 contas de tenant multiplicam essas linhas por 50, mesmo com tráfego baixo em cada uma"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b18_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O antipadrão que transforma custo previsível em imprevisível",
+            "content": "Colocar um tenant de alto volume no pool \"porque ainda não deu problema\" adia o custo, não o elimina: ele reaparece como upgrade de instância inteira — pago por TODOS os 340 tenants — no dia em que o volume do maior finalmente satura a capacidade compartilhada. Migrar esse tenant para schema ou conta ANTES do limite é o que mantém o custo dos pequenos estável."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação",
+              "Risco",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Segurança",
+                "RLS obrigatória no modelo padrão; conta dedicada para o segmento contratual",
+                "papel com BYPASSRLS criado por engano; ExternalId ausente no cross-account",
+                "auditoria automatizada de pg_roles e de políticas de confiança cross-account",
+                "Alta"
+              ],
+              [
+                "Confiabilidade",
+                "canário contínuo detecta vazamento em minutos",
+                "instância RDS única é ponto único de falha para 300+ tenants pool",
+                "Multi-AZ na instância pool; plano de migração para os tenants que crescerem além da capacidade",
+                "Alta"
+              ],
+              [
+                "Eficiência de performance",
+                "índice composto (tenant_id, ...) mantém o plano de RLS eficiente",
+                "tenant de 40% do volume degrada p99 dos pequenos sob pico",
+                "monitorar latência por tenant e migrar o outlier para schema/conta antes do limite",
+                "Média"
+              ],
+              [
+                "Otimização de custo",
+                "pool evita custo fixo por tenant pequeno",
+                "CloudTrail/Config/GuardDuty multiplicando por conta no modelo silo",
+                "consolidar auditoria de contas de tenant via Organizations, não por conta isolada",
+                "Média"
+              ],
+              [
+                "Excelência operacional",
+                "migration é 1 comando no pool; vira laço com risco parcial no schema",
+                "schema divergente de versão sem detecção automática",
+                "alarme de contagem de schemas fora da versão mais recente, com corte de tempo",
+                "Média"
+              ],
+              [
+                "Sustentabilidade",
+                "pool concentra utilização, reduzindo capacidade ociosa por tenant",
+                "silo total para todos os tenants desperdiçaria capacidade reservada e não usada",
+                "manter o bridge como padrão evita superprovisionamento por tenant pequeno",
+                "Baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Evolução em níveis: de uma tabela comum à plataforma com IA isolada por tenant"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Não é uma escada de \"qual modelo é melhor\" — é o que muda de risco e de custo conforme o catálogo de clientes cresce e se diversifica."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "De uma tabela sem tenant_id à plataforma com isolamento propagado até a camada de IA",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Uma tabela sem coluna de tenant nenhuma, porque só existe um cliente.",
+                "note": "Risco resolvido: nenhum. Novo risco: o segundo cliente que assinar já nasce sem fronteira nenhuma entre ele e o primeiro. Custo: o mais baixo possível."
+              },
+              {
+                "label": "Nível 2 — Aplicação básica (o desenho mínimo deste laboratório)",
+                "instruction": "Coluna tenant_id na tabela, filtro escrito à mão em cada consulta.",
+                "note": "Risco resolvido: nenhum registrado é atribuído a dois clientes por acidente de esquema. Novo risco: um WHERE esquecido vaza a base inteira — é o incidente que abre este módulo. Custo: ainda o mais baixo."
+              },
+              {
+                "label": "Nível 3 — Produção (o desenho de produção deste laboratório)",
+                "instruction": "RLS obrigatória com FORCE, claim de tenant assinada pela Cognito, canário contínuo.",
+                "note": "Risco resolvido: vazamento por WHERE esquecido, porque o banco filtra independente do SQL escrito. Novo risco: papel com BYPASSRLS ou ExternalId ausente anulam a proteção em silêncio. Custo: praticamente o mesmo do nível 2 — a proteção é configuração, não infraestrutura nova."
+              },
+              {
+                "label": "Nível 4 — Alta escala: o bridge",
+                "instruction": "A maioria dos tenants no pool com RLS; o tenant de maior volume migrado para schema dedicado para não competir por I/O com os pequenos.",
+                "note": "Risco resolvido: ruído de vizinhança do tenant grande sobre os pequenos. Novo risco: migration parcial entre schemas divergentes. Custo: cresce com o número de tenants isolados fisicamente, não com o total de tenants."
+              },
+              {
+                "label": "Nível 5 — Plataforma: conta por tenant contratual",
+                "instruction": "Organizations provisiona conta dedicada para os tenants com exigência contratual, com papel cross-account, ExternalId único e SCP como teto de governança.",
+                "note": "Risco resolvido: qualquer bug de aplicação que vazasse entre tenants não atravessa mais a fronteira de conta. Novo risco: custo fixo de governança (CloudTrail, Config, Security Hub) por conta, e coordenação de guardrails via SCP em escala. Custo: sobe por tenant isolado, mas cumpre cláusula contratual literal."
+              },
+              {
+                "label": "Nível 6 — Dados e IA: a fronteira sobe até o modelo",
+                "instruction": "Um copiloto interno ou uma base de conhecimento (Bedrock Knowledge Bases) responde perguntas sobre o histórico de pedidos — e a mesma fronteira de tenant precisa valer na recuperação de contexto, não só na tabela relacional.",
+                "note": "Risco resolvido: nenhum, se a IA só ler do banco já protegido por RLS. Novo risco: um índice vetorial ou uma base de conhecimento POOLED, sem filtro de metadado por tenant, reabre exatamente o mesmo incidente deste módulo — um documento do tenant A citado na resposta ao tenant B, tratado em L90. Custo: cresce com volume de conteúdo indexado por tenant, independente do modelo de isolamento relacional escolhido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Não faz sentido levar isolamento até a camada de IA (nível 6) enquanto a camada de dado relacional (níveis 2–3) ainda depende de um WHERE escrito à mão. A fronteira mais fraca do sistema é a que decide o raio real de um incidente, e ela quase sempre está embaixo, não na parte mais nova."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Isolamento de tenant é um problema de fronteira de dado e de infraestrutura — não um problema que um modelo de linguagem resolve melhor que uma política de RLS ou uma conta AWS separada. Forçar IA aqui seria vender complexidade para um problema que já tem solução determinística e auditável."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Onde IA entra de verdade é um problema DIFERENTE, adjacente a este: quando a aplicação usa Bedrock Knowledge Bases ou um agente para responder perguntas sobre o histórico de um cliente, a recuperação de contexto pode citar documento de outro tenant se a base vetorial for compartilhada sem filtro de metadado — o mesmo incidente deste módulo, um andar acima na pilha."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b21_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Cenário",
+              "IA resolve?",
+              "Por quê"
+            ],
+            "rows": [
+              [
+                "Detectar automaticamente se um WHERE tenant_id está faltando no código",
+                "Não, hoje",
+                "é um problema de análise estática determinística (linter, revisão de política de RLS) — mais confiável e mais barato que inferência de modelo"
+              ],
+              [
+                "Decidir qual tenant vai para schema ou conta dedicada",
+                "Parcialmente",
+                "um modelo pode SUGERIR candidatos a partir de métricas de volume e ruído, mas a decisão final é de negócio (contrato, orçamento) — não delegável"
+              ],
+              [
+                "Impedir um documento do tenant A aparecer numa resposta gerada para o tenant B",
+                "Sim, é o problema do L90",
+                "metadado de tenant no índice vetorial e um filtro obrigatório na recuperação — a mesma lógica de RLS, aplicada à camada de IA"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b21_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "\"Treinar um modelo para detectar consultas suspeitas de vazamento em tempo real\" soa sofisticado e resolve pior o que RLS resolve de graça e sem inferência nenhuma: FORCE ROW LEVEL SECURITY barra a linha ANTES de ela sair do banco, com garantia matemática, não com um classificador que pode errar. Gaste o orçamento de IA no problema que só ela resolve — o L90 — não neste."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz isso",
+              "Sintoma em produção",
+              "Forma correta"
+            ],
+            "rows": [
+              [
+                "Confiar só no WHERE tenant_id escrito à mão",
+                "é a forma mais rápida de entregar a primeira versão, e funciona nos testes que só usam um tenant",
+                "vazamento no primeiro endpoint que alguém escrever sob pressão de prazo",
+                "RLS com FORCE como piso obrigatório, não como opção de quem lembrar"
+              ],
+              [
+                "Papel de aplicação reaproveitado do papel de migration",
+                "evita gerenciar duas credenciais e duas políticas de permissão",
+                "RLS parece configurada e não protege nada, porque o papel é dono da tabela",
+                "papel de aplicação separado, sem posse da tabela e sem BYPASSRLS"
+              ],
+              [
+                "Atributo customizado da Cognito sem o gatilho de pré-geração de token",
+                "parece funcionar em teste manual, porque o desenvolvedor está olhando o ID token no login",
+                "a claim simplesmente não existe no access token que a API recebe em produção",
+                "gatilho de pré-geração de token, versão 2, escrevendo em accessTokenGeneration"
+              ],
+              [
+                "`SET` de sessão em vez de `set_config(..., true)`",
+                "a sintaxe do SET é a primeira que aparece em qualquer tutorial de RLS",
+                "vazamento intermitente sob carga, quando o pool reaproveita conexão entre tenants",
+                "set_config transacional, que expira sozinho no fim da transação"
+              ],
+              [
+                "Colocar todos os tenants no modelo silo \"para garantir isolamento máximo\"",
+                "parece a decisão mais segura, e evita o desconforto de explicar por que um cliente pequeno está no pool",
+                "custo operacional multiplicado por centenas de contas, a maioria com tráfego irrisório",
+                "bridge: RLS como padrão, conta dedicada só onde volume ou contrato exigem"
+              ],
+              [
+                "ExternalId genérico ou reaproveitado entre tenants no papel cross-account",
+                "parece simplificar o on-boarding de conta nova",
+                "qualquer entidade que descubra UM ExternalId pode tentar assumir o papel de QUALQUER tenant",
+                "ExternalId único por tenant, gerado pela plataforma e nunca reaproveitado"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Consulta sem WHERE devolve todos os tenants mesmo com RLS habilitada",
+                "FORCE ROW LEVEL SECURITY não foi aplicado, ou o papel de conexão é dono da tabela ou tem BYPASSRLS",
+                "SELECT relforcerowsecurity FROM pg_class; SELECT rolbypassrls FROM pg_roles",
+                "rls.sql e o papel usado na connection string da aplicação",
+                "aplicar FORCE e trocar o papel de conexão por um sem BYPASSRLS e sem posse da tabela"
+              ],
+              [
+                "Vazamento aparece só sob carga, nunca em teste manual isolado",
+                "uso de SET de sessão em vez de set_config transacional, com pool de conexão reaproveitando entre requisições",
+                "log de auditoria do Postgres cruzando app.tenant_id da sessão com o tenant esperado da requisição",
+                "middleware/repositório que declara o contexto de tenant",
+                "trocar por set_config(..., true) dentro da transação"
+              ],
+              [
+                "Requisição autenticada recebe 403 mesmo com login bem-sucedido",
+                "a claim tenant_id não chegou ao access token — atributo customizado sem o gatilho de pré-geração v2",
+                "decodificar o access token (não o ID token) e conferir a claim",
+                "configuração do gatilho de pré-geração de token no user pool",
+                "configurar claimsToAddOrOverride no accessTokenGeneration do gatilho v2"
+              ],
+              [
+                "assume-role na conta do tenant funciona mesmo sem passar --external-id",
+                "a política de confiança do papel não exige a condição sts:ExternalId",
+                "ler assume_role_policy do papel PlataformaRotafacilAcesso na conta do tenant",
+                "conta.tf, bloco de confiança cross-account",
+                "adicionar a condição StringEquals sts:ExternalId com valor único por tenant"
+              ],
+              [
+                "Migration aplicada parcialmente deixa alguns tenants com schema desatualizado",
+                "o laço de migração por schema falhou no meio e não é idempotente",
+                "contar schemas com versão diferente da migration mais recente",
+                "migrar_todos_os_schemas.sh e o log de execução",
+                "tornar o script idempotente e recomeçável do ponto da falha, e alarmar sobre divergência"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "\"Que papel do Postgres a conexão está usando, e ele tem BYPASSRLS ou posse da tabela?\" — a resposta explica a maioria dos casos em que RLS parece configurada certa e não protege nada."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A ordem importa mais aqui do que em outros laboratórios, porque parte da infraestrutura deste módulo — schemas e contas de tenant — não é toda gerenciada pelo mesmo estado do Terraform."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "#!/usr/bin/env bash\nset -euo pipefail\n\n# 1. Remove o canario agendado ANTES de remover o banco, senao ele passa a\n#    falhar em loop tentando alcancar uma instancia que ja nao existe.\naws events remove-targets --rule canario-isolamento --ids canario\naws events delete-rule --rule-name canario-isolamento\n\n# 2. Schemas de tenant NAO fazem parte do estado do Terraform -- foram\n#    criados por funcao SQL (provisionar_schema_tenant), entao sao removidos\n#    por SQL tambem. Confirme que nao ha uso ativo antes de derrubar.\npsql \"$DATABASE_URL\" -c \"SELECT nspname FROM pg_namespace WHERE nspname LIKE 'tenant_%'\"\n# DROP SCHEMA tenant_xxx CASCADE;  -- um por vez, de proposito, nunca em lote\n\n# 3. Contas de tenant (Organizations) NAO fecham com terraform destroy por\n#    padrao -- aws_organizations_account so remove a conta da ORGANIZACAO,\n#    nao fecha a conta AWS. Fechar de fato exige a API de fechamento de conta\n#    ou o console, e tem janela de 90 dias antes de poder reingressar numa\n#    organizacao. Planeje isso ANTES de prometer \"encerramento imediato\" a um\n#    tenant que sai.\n\nterraform destroy -auto-approve\n"
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "O `destroy` remove?",
+              "Observação"
+            ],
+            "rows": [
+              [
+                "Instância RDS pool",
+                "Sim",
+                "inclui todos os schemas de tenant CRIADOS via Terraform; os criados via função SQL de on-boarding, não"
+              ],
+              [
+                "Política de RLS e papéis do Postgres",
+                "Sim, se gerenciados por Terraform; não, se aplicados via script SQL manual",
+                "confira se rls.sql está em recurso de Terraform ou em script separado"
+              ],
+              [
+                "Schema de tenant (modelo por schema)",
+                "Não",
+                "foi criado por função SQL de on-boarding, fora do estado do Terraform — remoção é manual, um schema por vez"
+              ],
+              [
+                "Conta AWS do tenant (Organizations)",
+                "Não fecha a conta",
+                "aws_organizations_account remove da organização; fechar de fato exige API/console e tem janela de 90 dias"
+              ],
+              [
+                "Segredo no Secrets Manager",
+                "Não, por padrão",
+                "fica em janela de recuperação; force_delete_without_recovery remove de imediato e sem volta"
+              ],
+              [
+                "Regra do EventBridge e função Lambda do canário",
+                "Sim",
+                "remova a regra antes do banco, para não gerar erro em loop contra alvo inexistente"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "Fechar a conta errada de tenant é irreversível dentro da janela de 90 dias",
+            "content": "Uma conta AWS fechada não pode reingressar numa Organization por 90 dias. Antes de fechar a conta de um tenant que encerrou contrato, confirme que não há obrigação de retenção de dado pendente (contratual ou regulatória) que exija acesso à conta durante esse período."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Motivo"
+            ],
+            "rows": [
+              [
+                "Consulta sem WHERE tenant_id vaza a base inteira",
+                "RLS com FORCE ROW LEVEL SECURITY",
+                "o banco filtra mesmo que o SQL não peça"
+              ],
+              [
+                "Papel dono da tabela ignora a política",
+                "papel de aplicação sem posse e sem BYPASSRLS",
+                "FORCE só vale para quem não tem privilégio de dono"
+              ],
+              [
+                "Cliente poderia forjar o próprio tenant",
+                "claim assinada pela Cognito, via gatilho de pré-geração v2",
+                "o access token chega já com a identidade, verificável e não editável pelo cliente"
+              ],
+              [
+                "Pool de conexão reaproveitado entre tenants",
+                "set_config(..., true), transacional",
+                "o valor expira sozinho no fim da transação, nunca sobrevive para a próxima requisição"
+              ],
+              [
+                "Migration de N schemas pode falhar no meio",
+                "script idempotente e recomeçável, com alarme de divergência",
+                "reduz o tempo em que tenants ficam em versões diferentes sem ninguém saber"
+              ],
+              [
+                "Cláusula contratual de \"conta própria\"",
+                "conta AWS dedicada via Organizations, com ExternalId único",
+                "é a única fronteira que não depende de nenhuma linha de código da aplicação"
+              ],
+              [
+                "Vazamento pode acontecer sem ninguém notar por meses",
+                "canário ativo, autenticado, tentando vazar de propósito",
+                "prova a proteção em produção continuamente, não só no ambiente de teste"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Proteção"
+            ],
+            "rows": [
+              [
+                "WHERE esquecido numa consulta nova",
+                "RLS obrigatória barra a linha antes de sair do banco"
+              ],
+              [
+                "Papel de conexão com privilégio excessivo",
+                "auditoria periódica de pg_roles e separação de papéis"
+              ],
+              [
+                "ExternalId ausente no papel cross-account",
+                "condição sts:ExternalId única por tenant"
+              ],
+              [
+                "Migration parcial entre schemas",
+                "script idempotente + alarme de divergência de versão"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Login gera o access token, com a claim tenant_id escrita pelo gatilho de pré-geração v2.",
+              "ALB encaminha a requisição sem inspecionar claim nenhuma.",
+              "Middleware valida a assinatura do JWT e extrai o tenant já verificado.",
+              "Repositório abre a transação e declara o tenant com set_config(..., true).",
+              "Postgres reescreve a consulta pela política de RLS antes de executar.",
+              "Resultado filtrado volta à aplicação — sem nenhum WHERE tenant_id escrito à mão.",
+              "Canário tenta vazar dado de outro tenant a cada 5 minutos, publicando métrica.",
+              "Alarme dispara em minutos se qualquer linha vazar, antes de um cliente notar."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b26_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "RLS sozinha já resolve isolamento multi-tenant, sem mais nada?",
+            "answer": "Não — RLS resolve o isolamento de DADO, não o de CAPACIDADE nem o de infraestrutura. Com `FORCE ROW LEVEL SECURITY` e uma política correta, uma consulta sem `WHERE tenant_id` nunca devolve linha de outro cliente, e isso já elimina a classe de incidente mais comum. Mas todos os tenants continuam competindo pela mesma instância RDS: um tenant de alto volume ainda degrada a latência dos pequenos, e uma falha de instância ainda afeta todos ao mesmo tempo. Para essas duas dimensões — ruído de vizinhança e raio de falha de infraestrutura — a resposta é schema ou conta dedicados, não RLS."
+          }
+        },
+        {
+          "id": "b26_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Por que não usar SET LOCAL diretamente em vez de set_config?",
+            "answer": "`SET LOCAL app.tenant_id = @id` não existe como comando parametrizável — o protocolo `SET` do Postgres não aceita bind parameter, então a única forma de usá-lo com um valor dinâmico seria montar a string SQL por concatenação, reabrindo risco de injeção. `set_config('app.tenant_id', $1, true)` é uma função normal, aceita parâmetro ligado como qualquer outra chamada, e o terceiro argumento `true` reproduz exatamente o comportamento transacional de `SET LOCAL`: o valor vale só até o fim da transação atual."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "FORCE ROW LEVEL SECURITY protege contra um superusuário do Postgres?",
+            "answer": "Não, e essa é a exceção documentada mais importante do recurso. Segundo a documentação do Postgres, a segurança de linha é sempre desabilitada para superusuários e para papéis com o atributo `BYPASSRLS`, independentemente de `FORCE` estar ativo. `FORCE` amplia a política para incluir o DONO da tabela — que sem `FORCE` ficaria de fora — mas não alcança superusuário nem papel com `BYPASSRLS`. A consequência prática é que o papel usado pela aplicação nunca pode ter esse atributo nem ser superusuário, ou toda a proteção deste módulo deixa de valer para ele especificamente."
+          }
+        },
+        {
+          "id": "b26_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Qual a diferença prática entre isolamento por schema e por conta AWS?",
+            "answer": "Schema isola NAMESPACE dentro do mesmo banco físico; conta isola INFRAESTRUTURA inteira. Um erro de aplicação que ignora o `search_path` no modelo por schema ainda consegue, em teoria, referenciar outro schema com um nome totalmente qualificado — a fronteira é uma convenção de conexão, não uma parede de rede ou de IAM. No modelo por conta, não existe caminho de rede nem credencial válida por padrão para alcançar a conta vizinha: a fronteira é imposta pela própria AWS, não pelo código da aplicação. O preço dessa garantia mais forte é operar N contas em vez de N schemas em uma só."
+          }
+        },
+        {
+          "id": "b26_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Custom attribute da Cognito não aparece automaticamente no access token?",
+            "answer": "Não. Um atributo customizado cadastrado direto no pool de usuários aparece no ID TOKEN por padrão, e o access token — o que a maioria das APIs valida em cada requisição — não carrega atributos customizados sem configuração adicional. A forma documentada de colocar uma claim de aplicação no access token é o gatilho de pré-geração de token na versão 2, escrevendo explicitamente em `accessTokenGeneration.claimsToAddOrOverride`. Confiar no atributo simples costuma passar despercebido porque o teste manual de login olha o ID token, não o access token que a API de fato recebe."
+          }
+        },
+        {
+          "id": "b26_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Por que o papel cross-account precisa de ExternalId, se já exige o ARN da conta confiável?",
+            "answer": "Porque o ARN de quem PODE assumir o papel não é segredo — ele aparece em mensagem de erro de permissão e em log, e alguém com acesso à conta confiável (a da plataforma) poderia, por engano ou má-fé, tentar assumir o papel de um tenant que não deveria. O `ExternalId` é um segundo fator compartilhado só entre a plataforma e aquele tenant específico: sem conhecê-lo, o `assume-role` falha mesmo vindo da conta certa. É a defesa padrão contra o chamado \"problema do deputado confuso\" em cenários cross-account com terceiros."
+          }
+        },
+        {
+          "id": "b26_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Um canário que tenta vazar dado de propósito não é ele mesmo um risco de segurança?",
+            "answer": "O canário lê um dado sintético de teste, nunca dado real de tenant, e desfaz a própria transação com `rollback` ao final — ele nunca escreve, nunca altera e nunca expõe o resultado a ninguém além da métrica que publica. O risco que ele mitiga (vazamento real não detectado por meses) é ordens de grandeza maior que o risco que ele introduz (uma credencial de teste com acesso de leitura limitado, armazenada no Secrets Manager como qualquer outra). Tratá-lo como perigoso por \"tentar atacar o próprio sistema\" confunde teste controlado com ataque real."
+          }
+        },
+        {
+          "id": "b26_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Todo SaaS B2B precisa dos três modelos implementados ao mesmo tempo?",
+            "answer": "Não — a maioria nunca precisa do modelo por conta. RLS obrigatória no modelo por linha resolve o requisito de isolamento de dado para a imensa maioria dos catálogos de cliente, e é o ponto de partida correto para quase todo SaaS B2B. Schema entra quando um subconjunto de tenants tem volume alto o suficiente para gerar ruído perceptível nos vizinhos. Conta entra só quando existe exigência contratual explícita de infraestrutura dedicada, ou quando o tenant é grande o bastante para justificar o custo fixo de governança por conta. Implementar os três desde o primeiro cliente é engenharia adiantada para um problema que ainda não existe."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b27_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Sob carga em produção, um cliente ocasionalmente recebe dado de outro tenant, mas o mesmo cenário nunca se reproduz em teste de integração com uma requisição por vez. O middleware declara o tenant com `SET app.tenant_id = @id` (sem `LOCAL`) no início de cada requisição. Qual é a explicação mais provável?",
+            "options": [
+              "A política de RLS está com USING mas sem WITH CHECK",
+              "O access token expirou no meio da requisição",
+              "A tabela não tem FORCE ROW LEVEL SECURITY habilitado",
+              "O valor de SET de sessão sobrevive ao fim da transação e é herdado pela próxima requisição que reaproveitar a mesma conexão do pool"
+            ],
+            "correctIndex": 3,
+            "explanation": "`SET` sem `LOCAL` altera a variável para toda a SESSÃO da conexão, não só para a transação atual. Com pool de conexão — o padrão em qualquer driver de produção —, a mesma conexão física atende requisições de tenants diferentes ao longo do tempo, e uma requisição que não declara o próprio tenant antes de consultar herda o valor deixado pela requisição anterior que usou aquela conexão. Isso só aparece sob carga real porque exige duas requisições de tenants diferentes disputando a mesma conexão em sequência — o que um teste de integração sequencial, de uma requisição por vez, nunca reproduz.\n\nA primeira alternativa erra o mecanismo: WITH CHECK ausente afetaria escrita (INSERT/UPDATE), não a leitura intermitente descrita. A terceira não se sustenta: token expirado gera erro de autenticação, não dado do tenant errado. A quarta descreveria vazamento constante e reproduzível, não intermitente sob carga — FORCE ausente falharia da mesma forma em teste sequencial e em produção, igualmente, o que contradiz o enunciado."
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Uma empresa negocia um contrato enterprise que exige \"dados em infraestrutura de conta própria\" para um único cliente grande, enquanto os outros 339 tenants são pequenos e sensíveis a custo. Qual desenho atende ao requisito sem desperdiçar orçamento?",
+            "options": [
+              "Manter todos os 340 tenants no modelo por linha com RLS, incluindo o cliente enterprise",
+              "Bridge: RLS obrigatória como padrão para os 339 tenants pequenos, e conta AWS dedicada só para o cliente enterprise",
+              "Migrar todos os 340 tenants para contas AWS dedicadas via Organizations",
+              "Migrar todos os tenants para o modelo por schema, que já cumpre a cláusula contratual"
+            ],
+            "correctIndex": 1,
+            "explanation": "O requisito contratual é específico de UM segmento — não do catálogo inteiro — e o modelo bridge é desenhado exatamente para isso: aplicar a fronteira mais forte só onde ela é exigida, e manter o modelo mais barato onde ele já atende. RLS continua sendo o piso de proteção para todos, inclusive o cliente enterprise, mas a fronteira de CONTA some especificamente a cláusula \"infraestrutura própria\" de forma literal e auditável.\n\nA primeira alternativa cumpre o contrato de sobra, mas multiplica o custo operacional por 340 contas para um requisito que só um cliente tem — o requisito de custo por tenant pequeno, declarado na seção de requisitos, proíbe exatamente isso. A segunda ignora a cláusula contratual: RLS prova isolamento de DADO dentro de uma instância compartilhada, não \"infraestrutura própria\", que é uma afirmação sobre onde os recursos físicos residem. A quarta confunde os modelos: schema compartilha a mesma instância RDS entre tenants, então não cumpre uma exigência de conta própria — é uma fronteira mais forte que linha, mas mais fraca que conta, e o contrato pediu especificamente conta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b28",
+      "type": "section",
+      "position": 29,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b28_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L12 (claim de identidade via Cognito, validação de JWT) e L31 (fronteira de serviço bem definida, para saber onde a fronteira de tenant se encaixa)"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "os três modelos de isolamento e o trade-off real de cada um; FORCE ROW LEVEL SECURITY e a exceção de superusuário/BYPASSRLS; set_config transacional contra o risco de pool de conexão; ExternalId contra deputado confuso em cross-account; canário como prova contínua em produção"
+              ],
+              [
+                "Limitação que fica",
+                "o modelo por linha continua numa única instância física — RLS isola dado, não capacidade nem raio de falha de infraestrutura; e o modelo por schema herda o risco de migration parcial"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L43 — multi-conta com SCP e Control Tower. Aprofunda exatamente a fronteira de conta que este laboratório introduziu de forma mínima"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L98 (plataforma de IA multi-time com cota e chargeback) reusa a fronteira de conta deste laboratório para isolar orçamento e cota por time; L90 (vazamento entre inquilinos via IA) estende o mesmo raciocínio de isolamento até a camada de recuperação de contexto"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b28_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "AWS Whitepaper — SaaS Tenant Isolation Strategies",
+                "code": true
+              },
+              {
+                "text": " — os modelos silo, pool e bridge, e o vocabulário de raio de incidente usado neste módulo; "
+              },
+              {
+                "text": "AWS Whitepaper — SaaS Storage Strategies",
+                "code": true
+              },
+              {
+                "text": " — particionamento de dado e multitenancy em RDS; "
+              },
+              {
+                "text": "PostgreSQL — Row Security Policies",
+                "code": true
+              },
+              {
+                "text": " — o comportamento de ENABLE, FORCE e a exceção documentada de superusuário e BYPASSRLS; e a documentação da Cognito sobre o gatilho de pré-geração de token, versão 2, para claims no access token. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e por modelo de contratação."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b28_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "Os números de volume (340 tenants, 40% do maior, 1842/931/604 pedidos) são da base de exemplo deste laboratório, não uma medição universal — use-os como ordem de grandeza para montar o SEU cenário de teste, não como referência de dimensionamento. O comportamento de FORCE ROW LEVEL SECURITY e da exceção de BYPASSRLS foi conferido na documentação oficial do PostgreSQL; teste sempre `SELECT rolbypassrls FROM pg_roles` no papel real usado pela sua aplicação antes de assumir que a proteção está ativa. O comportamento do gatilho de pré-geração de token versão 2 deve ser reconferido no console da Cognito da sua conta, porque comportamento de gatilho evolui entre versões do serviço."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,12 +14,24 @@ import (
 // Tipada para evitar colisão com outras chaves de contexto.
 type ctxKeyRequestID struct{}
 
-// RequestID injeta um UUID único no header X-Request-ID e no contexto de cada request.
-// O ID é propagado para logs e traces — essential para correlacionar eventos de uma mesma request.
+// validRequestID casa o formato de um UUID ou de um ID curto alfanumérico com
+// hífen — o suficiente para qualquer cliente legítimo (proxy, SDK, teste
+// manual) correlacionar sem abrir espaço para injeção.
+var validRequestID = regexp.MustCompile(`^[a-zA-Z0-9-]{1,64}$`)
+
+// RequestID injeta um ID único no header X-Request-ID e no contexto de cada
+// request. Se o cliente enviar um valor, ele é usado — mas só depois de
+// validado (achado P-13, auditoria de 11/ago/2026): o header é ecoado sem
+// checagem em logs e na trilha de auditoria, então um valor com quebra de
+// linha ou caractere de controle era log/audit injection — cada linha de log
+// estruturado (slog) seria escapada corretamente, mas outros consumidores de
+// log em texto puro (journalctl, docker logs) não escapam, e qualquer
+// ferramenta que faça parsing por linha pode ser enganada por um
+// X-Request-ID contendo "\n" seguido de uma linha forjada.
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Request-ID")
-		if id == "" {
+		if id == "" || !validRequestID.MatchString(id) {
 			id = uuid.NewString()
 		}
 		w.Header().Set("X-Request-ID", id)
@@ -126,13 +139,25 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Vary: Origin SEMPRE — o Access-Control-Allow-Origin refletido varia
+			// por origin, e várias rotas desta API são cacheáveis
+			// (leaderboard/public, stats, curriculum — Cache-Control: public).
+			// Sem Vary, um cache intermediário (CDN, proxy) pode servir a resposta
+			// computada para a origin A a um cliente da origin B, ACAO incluído.
+			w.Header().Add("Vary", "Origin")
+
 			origin := r.Header.Get("Origin")
-			if _, ok := originsMap[origin]; ok {
+			_, allowed := originsMap[origin]
+			if allowed {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
+				// Allow-Credentials só quando a origin de fato bate com a allowlist
+				// — setá-lo incondicionalmente (mesmo sem ACAO) não vaza nada
+				// sozinho, mas é o tipo de header que fica "esquecido ligado" e
+				// some da lista de coisas a auditar quando a allowlist mudar.
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
 			}
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID")
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Max-Age", "86400")
 
 			if r.Method == http.MethodOptions {

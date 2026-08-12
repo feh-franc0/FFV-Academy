@@ -45,6 +45,43 @@ func (r *stubAttemptRepo) FindActiveByUserAndSimulado(_ context.Context, _ share
 func (r *stubAttemptRepo) ListByUser(_ context.Context, _ shared.UserID, _, _ int) ([]*domsim.Attempt, int, error) {
 	return nil, 0, nil
 }
+func (r *stubAttemptRepo) UpsertAnswer(_ context.Context, attemptID shared.AttemptID, qID shared.QuestionID, opt domsim.OptionID, now time.Time) (bool, error) {
+	a, ok := r.attempts[attemptID]
+	if !ok || a.IsFinished() || now.After(a.Deadline()) {
+		return false, nil
+	}
+	if err := a.AnswerQuestion(qID, opt, now); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+func (r *stubAttemptRepo) ClaimXPCredit(_ context.Context, _ shared.AttemptID, _ shared.UserID, _ time.Time) (bool, error) {
+	return true, nil
+}
+func (r *stubAttemptRepo) ListFinishedByUserAndSimulado(_ context.Context, _ shared.UserID, _ shared.SimuladoID) ([]*domsim.Attempt, error) {
+	return nil, nil
+}
+
+type stubQuestionRepo struct{}
+
+func (r *stubQuestionRepo) GetRandom(_ context.Context, _ string, _ int, _ domsim.QuestionQueryOpts) ([]*domsim.DBQuestion, error) {
+	return nil, nil
+}
+func (r *stubQuestionRepo) FindByID(_ context.Context, _ string) (*domsim.DBQuestion, error) {
+	return nil, shared.ErrNotFound
+}
+func (r *stubQuestionRepo) FindByIDs(_ context.Context, _ string, _ []string) ([]*domsim.DBQuestion, error) {
+	return nil, nil
+}
+func (r *stubQuestionRepo) List(_ context.Context, _ domsim.QuestionFilter) ([]*domsim.DBQuestion, int, error) {
+	return nil, 0, nil
+}
+func (r *stubQuestionRepo) Create(_ context.Context, _ *domsim.DBQuestion) error { return nil }
+func (r *stubQuestionRepo) Update(_ context.Context, _ *domsim.DBQuestion) error { return nil }
+func (r *stubQuestionRepo) Delete(_ context.Context, _ string) error             { return nil }
+func (r *stubQuestionRepo) CountBySimulado(_ context.Context, _ string) (int, error) {
+	return 0, nil
+}
 
 type stubCatalog struct{ sim *domsim.Simulado }
 
@@ -81,7 +118,7 @@ func (r *stubCertRepo) ExistsByAttempt(_ context.Context, _ shared.AttemptID) (b
 
 func makeFinishedAttempt(userID shared.UserID) *domsim.Attempt {
 	now := time.Now().UTC()
-	a := domsim.StartAttempt("att-idor", userID, "sim-x", 60, now)
+	a := domsim.StartAttempt("att-idor", userID, "sim-x", 60, []shared.QuestionID{"q1"}, now)
 	score := domsim.NewScore(domsim.ScoreResult{
 		Value: 90, Passed: true, CorrectCount: 18, TotalQuestions: 20,
 		ByTopic: map[domsim.Topic]domsim.TopicCounts{},
@@ -93,14 +130,14 @@ func makeFinishedAttempt(userID shared.UserID) *domsim.Attempt {
 func Test_IDOR_FinishAttempt_UserB_CannotFinish_UserA(t *testing.T) {
 	// A cria e não finaliza; B tenta finalizar.
 	now := time.Now().UTC()
-	a := domsim.StartAttempt("att-A", "user-A", "sim-x", 60, now)
+	a := domsim.StartAttempt("att-A", "user-A", "sim-x", 60, []shared.QuestionID{"q1"}, now)
 
 	repo := &stubAttemptRepo{attempts: map[shared.AttemptID]*domsim.Attempt{"att-A": a}}
 	cat := &stubCatalog{sim: &domsim.Simulado{
 		ID: "sim-x", PassingScore: 70, Questions: []domsim.Question{},
 	}}
 
-	uc := appsim.NewFinishAttemptUseCase(repo, cat, shared.FixedClock{T: now})
+	uc := appsim.NewFinishAttemptUseCase(repo, cat, &stubQuestionRepo{}, shared.FixedClock{T: now})
 	_, err := uc.Execute(context.Background(), appsim.FinishAttemptCommand{
 		UserID:    "user-B", // atacante
 		AttemptID: "att-A",
@@ -128,11 +165,10 @@ func Test_IDOR_IssueCertificate_UserB_CannotIssue_ForUserA(t *testing.T) {
 
 func Test_IDOR_AnswerQuestion_UserB_CannotAnswer_UserA(t *testing.T) {
 	now := time.Now().UTC()
-	a := domsim.StartAttempt("att-A", "user-A", "sim-x", 60, now)
+	a := domsim.StartAttempt("att-A", "user-A", "sim-x", 60, []shared.QuestionID{"q1"}, now)
 	repo := &stubAttemptRepo{attempts: map[shared.AttemptID]*domsim.Attempt{"att-A": a}}
-	cat := &stubCatalog{sim: &domsim.Simulado{ID: "sim-x", PassingScore: 70}}
 
-	uc := appsim.NewAnswerQuestionUseCase(repo, cat, shared.FixedClock{T: now})
+	uc := appsim.NewAnswerQuestionUseCase(repo, shared.FixedClock{T: now})
 	err := uc.Execute(context.Background(), appsim.AnswerQuestionCommand{
 		UserID:     "user-B", // atacante
 		AttemptID:  "att-A",

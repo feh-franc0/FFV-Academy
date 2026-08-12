@@ -17,20 +17,20 @@ func Test_UserStatsUseCase_Execute_AggregatesFinishedAttempts(t *testing.T) {
 	now := time.Now()
 	userID := shared.NewUserID()
 
-	a1 := domsim.StartAttempt(shared.NewAttemptID(), userID, shared.SimuladoID("s1"), 90, now)
+	a1 := domsim.StartAttempt(shared.NewAttemptID(), userID, shared.SimuladoID("s1"), 90, []shared.QuestionID{"q1"}, now)
 	_ = a1.Finish(domsim.NewScore(domsim.ScoreResult{
 		Value: 80, Passed: true, CorrectCount: 8, TotalQuestions: 10,
 		ByTopic: map[domsim.Topic]domsim.TopicCounts{"Cloud": {Correct: 4, Total: 5}, "Net": {Correct: 4, Total: 5}},
 	}), now)
 
-	a2 := domsim.StartAttempt(shared.NewAttemptID(), userID, shared.SimuladoID("s2"), 90, now)
+	a2 := domsim.StartAttempt(shared.NewAttemptID(), userID, shared.SimuladoID("s2"), 90, []shared.QuestionID{"q1"}, now)
 	_ = a2.Finish(domsim.NewScore(domsim.ScoreResult{
 		Value: 40, Passed: false, CorrectCount: 4, TotalQuestions: 10,
 		ByTopic: map[domsim.Topic]domsim.TopicCounts{"Cloud": {Correct: 2, Total: 5}, "Sec": {Correct: 2, Total: 5}},
 	}), now)
 
 	// Active attempt (ignored) and cancelled-like (score=nil).
-	a3 := domsim.StartAttempt(shared.NewAttemptID(), userID, shared.SimuladoID("s3"), 90, now)
+	a3 := domsim.StartAttempt(shared.NewAttemptID(), userID, shared.SimuladoID("s3"), 90, []shared.QuestionID{"q1"}, now)
 
 	attemptRepo := &exportAttemptLister{attempts: []*domsim.Attempt{a1, a2, a3}}
 	certRepo := &exportCertLister{certs: nil}

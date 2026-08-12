@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { SEO_DESCRIPTIONS } from '@/lib/seo-descriptions';
 import { CURRICULUM, BADGES_DEF, HUBS } from '../../lib/curriculum';
 import { ROADMAPS, resolveRoadmap, getRoadmap } from '../../lib/roadmaps';
 
@@ -38,15 +39,18 @@ describe('Sprint 3B — Badges', () => {
   );
 });
 
-describe('Sprint 3B — Hub Dados', () => {
-  it('existe Hub Dados com trail24 + trail38', () => {
-    const hub = HUBS.find(h => h.slug === 'dados');
-    expect(hub).toBeDefined();
-    expect(hub!.trailIds).toContain('trail24');
-    expect(hub!.trailIds).toContain('trail38');
+describe('Sprint 3B — Hub Dados (absorvido por Produção em ago/2026)', () => {
+  it('as trilhas de dados vivem em `engenharia`, e `dados` não existe mais como hub', () => {
+    // O hub `dados` tinha quatro trilhas de assunto de apoio e foi fundido em
+    // `engenharia`: dado e operação são o mesmo problema visto de dois lados.
+    // O que este teste protege é que nenhuma trilha se PERDEU na fusão.
+    expect(HUBS.find(h => h.slug === 'dados')).toBeUndefined();
+    const hub = HUBS.find(h => h.slug === 'engenharia')!;
+    expect(hub.trailIds).toContain('trail24');
+    expect(hub.trailIds).toContain('trail38');
   });
 
-  it('Fundamentos não tem mais trail38 (foi pra Dados)', () => {
+  it('Base técnica não tem trail38 — ele é da camada de dados, em Produção', () => {
     const hub = HUBS.find(h => h.slug === 'fundamentos')!;
     expect(hub.trailIds).not.toContain('trail38');
   });
@@ -105,7 +109,7 @@ describe('Sprint 3B — Integridade', () => {
     for (const id of ['trail24', 'trail25', 'trail26']) {
       const trail = CURRICULUM.find(t => t.id === id)!;
       for (const m of trail.modules) {
-        expect(m.seoDesc, `${m.slug}.seoDesc`).toBeTruthy();
+        expect(SEO_DESCRIPTIONS[m.slug], `${m.slug} em SEO_DESCRIPTIONS`).toBeTruthy();
         expect(m.keywords, `${m.slug}.keywords`).toBeTruthy();
       }
     }

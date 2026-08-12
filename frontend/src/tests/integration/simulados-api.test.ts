@@ -10,10 +10,12 @@ import {
   listSimuladosApi,
   getSimuladoApi,
   startOrResumeAttempt,
+  getActiveAttempt,
   answerQuestion,
   toggleFlag,
   finishAttempt,
   listAttemptsApi,
+  claimXPCredit,
 } from '../../lib/simulados-api';
 import { setAccessToken } from '../../lib/api-client';
 
@@ -110,6 +112,15 @@ describe('Modo mock (sem backend)', () => {
     const sim = await getSimuladoApi('nao-existe');
     expect(sim).toBeNull();
   });
+
+  it('claimXPCredit retorna claimed=false sem backend, sem chamar fetch', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await claimXPCredit('att_001');
+    expect(result.claimed).toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });
 
 // ─── Modo real ─────────────────────────────────────────────────────────────
@@ -118,7 +129,8 @@ describe('Modo real (backend mockado)', () => {
   beforeEach(setupBackend);
 
   it('listSimuladosApi chama GET /api/v1/simulados', async () => {
-    const fetchMock = mockFetchOk([MOCK_SIMULADO_DTO]);
+    // Backend responde `{simulados, total}`, não um array solto.
+    const fetchMock = mockFetchOk({ simulados: [MOCK_SIMULADO_DTO], total: 1 });
     vi.stubGlobal('fetch', fetchMock);
 
     const list = await listSimuladosApi();
@@ -155,16 +167,39 @@ describe('Modo real (backend mockado)', () => {
   });
 
   it('startOrResumeAttempt chama POST /api/v1/simulados/:id/attempts', async () => {
-    const fetchMock = mockFetchOk(MOCK_ATTEMPT_DTO);
+    // Backend responde `{attempt, simulado}`, não o AttemptDTO solto.
+    const fetchMock = mockFetchOk({ attempt: MOCK_ATTEMPT_DTO, simulado: MOCK_SIMULADO_DTO });
     vi.stubGlobal('fetch', fetchMock);
 
-    const attempt = await startOrResumeAttempt('simulado-aws-practitioner');
+    const { attempt } = await startOrResumeAttempt('simulado-aws-practitioner');
     expect(attempt.id).toBe('att_001');
     expect(attempt.questions).toHaveLength(1);
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toContain('/api/v1/simulados/simulado-aws-practitioner/attempts');
     expect(init.method).toBe('POST');
+  });
+
+  it('getActiveAttempt chama GET /api/v1/simulados/:id/attempts/active e desembrulha o envelope', async () => {
+    const fetchMock = mockFetchOk({ attempt: MOCK_ATTEMPT_DTO, simulado: MOCK_SIMULADO_DTO });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const attempt = await getActiveAttempt('simulado-aws-practitioner');
+    expect(attempt?.id).toBe('att_001');
+
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toContain('/api/v1/simulados/simulado-aws-practitioner/attempts/active');
+  });
+
+  it('getActiveAttempt retorna null quando não há tentativa ativa (404)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false, status: 404,
+      json: () => Promise.resolve({ type: 'not-found', title: 'Not Found', status: 404, detail: '' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const attempt = await getActiveAttempt('simulado-aws-practitioner');
+    expect(attempt).toBeNull();
   });
 
   it('answerQuestion chama POST /api/v1/attempts/:id/answers', async () => {
@@ -196,13 +231,18 @@ describe('Modo real (backend mockado)', () => {
       passed: true,
       byTopic: { 'Shared Responsibility': { correct: 4, total: 5 } },
     };
-    const fetchMock = mockFetchOk({ score: scoreDTO });
+    // Backend responde `{attempt, weakTopics}`, com o score aninhado em attempt.score.
+    const fetchMock = mockFetchOk({
+      attempt: { ...MOCK_ATTEMPT_DTO, status: 'finished' as const, score: scoreDTO },
+      weakTopics: ['Shared Responsibility'],
+    });
     vi.stubGlobal('fetch', fetchMock);
 
-    const score = await finishAttempt('att_001');
+    const { score, weakTopics } = await finishAttempt('att_001');
     expect(score.value).toBe(85);
     expect(score.passed).toBe(true);
     expect(score.correct).toBe(17);
+    expect(weakTopics).toEqual(['Shared Responsibility']);
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toContain('/api/v1/attempts/att_001/finish');
@@ -211,7 +251,8 @@ describe('Modo real (backend mockado)', () => {
 
   it('listAttemptsApi chama GET /api/v1/attempts', async () => {
     const finishedAttempt = { ...MOCK_ATTEMPT_DTO, status: 'finished' as const, finishedAt: '2024-01-01T01:00:00Z', score: { value: 90, correct: 18, total: 20, passed: true, byTopic: {} } };
-    const fetchMock = mockFetchOk([finishedAttempt]);
+    // Backend responde `{attempts, total}`, não um array solto.
+    const fetchMock = mockFetchOk({ attempts: [finishedAttempt], total: 1 });
     vi.stubGlobal('fetch', fetchMock);
 
     const attempts = await listAttemptsApi();
@@ -219,5 +260,25 @@ describe('Modo real (backend mockado)', () => {
     expect(attempts[0].simuladoId).toBe('simulado-aws-practitioner');
     expect(attempts[0].score).toBe(90);
     expect(attempts[0].passed).toBe(true);
+  });
+
+  it('claimXPCredit chama POST /api/v1/attempts/:id/claim-xp e retorna claimed', async () => {
+    const fetchMock = mockFetchOk({ claimed: true });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await claimXPCredit('att_001');
+    expect(result.claimed).toBe(true);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/api/v1/attempts/att_001/claim-xp');
+    expect(init.method).toBe('POST');
+  });
+
+  it('claimXPCredit retorna claimed=false quando o servidor já concedeu antes', async () => {
+    const fetchMock = mockFetchOk({ claimed: false });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await claimXPCredit('att_001');
+    expect(result.claimed).toBe(false);
   });
 });

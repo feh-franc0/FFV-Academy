@@ -1,5 +1,7 @@
 'use client';
 
+import Link from 'next/link';
+
 export default function Error({
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   error,
@@ -18,16 +20,32 @@ export default function Error({
       <p className="text-sm mb-6" style={{ color: 'var(--ffv-muted)', maxWidth: 420 }}>
         Ocorreu um erro inesperado. Seus dados de progresso estão seguros no navegador.
       </p>
-      <button
-        onClick={reset}
-        className="px-4 py-2 rounded-md text-sm font-medium transition-colors"
-        style={{
-          background: 'var(--ffv-blue)',
-          color: 'var(--primary-foreground)',
-        }}
-      >
-        Tentar novamente
-      </button>
+      <div className="flex items-center gap-3 flex-wrap justify-center">
+        <button
+          onClick={reset}
+          className="px-4 py-2 rounded-md text-sm font-medium transition-colors"
+          style={{
+            background: 'var(--ffv-blue)',
+            color: 'var(--primary-foreground)',
+          }}
+        >
+          Tentar novamente
+        </button>
+        <Link
+          href="/"
+          className="px-4 py-2 rounded-md text-sm font-medium"
+          style={{ border: '1px solid var(--ffv-border)', color: 'var(--foreground)' }}
+        >
+          Voltar para a home
+        </Link>
+        <Link
+          href="/explorar"
+          className="px-4 py-2 rounded-md text-sm font-medium"
+          style={{ border: '1px solid var(--ffv-border)', color: 'var(--foreground)' }}
+        >
+          Explorar conteúdo
+        </Link>
+      </div>
     </div>
   );
 }

@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, X, Share2 } from 'lucide-react';
-import { CURRICULUM, type Trail } from '@/lib/curriculum';
+import { CURRICULUM } from '@/lib/curriculum';
 import { useGameState } from '@/hooks/useGameState';
 import { awardBadge } from '@/lib/engine';
 import { STORAGE_KEYS } from '@/lib/constants';
 import { getRaw, setRaw } from '@/lib/storage';
+import { readableTextColor } from '@/lib/readable-text';
 
 interface CertificateProps {
   trailId: string;
@@ -236,19 +237,20 @@ export function Certificate({ trailId, onClose }: CertificateProps) {
             <>
               <input
                 type="text"
+                aria-label="Nome no certificado"
                 value={name}
                 onChange={e => setName(e.target.value)}
                 placeholder="Seu nome"
                 maxLength={80}
                 className="text-sm px-3 py-1 rounded-md flex-1 max-w-xs"
-                style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)' }}
+                style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)', minHeight: 44 }}
                 autoFocus
                 onKeyDown={e => e.key === 'Enter' && handleNameSave()}
               />
               <button
                 onClick={handleNameSave}
                 className="text-xs px-3 py-1 rounded-md font-semibold"
-                style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
+                style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)', minHeight: 44 }}
               >
                 Salvar
               </button>
@@ -257,7 +259,7 @@ export function Certificate({ trailId, onClose }: CertificateProps) {
             <button
               onClick={() => setEditingName(true)}
               className="text-sm font-semibold underline"
-              style={{ color: 'var(--ffv-blue)' }}
+              style={{ color: 'var(--ffv-blue)', minHeight: 44 }}
             >
               {name || 'definir nome'} ✎
             </button>
@@ -286,7 +288,7 @@ export function Certificate({ trailId, onClose }: CertificateProps) {
             type="button"
             onClick={handleDownload}
             className="flex-1 min-w-[140px] flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-colors"
-            style={{ background: 'var(--ffv-bg3)', color: 'var(--foreground)', border: '1px solid var(--ffv-border)' }}
+            style={{ background: 'var(--ffv-bg3)', color: 'var(--foreground)', border: '1px solid var(--ffv-border)', minHeight: 44 }}
           >
             <Download size={16} />
             Baixar PNG
@@ -295,7 +297,7 @@ export function Certificate({ trailId, onClose }: CertificateProps) {
             type="button"
             onClick={handleLinkedIn}
             className="flex-1 min-w-[140px] flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-colors"
-            style={{ background: '#0a66c2', color: '#fff' }}
+            style={{ background: '#0a66c2', color: '#fff', minHeight: 44 }}
           >
             <span aria-hidden className="font-bold">in</span>
             Compartilhar no LinkedIn
@@ -304,7 +306,7 @@ export function Certificate({ trailId, onClose }: CertificateProps) {
             type="button"
             onClick={handleShare}
             className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors"
-            style={{ background: trail.color, color: '#0d1117' }}
+            style={{ background: trail.color, color: readableTextColor(trail.color), minHeight: 44 }}
           >
             <Share2 size={16} />
             Compartilhar
@@ -324,9 +326,7 @@ function simpleHash(s: string): number {
   return Math.abs(h);
 }
 
-/**
- * Helper: dado o estado atual, retorna IDs de trilhas concluídas (todas as módulos done).
- */
-export function getCompletedTrailIds(completedModules: string[]): Trail[] {
-  return CURRICULUM.filter(t => t.modules.every(m => completedModules.includes(m.slug)));
-}
+// `getCompletedTrailIds` morava aqui e foi para `queries-leves.ts` como
+// `getTrilhasConcluidasLeve` em 11/ago/2026 — precisava do currículo leve, não
+// deste componente (que é `next/dynamic` a partir daqui, carregado só quando
+// o usuário abre um certificado).

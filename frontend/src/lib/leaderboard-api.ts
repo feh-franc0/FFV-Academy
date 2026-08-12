@@ -69,29 +69,47 @@ export interface PublicLeaderboardData {
   entries: PublicLeaderboardEntry[];
 }
 
+/**
+ * Resultado da consulta ao ranking, com a falha explícita.
+ *
+ * Antes a função devolvia `PublicLeaderboardData | null`, e `null` significava
+ * três coisas diferentes: sem backend configurado, servidor inacessível, ou erro
+ * de resposta. A tela colapsava tudo no mesmo estado vazio — "ninguém pontuou
+ * ainda" — então uma queda do servidor virava a afirmação de que a plataforma não
+ * tem usuários. O visitante não tinha como distinguir, e nem sabia que havia algo
+ * para distinguir.
+ */
+export type ResultadoLeaderboard =
+  | { status: 'ok'; dados: PublicLeaderboardData }
+  | { status: 'sem-backend' }
+  | { status: 'falhou' };
+
 export async function getPublicLeaderboard(
   period: RankPeriod = 'weekly',
   limit = 10,
-): Promise<PublicLeaderboardData | null> {
-  if (!hasBackend()) return null;
+): Promise<ResultadoLeaderboard> {
+  if (!hasBackend()) return { status: 'sem-backend' };
   try {
     const data = await apiGet<PublicLeaderboardResponse & { period: string; periodStart: string; periodEnd: string }>(
       `/api/v1/leaderboard/public?period=${period}&limit=${limit}`,
       false,
     );
     return {
-      period: (data.period as RankPeriod) ?? period,
-      periodStart: data.periodStart,
-      periodEnd: data.periodEnd,
-      entries: data.entries.map(e => ({
-        rank: e.rank,
-        name: e.userName,
-        xpGained: e.score,
-        avatarInitials: initialsFromName(e.userName),
-      })),
+      status: 'ok',
+      dados: {
+        period: (data.period as RankPeriod) ?? period,
+        periodStart: data.periodStart,
+        periodEnd: data.periodEnd,
+        entries: data.entries.map(e => ({
+          rank: e.rank,
+          name: e.userName,
+          xpGained: e.score,
+          avatarInitials: initialsFromName(e.userName),
+        })),
+      },
     };
   } catch {
-    return null;
+    return { status: 'falhou' };
   }
 }
 

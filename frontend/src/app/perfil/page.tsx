@@ -2,7 +2,9 @@ import type { Metadata } from 'next';
 import { DevProfileClient } from '@/components/DevProfileClient';
 
 export const metadata: Metadata = {
-  title: 'Perfil Dev — FFV Academy',
+  // página pessoal do usuário — fora do índice de propósito.
+  robots: { index: false, follow: false },
+  title: 'Perfil Dev',
   description:
     'Seu perfil público de desenvolvedor: conquistas, trilhas em progresso, badges, estatísticas de estudo e desempenho em quizzes.',
   keywords:

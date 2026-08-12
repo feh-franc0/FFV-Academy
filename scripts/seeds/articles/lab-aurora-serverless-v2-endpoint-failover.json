@@ -1,0 +1,2433 @@
+{
+  "slug": "lab-aurora-serverless-v2-endpoint-failover",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O relatório de faturamento do "
+              },
+              {
+                "text": "L14",
+                "code": true
+              },
+              {
+                "text": " resolveu a disputa entre duas leituras opostas. O que ele não tocou é o tamanho do cluster Aurora por trás das duas: writer e reader nasceram `db.r6g.large`, fixos, e continuam assim — porque nenhum requisito daquele laboratório pedia outra coisa. Este é o requisito que apareceu depois."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência roda campanhas trimestrais que multiplicam o volume de pedidos por vinte em relação à madrugada. O time de operação mediu `CPUUtilization` por uma semana inteira: 4% de média entre 2h e 5h, picos de 82% durante os quarenta minutos de cada onda de campanha, três vezes ao dia nesses períodos. A instância que sobrevive ao pico é a mesma instância que cobra a hora inteira da madrugada vazia."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A segunda metade do problema é operacional, não financeira: ninguém jamais testou o que acontece se o writer cair. Existe um reader de pé desde o L14, mas \"existe um reader\" e \"sabemos quanto tempo leva para ele assumir, medido, com carga real em cima\" são afirmações muito diferentes — e só a segunda é uma garantia."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado — depende do L14 (cluster Aurora writer + reader já no ar)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L14 concluído e no ar, psql ou cliente Postgres, AWS CLI, Terraform"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 50 min · implementação 2 h 30 a 3 h, mais uma semana de medição prévia"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Neutro a baixo: troca capacidade fixa por capacidade que acompanha a carga — tende a cair para quem já mede mais de uma hora de ociosidade por dia"
+              },
+              {
+                "k": "Serviços",
+                "v": "Aurora PostgreSQL (Serverless v2), CloudWatch, Secrets Manager"
+              },
+              {
+                "k": "Volume atual",
+                "v": "900 lojas, cluster r6g.large fixo, CPU 4% de madrugada e 82% em campanha"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "a fatura deve acompanhar a carga, e o failover precisa de tempo MEDIDO, não estimado"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "a distribuição de carga medida numa semana representa o padrão real — campanha fora do calendário observado exige remedir, não extrapolar"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "cluster Serverless v2 com piso e teto derivados de medição, e um failover ensaiado com o tempo de indisponibilidade escrito, não suposto"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é onde se explica a arquitetura de armazenamento compartilhado do Aurora nem a diferença entre writer e reader — isso o L14 já fez, e reler aqui seria repetição, não aprofundamento. Também não é sobre modelagem de tabela única no DynamoDB (L16) nem sobre disaster recovery multi-região (L58, que depende deste). Aqui a pergunta é específica: como decidir piso e teto de capacidade por medição, os dois endpoints e o erro de trocá-los, e um failover cronometrado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com uma medição ou um comando na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Medir a curva de capacidade real de um cluster Aurora por uma janela representativa, antes de decidir qualquer número.",
+              "Explicar por que \"scaling point\" é um conceito do Serverless v1, e por que o v2 escala com transação em andamento, tabela travada e tabela temporária em uso.",
+              "Derivar o piso de ACU do conjunto de dados quente, e o teto do pico medido com margem explícita — não de um valor copiado.",
+              "Distinguir o cluster endpoint do reader endpoint, e explicar o que acontece ao tentar escrever pelo segundo.",
+              "Explicar por que o failover do Aurora não espera uma réplica \"alcançar\" o writer, a partir da arquitetura de volume compartilhado.",
+              "Configurar o tier de promoção de um reader para que ele já nasça do tamanho do writer.",
+              "Ensaiar um failover com carga real em andamento e medir o tempo de indisponibilidade.",
+              "Configurar um alarme de orçamento que impeça o teto de ACU virar um cheque em branco."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Unidade de capacidade do Aurora Serverless v2",
+                "SAA-C03, SAP-C02",
+                "ACU como memória + CPU proporcional, faixa configurável",
+                "que capacidade e armazenamento são dimensões separadas — o volume não encolhe quando o ACU cai"
+              ],
+              [
+                "Escala contínua vs. degrau de instância",
+                "SAA-C03, DVA-C02",
+                "incrementos a partir de 0,5 ACU vs. troca de classe",
+                "por que redimensionar um cluster provisionado é operação de manutenção, e Serverless v2 não é"
+              ],
+              [
+                "\"Scaling point\" — o mito do v1 aplicado ao v2",
+                "SAP-C02",
+                "a explicação de por que o v2 não espera ponto de quietude",
+                "não confundir o comportamento documentado do Serverless v1 com o do v2"
+              ],
+              [
+                "Volume de cluster compartilhado",
+                "SAA-C03, SAP-C02",
+                "writer e reader lendo o MESMO volume, sem cópia",
+                "por que adicionar um reader é instantâneo e por que o failover não espera replicação alcançar"
+              ],
+              [
+                "Cluster endpoint vs. reader endpoint",
+                "SAA-C03, DVA-C02",
+                "um `NpgsqlDataSource` por endpoint, nunca compartilhado",
+                "o cluster endpoint sempre aponta para o writer atual; o reader distribui entre leitoras"
+              ],
+              [
+                "Tier de promoção de réplica",
+                "SAP-C02",
+                "reader em tier 0 acompanhando a capacidade do writer",
+                "a diferença entre um reader pronto para assumir e um que precisa escalar depois de promovido"
+              ],
+              [
+                "Tempo típico de failover do Aurora",
+                "SAA-C03, SOA-C02",
+                "ensaio cronometrado, comparado ao valor documentado",
+                "por que Aurora recupera mais rápido que Multi-AZ clássico — a causa é o armazenamento, não mágica"
+              ],
+              [
+                "Piso e teto de ACU",
+                "SAP-C02, DOP-C02",
+                "derivados de `ServerlessDatabaseCapacity` medido, não de tabela de preço",
+                "o piso evita esvaziar o buffer cache; o teto evita fatura sem controle"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve uma carga variável e oferece \"aumente o `max_capacity` bastante para não travar durante transação longa\" como opção de resposta. A armadilha nomeia um comportamento real do Serverless v1 e o aplica ao v2, onde ele não existe: a documentação atual é explícita que a escala acontece com transação em andamento, sem esperar um ponto de quietude. A resposta certa é dimensionar o teto pelo pico medido, não pelo medo de travar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "A fatura deve acompanhar a carga",
+                "capacidade em ACU, não classe fixa",
+                "troca `db.r6g.large` por `db.serverless` no writer e no reader"
+              ],
+              [
+                "Amplitude de carga",
+                "20× entre madrugada e pico de campanha",
+                "exige medir a curva antes de fixar piso e teto — não adivinhar por instinto"
+              ],
+              [
+                "Latência do histórico não pode regredir",
+                "p95 abaixo de 30 ms, herdado do L14",
+                "piso de ACU dimensionado para caber o índice quente no buffer, não para ser o menor possível"
+              ],
+              [
+                "Failover com tempo conhecido",
+                "medido, não estimado",
+                "reader em tier de promoção 0, e um ensaio de failover com carga real em andamento"
+              ],
+              [
+                "Sem estouro de orçamento por query ruim",
+                "teto de ACU com alarme de custo",
+                "orçamento (Budgets) e alarme de `ACUUtilization` sustentada, além do teto técnico"
+              ],
+              [
+                "Equipe de duas pessoas, sem tuning manual constante",
+                "nenhuma intervenção por campanha",
+                "a escala é automática dentro da faixa; ninguém redimensiona instância antes de cada evento"
+              ],
+              [
+                "Aplicação já usa dois pools de conexão",
+                "writer e reader separados, desde o L14",
+                "a troca de endpoint não muda código de aplicação além da string de conexão"
+              ],
+              [
+                "Rastreabilidade da decisão de capacidade",
+                "piso e teto justificados por número",
+                "a curva de `ServerlessDatabaseCapacity` medida entra na documentação da decisão"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: um Aurora, tamanho do pico, ligado a noite inteira"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o cluster que a Cadência tem hoje, herdado do L14. Ele é legítimo como ponto de partida: sobrevive à campanha, e a interface SQL não muda uma linha em relação a RDS. O laboratório começa medindo o custo da capacidade ociosa, porque um número torna o defeito discutível, e \"está caro\" não."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Um Aurora, do tamanho do pico, ligado a noite inteira",
+            "caption": "Este é o cluster que o L14 deixou no ar: writer e reader `db.r6g.large`, fixos, 24 horas por dia. Ele funciona — nenhuma peça está mal configurada. O defeito é que a instância foi dimensionada para os quarenta minutos de campanha às 14h, e ela cobra esse tamanho também às 3h, quando praticamente ninguém compra. Percorra os passos: a fatura não sabe que horas são.",
+            "groups": [
+              {
+                "label": "Aplicação (ECS Fargate)",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "api",
+                    "service": "fargate",
+                    "label": "Serviço de pedidos e histórico",
+                    "note": "escreve e lê no mesmo cluster; nenhuma distinção de capacidade por horário do dia"
+                  }
+                ]
+              },
+              {
+                "label": "Aurora — capacidade fixa, tamanho do pico",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "writer",
+                    "service": "aurora",
+                    "label": "Aurora PostgreSQL, db.r6g.large (writer)",
+                    "note": "dimensionado para sobreviver à campanha das 14h; cobra esse tamanho às 3h também"
+                  },
+                  {
+                    "id": "reader",
+                    "service": "aurora",
+                    "label": "Aurora PostgreSQL, db.r6g.large (reader)",
+                    "note": "existe para o relatório do L14; mesma capacidade fixa, mesma cobrança nas 24 horas"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "CPUUtilization por instância",
+                    "note": "mostra 4% às 3h e 82% às 14h na MESMA instância, pelo MESMO preço de hora"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "api",
+                "to": "writer",
+                "label": "INSERT e UPDATE de pedidos, 24 horas por dia",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "reader",
+                "label": "SELECT do relatório de faturamento",
+                "style": "solid"
+              },
+              {
+                "from": "writer",
+                "to": "cw",
+                "label": "CPUUtilization e FreeableMemory do writer",
+                "style": "dashed"
+              },
+              {
+                "from": "reader",
+                "to": "cw",
+                "label": "CPUUtilization e AuroraReplicaLag do reader",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A capacidade foi dimensionada para o pico, não para o dia",
+                "detail": "`db.r6g.large` tem 2 vCPU e 16 GiB de memória — o suficiente para não cair durante os quarenta minutos de campanha. É uma decisão correta olhando só para o pico, e é exatamente por isso que ninguém a questionou até agora.",
+                "nodes": [
+                  "api",
+                  "writer"
+                ],
+                "edges": [
+                  "api>writer"
+                ]
+              },
+              {
+                "label": "Às 3 da manhã, a fatura não sabe que ninguém está comprando",
+                "detail": "A instância continua com 2 vCPU e 16 GiB reservados, cobrando o mesmo valor por hora que cobra às 14h. O `CPUUtilization` médio de madrugada gira em 4%: mais de 90% da capacidade paga fica ociosa na maior parte do dia.",
+                "nodes": [
+                  "writer",
+                  "cw"
+                ],
+                "edges": [
+                  "writer>cw"
+                ]
+              },
+              {
+                "label": "O reader paga o mesmo preço mesmo quando o relatório não roda",
+                "detail": "O reader existe para isolar o relatório de faturamento do L14, e ele é necessário durante o expediente. Fora dele, continua de pé, do mesmo tamanho, cobrando a mesma hora — porque instância provisionada não tem estado \"ocioso e barato\".",
+                "nodes": [
+                  "reader",
+                  "cw"
+                ],
+                "edges": [
+                  "reader>cw"
+                ]
+              },
+              {
+                "label": "O defeito não é falha de configuração: é aritmética de classe fixa",
+                "detail": "Uma classe de instância é um contrato de tamanho constante. Não existe meio termo entre \"grande o bastante para o pico\" e \"pequeno o bastante para a madrugada\" numa única classe — o intervalo entre os dois regimes é de vinte vezes, e a classe só tem um valor.",
+                "nodes": [
+                  "api",
+                  "writer"
+                ],
+                "edges": [
+                  "api>writer"
+                ]
+              },
+              {
+                "label": "Trocar de classe também não é grátis nem instantâneo",
+                "detail": "Redimensionar um cluster provisionado significa mudar para outra classe da família — `r6g.large` para `r6g.xlarge`, por exemplo, dobrando de capacidade de uma vez — e isso é uma operação de manutenção, não um botão de escala contínua. Alguém precisaria lembrar de fazer isso antes de cada campanha e desfazer depois.",
+                "nodes": [
+                  "writer",
+                  "reader"
+                ],
+                "edges": [
+                  "api>writer",
+                  "api>reader"
+                ]
+              },
+              {
+                "label": "Por que a Cadência está exatamente aqui",
+                "detail": "Porque o L14 resolveu um problema diferente — qual banco serve qual consulta — e resolveu bem. Capacidade fixa nunca foi a pergunta daquele laboratório. Ela virou pergunta agora que a amplitude entre madrugada e campanha ficou grande o bastante para aparecer na fatura como linha visível.",
+                "nodes": [
+                  "api",
+                  "reader"
+                ],
+                "edges": [
+                  "api>reader"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A medição roda por uma janela representativa — o padrão da casa é uma semana, para cobrir os ciclos de campanha sem depender de um único dia atípico."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "filename": "medir-a-ociosidade.sh",
+            "code": "# Rode por pelo menos 7 dias corridos antes de decidir piso e teto.\nCLUSTER=ffv-lab-aurora\nINSTANCIA_WRITER=ffv-lab-aurora-writer\n\naws cloudwatch get-metric-statistics \\\n  --namespace AWS/RDS --metric-name CPUUtilization \\\n  --dimensions Name=DBInstanceIdentifier,Value=\"$INSTANCIA_WRITER\" \\\n  --start-time \"$(date -u -d '7 days ago' +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --period 3600 --statistics Average Maximum --output table\n\n# Na Cadencia: media de 4% entre 2h e 5h, picos de 82% em tres janelas de\n# 40 min por dia de campanha. A instancia e a MESMA nos dois horarios — o\n# preco por hora tambem e o mesmo, e e essa igualdade que este modulo quebra."
+          }
+        },
+        {
+          "id": "b4_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "A fatura que não sabe que horas são",
+            "content": "Uma instância `db.r6g.large` cobra o mesmo valor por hora às 3h e às 14h, porque o contrato de capacidade provisionada é constante — não existe estado \"ocioso e barato\" numa classe fixa. Com CPU médio de 4% em boa parte do dia, a Cadência paga por capacidade que simplesmente não é usada na maior parte das 24 horas. Não é um erro de configuração: é a natureza do modelo provisionado aplicada a uma carga que varia vinte vezes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção: capacidade derivada, reader pronto para assumir"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. Se você não conseguir apontar o requisito, a peça é adorno — e este desenho não tem nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Serverless v2: capacidade que segue a curva, e um reader pronto para assumir",
+            "caption": "Não é o desenho anterior com um rótulo \"serverless\" colado: writer e reader trocaram de tipo de instância — `db.serverless` — e passaram a ter um piso e um teto de ACU derivados de medição, não da classe mais próxima. O reader entra em tier de promoção 0, o que muda o que ele faz num failover. Percorra os passos: cada peça nova rastreia a um requisito da tabela anterior.",
+            "groups": [
+              {
+                "label": "Aplicação (ECS Fargate)",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "api",
+                    "service": "fargate",
+                    "label": "Serviço de pedidos e histórico",
+                    "note": "usa dois `NpgsqlDataSource`: um para o endpoint de escrita, outro para o de leitura"
+                  }
+                ]
+              },
+              {
+                "label": "Aurora Serverless v2 — capacidade derivada da medição",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "writer",
+                    "service": "aurora",
+                    "label": "Aurora Serverless v2 (writer), 2–32 ACU",
+                    "note": "o piso mantém o índice do histórico quente no buffer; o teto vem do pico medido com folga"
+                  },
+                  {
+                    "id": "reader",
+                    "service": "aurora",
+                    "label": "Aurora Serverless v2 (reader), tier de promoção 0",
+                    "note": "a capacidade mínima dele passa a acompanhar a do writer — pronto para assumir sem escalar primeiro"
+                  }
+                ]
+              },
+              {
+                "label": "Observação e failover",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "ServerlessDatabaseCapacity e ACUUtilization",
+                    "note": "traça a curva de ACU ao lado da curva de CPU — a prova de que a capacidade acompanha a carga"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "api",
+                "to": "writer",
+                "label": "cluster endpoint — sempre o writer atual",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "reader",
+                "label": "reader endpoint — round-robin entre leitoras disponíveis",
+                "style": "solid"
+              },
+              {
+                "from": "writer",
+                "to": "reader",
+                "label": "mesmo volume de cluster; réplica de storage, não de WAL",
+                "style": "dashed"
+              },
+              {
+                "from": "writer",
+                "to": "cw",
+                "label": "ServerlessDatabaseCapacity do writer, medida a cada segundo",
+                "style": "dashed"
+              },
+              {
+                "from": "reader",
+                "to": "cw",
+                "label": "ServerlessDatabaseCapacity do reader, medida a cada segundo",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O piso de ACU não é zero: é o que mantém o índice quente",
+                "detail": "Zero ACU parece a economia óbvia, mas descarta o buffer cache a cada ociosidade — e o índice do histórico do L14, que respondia em 24 ms, volta a ser lido do disco até se aquecer de novo. O piso de 2 ACU (≈4 GiB) foi escolhido para caber o conjunto de dados quente, não por ser um número redondo.",
+                "nodes": [
+                  "api",
+                  "writer"
+                ],
+                "edges": [
+                  "api>writer"
+                ]
+              },
+              {
+                "label": "O teto vem do pico medido, com folga — não de um número redondo",
+                "detail": "Uma semana de `ServerlessDatabaseCapacity` mostrou pico de campanha em torno de 15 ACU. O teto de 32 ACU dá margem para crescimento e para o dia em que a campanha vier maior, sem herdar o hábito de \"escolher o dobro do que parece seguro\".",
+                "nodes": [
+                  "writer",
+                  "cw"
+                ],
+                "edges": [
+                  "writer>cw"
+                ]
+              },
+              {
+                "label": "A escala é fina, não por degrau de família de instância",
+                "detail": "O Aurora Serverless v2 muda a capacidade em incrementos a partir de 0,5 ACU, e o incremento cresce com a capacidade atual — quanto maior o cluster já está, mais rápido ele sobe. É o oposto de trocar `r6g.large` por `r6g.xlarge`, que dobra de uma vez e exige uma operação de manutenção.",
+                "nodes": [
+                  "api",
+                  "writer"
+                ],
+                "edges": [
+                  "api>writer"
+                ]
+              },
+              {
+                "label": "O reader já lê o mesmo volume: não existe \"alcançar\" o writer",
+                "detail": "Réplica e writer se conectam ao MESMO volume de cluster — a replicação acontece na camada de armazenamento, não copiando linhas por WAL. É por isso que promover o reader a writer não espera nenhuma sincronização de dados.",
+                "nodes": [
+                  "writer",
+                  "reader"
+                ],
+                "edges": [
+                  "writer>reader"
+                ]
+              },
+              {
+                "label": "O reader promovido herda a capacidade do writer, não a própria",
+                "detail": "Em tier de promoção 0, o piso do reader passa a ser a capacidade ATUAL do writer — ele já está no tamanho certo para assumir a carga inteira no instante do failover, em vez de precisar escalar depois de já ser o writer.",
+                "nodes": [
+                  "reader"
+                ],
+                "edges": [
+                  "writer>reader"
+                ]
+              },
+              {
+                "label": "As duas curvas, lado a lado, são a prova de que funciona",
+                "detail": "O painel mostra `ServerlessDatabaseCapacity` do writer e do reader ao lado de `CPUUtilization`: quando a carga sobe, a capacidade sobe minutos depois — não antes, o que seria capacidade ociosa paga sem motivo.",
+                "nodes": [
+                  "writer",
+                  "reader",
+                  "cw"
+                ],
+                "edges": [
+                  "writer>cw",
+                  "reader>cw"
+                ]
+              },
+              {
+                "label": "Escrever no endpoint de leitura falha, e falha do jeito certo",
+                "detail": "O reader endpoint distribui conexões entre leitoras, e cada uma delas está aberta em modo somente leitura no próprio PostgreSQL. Um `INSERT` ali não corrompe nada: o banco recusa a transação com um erro explícito, antes de qualquer escrita ser tentada.",
+                "nodes": [
+                  "api",
+                  "reader"
+                ],
+                "edges": [
+                  "api>reader"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação ao desenho anterior não é \"a mesma instância com um nome novo\": é que capacidade deixou de ser uma classe escolhida de uma lista e passou a ser um intervalo justificado por medição, com o writer e o reader escalando dentro dele de forma independente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "annotated_formula",
+          "position": 3,
+          "data": {
+            "title": "O que decide o piso e o teto de ACU, e por que nenhum dos dois é chute",
+            "formula": "piso_ACU ≈ conjunto_quente_GiB ÷ 2   ·   teto_ACU ≈ pico_medido_ACU × margem",
+            "parts": [
+              {
+                "symbol": "conjunto_quente_GiB",
+                "name": "O que precisa caber no buffer cache",
+                "description": "Índices e tabelas acessados com frequência — no caso da Cadência, o índice do histórico de pedidos do L14. Cada ACU equivale a cerca de 2 GiB de memória; dividir o conjunto quente por esse valor dá o piso que evita descartar cache a cada ociosidade."
+              },
+              {
+                "symbol": "pico_medido_ACU",
+                "name": "O que a curva de CloudWatch realmente mostrou",
+                "description": "`ServerlessDatabaseCapacity` durante os quarenta minutos de campanha, não um valor de tabela de instância. É o único número desta fórmula que vem de medição direta, e é o mais importante dos dois.",
+                "highlight": true
+              },
+              {
+                "symbol": "margem",
+                "name": "Folga explícita, não medo disfarçado de engenharia",
+                "description": "Um fator declarado — por exemplo, dobrar o pico observado — cobre crescimento orgânico e uma campanha maior que a medida. A margem é uma decisão registrada, não \"coloquei um valor alto para garantir\"."
+              },
+              {
+                "symbol": "incremento mínimo",
+                "name": "0,5 ACU, e cresce com a capacidade atual",
+                "description": "Quanto maior a capacidade já em uso, maior o incremento de cada passo de escala — por isso um cluster que já está em 10 ACU sobe mais rápido do que um que está saindo de 2. É o oposto de uma classe de instância fixa, que muda em saltos grandes e discretos."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "success",
+            "title": "O ajuste com maior efeito por decisão tomada",
+            "content": "Trocar `db.r6g.large` por `db.serverless` com piso de 2 ACU e teto de 32 ACU já resolve a maior parte do defeito medido na seção anterior, e não exige reescrever uma linha de SQL — a interface Postgres é a mesma. O tier de promoção 0 no reader custa mais um pouco de capacidade mínima constante, e é o que transforma \"existe um reader\" em \"o reader está pronto para assumir agora\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Como funciona, da medição ao failover ensaiado"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A ordem importa: medir antes de configurar, configurar antes de ensaiar. Pular a medição transforma piso e teto em chute com aparência de decisão."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Da curva medida ao failover cronometrado",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1. Medir a curva de carga real por uma janela representativa",
+                "desc": "No mínimo uma semana de `CPUUtilization`, `FreeableMemory` e conexões ativas no cluster atual. Um único dia esconde o padrão semanal; um dia de campanha isolado superestima o piso."
+              },
+              {
+                "label": "2. Derivar o piso do conjunto de dados quente",
+                "desc": "Tamanho do índice e das tabelas mais acessadas, convertido em ACU pela proporção de 2 GiB por unidade. É o valor que evita reaquecer o cache a cada janela ociosa."
+              },
+              {
+                "label": "3. Derivar o teto do pico medido, com margem declarada",
+                "desc": "Pico observado de `ServerlessDatabaseCapacity` (ou, antes da migração, o `CPUUtilization` convertido em ordem de grandeza equivalente), multiplicado por um fator de folga escrito no código, não na memória de alguém."
+              },
+              {
+                "label": "4. Aplicar a mudança: `db.serverless` e a faixa de capacidade",
+                "desc": "Terraform troca a classe de instância do writer e do reader, e declara `serverlessv2_scaling_configuration` no cluster com o piso e o teto derivados nos passos 2 e 3."
+              },
+              {
+                "label": "5. Confirmar o tier de promoção do reader em 0",
+                "desc": "A partir daqui, o piso do reader deixa de ser o valor fixo do cluster e passa a acompanhar a capacidade ATUAL do writer — ele já nasce do tamanho certo para uma promoção."
+              },
+              {
+                "label": "6. Ensaiar o failover com carga real em andamento",
+                "desc": "Um laço de escrita roda enquanto o failover é disparado manualmente. O que se mede é o intervalo entre a última escrita aceita e a primeira aceita depois — não o tempo total do comando."
+              },
+              {
+                "label": "7. Comparar o tempo medido ao que a documentação declara",
+                "desc": "A AWS documenta failover tipicamente abaixo de 60 segundos, e frequentemente abaixo de 30, com pelo menos um reader disponível. Se o seu ensaio ultrapassar isso, a investigação vai para reconexão da aplicação, não para o Aurora."
+              },
+              {
+                "label": "8. Registrar a curva de ACU ao lado da curva de custo",
+                "desc": "O painel final mostra capacidade subindo e descendo com a carga — é a prova viva, e o documento que sustenta a decisão da próxima revisão de orçamento."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O evento que o CloudWatch registra quando um failover acontece — disparado à mão ou por uma falha real — carrega o suficiente para acionar um alarme sem que ninguém precise olhar o console no momento."
+              }
+            ]
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O que o EventBridge entrega quando o Aurora promove um reader a writer. Vale assinar para saber de um failover automatico sem estar de plantao."
+              }
+            ]
+          },
+          "position": 3
+        },
+        {
+          "id": "b6_3",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "json",
+            "filename": "evento-de-failover.json",
+            "code": "{\n  \"source\": \"aws.rds\",\n  \"detail-type\": \"RDS DB Cluster Event\",\n  \"resources\": [\"arn:aws:rds:us-east-1:111122223333:cluster:ffv-lab-aurora\"],\n  \"detail\": {\n    \"EventCategories\": [\"failover\"],\n    \"SourceType\": \"CLUSTER\",\n    \"Message\": \"A Multi-AZ failover for cluster ffv-lab-aurora has completed.\",\n    \"Date\": \"2026-08-07T14:12:04.000Z\"\n  }\n}"
+          }
+        },
+        {
+          "id": "b6_4",
+          "type": "callout",
+          "position": 5,
+          "data": {
+            "variant": "info",
+            "title": "\"Scaling point\" é termo do Serverless v1 — e o v2 foi desenhado para não precisar dele",
+            "content": "O Serverless v1 introduzia o conceito de \"scaling point\": um instante em que era seguro escalar, e que transação longa, tabela travada ou tabela temporária em uso podiam impedir de existir — nesse caso, o Aurora tentava repetidamente até achar um ponto de quietude, ou aplicava \"force scaling\" derrubando conexões e locks. A documentação atual do Serverless v2 é explícita no sentido oposto: a escala acontece com conexões abertas, transações em andamento, tabelas travadas e tabelas temporárias em uso, sem esperar um ponto de quietude e sem interromper operação nenhuma. Configurar um teto alto \"para não travar durante minha transação longa\" resolve um problema que o v2 não tem — e só infla a fatura."
+          }
+        },
+        {
+          "id": "b6_5",
+          "type": "paragraph",
+          "position": 6,
+          "data": {
+            "content": [
+              {
+                "text": "O que continua real, e não é o mesmo problema: uma transação longa pode manter páginas presas no buffer e atrapalhar a decisão de ESCALAR PARA BAIXO, porque a carga aparente permanece alta enquanto a transação não termina. Isso afeta o custo — o cluster demora mais para descer — e não a disponibilidade, que é a distinção que a confusão com o v1 apaga."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Cluster Aurora writer + reader `db.r6g.large`, fixo, rodando 24 horas para suportar uma campanha que multiplica o volume por vinte durante quarenta minutos, três vezes ao dia, com CPU médio de 4% no resto do tempo. Duas pessoas mantêm o sistema, sem tuning manual antes de cada campanha.",
+            "winner": "Aurora Serverless v2 para writer e reader, com piso e teto derivados de medição e reader em tier de promoção 0",
+            "why": "O problema declarado tem duas partes, e o Serverless v2 resolve as duas sem pedir operação manual: a capacidade acompanha a carga automaticamente dentro da faixa configurada, então a madrugada deixa de pagar o tamanho do pico; e o reader em tier 0 nasce do tamanho do writer, então o failover não depende de alguém redimensionar nada às pressas. A equipe de duas pessoas não tem tempo para redimensionar instância antes de cada campanha — e esquecer de fazer isso uma vez é o incidente.",
+            "alternatives": [
+              {
+                "name": "Redimensionar a instância manualmente antes e depois de cada campanha",
+                "downside": "Funciona enquanto alguém lembra, e falha exatamente no dia em que ninguém lembra. Redimensionar é uma operação de manutenção com breve interrupção, não um ajuste contínuo — e ainda assim é feito no calendário errado com frequência maior do que se admite."
+              },
+              {
+                "name": "Instância provisionada maior, sempre ligada, sizada para o dobro do pico atual",
+                "downside": "Resolve o risco de faltar capacidade e piora o problema original: agora a madrugada paga por uma instância AINDA maior, 24 horas por dia, para um evento que dura duas horas somadas no mês."
+              },
+              {
+                "name": "RDS Proxy na frente do cluster provisionado atual",
+                "downside": "Resolve esgotamento de conexão e acelera reconexão após failover, mas não toca o problema declarado — o tamanho da instância continua fixo e a fatura de madrugada continua igual. É complementar ao Serverless v2, não substituto (entra no nível 3 da evolução)."
+              },
+              {
+                "name": "Implantação Multi-AZ de cluster (dois standbys legíveis)",
+                "downside": "Resolve um problema diferente — mais capacidade de leitura com redundância — e continua sendo capacidade PROVISIONADA e fixa. A amplitude de vinte vezes entre madrugada e pico permanece intocada."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Piso de ACU",
+                "2, derivado do conjunto de dados quente",
+                "0 (auto-pause); 0,5 (padrão \"seguro\")",
+                "mantém o índice do histórico no buffer cache sem reaquecer a cada ociosidade",
+                "nunca chega a 0 ACU: paga um piso constante mesmo de madrugada"
+              ],
+              [
+                "Teto de ACU",
+                "32, dobro do pico medido de 15",
+                "igual ao pico medido, sem margem; um valor alto \"para garantir\"",
+                "cobre crescimento e uma campanha maior sem herdar o hábito de superdimensionar por medo",
+                "ainda pode não bastar numa campanha muito acima do padrão histórico — requer remedir"
+              ],
+              [
+                "Tier de promoção do reader",
+                "0 — acompanha a capacidade do writer",
+                "tier 2-15, escalando de forma independente",
+                "o reader já nasce do tamanho certo para assumir; não precisa escalar depois de promovido",
+                "paga capacidade mínima mais alta o tempo todo, mesmo fora de failover"
+              ],
+              [
+                "Escala de instância vs. Serverless v2",
+                "Serverless v2 no writer e no reader",
+                "provisionado maior, sempre ligado; redimensionamento manual por campanha",
+                "acompanha a carga sem operação humana e sem janela de manutenção para trocar classe",
+                "faixa de capacidade (0–256 ACU) é menor que o maior provisionado disponível — não serve a toda carga"
+              ],
+              [
+                "Ensaio de failover",
+                "disparado manualmente, com carga real em andamento",
+                "confiar no valor documentado sem medir; testar sem carga",
+                "o tempo real depende de reconexão da aplicação, que só aparece sob carga",
+                "exige uma janela de manutenção ou ambiente de homologação equivalente à produção"
+              ],
+              [
+                "Endpoint por tipo de operação",
+                "writer para escrita, reader para leitura, dois pools",
+                "um único endpoint para tudo",
+                "isola o caminho de escrita do de leitura e faz o erro de gravar no reader falhar cedo",
+                "mais uma string de conexão e um pool para manter coerentes entre ambientes"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que o tier de promoção 0 cria, e que este módulo paga em dinheiro, não em risco",
+            "content": "Um reader em tier 0 nunca escala abaixo da capacidade do writer, mesmo em horários em que ninguém está lendo relatório nenhum. É uma troca explícita: mais previsibilidade de failover por mais capacidade mínima paga. Para um reader que existe só para um relatório noturno pouco crítico, tier 2 com escala independente pode custar menos e ainda ser aceitável — a decisão depende de quanto o failover rápido vale para você."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: o cluster, com piso e teto declarados"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A troca central deste laboratório é uma linha: `instance_class` deixa de ser uma classe da família `r6g` e passa a ser `db.serverless`, com a faixa de capacidade declarada no próprio cluster. O restante do Terraform do L14 — sub-rede, segurança, criptografia, backup — não muda."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "aurora-serverless.tf",
+            "code": "# aurora-serverless.tf — troca db.r6g.large por db.serverless, com piso e teto\n# derivados de medicao (ver medir-a-ociosidade.sh) e o reader em tier de promocao 0.\n\nvariable \"acu_minimo\" {\n  description = \"Piso de ACU, derivado do conjunto de dados quente (indice do historico)\"\n  type        = number\n  default     = 2 # ~4 GiB — cabe o indice do L14 sem descartar cache a cada ociosidade\n}\n\nvariable \"acu_maximo\" {\n  description = \"Teto de ACU, derivado do pico medido (15 ACU) com margem de 2x\"\n  type        = number\n  default     = 32\n}\n\nresource \"aws_rds_cluster\" \"pedidos\" {\n  cluster_identifier = \"${var.projeto}-aurora\"\n  engine              = \"aurora-postgresql\"\n  # 16.3+ e o piso de versao para a faixa 0-256 ACU; confira a sua antes de aplicar.\n  engine_version      = \"16.4\"\n  database_name       = \"pedidos\"\n  master_username      = \"app_admin\"\n  manage_master_user_password = true\n\n  db_subnet_group_name   = aws_db_subnet_group.privada.name\n  vpc_security_group_ids = [aws_security_group.banco.id]\n\n  storage_encrypted = true\n  kms_key_id         = aws_kms_key.app.arn\n\n  backup_retention_period = 7\n  preferred_backup_window = \"03:00-04:00\"\n\n  # O piso e o teto do CLUSTER. Cada instancia (writer, reader) tambem escala\n  # dentro desta faixa — nao existe faixa separada por instancia.\n  serverlessv2_scaling_configuration {\n    min_capacity = var.acu_minimo\n    max_capacity = var.acu_maximo\n  }\n\n  final_snapshot_identifier = \"${var.projeto}-aurora-final-${formatdate(\"YYYYMMDD\", timestamp())}\"\n  skip_final_snapshot       = false\n  deletion_protection       = true # removido explicitamente antes do destroy, de proposito\n}\n\nresource \"aws_rds_cluster_instance\" \"writer\" {\n  identifier          = \"${var.projeto}-aurora-writer\"\n  cluster_identifier  = aws_rds_cluster.pedidos.id\n  # A troca central deste modulo: nao ha mais classe fixa. `db.serverless` diz\n  # ao Aurora para usar a faixa declarada acima em vez de uma classe da familia.\n  instance_class      = \"db.serverless\"\n  engine              = aws_rds_cluster.pedidos.engine\n  engine_version      = aws_rds_cluster.pedidos.engine_version\n  publicly_accessible = false\n}\n\nresource \"aws_rds_cluster_instance\" \"reader\" {\n  identifier          = \"${var.projeto}-aurora-reader\"\n  cluster_identifier  = aws_rds_cluster.pedidos.id\n  instance_class      = \"db.serverless\"\n  engine              = aws_rds_cluster.pedidos.engine\n  engine_version      = aws_rds_cluster.pedidos.engine_version\n  publicly_accessible = false\n\n  # Tier 0: o piso deste reader passa a ser a capacidade ATUAL do writer, nao\n  # o var.acu_minimo do cluster. E o que o deixa pronto para assumir sem\n  # precisar escalar depois de ja ser o writer.\n  promotion_tier = 0\n}\n\noutput \"endpoint_escrita\" {\n  value       = aws_rds_cluster.pedidos.endpoint\n  description = \"cluster endpoint — sempre aponta para o writer atual, mesmo apos failover\"\n}\n\noutput \"endpoint_leitura\" {\n  value       = aws_rds_cluster.pedidos.reader_endpoint\n  description = \"reader endpoint — round-robin entre leitoras disponiveis; NUNCA aceita escrita\"\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O piso de 0,5 ou 0 ACU é tentador, e a documentação da AWS avisa sobre isso",
+            "content": "Zero ACU habilita a pausa automática — o cluster para de cobrar compute quando ocioso, e a próxima conexão espera o cluster retomar. Para um cluster com tráfego constante como o da Cadência, isso troca economia marginal por uma latência de retomada perceptível na primeira requisição do dia. O piso de 2 ACU deste módulo não é conservador por acaso: ele mantém o cluster sempre pronto, e o ganho de custo já vem do teto que deixou de ser pago 24 horas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o alarme que impede o teto virar cheque em branco"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O teto técnico de 32 ACU não é um teto de custo — ele autoriza o cluster a sustentar essa capacidade indefinidamente, e nada no Aurora impede uma consulta mal escrita de fazer exatamente isso. O alarme abaixo é a segunda linha de defesa, depois da revisão de código."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "alarmes-capacidade.tf",
+            "code": "# alarmes-capacidade.tf — o teto tecnico (max_capacity) nao e um teto de custo.\n# Uma query em laco pode sustentar 32 ACU por horas sem violar nenhum limite do\n# Aurora — o alarme abaixo e o que transforma isso em um aviso, nao numa\n# surpresa na fatura do mes seguinte.\n\nresource \"aws_cloudwatch_metric_alarm\" \"acu_sustentado_no_teto\" {\n  alarm_name          = \"${var.projeto}-aurora-acu-no-teto\"\n  namespace           = \"AWS/RDS\"\n  metric_name         = \"ServerlessDatabaseCapacity\"\n  statistic           = \"Average\"\n  period              = 300\n  evaluation_periods  = 6 # 30 minutos sustentados — campanha legitima nao passa disso\n  threshold           = var.acu_maximo * 0.9\n  comparison_operator = \"GreaterThanOrEqualToThreshold\"\n  treat_missing_data  = \"notBreaching\"\n\n  dimensions = {\n    DBClusterIdentifier = aws_rds_cluster.pedidos.cluster_identifier\n  }\n\n  alarm_actions = [aws_sns_topic.alertas.arn]\n}\n\n# rds:FailoverDBCluster e escopavel por ARN — nao e o `*` que precisa de\n# justificativa. cloudwatch:GetMetricData e as duas acoes de metrica abaixo\n# NAO aceitam recurso especifico: sao operacoes de leitura sobre o namespace\n# inteiro da conta, entao `Resource = \"*\"` aqui e a unica forma de conceder a\n# acao, nao uma escolha por preguica.\ndata \"aws_iam_policy_document\" \"operar_failover\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"rds:FailoverDBCluster\", \"rds:DescribeDBClusters\"]\n    resources = [aws_rds_cluster.pedidos.arn]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"cloudwatch:GetMetricData\", \"cloudwatch:GetMetricStatistics\"]\n    resources = [\"*\"]\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O `*` que aparece na política, e por que ele se justifica",
+            "content": "`cloudwatch:GetMetricData` e `cloudwatch:GetMetricStatistics` são operações de LEITURA sobre métricas da conta inteira — elas não têm um ARN de recurso específico para restringir, ao contrário de `rds:FailoverDBCluster`, que é escopado ao ARN do cluster na mesma política. A regra não é \"nunca use `*`\" — é \"todo `*` tem de ter uma frase explicando por que não pode ser mais estreito\". Sem essa frase, é preguiça; com ela, é decisão."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: dois pools, dois endpoints, uma pipeline de resiliência"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O padrão de dois pools já existia desde o L14 — o que muda aqui é o motivo declarado: não é só isolar carga de leitura e escrita, é que o comportamento dos dois endpoints diverge durante um failover, e a aplicação precisa saber disso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "DataSources.cs",
+            "code": "// DataSources.cs — dois pools, dois enderecos, e o motivo de nunca compartilhar\n\nvar builder = WebApplication.CreateBuilder(args);\n\n// Escrita: sempre o CLUSTER endpoint. Ele resolve para o writer atual — antes\n// e depois de qualquer failover, sem a aplicacao saber ou precisar saber.\nvar enderecoEscrita = builder.Configuration.GetConnectionString(\"AuroraEscrita\")!;\nbuilder.Services.AddNpgsqlDataSource(enderecoEscrita, name: \"escrita\", dataSourceBuilder =>\n{\n    // Timeout de conexao curto: se o writer esta indisponivel (failover em\n    // andamento), falhar rapido e deixar o Polly (abaixo) decidir o retry e\n    // por o registrar como o e melhor do que ficar pendurado no pool.\n    dataSourceBuilder.ConnectionStringBuilder.Timeout = 5;\n});\n\n// Leitura: o READER endpoint. Ele distribui entre as leitoras disponiveis por\n// DNS round-robin — e cada leitora esta aberta em modo somente leitura no\n// proprio PostgreSQL, entao um INSERT aqui falha no banco, nao na aplicacao.\nvar enderecoLeitura = builder.Configuration.GetConnectionString(\"AuroraLeitura\")!;\nbuilder.Services.AddNpgsqlDataSource(enderecoLeitura, name: \"leitura\", dataSourceBuilder =>\n{\n    dataSourceBuilder.ConnectionStringBuilder.Timeout = 5;\n});\n\n// Resiliencia com retry e jitter, especifica para o intervalo de failover.\n// Sem jitter, todas as instancias do servico tentariam reconectar no MESMO\n// instante apos a promocao do reader, multiplicando a carga de reconexao\n// exatamente quando o writer novo mais precisa de folga.\nbuilder.Services.AddResiliencePipeline(\"aurora-escrita\", pb =>\n{\n    pb.AddRetry(new Polly.Retry.RetryStrategyOptions\n    {\n        ShouldHandle = new Polly.PredicateBuilder().Handle<NpgsqlException>(),\n        MaxRetryAttempts = 4,\n        BackoffType = Polly.DelayBackoffType.Exponential,\n        UseJitter = true,\n        Delay = TimeSpan.FromMilliseconds(200),\n    });\n});\n\nvar app = builder.Build();\napp.Run();\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Retry sem jitter transforma um failover em apagão coordenado",
+            "content": "Se todas as réplicas do serviço reconectarem no mesmo instante — porque cada uma aplicou o mesmo backoff fixo — o writer recém-promovido recebe uma rajada de conexões simultâneas no pior momento possível, logo depois de assumir a carga inteira sozinho. O jitter espalha essas tentativas no tempo. É a mesma lição do L03 sobre retry sem backoff (L36 aprofunda), aplicada ao caso específico de reconexão pós-failover."
+          }
+        },
+        {
+          "id": "b10_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "csharp",
+            "filename": "Repositorios.cs",
+            "code": "// PedidoRepositorio.cs — o caminho de escrita, com o pool de escrita e a\n// pipeline de resiliencia amarrados desde a injecao de dependencia.\n\npublic sealed class PedidoRepositorio\n{\n    private readonly NpgsqlDataSource _escrita;\n    private readonly ResiliencePipeline _resiliencia;\n\n    public PedidoRepositorio(\n        [FromKeyedServices(\"escrita\")] NpgsqlDataSource escrita,\n        [FromKeyedServices(\"aurora-escrita\")] ResiliencePipeline resiliencia)\n    {\n        _escrita = escrita;\n        _resiliencia = resiliencia;\n    }\n\n    public async Task<Guid> CriarAsync(NovoPedido pedido, CancellationToken ct) =>\n        await _resiliencia.ExecuteAsync(async token =>\n        {\n            // Se um failover estiver em andamento, a primeira tentativa aqui\n            // recebe uma excecao de conexao — nao um erro de negocio. A\n            // pipeline reexecuta com backoff; NAO reexecute manualmente por\n            // fora dela, ou o jitter perde o efeito.\n            await using var conexao = await _escrita.OpenConnectionAsync(token);\n            await using var transacao = await conexao.BeginTransactionAsync(token);\n\n            const string sql = \"\"\"\n                INSERT INTO pedidos (id, cliente_id, loja_id, total, status, criado_em)\n                VALUES (@id, @cliente, @loja, @total, 'confirmado', now())\n                \"\"\";\n            await using var comando = new NpgsqlCommand(sql, conexao, transacao);\n            comando.Parameters.AddWithValue(\"id\", pedido.Id);\n            comando.Parameters.AddWithValue(\"cliente\", pedido.ClienteId);\n            comando.Parameters.AddWithValue(\"loja\", pedido.LojaId);\n            comando.Parameters.AddWithValue(\"total\", pedido.Total);\n            await comando.ExecuteNonQueryAsync(token);\n\n            await transacao.CommitAsync(token);\n            return pedido.Id;\n        }, ct);\n}\n\n// HistoricoRepositorio.cs — o caminho de leitura, deliberadamente incapaz de\n// escrever: o pool aponta para o reader endpoint, e nao ha metodo de escrita\n// nesta classe. O compilador nao impede um INSERT por engano; o Postgres impede.\npublic sealed class HistoricoRepositorio\n{\n    private readonly NpgsqlDataSource _leitura;\n\n    public HistoricoRepositorio([FromKeyedServices(\"leitura\")] NpgsqlDataSource leitura) =>\n        _leitura = leitura;\n\n    public async Task<IReadOnlyList<PedidoResumo>> PorClienteAsync(\n        Guid clienteId, int tamanho, CancellationToken ct)\n    {\n        await using var conexao = await _leitura.OpenConnectionAsync(ct);\n        const string sql = \"\"\"\n            SELECT id, loja_id, total, status, criado_em\n            FROM pedidos\n            WHERE cliente_id = @cliente\n            ORDER BY criado_em DESC\n            LIMIT @tamanho\n            \"\"\";\n        await using var comando = new NpgsqlCommand(sql, conexao);\n        comando.Parameters.AddWithValue(\"cliente\", clienteId);\n        comando.Parameters.AddWithValue(\"tamanho\", tamanho);\n\n        var linhas = new List<PedidoResumo>();\n        await using var leitor = await comando.ExecuteReaderAsync(ct);\n        while (await leitor.ReadAsync(ct))\n            linhas.Add(new PedidoResumo(\n                leitor.GetGuid(0), leitor.GetGuid(1), leitor.GetDecimal(2),\n                leitor.GetString(3), leitor.GetDateTime(4)));\n        return linhas;\n    }\n}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Implantar, medir e ensaiar o failover"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "aplicar.sh",
+            "code": "#!/usr/bin/env bash\nset -euo pipefail\n\n# 1. Aplica a troca para Serverless v2 com o piso e o teto medidos.\nterraform apply -var=\"acu_minimo=2\" -var=\"acu_maximo=32\" -auto-approve\n\n# 2. Confirma a faixa de capacidade ATIVA no cluster.\naws rds describe-db-clusters --db-cluster-identifier ffv-lab-aurora \\\n  --query \"DBClusters[0].ServerlessV2ScalingConfiguration\"\n\n# 3. Confirma o tier de promocao do reader.\naws rds describe-db-instances --db-instance-identifier ffv-lab-aurora-reader \\\n  --query \"DBInstances[0].PromotionTier\""
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma aceita \"parece que escalou\" ou \"o failover pareceu rápido\" como resultado — cada uma tem um número, e a quinta é a que mais gente pula."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medicoes; nenhuma conclusao vem de \"parece que funcionou\".\nset -euo pipefail\nCLUSTER=ffv-lab-aurora\n\n# -- Prova 1: a capacidade acompanha a carga, nao fica fixa ------------------\n# Gere trafego crescente por 10 min e observe ServerlessDatabaseCapacity subir\n# em incrementos — nao em um unico salto.\naws cloudwatch get-metric-statistics \\\n  --namespace AWS/RDS --metric-name ServerlessDatabaseCapacity \\\n  --dimensions Name=DBClusterIdentifier,Value=\"$CLUSTER\" \\\n  --start-time \"$(date -u -d '15 min ago' +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --period 60 --statistics Average Maximum --output table\n\n# -- Prova 2: escrever no reader endpoint falha no banco, nao na aplicacao ---\n# Deve falhar com erro de transacao somente leitura do proprio PostgreSQL.\nENDPOINT_LEITURA=$(terraform output -raw endpoint_leitura)\npsql \"host=$ENDPOINT_LEITURA dbname=pedidos user=app_admin sslmode=require\" \\\n  -c \"INSERT INTO pedidos (id) VALUES (gen_random_uuid());\" 2>&1 \\\n  | grep -qi \"read-only transaction\" \\\n  && echo \"OK: o reader recusou a escrita\" \\\n  || echo \"FALHA DA PROVA: a escrita nao deveria ter sido aceita\"\n\n# -- Prova 3: o failover ensaiado, com carga real em andamento ---------------\n# Um laco de escrita roda enquanto o failover e disparado a mao. O que importa\n# e o intervalo entre a ULTIMA escrita aceita e a PRIMEIRA aceita depois.\n( i=0; while true; do\n    if psql \"$(terraform output -raw endpoint_escrita)\" -c \\\n        \"INSERT INTO pedidos (id) VALUES (gen_random_uuid());\" >/dev/null 2>&1; then\n      echo \"$(date +%T.%N) OK $i\"\n    else\n      echo \"$(date +%T.%N) FALHA $i\"\n    fi\n    i=$((i+1)); sleep 0.2\n  done ) > /tmp/janela-failover.log &\nLACO=$!\naws rds failover-db-cluster --db-cluster-identifier \"$CLUSTER\"\naws rds wait db-cluster-available --db-cluster-identifier \"$CLUSTER\"\nsleep 30; kill $LACO\n# Conte as linhas \"FALHA\" consecutivas no log — multiplicado por 0,2 s, isso\n# e a janela de indisponibilidade medida. Na Cadencia: 9 falhas seguidas,\n# cerca de 1,8 s — dentro dos \"tipicamente abaixo de 30 s\" da documentacao,\n# mas o numero exato so existe porque foi medido, nao presumido.\ngrep -c FALHA /tmp/janela-failover.log || true\n\n# -- Prova 4: o reader promovido ja nasceu do tamanho certo -------------------\n# Apos o failover, confira que o NOVO writer (o reader promovido) nao passou\n# por um salto de ACU logo em seguida — ele ja estava no tamanho do writer antigo.\naws cloudwatch get-metric-statistics \\\n  --namespace AWS/RDS --metric-name ServerlessDatabaseCapacity \\\n  --dimensions Name=DBClusterIdentifier,Value=\"$CLUSTER\" \\\n  --start-time \"$(date -u -d '5 min ago' +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --period 30 --statistics Average --output table\n\n# -- Prova 5: o alarme de teto sustentado dispara de verdade ------------------\n# Gere carga sintetica que sustente 90% do teto por 30 min (ou reduza o teto\n# temporariamente para testar) e confirme o estado do alarme.\naws cloudwatch describe-alarms \\\n  --alarm-names \"ffv-lab-aurora-acu-no-teto\" \\\n  --query \"MetricAlarms[0].StateValue\" --output text"
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Capacidade acompanha carga",
+                "`ServerlessDatabaseCapacity` em janela de tráfego crescente",
+                "a curva sobe em incrementos, acompanhando a carga gerada",
+                "capacidade plana com carga variando indica que o piso e o teto estão iguais, ou muito próximos"
+              ],
+              [
+                "2 · Reader recusa escrita",
+                "INSERT via reader endpoint",
+                "erro de transação somente leitura do PostgreSQL",
+                "se a escrita for aceita, o endpoint usado não é o reader — confira a string de conexão"
+              ],
+              [
+                "3 · Janela de failover medida",
+                "laço de escrita durante `failover-db-cluster`",
+                "um número de segundos, não uma sensação",
+                "ausência de qualquer falha pode indicar que o laço não estava realmente tocando o writer"
+              ],
+              [
+                "4 · Reader promovido não salta de ACU",
+                "`ServerlessDatabaseCapacity` logo após o failover",
+                "a capacidade do novo writer já estava no patamar anterior",
+                "um salto grande após o failover indica tier de promoção diferente de 0"
+              ],
+              [
+                "5 · Alarme de teto dispara",
+                "`describe-alarms` após carga sustentada",
+                "estado `ALARM`",
+                "estado `INSUFFICIENT_DATA` prolongado indica dimensão errada no alarme"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três acontecem de verdade na operação de um cluster Serverless v2, e as três se parecem no sintoma superficial — \"o banco está lento\" ou \"o banco não responde\". O que as separa é onde se olha."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Piso de ACU baixo demais para o conjunto quente",
+                "reduza `acu_minimo` para 0,5 num cluster com o índice do histórico grande",
+                "latência do histórico sobe de forma intermitente, mesmo sem pico de tráfego",
+                "`ServerlessDatabaseCapacity` oscilando perto do piso, correlacionado com `ReadLatency`",
+                "elevar o piso para caber o conjunto de dados quente, medido por `BufferCacheHitRatio`"
+              ],
+              [
+                "Teto de ACU alcançado por consulta ruim, não por tráfego real",
+                "rode uma consulta sem índice sobre a tabela inteira em paralelo ao tráfego normal",
+                "`ACUUtilization` sustentado perto de 100%, latência de TODAS as consultas sobe junto",
+                "`Performance Insights` mostrando uma consulta dominando o tempo de espera",
+                "corrigir o índice ou mover a consulta para um reader isolado — não subir o teto"
+              ],
+              [
+                "Aplicação sem retry após failover",
+                "dispare `failover-db-cluster` sem a pipeline de resiliência do C# ativa",
+                "uma rajada de exceções de conexão na aplicação, que não se recupera sozinha",
+                "log da aplicação mostrando `NpgsqlException` sem nova tentativa em seguida",
+                "pipeline de retry com backoff e jitter, como na seção de construção"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A falha que o alarme de ACU não pega",
+            "content": "O alarme deste módulo observa capacidade SUSTENTADA perto do teto — ele não distingue tráfego real de consulta ruim. Uma campanha legítima e uma consulta sem índice acionam o MESMO alarme. É por isso que a prova 5 existe ao lado do `Performance Insights`: o alarme diz que algo está caro; só o `Performance Insights` diz o quê."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25_0",
+      "type": "quiz",
+      "position": 13,
+      "data": {
+        "question": "Seu cluster Aurora Serverless v2 atende tráfego constante e tem um índice quente de histórico de pedidos. Você configura o piso em 0,5 ACU \"para economizar ao máximo\". Por que isso é arriscado?",
+        "options": [
+          "Porque o Aurora não permite escalar para cima a partir de um piso tão baixo",
+          "Porque o buffer cache é descartado durante a ociosidade no piso, e a próxima consulta paga o custo de reaquecê-lo do disco",
+          "Porque o piso de 0,5 ACU não é suportado em clusters Aurora PostgreSQL, apenas em Aurora MySQL",
+          "Porque abaixo de 2 ACU o Aurora desliga automaticamente qualquer réplica de leitura associada"
+        ],
+        "correctIndex": 1,
+        "explanation": "O piso de capacidade determina quanta memória — e portanto quanto buffer cache — o cluster mantém quando está ocioso. Num piso de 0,5 ACU (cerca de 1 GiB), um índice quente maior que isso é parcialmente descartado a cada janela sem tráfego, e a consulta seguinte paga o custo de trazê-lo de volta do disco — latência intermitente sem relação aparente com volume. A correção é dimensionar o piso pelo conjunto de dados realmente acessado com frequência, não pelo menor valor permitido.\n\nA primeira alternativa inventa uma restrição que não existe: nada impede o Aurora Serverless v2 de escalar para cima a partir de qualquer piso — a escala é contínua em ambas as direções, dentro da faixa configurada. A terceira erra o fato técnico: a faixa de 0,5 a 128 ou 256 ACU é suportada tanto em Aurora MySQL quanto em Aurora PostgreSQL, a partir das versões de engine compatíveis. A quarta inventa um comportamento automático que não existe — readers escalam de acordo com o próprio tier de promoção, e não são desligados por o writer estar num piso baixo."
+      }
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 14,
+      "data": {
+        "title": "Segurança: o que muda quando a capacidade é elástica"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Capacidade que escala sozinha desloca um risco que capacidade fixa não tinha: alguém com acesso de escrita pode gerar carga que a conta paga automaticamente, sem precisar pedir permissão para redimensionar nada."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Consulta ou laço mal escrito sustenta o teto de ACU por horas",
+                "média",
+                "médio",
+                "alarme de `ACUUtilization` sustentada (seção de construção); revisão de índice em code review",
+                "alarme em `ALARM` combinado com `Performance Insights`",
+                "identificar a consulta dominante e corrigi-la ou isolá-la num reader"
+              ],
+              [
+                "Failover disparado sem necessidade, gerando indisponibilidade evitável",
+                "baixa",
+                "médio",
+                "`rds:FailoverDBCluster` restrito por IAM a um papel de operação, não à role de deploy",
+                "CloudTrail em `FailoverDBCluster` fora de uma janela de ensaio programada",
+                "auditar quem disparou e por quê; o próprio failover já resolve a indisponibilidade em segundos"
+              ],
+              [
+                "Escrita aceita pelo endpoint errado por engano de configuração",
+                "baixa",
+                "alto",
+                "o PostgreSQL recusa escrita em réplica somente leitura — é proteção do próprio banco",
+                "log de aplicação com erro de transação somente leitura em produção",
+                "corrigir a string de conexão; nenhum dado foi perdido, porque a escrita nunca foi aceita"
+              ],
+              [
+                "Credencial mestra do cluster exposta",
+                "baixa",
+                "alto",
+                "`manage_master_user_password` — segredo gerado e rotacionado pelo Secrets Manager, herdado do L14",
+                "CloudTrail em acesso ao segredo fora dos papéis esperados",
+                "rotacionar via Secrets Manager; a aplicação lê por ARN e não precisa de deploy novo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O que o menor privilégio aqui separa, e por que separa",
+            "content": "A ação de disparar um failover (`rds:FailoverDBCluster`) e a de aplicar mudança de infraestrutura (`terraform apply` sobre o cluster) não deveriam pertencer à mesma identidade em produção. Um ensaio de failover é uma operação de rotina que uma pessoa de plantão dispara sem tocar Terraform nenhum; separar os dois papéis evita que uma credencial de deploy vazada também controle a disponibilidade do banco."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel de capacidade responde"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um painel de Aurora Serverless v2 tem uma função estreita: dizer se a capacidade está acompanhando a carga, e se um failover deixaria o sistema pronto. Métrica que não ajuda nessa decisão pertence a outro painel."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "A capacidade está acompanhando a carga?",
+                "`ServerlessDatabaseCapacity` do writer",
+                "sobe com tráfego, desce com ociosidade",
+                "variação diária visível; capacidade plana é suspeita"
+              ],
+              [
+                "Estamos perto do teto por tráfego real ou por consulta ruim?",
+                "`ACUUtilization` + Performance Insights",
+                "utilização sustentada acima de 90% sem melhora de throughput indica gargalo, não capacidade",
+                "≥ 90% por 30 min"
+              ],
+              [
+                "O reader está pronto para assumir agora?",
+                "`ServerlessDatabaseCapacity` do reader vs. do writer",
+                "divergência grande indica tier de promoção diferente de 0",
+                "diferença > 20% sustentada"
+              ],
+              [
+                "O buffer cache está sofrendo com o piso atual?",
+                "`BufferCacheHitRatio`",
+                "queda after descida de capacidade indica piso baixo para o conjunto quente",
+                "< 95% fora de janela de escala"
+              ],
+              [
+                "Um failover aconteceu, e quanto tempo levou?",
+                "evento `RDS DB Cluster Event` categoria `failover`",
+                "confirma failover automático e ancora a duração real observada",
+                "qualquer ocorrência fora de ensaio programado"
+              ],
+              [
+                "O custo está dentro do esperado?",
+                "`ServerlessDatabaseCapacity` integrada no tempo (ACU-hora)",
+                "tendência muito acima do padrão histórico indica teto sendo usado sem necessidade",
+                "revisão semanal"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana logo depois do failover",
+            "content": "`DatabaseConnections` cai a zero no instante da promoção e sobe de novo conforme a aplicação reconecta — um alarme ingênuo de \"conexões em zero\" dispararia em todo failover normal, inclusive nos ensaiados de propósito. O sinal que importa é a DURAÇÃO da queda, não a queda em si."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Escala: 10 lojas, 900, e a próxima ordem de grandeza"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece com a capacidade",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 lojas, carga estável",
+                "o cluster passa a maior parte do tempo perto do piso",
+                "nada; é sub-utilização saudável de um piso bem dimensionado",
+                "nada"
+              ],
+              [
+                "900 lojas, pico de campanha 20×",
+                "capacidade sobe de ~2 para ~15 ACU em minutos",
+                "é o cenário deste laboratório",
+                "piso e teto medidos, como construído aqui"
+              ],
+              [
+                "9 mil lojas, pico ainda maior",
+                "o teto de 32 ACU pode não bastar mais",
+                "consultas que hoje cabem num reader único passam a competir por CPU",
+                "remedir o pico, considerar mais de um reader (até 15) para distribuir leitura"
+              ],
+              [
+                "Pico fora do padrão sazonal (campanha maior que qualquer uma anterior)",
+                "capacidade sobe até o teto e para",
+                "requisições começam a esperar fila de CPU no writer, sem erro explícito",
+                "alarme de ACU no teto (seção de construção) avisa; ajuste o teto e remeça"
+              ],
+              [
+                "Falha de AZ durante o pico",
+                "o reader em outra AZ assume via failover",
+                "a capacidade do writer novo é a do reader promovido, que pode ser menor que o pico",
+                "reader em tier 0 acompanha o writer; ainda assim, ensaie o failover DURANTE pico, não só em carga normal"
+              ],
+              [
+                "Consulta com transação muito longa (minutos)",
+                "a capacidade tende a não descer enquanto ela roda",
+                "custo elevado por mais tempo que o necessário — não indisponibilidade",
+                "identificar e limitar transações longas com `statement_timeout`; não é o mesmo problema que \"scaling point\""
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O gargalo que só aparece acima de 15 réplicas",
+            "content": "Aurora aceita até 15 réplicas por cluster. Uma frota de leitura desse tamanho normalmente indica que a carga de leitura deveria estar em outro lugar — cache (ElastiCache), busca dedicada (OpenSearch) ou uma segunda fonte de verdade — não que falta adicionar a réplica 16."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Custo: o que este laboratório muda na fatura"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o laboratório em que o custo é o próprio requisito, não um efeito colateral. O ganho vem de pagar pela curva em vez de pagar pelo pico o tempo todo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que muda na fatura",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Antes (L14)",
+                "writer + reader `r6g.large`, 24h",
+                "duas instâncias de tamanho fixo, cobrando o pico o dia inteiro",
+                "constante, independente da carga",
+                "nenhuma sem trocar o modelo de capacidade"
+              ],
+              [
+                "Depois, dia normal",
+                "piso 2 ACU na maior parte das 24h",
+                "ACU-hora próximo do piso na maior parte do tempo",
+                "acompanha a curva de CPU medida",
+                "revisar o piso se o conjunto quente crescer"
+              ],
+              [
+                "Depois, dia de campanha",
+                "até 32 ACU por ~2 horas somadas no dia",
+                "ACU-hora mais alto só durante os picos reais",
+                "proporcional à duração da campanha, não ao dia inteiro",
+                "confirmar que o teto não é atingido por consulta ruim"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Capacidade Serverless v2",
+                "ACU-hora, medida por segundo",
+                "o piso é pago o tempo todo — dimensione-o pelo conjunto quente, não por segurança extra"
+              ],
+              [
+                "Armazenamento do volume de cluster",
+                "GB-mês, independente da capacidade de compute",
+                "não cai quando o ACU cai — compute e armazenamento são cobrados separadamente"
+              ],
+              [
+                "Reader em tier de promoção 0 ou 1",
+                "ACU-hora no mínimo igual ao do writer",
+                "é o preço explícito de prontidão para failover — tier mais alto custa menos e falha pior"
+              ],
+              [
+                "I/O do volume (se Aurora Standard)",
+                "por milhão de requisições de I/O",
+                "Aurora I/O-Optimized remove essa cobrança e compensa quando I/O passa de 25% do gasto total"
+              ],
+              [
+                "Backup além do período de retenção padrão",
+                "GB-mês retido",
+                "retenção de 7 dias herdada do L14; aumentar tem custo direto e proporcional"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho de custo que a curva prova, não a intuição",
+            "content": "Comparar ACU-hora integrado ao longo de uma semana antes e depois da migração é o único jeito honesto de saber quanto se economizou — \"parece mais barato\" não é número. Para a Cadência, o piso de 2 ACU na maior parte do dia contra duas instâncias `r6g.large` fixas é a diferença que sustenta a decisão deste módulo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "piso e teto documentados com a medição que os gerou; failover ensaiado e cronometrado",
+                "o ensaio cobre uma falha controlada, não uma AZ inteira caindo de verdade",
+                "experimento de injeção de falha de AZ (L57)",
+                "média"
+              ],
+              [
+                "Segurança",
+                "segredo mestre gerenciado, IAM separado entre failover e deploy",
+                "a política de failover ainda não distingue ensaio programado de disparo ad-hoc",
+                "janela de manutenção aprovada para ensaios (parte do L54)",
+                "baixa"
+              ],
+              [
+                "Confiabilidade",
+                "reader em tier 0, pronto para assumir; failover medido, não estimado",
+                "um único reader é um único ponto de redundância — falha dupla simultânea ainda derruba",
+                "segundo reader em outra AZ para tolerar duas falhas",
+                "média"
+              ],
+              [
+                "Eficiência de performance",
+                "capacidade acompanha a carga em incrementos finos, sem operação manual",
+                "consulta sem índice ainda consome ACU real antes de qualquer alarme disparar",
+                "revisão de índice como parte do processo de deploy, não reativa",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "paga pela curva medida, não pelo pico constante",
+                "o piso de 2 ACU é decisão de hoje; o conjunto quente cresce com o volume de pedidos",
+                "revisar o piso trimestralmente com o mesmo script de medição",
+                "alta"
+              ],
+              [
+                "Sustentabilidade",
+                "capacidade ociosa reduzida de ~90% do tempo para o piso necessário",
+                "compute não usado ainda existe brevemente durante a descida da escala",
+                "já é o melhor disponível no modelo atual; sem ação adicional",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho de novo. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "De um cluster fixo à capacidade preditiva — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Aurora provisionado único, sem reader, capacidade pequena e fixa. É onde qualquer laboratório de banco começa.",
+                "note": "Risco resolvido: nenhum. Novo risco: não sobrevive a um pico real, e a única resposta a \"está lento\" é redimensionar manualmente. Custo: o mais baixo — sem excedente nem redundância."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Serverless v2 com piso e teto derivados de medição, reader em tier de promoção 0, failover ensaiado com tempo cronometrado.",
+                "note": "Risco resolvido: pagar o pico 24 horas, e não saber quanto tempo um failover realmente leva. Novo risco: consulta ruim sustenta o teto sem violar limite nenhum do Aurora. Custo: acompanha a curva medida."
+              },
+              {
+                "label": "Nível 3 — RDS Proxy na frente do cluster",
+                "instruction": "Pool de conexões gerenciado entre a aplicação e o Aurora, com reconexão mais rápida após failover e proteção contra esgotamento de `max_connections` durante escala rápida.",
+                "note": "Risco resolvido: rajada de reconexão simultânea sobrecarregando o writer recém-promovido. Novo risco: mais um componente gerenciado no caminho crítico de toda consulta. Custo: por hora do proxy, por instância."
+              },
+              {
+                "label": "Nível 4 — Múltiplos readers, com propósitos distintos",
+                "instruction": "Um reader em tier 0 para HA (como aqui) e um ou mais readers em tier 2+ escalando de forma independente, dedicados a relatório pesado — sem competir por capacidade com o caminho de failover.",
+                "note": "Risco resolvido: relatório pesado consumindo a capacidade que deveria estar reservada para assumir o writer. Novo risco: a aplicação precisa rotear corretamente cada consulta para o reader certo. Custo: mais uma instância serverless mínima."
+              },
+              {
+                "label": "Nível 5 — Aurora Global Database",
+                "instruction": "Replicação assíncrona entre regiões, com uma região secundária pronta para assumir em caso de indisponibilidade regional (L58).",
+                "note": "Risco resolvido: falha da REGIÃO inteira, que nenhum failover dentro de uma região cobre. Novo risco: replicação entre regiões tem latência própria, e o RPO deixa de ser zero. Custo: réplica secundária mais transferência de dados entre regiões."
+              },
+              {
+                "label": "Nível 6 — Dados e capacidade preditiva",
+                "instruction": "Usar o histórico de `ServerlessDatabaseCapacity` e o calendário de campanhas para prever o próximo teto necessário antes de ele ser alcançado, em vez de reagir ao alarme.",
+                "note": "Risco resolvido: tratar toda campanha como igualmente imprevisível quando o histórico já mostra o padrão. Novo risco: previsão errada gera falsa confiança — o alarme reativo continua sendo a rede de segurança. Custo: baixo; o dado já existe no CloudWatch."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "RDS Proxy no nível 3 resolve um problema que só aparece depois de a aplicação já depender de reconexão rápida pós-failover — que é o nível 2. Quem instala o proxy antes de medir piso e teto está resolvendo esgotamento de conexão de um cluster que ainda não sabe qual capacidade realmente precisa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não decide o piso nem o teto de ACU, e forçá-la seria o antipadrão que a própria série critica. As duas perguntas centrais — \"quanto de conjunto quente preciso manter aquecido\" e \"qual foi o pico real medido\" — têm resposta por medição direta. Um modelo não melhora nenhuma das duas: elas são leitura de métrica e aritmética."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar onde IA acrescentaria valor real, e ele é modesto: prever o TAMANHO da próxima campanha a partir do histórico de marketing e do padrão de campanhas anteriores, para revisar o teto ANTES do evento em vez de depois de um alarme. Isso é diferente de decidir a capacidade em tempo real — o Aurora já faz isso sozinho, em segundos, sem esperar previsão nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "antecipar o tamanho de uma campanha específica antes de ela começar"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "uma regra simples — \"revise o teto se a campanha anunciada supera a maior já medida\" — cobre a maior parte dos casos; IA só se justificaria com histórico de dezenas de campanhas com características variadas"
+              ],
+              [
+                "De onde viriam os dados?",
+                "`ServerlessDatabaseCapacity` histórico do CloudWatch, calendário de campanhas e volume de cupons emitidos, que já existem no sistema de marketing"
+              ],
+              [
+                "Qual o risco?",
+                "prever teto abaixo do necessário por excesso de confiança no modelo, quando o alarme reativo já cobria o caso — a previsão não pode SUBSTITUIR o alarme, só antecipá-lo"
+              ],
+              [
+                "Por que não agora?",
+                "a Cadência tem poucas campanhas medidas até aqui; um modelo treinado com menos de uma dezena de eventos é ajuste de curva, não previsão"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b19_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"decidir o teto de ACU em tempo real, com base no padrão de tráfego\" troca um mecanismo determinístico e já rápido — o Aurora escala sozinho em segundos, sem esperar ponto de quietude nenhum — por um probabilístico e mais lento. Onde a escala automática já resolve o problema, IA só acrescenta latência de decisão e a chance de errar com confiança."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Configurar o teto de ACU alto \"para não travar durante transação longa\"",
+                "confunde o comportamento do Serverless v1 (scaling points) com o v2",
+                "o v2 não espera ponto de quietude — o teto alto não resolve nada que existisse, só paga mais",
+                "fatura de ACU-hora acima do que o tráfego medido justificaria",
+                "dimensionar o teto pelo pico medido, com margem declarada",
+                "nunca; é sempre um valor herdado de um medo que não se aplica ao v2"
+              ],
+              [
+                "Piso de ACU em 0 ou 0,5 num cluster de tráfego constante",
+                "parece a economia óbvia, e a documentação até menciona como tentador",
+                "descarta o buffer cache a cada ociosidade; a primeira consulta depois paga o preço do disco",
+                "latência intermitente sem relação aparente com volume de tráfego",
+                "piso dimensionado pelo conjunto de dados quente, medido por `BufferCacheHitRatio`",
+                "cluster genuinamente esporádico, sem consulta latência-sensível — dev/teste, por exemplo"
+              ],
+              [
+                "Reader em tier de promoção 2+ quando failover rápido é requisito",
+                "custa menos capacidade mínima constante",
+                "o reader pode estar subdimensionado no instante do failover e precisar escalar depois de já ser writer",
+                "failover tecnicamente concluído, mas com latência elevada logo em seguida",
+                "tier 0 ou 1 quando a velocidade de failover é o requisito declarado",
+                "reader dedicado a relatório, onde failover rápido não é o papel dele"
+              ],
+              [
+                "Aplicação sem retry após reconexão a um endpoint que mudou de writer",
+                "o cluster endpoint \"parece\" estável, então ninguém trata reconexão como caso esperado",
+                "a primeira exceção de conexão após um failover derruba a requisição sem tentar de novo",
+                "rajada de erro 500 durante e logo após um failover, mesmo bem-sucedido do lado do banco",
+                "pipeline de retry com backoff e jitter, amarrada ao pool de escrita",
+                "nunca; failover é evento esperado, não excepcional"
+              ],
+              [
+                "Testar failover sem carga real em andamento",
+                "é mais simples disparar o comando e ver se o cluster volta",
+                "o tempo medido sem carga esconde o efeito de reconexão simultânea de múltiplas instâncias da aplicação",
+                "\"o failover funcionou no teste\" e depois demora visivelmente mais em produção",
+                "ensaiar com um laço de escrita real, como na seção de provas",
+                "primeira verificação rápida de que o mecanismo básico funciona, antes do ensaio completo"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Latência sobe sem relação com volume de tráfego",
+                "piso de ACU abaixo do conjunto de dados quente",
+                "compare quedas de `BufferCacheHitRatio` com o momento em que a capacidade desceu ao piso",
+                "`ServerlessDatabaseCapacity` vs. `BufferCacheHitRatio`",
+                "elevar o piso para caber o conjunto quente medido"
+              ],
+              [
+                "Capacidade sustentada perto do teto sem pico de tráfego visível",
+                "consulta sem índice ou em laço consumindo ACU",
+                "abra o Performance Insights e ordene por tempo de espera",
+                "Performance Insights, `pg_stat_statements`",
+                "corrigir o índice; considerar mover a consulta para um reader isolado"
+              ],
+              [
+                "Erro de \"read-only transaction\" em produção",
+                "a aplicação está escrevendo pelo reader endpoint",
+                "confira a string de conexão do caminho que gerou o erro",
+                "configuração da aplicação, não o banco",
+                "apontar o caminho de escrita para o cluster endpoint"
+              ],
+              [
+                "Rajada de exceções de conexão logo após um failover",
+                "ausência de retry com backoff, ou backoff sem jitter",
+                "meça o intervalo entre as exceções e veja se são simultâneas entre instâncias",
+                "log da aplicação, timestamps correlacionados entre réplicas do serviço",
+                "pipeline de retry com backoff exponencial e jitter"
+              ],
+              [
+                "Failover demora visivelmente mais que o documentado",
+                "reader em tier de promoção diferente de 0, ou ausência de reader",
+                "confira `PromotionTier` de todas as instâncias do cluster",
+                "`describe-db-instances` → `PromotionTier`",
+                "garantir ao menos um reader em tier 0 ou 1 em AZ diferente do writer"
+              ],
+              [
+                "Fatura de ACU-hora muito acima do padrão histórico, sem campanha",
+                "teto atingido por engano de configuração ou consulta introduzida em deploy recente",
+                "compare `ServerlessDatabaseCapacity` integrado por semana contra o histórico",
+                "CloudWatch, correlacionado com o log de deploys",
+                "identificar o deploy que mudou o padrão de consulta e reverter ou corrigir"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em piso ou teto, pergunte: a capacidade está subindo por TRÁFEGO ou por CONSULTA RUIM? `ServerlessDatabaseCapacity` sozinho não distingue os dois — só o Performance Insights, olhando o que está consumindo o tempo, separa \"a campanha chegou\" de \"alguém introduziu uma varredura de tabela inteira\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A troca para Serverless v2 não acrescenta recurso novo além do que o L14 já criava — o que muda é a classe de instância e a configuração de escala. A limpeza herda os cuidados do L14, com um item adicional: os alarmes deste módulo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Remova o deletion_protection ANTES do destroy — ele existe para impedir\n#    exclusao acidental, nao para bloquear uma limpeza deliberada.\nterraform apply -var=\"deletion_protection=false\" -auto-approve\n\n# 2. Derrube o que o Terraform administra.\nterraform destroy -auto-approve\n\n# 3. SNAPSHOT FINAL: o destroy CRIA um, por causa de skip_final_snapshot=false.\n#    Ele sobrevive ao destroy de proposito, e cobra armazenamento enquanto existir.\naws rds describe-db-cluster-snapshots \\\n  --query \"DBClusterSnapshots[?contains(DBClusterSnapshotIdentifier, 'ffv-lab-aurora')].DBClusterSnapshotIdentifier\" \\\n  --output table\n# Apague so depois de confirmar que ninguem precisa dele:\n# aws rds delete-db-cluster-snapshot --db-cluster-snapshot-identifier <nome>\n\n# 4. ALARMES criados fora do Terraform, se algum foi ajustado a mao no console.\naws cloudwatch delete-alarms --alarm-names ffv-lab-aurora-acu-no-teto 2>/dev/null || true\n\n# 5. SEGREDO NO SECRETS MANAGER: o gerenciado pelo cluster tem exclusao propria,\n#    com periodo de retencao antes de apagar de verdade.\naws secretsmanager list-secrets \\\n  --query \"SecretList[?contains(Name, 'ffv-lab-aurora')].Name\" --output table\n\n# 6. Prova final: nada com o nome do projeto de pe, alem do snapshot retido.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table"
+          }
+        },
+        {
+          "id": "b22_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Desligar deletion_protection sem confirmar o snapshot é perda irreversível",
+            "content": "Uma vez que o `terraform destroy` roda com `skip_final_snapshot = false`, o cluster some e o snapshot final é o ÚNICO caminho de volta. Se alguém apagar esse snapshot sem confirmar antes que não é mais necessário, os dados da Cadência não existem em lugar nenhum — não há segunda chance depois desse ponto. Confirme o nome do snapshot antes de qualquer `delete-db-cluster-snapshot`."
+          }
+        },
+        {
+          "id": "b22_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Cluster e instâncias Serverless v2",
+                "sim",
+                "não",
+                "compute para com o cluster"
+              ],
+              [
+                "Snapshot final",
+                "não — é CRIADO pelo destroy",
+                "sim, GB-mês",
+                "existe justamente para sobreviver à exclusão; é a rede de segurança do próprio destroy"
+              ],
+              [
+                "Segredo do Secrets Manager",
+                "depende da política de exclusão do recurso",
+                "sim, por segredo-mês durante o período de retenção",
+                "exclusão tem espera padrão antes de apagar de verdade — é proteção contra remoção acidental"
+              ],
+              [
+                "Alarme de CloudWatch",
+                "sim, se declarado em Terraform",
+                "centavos",
+                "alarme ajustado à mão no console não aparece no estado do Terraform"
+              ],
+              [
+                "Grupo de sub-rede e de segurança do L01/L14",
+                "sim",
+                "não diretamente",
+                "mas outros recursos do L01 (ALB, NAT) continuam cobrando se você não seguiu a limpeza deles"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Fatura fixa para uma carga que varia 20×",
+                "`db.serverless` com piso e teto medidos",
+                "a capacidade acompanha a curva; ninguém paga o tamanho do pico às 3 da manhã"
+              ],
+              [
+                "Medo de transação longa travando a escala",
+                "confirmação de que \"scaling point\" é do v1",
+                "o v2 escala com transação em andamento — o teto não precisa ser inflado por esse medo"
+              ],
+              [
+                "Piso baixo esvaziando o buffer cache",
+                "piso dimensionado pelo conjunto de dados quente",
+                "evita reaquecer o índice do histórico a cada ociosidade"
+              ],
+              [
+                "Teto sem controle de custo",
+                "alarme de ACU sustentada perto do teto",
+                "separa tráfego real de consulta ruim antes de virar surpresa na fatura"
+              ],
+              [
+                "Escrever no endpoint errado",
+                "dois pools, dois endpoints, sem compartilhamento",
+                "o cluster endpoint sempre é o writer atual; o reader recusa escrita no próprio banco"
+              ],
+              [
+                "Failover com tempo desconhecido",
+                "ensaio cronometrado com carga real em andamento",
+                "transforma \"deve ser rápido\" em um número escrito e comparável ao documentado"
+              ],
+              [
+                "Reader subdimensionado no instante do failover",
+                "tier de promoção 0",
+                "o piso do reader acompanha a capacidade atual do writer, pronto para assumir"
+              ],
+              [
+                "Rajada de reconexão derrubando o writer novo",
+                "retry com backoff e jitter",
+                "espalha as tentativas no tempo em vez de concentrá-las no pior momento"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Fatura de madrugada pagando o pico",
+                "capacidade Serverless v2 com piso baixo",
+                "consulta ruim sustentando o teto — isso é o alarme de ACU"
+              ],
+              [
+                "Falha do writer",
+                "reader em tier 0, failover automático",
+                "falha simultânea de duas AZs — precisaria de segundo reader (L57/L58)"
+              ],
+              [
+                "Escrita no endpoint errado",
+                "réplica somente leitura no PostgreSQL",
+                "a aplicação continuar tentando o endpoint errado sem alertar ninguém"
+              ],
+              [
+                "Reconexão em massa pós-failover",
+                "retry com backoff e jitter",
+                "writer novo genuinamente subdimensionado — isso é o tier de promoção"
+              ],
+              [
+                "Fatura sem controle de teto",
+                "alarme de ACU sustentada",
+                "a causa raiz da consulta ruim; o alarme avisa, não corrige"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "A curva de carga é medida por pelo menos uma semana antes de qualquer número ser fixado.",
+              "O piso de ACU é derivado do conjunto de dados quente, para não esvaziar o buffer cache.",
+              "O teto de ACU é derivado do pico medido, com margem declarada — não de um número redondo.",
+              "O Terraform troca a classe fixa por `db.serverless` e declara a faixa no cluster.",
+              "O reader entra em tier de promoção 0, para nascer do tamanho do writer.",
+              "A aplicação usa dois pools: escrita no cluster endpoint, leitura no reader endpoint.",
+              "Uma pipeline de retry com backoff e jitter cobre a reconexão pós-failover.",
+              "O failover é disparado a mão, com um laço de escrita real medindo a janela.",
+              "O tempo medido é comparado ao documentado — não presumido como igual.",
+              "Um alarme de ACU sustentada perto do teto impede que o teto vire cheque em branco."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "O Aurora Serverless v2 escala em degraus, como trocar de classe de instância?",
+            "answer": "Não. A escala acontece em incrementos que começam em 0,5 ACU, e o tamanho de cada incremento cresce conforme a capacidade atual — quanto maior o cluster já está, mais rápido ele sobe. Isso é estruturalmente diferente de trocar `db.r6g.large` por `db.r6g.xlarge`, que dobra a capacidade de uma vez e é uma operação de manutenção sobre a classe de instância. No Serverless v2, a capacidade é medida a cada segundo e ajustada continuamente dentro do piso e do teto configurados, sem exigir troca de classe nem intervenção manual."
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Posso usar o endpoint de leitura do Aurora para gravar dados?",
+            "answer": "Não, e a tentativa falha de forma segura: cada instância leitora está aberta em modo somente leitura no próprio PostgreSQL, então um `INSERT` ou `UPDATE` enviado pelo reader endpoint é recusado pelo banco com um erro de transação somente leitura, antes de qualquer escrita ser tentada. Nenhum dado é corrompido ou perdido — o efeito é uma exceção na aplicação, não uma inconsistência no banco. A correção é apontar o caminho de escrita para o cluster endpoint, que sempre resolve para o writer atual."
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Por que o failover do Aurora é mais rápido que o do RDS Multi-AZ clássico?",
+            "answer": "Porque o Aurora não precisa copiar dado nenhum durante a promoção. Writer e réplicas leem o MESMO volume de cluster, compartilhado e replicado em três zonas de disponibilidade na camada de armazenamento — promover uma réplica a writer é apontar uma conexão nova para uma instância que já lê os mesmos dados, não esperar uma cópia \"alcançar\" o primário. A documentação da AWS registra failover tipicamente abaixo de 60 segundos, com frequência abaixo de 30, quando existe pelo menos uma réplica disponível — contra até 10 minutos quando é preciso recriar o writer do zero, sem nenhuma réplica no cluster."
+          }
+        },
+        {
+          "id": "b24_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Qual valor devo usar como ACU mínimo do Aurora Serverless v2?",
+            "answer": "Derive do conjunto de dados acessado com frequência — índices e tabelas quentes — não de um valor padrão \"seguro\". Cada ACU corresponde a cerca de 2 GiB de memória; um piso baixo demais descarta parte desse conjunto do buffer cache a cada período ocioso, e a próxima consulta paga o custo de reaquecê-lo a partir do disco. A própria documentação da AWS recomenda dimensionar o piso pelo tamanho do working set que a aplicação precisa manter em memória, e cita pisos mínimos específicos para recursos como Performance Insights (2 ACU) e Aurora Global Database (8 ACU) na região primária."
+          }
+        },
+        {
+          "id": "b24_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Uma transação longa trava a escala do Aurora Serverless v2?",
+            "answer": "Não no v2 — e essa é uma confusão comum com o Serverless v1. O v1 tinha o conceito de \"scaling point\", um instante seguro para escalar que transação longa, tabela travada ou tabela temporária podiam impedir de existir. A documentação atual do v2 afirma o oposto de forma explícita: a escala acontece com conexões abertas, transações em andamento, tabelas travadas e tabelas temporárias em uso, sem esperar um ponto de quietude e sem interromper operação nenhuma. O que uma transação longa PODE atrasar é a escala PARA BAIXO, porque a carga aparente permanece alta enquanto ela não termina — um efeito de custo, não de disponibilidade."
+          }
+        },
+        {
+          "id": "b24_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "O reader do Aurora Serverless v2 escala junto com o writer?",
+            "answer": "Depende do tier de promoção configurado. Readers em tier 0 ou 1 têm o piso de capacidade atrelado à capacidade ATUAL do writer — eles ficam sempre do mesmo tamanho ou maiores, prontos para assumir a carga inteira sem precisar escalar depois de uma promoção. Readers em tier 2 a 15 escalam de forma independente, dentro da faixa geral do cluster, e podem ficar menores que o writer quando a carga de leitura deles é baixa — o que os torna mais baratos, mas potencialmente subdimensionados se forem promovidos num failover."
+          }
+        },
+        {
+          "id": "b24_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Aurora Serverless v2 pode escalar até zero ACU?",
+            "answer": "Pode, em versões de engine que suportam o recurso de pausa automática — a capacidade desce a zero e o cluster para de cobrar compute enquanto ocioso, retomando na próxima conexão. Para um cluster com tráfego constante, como o da Cadência, isso não é desejável: a primeira requisição depois de um período pausado espera o cluster retomar, o que introduz uma latência perceptível que capacidade sempre ativa não tem. Zero ACU serve bem a ambientes genuinamente esporádicos — desenvolvimento e teste, por exemplo — não a um caminho de produção com requisição a qualquer hora."
+          }
+        },
+        {
+          "id": "b24_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Como faço o failover do meu cluster Aurora sem esperar uma falha real acontecer?",
+            "answer": "Dispare manualmente com o comando de failover do cluster, com carga real em andamento — não com o banco ocioso. Testar sem tráfego esconde o efeito de reconexão simultânea de múltiplas instâncias da aplicação, que costuma alongar a indisponibilidade percebida na prática. Meça o intervalo entre a última escrita aceita antes do failover e a primeira aceita depois; esse número, e não o tempo total do comando, é a janela de indisponibilidade real que os seus usuários sentiriam."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b25_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Uma equipe configura o teto de ACU do cluster bem acima do necessário, \"para não travar durante uma transação longa que o time roda todo fim de mês\". O raciocínio é válido para o Aurora Serverless v2?",
+            "options": [
+              "Sim: tabelas travadas e transações longas ainda impedem a escala no v2, exatamente como no v1",
+              "Não: o v2 escala mesmo com transação em andamento, tabela travada e tabela temporária em uso — \"scaling point\" é um conceito do v1",
+              "Não: o conceito de \"scaling point\" nunca existiu documentado pela AWS, é um mito de blog sobre o Serverless v1",
+              "Sim, mas o efeito só existe para escalar para baixo; escalar para cima nunca é afetado por nada"
+            ],
+            "correctIndex": 1,
+            "explanation": "A documentação oficial do Serverless v2 é explícita: a escala acontece \"while database connections are open, while SQL transactions are in process, while tables are locked, and while temporary tables are in use\", sem esperar um ponto de quietude e sem interromper operação nenhuma. O teto alto \"para não travar\" resolve um problema que o v2 não tem — ele só aumenta o valor máximo que uma consulta ruim poderia sustentar, sem trazer nenhum benefício contra o cenário descrito.\n\nA primeira alternativa aplica ao v2 um comportamento real, mas que pertence especificamente ao Serverless v1: lá, sim, transação longa podia impedir o Aurora de encontrar um \"scaling point\" e forçar escala manual (\"force scaling\") derrubando conexões. A terceira acerta parcialmente — transação longa PODE atrasar a escala PARA BAIXO, porque a carga aparente permanece alta — mas erra ao afirmar que escalar para cima \"nunca é afetado por nada\", ignorando que o efeito real é sobre custo, não sobre disponibilidade, e existe. A quarta inverte a correção: \"scaling point\" é um termo real e documentado do Serverless v1, não um mito — o erro está em aplicá-lo ao v2, não em ele nunca ter existido."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Um cluster Aurora com reader em tier de promoção 0 sofre a queda do writer. Você ensaiou o failover no laboratório e mediu cerca de 2 segundos de escritas rejeitadas. Por que o failover do Aurora tende a ser medido em segundos, e não nos minutos que recriar um banco do zero exigiria?",
+            "options": [
+              "Porque o Aurora copia os dados do writer para o reader em segundos, usando compressão acelerada por hardware",
+              "Porque o tier de promoção 0 desativa temporariamente a validação de integridade transacional durante a troca",
+              "Porque o reader já lê o mesmo volume de cluster compartilhado do writer — promovê-lo é redirecionar conexões, não sincronizar dados",
+              "Porque o Aurora Serverless v2 pausa a aplicação inteira até o novo writer estar pronto, eliminando qualquer erro perceptível"
+            ],
+            "correctIndex": 2,
+            "explanation": "A velocidade vem da arquitetura de armazenamento, não de um atalho no processo de failover. Writer e réplicas se conectam ao MESMO volume de cluster, replicado de forma síncrona em três zonas de disponibilidade na camada de armazenamento — então promover uma réplica a writer é redirecionar conexões para uma instância que já lê os mesmos dados, não esperar uma cópia \"alcançar\" o primário como aconteceria com um standby de réplica independente. Os cerca de 2 segundos medidos no ensaio são o tempo de detectar a falha e redirecionar — não o tempo de mover dado nenhum.\n\nA primeira alternativa inventa um mecanismo de cópia acelerada que não existe: não há cópia de dados durante o failover, porque não há segunda cópia a sincronizar. A terceira inventa um comportamento perigoso e falso — nenhuma etapa do failover do Aurora desativa validação de integridade transacional. A quarta contradiz a própria prova que o laboratório pede para medir: se a aplicação fosse pausada sem erro nenhum, a prova 3 da seção de implantação não teria registrado nenhuma linha \"FALHA\" no log — e ela registrou, porque existe sim uma janela breve de indisponibilidade real, só que curta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b26_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L14 no ar (cluster Aurora writer + reader, ambos servindo a aplicação do L07/L01), noções de PostgreSQL e Terraform"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "como derivar piso e teto de ACU por medição; a diferença entre \"scaling point\" do v1 e o comportamento do v2; cluster endpoint vs. reader endpoint e o que acontece ao inverter os dois; por que o failover do Aurora é rápido, derivado da arquitetura de armazenamento compartilhado; tier de promoção e o que ele custa"
+              ],
+              [
+                "Limitação que fica",
+                "um único reader é um único ponto de redundância — falha simultânea de duas AZs ainda derruba o cluster; e o alarme de ACU não distingue tráfego real de consulta ruim"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L16 — modelagem de tabela única no DynamoDB, que o L14 também deixou para depois"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L58 (DR multi-região com Aurora Global) depende do failover ensaiado aqui como linha de base dentro de uma única região; L57 (chaos: derrubar uma AZ de propósito) usa este cluster como um dos alvos do experimento"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b26_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "How Aurora serverless works",
+                "code": true
+              },
+              {
+                "text": " — arquitetura, unidade de capacidade (ACU) e o texto explícito sobre escala acontecer sem esperar um ponto de quietude; "
+              },
+              {
+                "text": "Performance and scaling for Aurora serverless",
+                "code": true
+              },
+              {
+                "text": " — os fatores recomendados para escolher piso e teto; "
+              },
+              {
+                "text": "Amazon Aurora storage",
+                "code": true
+              },
+              {
+                "text": " — o volume de cluster compartilhado entre writer e réplicas; "
+              },
+              {
+                "text": "High availability for Amazon Aurora",
+                "code": true
+              },
+              {
+                "text": " — o mecanismo e o tempo típico de failover, e o comportamento dos tiers de promoção; e a página histórica de "
+              },
+              {
+                "text": "como o Aurora Serverless v1 funciona",
+                "code": true
+              },
+              {
+                "text": ", consultada especificamente para confirmar que \"scaling points\" é um conceito daquela versão, e não do Serverless v2 usado neste laboratório. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque ACU-hora varia por região e por opção de armazenamento (Standard vs. I/O-Optimized)."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "O tempo de failover de \"cerca de 2 segundos\" citado nas provas é o medido no ambiente de exemplo deste laboratório, sob a carga específica gerada pelo script — não um número garantido pela AWS. A documentação declara \"tipicamente abaixo de 60 segundos, frequentemente abaixo de 30\", e o seu resultado depende da sua carga, da sua configuração de driver e da sua lógica de retry. Da mesma forma, os valores de piso (2 ACU) e teto (32 ACU) foram derivados da curva medida na Cadência — meça a sua antes de copiar esses números."
+          }
+        }
+      ]
+    }
+  ]
+}

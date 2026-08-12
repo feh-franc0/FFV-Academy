@@ -9,6 +9,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { renderMarkdown } from '@/lib/markdown';
+import { BASE, social } from '@/lib/metadata-social';
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -64,13 +65,49 @@ export async function generateStaticParams() {
 
 export const dynamicParams = false;
 
+/** `postgres` → `Postgres`; `system-design` → `System design`. */
+function tituloDoSlug(slug: string): string {
+  const s = slug.replace(/-/g, ' ');
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
   const it = await fetchCheatsheet(slug);
-  if (!it) return { title: 'Cheatsheet — FFV Academy' };
+
+  /**
+   * O caminho de fallback é o que mais rodou até aqui, e era o mais defeituoso.
+   *
+   * Quando o build não alcança o backend — CI sem `NEXT_PUBLIC_API_BASE_URL`, ou
+   * falha de rede —, `fetchCheatsheet` devolve `null`. Antes, isso retornava
+   * `{ title: 'Cheatsheet' }` e mais nada: TODAS as páginas de cheatsheet saíam
+   * com o MESMO `<title>` ("Cheatsheet — FFV Academy"), sem `description` e **sem
+   * canônica**. Medido em 06/ago/2026 no HTML servido: `/cheatsheets/postgres` e
+   * `/cheatsheets/git` com título idêntico. Título repetido em páginas diferentes
+   * é sinal de conteúdo duplicado; canônica ausente deixa a escolha da URL para o
+   * buscador.
+   *
+   * Agora o fallback deriva um título do próprio slug e declara a canônica de
+   * qualquer jeito — o que o servidor sabe sem o backend já é suficiente para o
+   * `<head>` ficar correto e distinto.
+   */
+  const titulo = it?.title ?? tituloDoSlug(slug);
   return {
-    title: `${it.title} — FFV Academy`,
-    description: it.description ?? it.subtitle ?? `Cheatsheet ${it.title}`,
+    // SEM sufixo de marca: o template `'%s — FFV Academy'` do layout raiz o
+    // aplica. Escrever à mão produzia `X — FFV Academy — FFV Academy`, e o
+    // defeito ficou invisível localmente porque o caminho de fallback vencia.
+    title: `Cheatsheet ${titulo}`,
+    description:
+      it?.description ?? it?.subtitle ?? `Cheatsheet de ${titulo}: os comandos e conceitos que se esquece na hora, em uma página.`,
+    // Sem barra final, como o resto do site. Auditoria de 05/ago/2026: era a
+    // única rota dinâmica indexável sem canônica declarada.
+    alternates: { canonical: `${BASE}/cheatsheets/${slug}` },
+    ...social({
+      titulo: `Cheatsheet ${titulo} — FFV Academy`,
+      descricao: it?.description ?? it?.subtitle ?? `Referência rápida de ${titulo}.`,
+      caminho: `/cheatsheets/${slug}`,
+      tipo: 'article',
+    }),
   };
 }
 

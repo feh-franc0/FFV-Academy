@@ -1,7 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { BADGES_DEF, LEVELS } from '@/lib/curriculum';
+import { useEffect, useMemo, useRef, useState } from 'react';
+// Módulos estreitos — ver a nota em GameHUD.tsx.
+import { BADGES_DEF } from '@/lib/curriculum/badges';
+import { LEVELS } from '@/lib/curriculum/levels';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 
 export type CelebrationEvent =
   | { kind: 'badge'; badgeId: string }
@@ -27,6 +30,8 @@ const CONFETTI_COLORS = [
 export function CelebrationOverlay({ events, onDismiss }: Props) {
   const [idx, setIdx] = useState(0);
   const current = events[idx];
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, !!current);
 
   useEffect(() => {
     if (!current) return;
@@ -75,9 +80,11 @@ export function CelebrationOverlay({ events, onDismiss }: Props) {
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label="Conquista"
+      tabIndex={-1}
       onClick={() => {
         if (idx < events.length - 1) setIdx(i => i + 1);
         else onDismiss();
@@ -233,15 +240,15 @@ export function CelebrationOverlay({ events, onDismiss }: Props) {
           {content.icon}
         </div>
         <div
-          className="font-mono uppercase"
+          className="font-mono uppercase ffv-acento-texto"
           style={{
             fontSize: 10,
             letterSpacing: '0.18em',
-            color: content.color,
+            '--ffv-acento': content.color,
             fontWeight: 700,
             marginBottom: 8,
             animation: 'ffv-label-in 0.3s ease-out 0.35s both',
-          }}
+          } as React.CSSProperties}
         >
           {content.label}
         </div>

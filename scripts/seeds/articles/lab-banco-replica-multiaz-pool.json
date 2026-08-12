@@ -1,0 +1,2803 @@
+{
+  "slug": "lab-banco-replica-multiaz-pool",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência é a mesma equipe do "
+              },
+              {
+                "text": "L01",
+                "code": true
+              },
+              {
+                "text": " e do "
+              },
+              {
+                "text": "L03",
+                "code": true
+              },
+              {
+                "text": ": dois engenheiros mantendo uma API de pedidos em .NET 8, em ECS Fargate, com PostgreSQL no RDS em sub-rede privada. Em dez meses as trinta lojas viraram quatrocentas. A arquitetura não mudou, e o número de requisições multiplicou por vinte e nove."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O sintoma tem horário. Entre 11h30 e 13h, quando cada gerente abre o painel de vendas do dia, o p95 da API sai de 180 ms e chega a 2,4 s. A CPU do banco fica em 98%. E a métrica que não fecha com nada é a de sessões: apenas 84 conexões abertas, contra um teto de cerca de 900. Poucas conexões, CPU no limite. A conta não bate com nenhuma explicação de \"está faltando banco\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A hipótese que o time levou para a reunião era razoável e estava errada: \"o Multi-AZ está ligado, então já temos duas máquinas — precisamos aprender a usar a segunda\". Multi-AZ não tem uma segunda máquina para usar: tem uma segunda cópia para assumir. A distinção parece semântica e decide a fatura do trimestre."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Intermediário — depende do L01 no ar e de SQL básico"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L01 concluído, `psql` na máquina, Terraform, noção de plano de execução"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 45 min · implementação 2 h a 2 h 30, incluindo o ensaio de troca de AZ"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Médio: acrescenta uma instância de leitura e uma porta de conexão, as duas cobrando por hora ligada"
+              },
+              {
+                "k": "Serviços",
+                "v": "RDS PostgreSQL (Multi-AZ e réplica de leitura), RDS Proxy, Performance Insights, CloudWatch, Secrets Manager"
+              },
+              {
+                "k": "Volume atual",
+                "v": "400 lojas, cerca de 260 mil requisições por dia, pico entre 11h30 e 13h"
+              },
+              {
+                "k": "Sintoma medido",
+                "v": "p95 de 180 ms para 2,4 s no pico; CPU do banco em 98% com 84 sessões abertas"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "a tabela `pedido` tem 4,2 milhões de linhas e cresce 40 mil por dia; nenhuma consulta faz junção com mais de três tabelas"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "leitura de painel e relatório atendida pela réplica, o teto de sessões escrito e derivado, e uma troca de AZ ensaiada com o tempo medido"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é escolha de banco de dados. A pergunta \"PostgreSQL, Aurora ou DynamoDB para esta carga\" tem laboratório próprio, o L14, e ela só faz sentido depois de você saber medir onde a carga dói — que é o assunto daqui. Também não é cache: 80% de consultas idênticas batendo no banco é o L13, e cache antes de índice esconde o defeito em vez de removê-lo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada objetivo se prova com um comando na seção de medição, e nenhum deles se prova com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que a CPU do banco chega a 100% com poucas sessões abertas, e nomear o que a produz.",
+              "Ler um plano de execução e decidir, por ele, se o problema é consulta ou capacidade.",
+              "Justificar por que otimizar a consulta vem ANTES de acrescentar réplica, e o que a ordem inversa custa.",
+              "Distinguir o standby do Multi-AZ da réplica de leitura por mecanismo, não por nome — replicação síncrona sem endereço contra assíncrona com endereço.",
+              "Calcular o teto de sessões da sua frota como `tasks × pool` e compará-lo com o `max_connections` da classe.",
+              "Rotear leitura para a réplica em .NET 8 com dois pools, e cercar a leitura que segue uma gravação.",
+              "Medir atraso de replicação dos dois lados e reconhecer o artefato de cinco minutos em base ociosa.",
+              "Ensaiar uma troca de AZ e separar, no cronômetro, a janela que é da AWS da janela que é do seu pool.",
+              "Decidir entre réplica de leitura e cluster Multi-AZ a partir do requisito, não do hábito."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Multi-AZ não é escala de leitura",
+                "SAA-C03, CLF-C02",
+                "o standby aparece no desenho mínimo sem atender uma consulta",
+                "que a documentação nega explicitamente o uso do standby para leitura"
+              ],
+              [
+                "Réplica de leitura",
+                "SAA-C03, DVA-C02",
+                "instância nova em terceira AZ, com endereço próprio",
+                "replicação assíncrona, promoção manual e que ela não é alvo automático de troca"
+              ],
+              [
+                "Multi-AZ DB cluster",
+                "SAA-C03, SAP-C02",
+                "alternativa avaliada na caixa de decisão",
+                "dois leitores que ATENDEM consulta, semissíncrono, e classes com disco local"
+              ],
+              [
+                "Pool de conexão",
+                "SAA-C03, DVA-C02",
+                "a conta `tasks × pool` contra o `max_connections`",
+                "que o pool é por processo e o teto é da frota"
+              ],
+              [
+                "RDS Proxy",
+                "SAA-C03, DVA-C02",
+                "porta na frente da escrita, com percentual do teto reservado",
+                "que ele se associa só à instância de escrita, nunca a uma réplica"
+              ],
+              [
+                "Troca de AZ e DNS",
+                "SAA-C03, SOA-C02",
+                "ensaio com `--force-failover` e cronômetro",
+                "que o endpoint é nome de DNS e conexão aberta não volta a resolver nome"
+              ],
+              [
+                "Atraso de replicação",
+                "SAA-C03, SOA-C02",
+                "medição nos dois lados, com o artefato de base ociosa",
+                "que atraso é a razão pela qual \"gravei e não vejo\" chega ao usuário"
+              ],
+              [
+                "Diagnóstico antes de capacidade",
+                "SOA-C02, SAP-C02",
+                "plano de execução e estatística de consulta antes de qualquer peça nova",
+                "que carga relativa aos núcleos separa consulta ruim de máquina pequena"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A questão clássica descreve um banco com CPU saturada e pede a solução de menor custo para escalar leitura. Três alternativas parecem certas: ligar Multi-AZ, aumentar a classe e criar réplica. A resposta depende de uma palavra no enunciado — se ele diz \"escalar leitura\", Multi-AZ está errado por definição, porque o standby não atende leitura. Se o enunciado diz \"sobreviver à perda de uma zona\", a réplica é que está errada, porque ela não é alvo automático de troca. As duas peças aparecem juntas na prova exatamente porque são confundidas juntas na vida."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A coluna da direita é a rastreabilidade. Toda peça da arquitetura de produção aparece nela; peça que não aparecesse teria sido retirada do desenho antes de este texto existir."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "p95 do painel no pico",
+                "abaixo de 400 ms",
+                "obriga índice composto por loja e data; é o requisito que NÃO precisa de recurso novo, e por isso vem primeiro"
+              ],
+              [
+                "Relatório de 90 dias sem afetar pedido",
+                "obrigatório",
+                "é o requisito que justifica a réplica de leitura: isolamento de concorrência, não velocidade de consulta"
+              ],
+              [
+                "Leitura de conferência após gravação",
+                "sem atraso perceptível",
+                "obriga a cerca no roteamento: requisição que gravou continua no primário até o fim"
+              ],
+              [
+                "Sessões da frota contra o teto do banco",
+                "abaixo de 70% do `max_connections`",
+                "obriga pool derivado e não herdado: 6 × (10 + 40) em vez de 6 × 100"
+              ],
+              [
+                "Escalar tasks de 6 para 40 sem tocar no banco",
+                "requisito vindo do L06",
+                "obriga a porta de conexão na frente da escrita, senão a política de escala derruba o banco"
+              ],
+              [
+                "Sobreviver à perda de uma zona",
+                "gravação volta sem intervenção humana",
+                "mantém o Multi-AZ e coloca a réplica numa TERCEIRA zona, não na do standby"
+              ],
+              [
+                "Tempo de retomada da gravação",
+                "medido, não estimado",
+                "obriga ensaio com troca forçada e sonda de 200 ms nos dois lados"
+              ],
+              [
+                "Privilégio do caminho de leitura",
+                "somente consulta",
+                "obriga papel restrito no banco e segundo segredo, em vez de reusar a credencial de gravação"
+              ],
+              [
+                "Orçamento do trimestre",
+                "não dobra a linha de banco",
+                "descarta subir classe e descarta o cluster Multi-AZ agora: as duas soluções corretas que este trimestre não paga"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o desenho correto que resolve o problema errado"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que o L01 entregou, e ele não tem defeito de construção. Tem um defeito de leitura: o time acredita que ele entrega algo que ele nunca prometeu. A parte mais difícil deste laboratório é essa, e não a configuração."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Um endpoint, um destino de consulta e um standby que responde zero",
+            "caption": "Este desenho é o do L01 e está correto para o que ele prometia: banco em sub-rede privada, com cópia em outra AZ. O que ele não prometia — e o que o time acredita que ele entrega — é capacidade de leitura. Percorra os passos e repare em duas ausências que não aparecem como erro em lugar nenhum: nada roteia consulta, e nada limita quantas sessões a frota pode abrir.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Gerente de loja no pico",
+                    "note": "abre o painel entre 11h30 e 13h, junto com outras 399 lojas, e é quem cronometra os 2,4 s de espera"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "Balanceador do L01",
+                    "note": "trata pedido e painel como a mesma coisa, porque a distinção entre escrever e consultar não existe em camada de rede"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada: as seis tasks",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "task",
+                    "service": "fargate",
+                    "label": "6 tasks .NET 8",
+                    "note": "processo isolado por task; nenhuma delas sabe quantas sessões as outras cinco já abriram no banco"
+                  },
+                  {
+                    "id": "pool",
+                    "service": "fila",
+                    "label": "Pool do Npgsql, padrão",
+                    "note": "até 100 sessões por processo, com o valor herdado do padrão da biblioteca e nunca escrito em nenhum arquivo"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada, AZ a: o banco",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "primary",
+                    "service": "rds",
+                    "label": "RDS PostgreSQL primário",
+                    "note": "recebe escrita e também o relatório do painel; a saturação vem de uma varredura sequencial, não da quantidade de sessões"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada, AZ b: o que a fatura já paga",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "standby",
+                    "service": "replica",
+                    "label": "Standby do Multi-AZ",
+                    "note": "cópia síncrona sem endereço para conectar; a documentação afirma que ela não pode atender consulta de leitura"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "HTTPS 443 — painel e pedido pela mesma porta",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "task",
+                "label": "distribui por número de conexões, não por tipo de consulta",
+                "style": "solid"
+              },
+              {
+                "from": "task",
+                "to": "pool",
+                "label": "empresta uma sessão do pool da própria task",
+                "style": "solid"
+              },
+              {
+                "from": "pool",
+                "to": "primary",
+                "label": "até 6 × 100 sessões possíveis contra um teto de ~900",
+                "style": "solid"
+              },
+              {
+                "from": "primary",
+                "to": "standby",
+                "label": "replicação síncrona: o commit espera a outra AZ",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A CPU vai a 100% por causa de uma consulta, não de carga",
+                "detail": "O painel filtra pedidos por loja e por data, e não existe índice que atenda os dois campos. O plano é varredura sequencial em 4,2 milhões de linhas, a cada abertura de painel. Uma consulta que lê tudo consome CPU proporcional ao tamanho da tabela, e não ao número de usuários — por isso 84 sessões bastam para saturar oito núcleos.",
+                "nodes": [
+                  "primary"
+                ],
+                "edges": [
+                  "pool>primary"
+                ]
+              },
+              {
+                "label": "Consulta lenta prende sessão, e sessão presa multiplica",
+                "detail": "Enquanto a consulta roda, a sessão fica emprestada. Com resposta em 3 ms o pool de uma task circula poucas sessões; com resposta em 2,2 s ele precisa de centenas para o mesmo volume de requisições. A demanda de conexão é consequência da latência, não causa dela — e é por isso que aumentar o pool piora.",
+                "nodes": [
+                  "pool",
+                  "task"
+                ],
+                "edges": [
+                  "task>pool"
+                ]
+              },
+              {
+                "label": "O teto real de sessões é tasks × pool, e ele não está escrito",
+                "detail": "Cada task tem o seu pool, com 100 de máximo por herança do padrão do Npgsql. Seis tasks autorizam 600 sessões contra um `max_connections` de cerca de 900, que já reserva vagas para superusuário. Escalar de 6 para 12 tasks — a reação natural ao pico — dobra o número que precisa caber, e o limite é do banco.",
+                "nodes": [
+                  "pool",
+                  "primary"
+                ],
+                "edges": [
+                  "pool>primary"
+                ]
+              },
+              {
+                "label": "O standby cobra igual e não atende uma única consulta",
+                "detail": "Multi-AZ dobra o custo de instância e de armazenamento para entregar failover. Não existe endpoint de leitura aqui: a documentação da AWS diz, textualmente, que o standby não pode servir tráfego de leitura. A crença de que \"está ligado, então ajuda\" é o defeito central deste desenho, e ele é invisível em qualquer painel.",
+                "nodes": [
+                  "standby"
+                ],
+                "edges": [
+                  "primary>standby"
+                ]
+              },
+              {
+                "label": "E a escrita fica um pouco mais lenta por causa dele",
+                "detail": "A replicação para o standby é síncrona, então o commit só retorna depois de a outra AZ confirmar. A própria documentação avisa que Multi-AZ pode aumentar a latência de escrita e de commit em relação a AZ única. Multi-AZ não é neutro para desempenho: ele cobra na escrita para pagar na disponibilidade.",
+                "nodes": [
+                  "primary",
+                  "standby"
+                ],
+                "edges": [
+                  "primary>standby"
+                ]
+              },
+              {
+                "label": "Por que um time competente para aqui",
+                "detail": "Porque as duas linhas que faltam não existem como erro. Ninguém escreve `MaxPoolSize` para deixá-lo no padrão, e ninguém desenha uma seta para dizer que o standby não atende. O desenho passa em revisão de arquitetura, atende o requisito de disponibilidade e falha em um requisito que nunca foi escrito.",
+                "nodes": [
+                  "user",
+                  "alb"
+                ],
+                "edges": [
+                  "user>alb",
+                  "alb>task"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Antes de tocar em arquitetura, meça. Estes dois comandos separam as duas explicações possíveis para CPU alta, e elas levam a decisões opostas: consulta que lê demais, ou concorrência acima do que a máquina comporta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "sql",
+            "filename": "primeira-medicao.sql",
+            "code": "-- Pergunta 1: a carga cabe na maquina? DBLoadRelativeToNumVCPUs no\n-- CloudWatch acima de 1 significa mais sessoes ativas do que nucleos.\n-- Na Cadencia esse numero era 0,9 — a fila NAO era o problema.\n\n-- Pergunta 2: qual consulta consome o tempo? Ordene por tempo TOTAL.\nSELECT substring(query, 1, 60) AS consulta, calls,\n       round(100 * total_exec_time / sum(total_exec_time) OVER (), 1) AS pct\n  FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 5;\n-- Na Cadencia: um unico item respondia por 78%. Com esse numero na mao, a\n-- discussao de arquitetura ainda nao tinha comecado — e ja tinha resposta."
+          }
+        },
+        {
+          "id": "b4_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "As duas causas de CPU alta levam a decisões opostas",
+            "content": "Consulta que lê demais consome CPU proporcional ao TAMANHO DO DADO, e por isso satura com poucas sessões: é o caso da Cadência, e a correção é o plano de execução. Concorrência acima da máquina consome CPU proporcional ao NÚMERO DE SESSÕES ATIVAS, e aí a carga relativa aos núcleos passa de 1: a correção é capacidade ou fila. Tratar a primeira como a segunda é comprar instância maior para varrer a mesma tabela mais rápido — funciona por algumas semanas, e o custo passa a crescer junto com o dado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A mudança estrutural não é a instância nova. É a aplicação passar a decidir o destino de cada operação, o que exige um lugar onde essa decisão more e uma regra para o caso em que ela é ambígua."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Três nós de banco, dois caminhos de leitura e uma porta para as sessões",
+            "caption": "A mudança estrutural não é a réplica: é a aplicação passar a DECIDIR o destino de cada operação, o que exige um lugar onde essa decisão more. Percorra os passos e confira a rastreabilidade: cada peça abaixo aponta para uma linha da tabela de requisitos, e a que não apontasse teria sido retirada.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Gerente de loja",
+                    "note": "continua vendo uma tela única; a separação entre escrever e consultar é decisão interna e não vira duas URLs"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada: aplicação e a decisão de rota",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "task",
+                    "service": "fargate",
+                    "label": "6 tasks, dois pools cada",
+                    "note": "mantém um pool curto para escrita e outro maior para consulta, com os dois tamanhos derivados do teto do banco"
+                  },
+                  {
+                    "id": "rota",
+                    "service": "politica",
+                    "label": "Regra de roteamento",
+                    "note": "lê o atributo da operação e prende no primário toda consulta que segue uma gravação dentro da mesma requisição"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada: porta das sessões de escrita",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "proxy",
+                    "service": "rds",
+                    "label": "RDS Proxy no primário",
+                    "note": "reaproveita poucas sessões físicas por transação e enfileira surto em vez de repassar recusa de vaga ao banco"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada, AZ a e AZ b: escrita e failover",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "writer",
+                    "service": "postgres",
+                    "label": "Primário Multi-AZ",
+                    "note": "atende gravação e a consulta que não tolera atraso; o índice novo tirou a varredura sequencial daqui"
+                  },
+                  {
+                    "id": "standby",
+                    "service": "replica",
+                    "label": "Standby síncrono, AZ b",
+                    "note": "alvo de troca sem endereço próprio; continua fora do caminho de consulta, e agora isso é escolha registrada"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada, AZ c: capacidade de leitura",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "replica",
+                    "service": "replica",
+                    "label": "Réplica de leitura, AZ c",
+                    "note": "endereço próprio e replicação assíncrona; recusa gravação com erro de transação somente para consulta"
+                  }
+                ]
+              },
+              {
+                "label": "Medição que separa consulta ruim de falta de máquina",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "pi",
+                    "service": "monitor",
+                    "label": "Performance Insights",
+                    "note": "atribui a carga a evento de espera e a texto de consulta, que é o passo antes de qualquer decisão de comprar capacidade"
+                  },
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Alarmes de atraso e sessão",
+                    "note": "vigia atraso de replicação, sessões contra o teto do parâmetro e carga relativa ao número de núcleos"
+                  }
+                ]
+              },
+              {
+                "label": "Credencial, com privilégio separado por caminho",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sm",
+                    "service": "secretsmanager",
+                    "label": "Dois segredos",
+                    "note": "guarda a credencial de gravação e um papel restrito a consulta, lidos em execução e nunca embutidos na imagem"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "task",
+                "label": "HTTPS 443 pelo balanceador que o L01 já criou",
+                "style": "solid"
+              },
+              {
+                "from": "task",
+                "to": "rota",
+                "label": "a operação declara se tolera atraso de replicação",
+                "style": "solid"
+              },
+              {
+                "from": "rota",
+                "to": "proxy",
+                "label": "gravação e a consulta que a segue na mesma requisição",
+                "style": "solid"
+              },
+              {
+                "from": "rota",
+                "to": "replica",
+                "label": "painel e relatório, que aceitam segundos de atraso",
+                "style": "solid"
+              },
+              {
+                "from": "proxy",
+                "to": "writer",
+                "label": "sessões físicas reaproveitadas transação a transação",
+                "style": "solid"
+              },
+              {
+                "from": "writer",
+                "to": "standby",
+                "label": "cópia síncrona, usada só para troca de papel",
+                "style": "dashed"
+              },
+              {
+                "from": "writer",
+                "to": "replica",
+                "label": "registro de escrita antecipada em fluxo assíncrono",
+                "style": "solid"
+              },
+              {
+                "from": "sm",
+                "to": "task",
+                "label": "credencial de gravação e credencial restrita a consulta",
+                "style": "dashed"
+              },
+              {
+                "from": "writer",
+                "to": "pi",
+                "label": "carga por evento de espera e por texto de consulta",
+                "style": "dashed"
+              },
+              {
+                "from": "replica",
+                "to": "cw",
+                "label": "atraso de replicação medido na própria réplica",
+                "style": "dashed"
+              },
+              {
+                "from": "writer",
+                "to": "cw",
+                "label": "sessões abertas, núcleos ocupados e troca de AZ",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A consulta é corrigida antes de qualquer peça nova entrar",
+                "detail": "O índice composto por loja e data trocou a varredura de 4,2 milhões de linhas por uma busca de 3,4 ms, e a CPU do primário caiu de 98% para 24% sem nenhum recurso acrescentado. Este passo vem primeiro no desenho porque vem primeiro na execução: réplica sobre consulta ruim é hardware pago para repetir o mesmo desperdício em dois lugares.",
+                "nodes": [
+                  "pi",
+                  "writer"
+                ],
+                "edges": [
+                  "writer>pi"
+                ]
+              },
+              {
+                "label": "Cada operação declara a tolerância a atraso",
+                "detail": "A decisão de destino não cabe em texto de conexão, porque ela é por operação e não por processo. O relatório de 90 dias tolera segundos de defasagem; a conferência do pedido que acabou de ser gravado não tolera milissegundo. Quem escreve a consulta é quem sabe disso, e o roteamento só transporta essa informação.",
+                "nodes": [
+                  "rota",
+                  "task"
+                ],
+                "edges": [
+                  "task>rota"
+                ]
+              },
+              {
+                "label": "A consulta que segue uma gravação fica no primário",
+                "detail": "É a regra que evita o defeito mais visível ao usuário: gravar e não ver. A replicação para a réplica é assíncrona, então existe um intervalo em que o dado já foi confirmado e ainda não chegou lá. Marcar a requisição que gravou e mantê-la no primário até o fim resolve o caso comum sem exigir coordenação.",
+                "nodes": [
+                  "rota",
+                  "proxy"
+                ],
+                "edges": [
+                  "rota>proxy"
+                ]
+              },
+              {
+                "label": "O relatório sai do caminho da escrita",
+                "detail": "A agregação de 90 dias é pesada por natureza, e nenhum índice a torna leve. Este é o requisito que justifica a réplica: não a latência do painel, que o índice resolveu, mas uma carga analítica que compete por núcleos com a gravação de pedido. O ganho é isolamento de concorrência, não velocidade da consulta.",
+                "nodes": [
+                  "replica"
+                ],
+                "edges": [
+                  "rota>replica",
+                  "writer>replica"
+                ]
+              },
+              {
+                "label": "O teto de sessões deixa de ser tasks × pool",
+                "detail": "Com a porta na frente, a aplicação abre sessões contra ela e ela abre poucas contra o banco, reaproveitando cada uma por transação. Surto passa a virar espera medida em vez de recusa de vaga, e escalar de 6 para 40 tasks deixa de exigir recálculo do parâmetro do banco. O limite continua existindo: ele muda de lugar.",
+                "nodes": [
+                  "proxy",
+                  "writer"
+                ],
+                "edges": [
+                  "proxy>writer"
+                ]
+              },
+              {
+                "label": "O standby continua sem atender consulta, de propósito",
+                "detail": "Nada aqui tenta usar o standby para leitura, porque ele não serve para isso. O que mudou foi o entendimento: a disponibilidade vem dele, a capacidade de leitura vem da réplica em AZ c, e as duas peças ficam no desenho com papéis que não se confundem mais.",
+                "nodes": [
+                  "standby"
+                ],
+                "edges": [
+                  "writer>standby"
+                ]
+              },
+              {
+                "label": "A troca de papel é ensaiada, com o tempo medido nos dois lados",
+                "detail": "O ensaio mede duas janelas distintas: quanto o banco demora a assumir na outra AZ, e quanto a aplicação demora a parar de usar sessões que apontam para o endereço antigo. A segunda é sua, não da AWS, e é a que costuma ser confundida com a primeira.",
+                "nodes": [
+                  "cw",
+                  "writer"
+                ],
+                "edges": [
+                  "writer>cw",
+                  "replica>cw"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Repare no que NÃO mudou: o standby continua sem atender consulta. A diferença entre os dois desenhos, nesse ponto, é só que agora isso está escrito. Peça cuja função você não consegue enunciar é peça que você não pode dimensionar nem substituir."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "annotated_formula",
+          "position": 3,
+          "data": {
+            "title": "Quantas sessões a sua frota pode abrir, e contra qual teto",
+            "formula": "sessões = tasks × (pool_escrita + pool_leitura) + tarefas + pessoas ≤ max_connections − reservadas",
+            "parts": [
+              {
+                "symbol": "tasks",
+                "name": "O multiplicador que ninguém soma",
+                "description": "Cada task tem o próprio processo e o próprio pool. O tamanho do pool é por task; o teto do banco é da frota inteira. Escalar horizontalmente multiplica o lado esquerdo desta conta sem tocar no direito, e é por isso que a política de escala do L06 pode derrubar o banco.",
+                "highlight": true
+              },
+              {
+                "symbol": "pool_escrita + pool_leitura",
+                "name": "Dois destinos, dois pools, na mesma task",
+                "description": "Rotear leitura para a réplica cria um segundo pool. Manter os dois em 100, que é o padrão do Npgsql, dobra o pior caso por task. O pool de escrita pode ser pequeno, porque gravação é curta; o de leitura acompanha a concorrência de consulta."
+              },
+              {
+                "symbol": "tarefas + pessoas",
+                "name": "O que não passa pela aplicação",
+                "description": "Migração na partida, rotina agendada, ferramenta de BI, sessão de depuração no terminal. São poucas e são justamente as que faltam quando o teto é atingido: o operador descobre o problema tentando conectar e não conseguindo."
+              },
+              {
+                "symbol": "max_connections − reservadas",
+                "name": "O teto, que é derivado da memória",
+                "description": "No RDS para PostgreSQL o padrão é `LEAST({DBInstanceClassMemory/9531392}, 5000)`, o que dá cerca de 900 em uma instância de 8 GiB. Parte das vagas fica reservada para superusuário. Confirme com `SHOW max_connections`, porque `DBInstanceClassMemory` já desconta o que a AWS reserva."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "success",
+            "title": "O ajuste com maior efeito por linha alterada",
+            "content": "Das quatro parcelas da conta, a que mais surpreende é o multiplicador. Reduzir o pool de 100 para 40 no caminho de leitura e para 10 no de escrita é uma linha em cada lado, não custa nada e derruba o pior caso da frota de 600 sessões para 300. Nenhum recurso novo entra na fatura, e o teto do banco deixa de ser um número que ninguém sabia que existia."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de uma troca de AZ, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O endpoint do banco é um nome de DNS, e a troca de papel reescreve o destino desse nome. A documentação é explícita: por causa disso, as conexões existentes precisam ser limpas e reabertas. A parte que ela não pode dizer por você é quanto tempo a SUA aplicação leva para fazer isso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "O ensaio de troca de AZ, segundo a segundo — e onde a janela deixa de ser da AWS",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "t = 0 s · o comando entra",
+                "desc": "A troca é pedida com `reboot-db-instance --force-failover`. A documentação apresenta essa operação exatamente como forma de simular falha da instância, e avisa que o banco é interrompido de forma abrupta: transação em voo não termina com elegância."
+              },
+              {
+                "label": "t ≈ 1 s · a gravação começa a falhar",
+                "desc": "As sessões abertas contra o primário morrem juntas. No laço de prova, o `INSERT` passa a devolver erro de conexão, e o painel — que já lê da réplica — continua respondendo. Essa assimetria é o primeiro resultado útil do ensaio: o raio da falha ficou menor do que era."
+              },
+              {
+                "label": "t ≈ 34 s · o nome passa a resolver para a outra AZ",
+                "desc": "O endpoint do banco é um nome de DNS, e a troca reescreve o destino dele para o standby. A documentação afirma que, por causa disso, as conexões existentes precisam ser limpas e reabertas. Nada na aplicação percebe isso sozinho: um socket já aberto não volta a resolver nome nenhum."
+              },
+              {
+                "label": "t ≈ 34 a 47 s · a janela que é SUA",
+                "desc": "As sessões guardadas no pool apontam para o endereço antigo. Cada vez que uma delas é emprestada, a operação falha, a sessão é descartada e a seguinte é tentada. O erro continua chegando ao usuário durante esse esvaziamento, e o culpado não é o failover: é o pool."
+              },
+              {
+                "label": "t ≈ 47 s · a gravação volta",
+                "desc": "No ensaio de exemplo, a gravação voltou em 47 s: 34 s de troca e 13 s de esvaziamento de pool. Os 13 s somem quando existe uma porta de conexão na frente ou quando a aplicação limpa o pool ao detectar a falha. Meça os dois números separadamente, porque eles têm donos diferentes."
+              },
+              {
+                "label": "t ≈ 60 s · o console admite a mudança de AZ",
+                "desc": "A documentação avisa que a mudança de AZ pode levar vários minutos para aparecer no console, na interface de linha de comando e na API. Concluir \"não trocou\" olhando o console é um erro de leitura de instrumento, não um sintoma."
+              },
+              {
+                "label": "depois · a réplica não trocou de lado",
+                "desc": "A réplica de leitura continua replicando a partir do mesmo endpoint do primário, que agora aponta para a outra AZ. Ela não é promovida e não assume gravação: quem faz isso é o standby. É a distinção que o laboratório inteiro existe para instalar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A janela que a documentação da AWS não mede, porque não é dela",
+            "content": "A AWS diz que a troca leva tipicamente de 60 a 120 s, e mede da falha até o banco assumir na outra zona. Depois disso começa uma segunda janela, que é sua: cada sessão guardada no pool aponta para o endereço antigo, e um socket aberto não volta a resolver nome. Cada vez que uma delas é emprestada, a operação falha e a sessão é descartada. O erro continua chegando ao usuário durante esse esvaziamento, e a métrica do RDS já mostra o banco saudável — que é exatamente o quadro que faz o time procurar o defeito no lugar errado."
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "Sobre cache de nome em .NET, vale precisão. A documentação da AWS trata o caso da máquina virtual Java, que pode manter a resolução em memória até ser reiniciada, e recomenda tempo de vida de no máximo 60 s. O .NET não tem esse comportamento padrão. Só que o problema aqui é mais forte do que cache de nome: uma conexão estabelecida não consulta o DNS de novo em nenhuma plataforma. O que encurta a janela é reciclar sessão por tempo de vida, descartar o pool ao detectar a falha, ou ter uma porta de conexão na frente que faça isso por você."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_4",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "json",
+            "filename": "evento-de-troca.json",
+            "code": "// O que a assinatura de eventos entrega quando a troca ocorre. Assinar o\n// EVENTO e mais confiavel que vigiar metrica: a troca e um fato discreto, e\n// metrica so mostra o rastro dela.\n{\n  \"Source\": \"aws.rds\",\n  \"detail-type\": \"RDS DB Instance Event\",\n  \"resources\": [\"arn:aws:rds:us-east-1:111122223333:db:ffv-lab-primario\"],\n  \"detail\": {\n    \"SourceIdentifier\": \"ffv-lab-primario\",\n    \"SourceType\": \"DB_INSTANCE\",\n    \"EventCategories\": [\"failover\"],\n    \"Date\": \"2026-08-07T14:22:31.618Z\",\n    // A razao aparece no log de eventos, e \"user requested\" e a do ENSAIO.\n    // Em incidente real ela diz se foi patch de sistema, host insalubre,\n    // perda de rede, primario ocupado ou falha de volume.\n    \"Message\": \"Multi-AZ instance failover completed\"\n  }\n}"
+          }
+        },
+        {
+          "id": "b6_5",
+          "type": "callout",
+          "position": 5,
+          "data": {
+            "variant": "info",
+            "title": "O que este payload é, e o que ele não é",
+            "content": "A forma acima é ilustrativa da assinatura de eventos do RDS, com a categoria `failover` como o campo que importa. Os códigos numéricos de evento do RDS não aparecem aqui de propósito: não os confirmei na documentação, e citar código errado é pior do que não citar. Assine a CATEGORIA, que é estável e documentada, e leia o código que chegar na sua conta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Painel a 2,4 s no pico, CPU do banco em 98% com 84 sessões, Multi-AZ já ligado, 6 tasks em Fargate e orçamento que não aceita dobrar a linha de banco de dados neste trimestre.",
+            "winner": "Corrigir a consulta e dimensionar o pool primeiro; acrescentar réplica de leitura só para a carga que continua pesada depois disso",
+            "why": "A ordem é a decisão. A CPU em 98% com 84 sessões descreve trabalho por consulta, não concorrência: um índice composto trocou varredura de 4,2 milhões de linhas por busca de 3,4 ms e devolveu a CPU a 24%, sem recurso novo na fatura. Só depois disso a réplica ganha um requisito honesto — isolar o relatório de 90 dias, que é pesado por natureza e compete por núcleos com a gravação de pedido. Fazer o inverso paga instância nova para executar a mesma consulta ruim em dois lugares, e ainda acrescenta atraso de replicação como classe de defeito nova.",
+            "alternatives": [
+              {
+                "name": "Subir a classe da instância",
+                "downside": "É a resposta de menor esforço e funciona por algumas semanas, porque mais núcleos varrem a tabela mais rápido. O problema é que a varredura cresce com a tabela e a fatura cresce com a classe: você comprou tempo e amarrou o custo ao crescimento do dado. Legítimo como medida de emergência durante um incidente, nunca como diagnóstico."
+              },
+              {
+                "name": "Trocar Multi-AZ por Multi-AZ DB cluster",
+                "downside": "Resolve as duas coisas de uma vez: o cluster tem dois leitores que ATENDEM consulta e são alvo de troca, com replicação semissíncrona e endpoint de leitura pronto. Custa três instâncias em vez de duas, exige classes específicas com disco local e não é uma opção que se liga na instância existente. É a escolha certa quando disponibilidade e leitura crescem juntas, e é o caminho que o L15 percorre com o Aurora."
+              },
+              {
+                "name": "Pôr um cache na frente",
+                "downside": "Resolveria o painel, porque as consultas do pico são repetidas. O que ele acrescenta é uma regra de invalidação, e regra de invalidação errada mostra dado velho sem avisar — enquanto o atraso de replicação, ao menos, é medido. Cache depois de índice, não em vez dele: é o L13."
+              },
+              {
+                "name": "Só aumentar o pool para \"não faltar conexão\"",
+                "downside": "É a reação intuitiva e piora tudo. Cada sessão do PostgreSQL é um processo com memória própria, então mais sessões contra um banco saturado somam troca de contexto ao problema original. O pool grande não acelera consulta lenta: ele deixa mais gente esperando ao mesmo tempo, e aproxima a frota do teto do parâmetro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Primeiro movimento",
+                "índice composto por loja e data",
+                "subir classe; criar réplica; pôr cache",
+                "devolveu a CPU de 98% para 24% sem recurso novo na fatura",
+                "nada; é o único movimento sem trade-off, e por isso vem primeiro"
+              ],
+              [
+                "Capacidade de leitura",
+                "réplica de leitura em terceira AZ",
+                "cluster Multi-AZ; standby (impossível); Aurora",
+                "isola o relatório de 90 dias, que é pesado por natureza",
+                "atraso de replicação entra como classe de defeito nova, e ela chega ao usuário"
+              ],
+              [
+                "Onde a rota é decidida",
+                "no código, por operação",
+                "vários hosts com atributo de sessão; proxy que distribuísse leitura",
+                "a tolerância a atraso é por consulta, e texto de conexão vale por processo",
+                "mais código, e a obrigação de manter o argumento explícito em cada rota nova"
+              ],
+              [
+                "Leitura após gravação",
+                "marca por requisição, presa no primário",
+                "cerca por posição no registro de escrita; leitura sempre no primário",
+                "resolve o caso comum sem coordenação nem ida extra ao banco",
+                "não cobre gravar numa aba e ler em outra; para isso é a cerca por posição"
+              ],
+              [
+                "Teto de sessões",
+                "pool derivado, 10 de escrita e 40 de leitura",
+                "manter o padrão de 100; aumentar o teto do banco",
+                "6 × 50 = 300 contra ~900, com folga para migração e para o operador",
+                "sob surto real, requisição espera na fila do pool em vez de falhar de imediato"
+              ],
+              [
+                "Surto de conexão",
+                "porta na frente da escrita",
+                "só reduzir o pool; aumentar `max_connections`",
+                "permite escalar tasks de 6 para 40 sem recalcular parâmetro do banco",
+                "uma peça nova cobrando por hora, e ela não serve à leitura por limite documentado"
+              ],
+              [
+                "Multi-AZ na réplica",
+                "desligado",
+                "ligar, dobrando o custo dela",
+                "a carga de relatório tolera indisponibilidade de minutos",
+                "se a réplica virar caminho de recuperação, a decisão muda — é o L58"
+              ],
+              [
+                "Privilégio de leitura",
+                "papel restrito e segundo segredo",
+                "reusar a credencial de gravação nos dois pools",
+                "gravação que escape para o caminho de leitura falha na borda do privilégio",
+                "um segredo a mais para rotacionar, o que aumenta a superfície do L04"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que a réplica cria, e que este módulo não paga",
+            "content": "Atraso de replicação é um defeito novo, não um efeito colateral aceitável. Ele aparece na tela como \"gravei e não vejo\", e a cerca por requisição cobre o caso comum — gravar e conferir na mesma chamada. Ela NÃO cobre o usuário que grava numa aba e consulta em outra, porque são requisições diferentes e a marca não atravessa. Para esse caso existe a cerca por posição no registro de escrita, que custa uma consulta a mais por leitura. Escolha consciente: a Cadência aceitou o caso descoberto porque ele não aparece no fluxo do produto dela, e escreveu isso na decisão em vez de deixar como sorte."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: medir antes de mexer"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A ordem desta seção é o conteúdo dela. Diagnóstico, índice, e só então arquitetura. Invertida, você paga instância nova para executar a mesma consulta ruim em dois lugares — e ainda acrescenta atraso de replicação como problema."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "sql",
+            "filename": "diagnostico.sql",
+            "code": "-- diagnostico.sql — a ordem importa: medir, depois decidir.\n-- Rode como usuario com rds_superuser. `pg_stat_statements` ja vem carregado no\n-- shared_preload_libraries do grupo de parametros padrao do RDS para PostgreSQL,\n-- entao criar a extensao basta e nao exige reinicio.\nCREATE EXTENSION IF NOT EXISTS pg_stat_statements;\n\n-- 1. QUEM consome o banco. Ordenar por tempo TOTAL, e nao por tempo medio: uma\n--    consulta de 2 s chamada 40 mil vezes por hora domina uma de 30 s chamada\n--    tres vezes por dia, e e a primeira que derruba o pico.\nSELECT substring(query, 1, 90) AS consulta,\n       calls,\n       round(total_exec_time)             AS tempo_total_ms,\n       round(mean_exec_time, 2)           AS media_ms,\n       round(100 * total_exec_time / sum(total_exec_time) OVER (), 1) AS pct\n  FROM pg_stat_statements\n WHERE query NOT LIKE '%pg_stat%'\n ORDER BY total_exec_time DESC\n LIMIT 10;\n-- Na Cadencia: a consulta do painel respondia por 78% do tempo total de execucao.\n-- Um unico item. Antes de discutir arquitetura, isso ja e o diagnostico.\n\n-- 2. O PLANO da consulta campea. ANALYZE executa de verdade e mostra o tempo\n--    real; BUFFERS mostra quantos blocos foram lidos, que e o que explica a CPU.\nEXPLAIN (ANALYZE, BUFFERS, COSTS OFF)\nSELECT p.id, p.total, p.criado_em\n  FROM pedido p\n WHERE p.loja_id = 314\n   AND p.criado_em >= now() - interval '7 days'\n ORDER BY p.criado_em DESC\n LIMIT 50;\n-- ANTES:  Seq Scan on pedido  (actual time=0.03..2180.4 rows=1284 loops=1)\n--         Buffers: shared hit=1204 read=68312\n--         Execution Time: 2180.912 ms\n-- Ler 68 mil blocos do disco a cada abertura de painel e o custo, e ele nao cai\n-- com mais nucleos: cai com menos blocos lidos.\n\n-- 3. O indice. CONCURRENTLY nao trava escrita na tabela, e por isso pode entrar\n--    em producao no meio do dia. Ele custa mais tempo para construir e nao pode\n--    rodar dentro de transacao.\nCREATE INDEX CONCURRENTLY IF NOT EXISTS ix_pedido_loja_data\n    ON pedido (loja_id, criado_em DESC);\n-- A ordem das colunas nao e estetica: `loja_id` primeiro porque e igualdade, e\n-- `criado_em` depois porque e faixa. Invertido, o indice serve mal os dois.\n\n-- DEPOIS:  Index Scan using ix_pedido_loja_data  (actual time=0.02..3.31 rows=1284)\n--          Buffers: shared hit=41 read=6\n--          Execution Time: 3.412 ms\n-- 2180 ms -> 3,4 ms, e a CPU do primario caiu de 98% para 24% no mesmo pico.\n\n-- 4. QUANTAS sessoes existem de fato, e em que estado. `idle` e sessao guardada\n--    no pool sem uso; `idle in transaction` e o sintoma que mais dói, porque a\n--    sessao segura recursos sem estar fazendo nada.\nSELECT state, count(*) AS sessoes, max(now() - state_change) AS mais_antiga\n  FROM pg_stat_activity\n WHERE datname = current_database()\n GROUP BY state\n ORDER BY sessoes DESC;\n\nSHOW max_connections;              -- o teto real desta instancia\nSHOW superuser_reserved_connections; -- vagas que a sua aplicacao nao pode usar\n\n-- 5. O papel restrito a consulta. Criado no PRIMARIO: em replica fisica os\n--    papeis chegam pela replicacao, e tentar criar na replica falha.\nCREATE ROLE app_leitura LOGIN PASSWORD :'senha_leitura';\nGRANT CONNECT ON DATABASE pedidos TO app_leitura;\nGRANT USAGE ON SCHEMA public TO app_leitura;\nGRANT SELECT ON ALL TABLES IN SCHEMA public TO app_leitura;\nALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO app_leitura;\n-- Com isto, uma gravacao que escapar para o caminho de leitura falha na BORDA do\n-- privilegio, com mensagem clara, em vez de falhar por acaso na replica.\nALTER ROLE app_leitura SET default_transaction_read_only = on;\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que a ordem das colunas do índice não é estética",
+            "content": "Em `(loja_id, criado_em DESC)` a primeira coluna é a de igualdade e a segunda é a de faixa. O índice é uma árvore ordenada: fixar a loja restringe a busca a um ramo, e dentro dele as datas já estão em ordem, então a cláusula de faixa e o `ORDER BY` saem de graça. Invertido, o banco precisaria percorrer todas as datas para filtrar loja depois, e o índice serviria mal as duas condições. É a regra que decide praticamente todo índice composto, e ela é derivável: igualdade primeiro, faixa depois, e a ordenação segue a faixa."
+          }
+        },
+        {
+          "id": "b8_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "Índice não é grátis, e o custo tem lugar certo",
+            "content": "Todo índice é uma estrutura que precisa ser mantida a cada gravação, e ocupa espaço. Na tabela `pedido`, com 40 mil inserções por dia, um índice a mais é barato — inserção paga uma escrita adicional em árvore. O que não é barato é criar um índice por consulta lenta sem olhar quais já existem: índices que se sobrepõem cobram manutenção em duplicidade e o planejador escolhe um só. Antes de criar, confira o que já existe e se um índice existente cobre o caso com uma coluna a mais."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: a réplica, os parâmetros e os alarmes"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A réplica é uma instância nova, e por isso ela tem classe, zona, grupo de parâmetros e fatura próprios. Três dessas quatro escolhas são decisões, e a quarta é consequência delas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "banco.tf",
+            "code": "# banco.tf — a replica de leitura, os parametros que tornam o diagnostico\n# possivel e os alarmes que separam consulta ruim de falta de maquina.\n\n# O primario vem do L01 e nao e redeclarado aqui. Este laboratorio acrescenta a\n# replica, os parametros e a observacao.\nvariable \"primario_id\" {\n  type        = string\n  description = \"Identificador da instancia primaria criada no L01\"\n}\n\nvariable \"projeto\" {\n  type    = string\n  default = \"ffv-lab\"\n}\n\n# ── Grupo de parametros: o que torna o diagnostico possivel ─────────────────\n#\n# Sem estes tres, o incidente deste laboratorio e indiagnosticavel depois do\n# fato: voce ve a CPU alta e nao sabe qual consulta a causou.\nresource \"aws_db_parameter_group\" \"pedidos\" {\n  name   = \"${var.projeto}-pg16\"\n  family = \"postgres16\"\n\n  # `pg_stat_statements` ja vem no shared_preload_libraries do grupo padrao do\n  # RDS. Declaramos aqui de propósito: grupo customizado NAO herda a lista do\n  # padrao, e esquecer esta linha desliga a extensao em silencio.\n  parameter {\n    name         = \"shared_preload_libraries\"\n    value        = \"pg_stat_statements\"\n    apply_method = \"pending-reboot\"\n  }\n\n  # Consulta acima de 1 s vai para o log. O valor e uma decisao de volume: em 1 s\n  # o log registra o que importa; em 100 ms ele registra tudo e ninguem le.\n  parameter {\n    name         = \"log_min_duration_statement\"\n    value        = \"1000\"\n    apply_method = \"immediate\"\n  }\n\n  # `log_lock_waits` mostra espera por travamento, que e a segunda causa de\n  # latencia alta com CPU baixa — o oposto do caso deste laboratorio.\n  parameter {\n    name         = \"log_lock_waits\"\n    value        = \"1\"\n    apply_method = \"immediate\"\n  }\n}\n\n# ── A replica de leitura ────────────────────────────────────────────────────\n#\n# `replicate_source_db` e o que faz deste recurso uma replica, e nao um banco\n# novo. Replicacao ASSINCRONA: existe uma janela em que o dado esta confirmado no\n# primario e ainda nao chegou aqui. Essa janela e o assunto da secao de provas.\nresource \"aws_db_instance\" \"leitura\" {\n  identifier          = \"${var.projeto}-leitura\"\n  replicate_source_db = var.primario_id\n\n  # Classe MENOR que a do primario, de propósito: a replica atende relatorio, nao\n  # gravacao. Se ela ficar pequena demais, o atraso de replicacao cresce — e o\n  # alarme de atraso e justamente o instrumento que diz isso.\n  instance_class = \"db.m6g.large\"\n\n  # A replica fica em uma TERCEIRA AZ. Nao na do standby: concentrar as duas\n  # copias na mesma AZ desfaz metade do beneficio de ter duas.\n  availability_zone = var.az_leitura\n\n  # A replica NAO precisa de Multi-AZ para este caso de uso. Ligar aqui dobraria\n  # o custo dela para proteger uma carga de relatorio que tolera indisponibilidade\n  # de minutos. Em L58, quando a replica virar caminho de recuperacao, muda.\n  multi_az = false\n\n  parameter_group_name   = aws_db_parameter_group.pedidos.name\n  vpc_security_group_ids = [var.sg_banco_id]\n  publicly_accessible    = false\n  storage_encrypted      = true\n  kms_key_id             = var.kms_key_arn\n\n  # Performance Insights e o que permite atribuir carga a evento de espera. Sete\n  # dias de retencao ficam na camada sem custo adicional; retencao longa cobra.\n  performance_insights_enabled          = true\n  performance_insights_retention_period = 7\n\n  # Log do PostgreSQL no CloudWatch. Cria um grupo de logs que NAO desaparece com\n  # o destroy da instancia — esta na secao de limpeza por isso.\n  enabled_cloudwatch_logs_exports = [\"postgresql\"]\n\n  # Replica nao aceita `skip_final_snapshot = false`: nao existe snapshot final de\n  # replica. Manter explicito evita a surpresa no destroy.\n  skip_final_snapshot = true\n  apply_immediately   = true\n\n  tags = {\n    Projeto = var.projeto\n    Papel   = \"leitura\"\n    Lab     = \"L07\"\n  }\n}\n\n# ── Alarmes: cada um responde a UMA pergunta ────────────────────────────────\n\n# \"A frota esta perto do teto de sessoes?\" O limiar e 70% do `max_connections`\n# desta classe, e nao um numero redondo: em 8 GiB o teto fica em cerca de 900.\nresource \"aws_cloudwatch_metric_alarm\" \"sessoes\" {\n  alarm_name          = \"${var.projeto}-sessoes-perto-do-teto\"\n  namespace           = \"AWS/RDS\"\n  metric_name         = \"DatabaseConnections\"\n  statistic           = \"Maximum\"\n  period              = 60\n  evaluation_periods  = 3\n  threshold           = 630\n  comparison_operator = \"GreaterThanThreshold\"\n  dimensions          = { DBInstanceIdentifier = var.primario_id }\n  alarm_description   = \"630 = 70% de ~900. Acima disto, o operador tambem perde o acesso.\"\n  alarm_actions       = [var.topico_alarme_arn]\n}\n\n# \"A carga e maior do que a maquina?\" DBLoadRelativeToNumVCPUs acima de 1 significa\n# mais sessoes ativas do que nucleos: a fila e real. Abaixo de 1 com latencia alta\n# aponta para outra coisa — travamento, rede, disco.\nresource \"aws_cloudwatch_metric_alarm\" \"carga_relativa\" {\n  alarm_name          = \"${var.projeto}-carga-acima-dos-nucleos\"\n  namespace           = \"AWS/RDS\"\n  metric_name         = \"DBLoadRelativeToNumVCPUs\"\n  statistic           = \"Average\"\n  period              = 60\n  evaluation_periods  = 5\n  threshold           = 1\n  comparison_operator = \"GreaterThanThreshold\"\n  dimensions          = { DBInstanceIdentifier = var.primario_id }\n  alarm_description   = \"Publicada somente quando ha carga; exige Performance Insights ligado.\"\n  alarm_actions       = [var.topico_alarme_arn]\n}\n\n# \"A replica esta longe do primario?\" 30 s da folga de mais de uma ordem de\n# grandeza sobre o pior caso medido (1,9 s no lote noturno) e ainda fica abaixo\n# do artefato documentado de 5 minutos em base ociosa.\nresource \"aws_cloudwatch_metric_alarm\" \"atraso_replica\" {\n  alarm_name          = \"${var.projeto}-replica-atrasada\"\n  namespace           = \"AWS/RDS\"\n  metric_name         = \"ReplicaLag\"\n  statistic           = \"Maximum\"\n  period              = 60\n  evaluation_periods  = 3\n  threshold           = 30\n  comparison_operator = \"GreaterThanThreshold\"\n  dimensions          = { DBInstanceIdentifier = aws_db_instance.leitura.identifier }\n  alarm_description   = \"Sem escrita no primario, o atraso reportado sobe ate 5 min por projeto.\"\n  alarm_actions       = [var.topico_alarme_arn]\n}\n\n# \"Trocou de AZ?\" Assinar a categoria de evento em vez de vigiar metrica: a troca\n# e um EVENTO, e metrica so mostra o rastro dela.\nresource \"aws_db_event_subscription\" \"failover\" {\n  name             = \"${var.projeto}-eventos-de-troca\"\n  sns_topic        = var.topico_alarme_arn\n  source_type      = \"db-instance\"\n  source_ids       = [var.primario_id, aws_db_instance.leitura.identifier]\n  event_categories = [\"failover\", \"failure\", \"availability\", \"maintenance\"]\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A armadilha do grupo de parâmetros customizado",
+            "content": "O grupo de parâmetros padrão do RDS para PostgreSQL já carrega `pg_stat_statements` na lista de bibliotecas pré-carregadas. Um grupo customizado NÃO herda essa lista: se você criar o grupo e esquecer a linha, a extensão deixa de ser carregada e `pg_stat_statements` para de coletar. O sintoma é cruel — a tabela existe, a consulta funciona, e devolve poucas linhas ou nada, o que se confunde com \"o banco está tranquilo\". Foi assim que um diagnóstico ficou cego justamente no módulo que existe para diagnosticar."
+          }
+        },
+        {
+          "id": "b9_3",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "Sobre a zona da réplica: ela vai numa TERCEIRA zona, não na do standby. Concentrar as duas cópias na mesma zona desfaz metade do benefício de ter duas — a perda daquela zona levaria o alvo de troca e a capacidade de leitura ao mesmo tempo, e você descobriria isso no pior momento possível."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: a porta das sessões de escrita"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O limite documentado desta peça é o que decide o desenho: para instâncias do RDS em configuração de replicação, a porta pode ser associada apenas à instância de escrita, nunca a uma réplica de leitura. Quem espera que ela distribua consulta desenha uma topologia que a AWS não implementa."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "proxy.tf",
+            "code": "# proxy.tf — a porta das sessoes de escrita.\n#\n# LIMITE DOCUMENTADO, e ele decide o desenho: para instancias do RDS em\n# configuracao de replicacao, o proxy pode ser associado APENAS a instancia de\n# escrita, nunca a uma replica de leitura. Ou seja: o proxy resolve o problema de\n# sessao do lado da GRAVACAO, e o roteamento de leitura continua sendo trabalho\n# da aplicacao. Quem espera que o proxy \"distribua leitura\" desenha errado.\n\nresource \"aws_db_proxy\" \"escrita\" {\n  name                   = \"${var.projeto}-proxy-escrita\"\n  engine_family          = \"POSTGRESQL\"\n  role_arn               = aws_iam_role.proxy.arn\n  vpc_subnet_ids         = var.subnets_privadas\n  vpc_security_group_ids = [var.sg_proxy_id]\n\n  # TLS obrigatorio entre aplicacao e proxy. Sem isto, a credencial atravessa a\n  # VPC em claro — e \"e rede interna\" nao e argumento desde que existe conta\n  # comprometida por movimento lateral.\n  require_tls = true\n\n  # 1800 s e generoso e existe para nao cortar sessao de manutencao. Em aplicacao\n  # web, sessao ociosa por 30 min e sintoma, nao caso de uso.\n  idle_client_timeout = 1800\n\n  auth {\n    auth_scheme = \"SECRETS\"\n    iam_auth    = \"DISABLED\"\n    secret_arn  = var.segredo_escrita_arn\n  }\n\n  tags = { Projeto = var.projeto, Lab = \"L07\" }\n}\n\nresource \"aws_db_proxy_default_target_group\" \"escrita\" {\n  db_proxy_name = aws_db_proxy.escrita.name\n\n  connection_pool_config {\n    # O proxy pode usar ate 60% do `max_connections` do banco. O resto fica para\n    # migracao, rotina agendada, ferramenta de BI e o terminal do operador. Deixar\n    # em 100 entrega o banco inteiro a um unico consumidor.\n    max_connections_percent = 60\n\n    # Sessoes ociosas que o proxy mantem prontas. Baixo demais e cada surto paga\n    # o custo de abrir conexao; alto demais desperdicia vaga do banco.\n    max_idle_connections_percent = 15\n\n    # Quanto tempo o cliente espera na fila antes de receber erro. E aqui que o\n    # surto vira ESPERA MEDIDA em vez de recusa de vaga: o comportamento que a\n    # documentacao descreve como enfileirar ou limitar.\n    connection_borrow_timeout = 5\n\n    # Toda sessao do proxy nasce com este ajuste. Cinturao de seguranca: se uma\n    # gravacao chegar pelo caminho errado, ela falha com mensagem clara.\n    init_query = \"SET statement_timeout = '15s'\"\n  }\n}\n\nresource \"aws_db_proxy_target\" \"primario\" {\n  db_proxy_name          = aws_db_proxy.escrita.name\n  target_group_name      = aws_db_proxy_default_target_group.escrita.name\n  db_instance_identifier = var.primario_id\n}\n\n# ── IAM do proxy: menor privilegio, sem um unico curinga ────────────────────\nresource \"aws_iam_role\" \"proxy\" {\n  name = \"${var.projeto}-proxy-escrita\"\n  assume_role_policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect    = \"Allow\"\n      Action    = \"sts:AssumeRole\"\n      Principal = { Service = \"rds.amazonaws.com\" }\n    }]\n  })\n}\n\ndata \"aws_iam_policy_document\" \"proxy\" {\n  statement {\n    sid       = \"LerApenasOSegredoDesteBanco\"\n    actions   = [\"secretsmanager:GetSecretValue\"]\n    resources = [var.segredo_escrita_arn]\n  }\n\n  statement {\n    sid       = \"DecifrarApenasViaSecretsManager\"\n    actions   = [\"kms:Decrypt\"]\n    resources = [var.kms_key_arn]\n\n    # A condicao estreita o que o ARN sozinho nao estreita: a chave so pode ser\n    # usada quando a chamada vem do Secrets Manager. Sem ela, o papel poderia\n    # decifrar qualquer coisa cifrada com essa chave.\n    condition {\n      test     = \"StringEquals\"\n      variable = \"kms:ViaService\"\n      values   = [\"secretsmanager.${var.regiao}.amazonaws.com\"]\n    }\n  }\n}\n\nresource \"aws_iam_role_policy\" \"proxy\" {\n  role   = aws_iam_role.proxy.id\n  policy = data.aws_iam_policy_document.proxy.json\n}\n\n# ── IAM da task: o unico \"*\" deste laboratorio, e a frase que o justifica ───\ndata \"aws_iam_policy_document\" \"task_metricas\" {\n  statement {\n    sid     = \"PublicarMetricaDePoolNoNamespaceDoProjeto\"\n    actions = [\"cloudwatch:PutMetricData\"]\n\n    # `cloudwatch:PutMetricData` NAO suporta permissao no nivel de recurso: nao\n    # existe ARN de metrica. O curinga aqui nao e preguica, e a unica forma\n    # aceita pela acao — e o estreitamento vai para a condicao abaixo, que limita\n    # a UM namespace. Sem a condicao, a task poderia escrever em qualquer metrica\n    # da conta, inclusive sobrescrevendo painel de outro time.\n    resources = [\"*\"]\n\n    condition {\n      test     = \"StringEquals\"\n      variable = \"cloudwatch:namespace\"\n      values   = [\"FFV/Banco\"]\n    }\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "O que a porta troca, exatamente",
+            "content": "Sem ela, sessão da aplicação e sessão do banco são a mesma coisa, e o teto da frota é `tasks × pool`. Com ela, a aplicação abre sessões contra a porta e a porta abre poucas contra o banco, reaproveitando cada uma por transação. Duas consequências práticas: escalar tasks deixa de exigir recálculo do parâmetro do banco, e surto passa a virar espera medida — o comportamento que a documentação descreve como enfileirar ou limitar — em vez de recusa de vaga. O limite continua existindo; ele muda de lugar, e o novo lugar tem instrumento."
+          }
+        },
+        {
+          "id": "b10_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "A conta que a porta acrescenta, e a que ela não resolve",
+            "content": "A porta cobra por hora e por capacidade da instância que ela atende, então ela é a peça mais fácil de justificar mal. O que ela NÃO resolve: consulta lenta continua lenta, e transação longa segura a sessão física do mesmo jeito. Ela também prende a sessão a um cliente em algumas situações — o que a documentação chama de fixação — e nesses casos o reaproveitamento não acontece. Se o seu problema é `tasks × pool` e você tem 6 tasks estáveis, reduzir o pool resolve de graça. A porta ganha o requisito quando o número de tasks passa a variar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: dois pools, e a decisão de rota em .NET 8"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O ponto de projeto: o destino não cabe no texto de conexão. Texto de conexão vale para o processo, e a tolerância a atraso de replicação é por operação. Quem escreve a consulta é quem sabe, e o roteamento apenas transporta essa informação até a escolha do pool."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Dados.cs",
+            "code": "// Banco.cs — dois destinos, dois pools, e a decisao de rota por operacao.\n//\n// A decisao central deste arquivo: o destino NAO cabe no texto de conexao.\n// Um texto de conexao vale para o PROCESSO; a tolerancia a atraso de replicacao\n// e por OPERACAO. Quem escreve a consulta sabe se ela tolera; nada abaixo dela\n// sabe. Por isso a rota e um argumento com nome, e nao uma configuracao.\n\nusing Microsoft.EntityFrameworkCore;\nusing Microsoft.EntityFrameworkCore.Diagnostics;\nusing Npgsql;\nusing System.Diagnostics.Metrics;\n\npublic static class Banco\n{\n    // ── 1. Os dois pools ────────────────────────────────────────────────────\n    //\n    // NpgsqlDataSource E o dono do pool. Criar um por requisicao recria o pool e\n    // anula todo o ganho — e e o erro mais comum de quem vem de conexao avulsa.\n    // Por isso: um por destino, vivendo o tempo da aplicacao.\n    static NpgsqlDataSource Fonte(string conexao, int maximo, string papel)\n    {\n        var c = new NpgsqlDataSourceBuilder(conexao);\n        c.ConnectionStringBuilder.MaxPoolSize = maximo;\n        c.ConnectionStringBuilder.MinPoolSize = 2;\n\n        // O padrao do Npgsql e 100 por processo, e e ele que produz a conta\n        // `tasks x pool`. Aqui os valores sao DERIVADOS do teto do banco:\n        // 6 tasks x (10 + 40) = 300 sessoes de pior caso contra ~900 disponiveis,\n        // deixando folga para migracao, rotina agendada e o operador.\n\n        // `Timeout` (padrao 15 s) mede a espera para OBTER a conexao, incluindo a\n        // fila do pool. 5 s no caminho de leitura porque relatorio que espera 15 s\n        // por uma vaga ja perdeu o usuario: falhar rapido e mais honesto.\n        c.ConnectionStringBuilder.Timeout = papel == \"leitura\" ? 5 : 10;\n\n        // `ConnectionLifetime` e 3600 s por padrao desde a versao 9.0. Reduzir\n        // importa por um motivo especifico deste laboratorio: uma sessao aberta\n        // aponta para o endereco que o nome do endpoint resolvia NAQUELE momento,\n        // e reciclar encurta o rastro de uma troca de zona.\n        c.ConnectionStringBuilder.ConnectionLifetime = 900;\n\n        // `ConnectionIdleLifetime` fica no padrao de 300 s: sessao ociosa no pool\n        // ocupa vaga no banco, e vaga ocupada por nada e a mais cara de todas.\n        return c.Build();\n    }\n\n    public static void AdicionarBanco(this WebApplicationBuilder builder)\n    {\n        var escrita = Fonte(builder.Configuration[\"Banco:Escrita\"]!, 10, \"escrita\");\n        var leitura = Fonte(builder.Configuration[\"Banco:Leitura\"]!, 40, \"leitura\");\n\n        builder.Services.AddSingleton(new MedidorDeEspera());\n        builder.Services.AddScoped<MarcaDeEscrita>();\n        builder.Services.AddSingleton<Degradacao>();\n        builder.Services.AddScoped<Roteador>();\n\n        // O interceptador que MARCA a escrita e resolvido do provedor da\n        // REQUISICAO, e nao de dentro do EF. Isto importa: `DbContext.GetService`\n        // consulta o provedor INTERNO do EF Core, onde um servico com escopo de\n        // requisicao nao existe — a marca sairia sempre falsa, em silencio.\n        builder.Services.AddScoped<MarcadorDeEscrita>();\n\n        builder.Services.AddDbContext<PedidosDb>((sp, o) => o\n            .UseNpgsql(escrita)\n            .AddInterceptors(sp.GetRequiredService<MarcadorDeEscrita>(),\n                             sp.GetRequiredService<MedidorDeEspera>()));\n\n        builder.Services.AddDbContext<PedidosLeituraDb>((sp, o) => o\n            .UseNpgsql(leitura)\n            .UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking)\n            .AddInterceptors(sp.GetRequiredService<MedidorDeEspera>()));\n\n        // ── Saude: o que a task NAO pode viver sem ──────────────────────────\n        //\n        // A prontidao toca o PRIMARIO e nao toca a replica. Se ela dependesse da\n        // replica, uma falha do caminho de relatorio marcaria as seis tasks como\n        // inaptas, o balanceador as removeria, e uma degradacao PARCIAL viraria\n        // indisponibilidade TOTAL — com o agravante de as tasks novas nascerem\n        // igualmente inaptas. Prontidao verifica o que impede a task de\n        // trabalhar, nao tudo com que ela conversa.\n        builder.Services.AddHealthChecks()\n            .AddNpgSql(escrita, name: \"primario\", tags: [\"ready\"])\n            .AddNpgSql(leitura, name: \"replica\", tags: [\"degradado\"]);\n    }\n\n    public static void MapearSaude(this WebApplication app)\n    {\n        app.MapHealthChecks(\"/health/live\", new() { Predicate = _ => false });\n        app.MapHealthChecks(\"/health/ready\",\n            new() { Predicate = c => c.Tags.Contains(\"ready\") });\n        // Esta rota NAO entra no health check do balanceador: ela alimenta painel\n        // e alarme, e responder 503 aqui nao deve remover task nenhuma.\n        app.MapHealthChecks(\"/health/degradado\",\n            new() { Predicate = c => c.Tags.Contains(\"degradado\") });\n    }\n}\n\n// ── 2. Dois contextos sobre o MESMO modelo ──────────────────────────────────\n//\n// A subclasse da ao EF Core dois contextos distintos sem duplicar mapeamento:\n// `OnModelCreating` e herdado. O de leitura nasce sem rastreamento, porque\n// rastrear entidade que nunca sera salva e memoria gasta por nada.\npublic class PedidosDb(DbContextOptions<PedidosDb> opcoes) : DbContext(opcoes)\n{\n    public DbSet<Pedido> Pedidos => Set<Pedido>();\n    protected override void OnModelCreating(ModelBuilder m) { /* mapeamento */ }\n}\n\npublic sealed class PedidosLeituraDb(DbContextOptions<PedidosLeituraDb> opcoes)\n    : DbContext(opcoes)\n{\n    public DbSet<Pedido> Pedidos => Set<Pedido>();\n    // Reaproveita a MESMA configuracao do contexto de escrita, chamando o\n    // mapeamento compartilhado. Duas classes, um modelo, nenhuma duplicacao.\n    protected override void OnModelCreating(ModelBuilder m) => Mapeamento.Aplicar(m);\n}\n\n// ── 3. A cerca de leitura-apos-escrita ──────────────────────────────────────\n//\n// Escopo por requisicao. Assim que qualquer gravacao e confirmada, toda leitura\n// SEGUINTE daquela requisicao volta ao primario. Resolve o caso comum — gravar e\n// conferir na mesma tela — sem exigir coordenacao por posicao no registro de\n// escrita. NAO cobre gravar numa aba e ler em outra: sao requisicoes diferentes,\n// e para esse caso existe a cerca por posicao, que custa uma consulta a mais.\npublic sealed class MarcaDeEscrita\n{\n    public bool Houve { get; set; }\n}\n\npublic sealed class MarcadorDeEscrita(MarcaDeEscrita marca) : SaveChangesInterceptor\n{\n    public override ValueTask<int> SavedChangesAsync(\n        SaveChangesCompletedEventData dados, int resultado,\n        CancellationToken ct = default)\n    {\n        marca.Houve = true;\n        return base.SavedChangesAsync(dados, resultado, ct);\n    }\n}\n\n// O roteador. Uma unica pergunta, e ela e explicita na assinatura.\npublic sealed class Roteador(\n    PedidosDb primario, PedidosLeituraDb replica,\n    MarcaDeEscrita marca, Degradacao degradacao)\n{\n    public bool UsaReplica(bool toleraAtraso) =>\n        toleraAtraso && !marca.Houve && !degradacao.ReplicaSuspeita;\n\n    public PedidosDb Escrita => primario;\n\n    public IQueryable<Pedido> Pedidos(bool toleraAtraso) =>\n        UsaReplica(toleraAtraso) ? replica.Pedidos : primario.Pedidos;\n}\n\n// ── 4. A porta de retorno, com limite ───────────────────────────────────────\n//\n// Se a replica cai e TODA a leitura volta ao primario, voce reproduziu o\n// incidente original com uma peca a mais. Por isso o retorno e contado e\n// alarmado: voltar ao primario e medida temporaria, nunca regime.\npublic sealed class Degradacao\n{\n    static readonly Meter Medidor = new(\"FFV.Banco\");\n    static readonly Counter<long> Retornos =\n        Medidor.CreateCounter<long>(\"leitura.retorno_ao_primario\");\n\n    DateTimeOffset _suspeitaAte = DateTimeOffset.MinValue;\n\n    public bool ReplicaSuspeita => DateTimeOffset.UtcNow < _suspeitaAte;\n\n    public void Registrar(Exception e)\n    {\n        Retornos.Add(1, new KeyValuePair<string, object?>(\"motivo\", e.GetType().Name));\n        // Janela curta e deliberada: 30 s reabre o caminho de leitura para\n        // reavaliacao em vez de deixar o retorno virar permanente por esquecimento.\n        _suspeitaAte = DateTimeOffset.UtcNow.AddSeconds(30);\n    }\n}\n\n// ── 5. A metrica que o banco NAO tem como dar ───────────────────────────────\n//\n// O banco sabe quantas sessoes existem. Ele nao sabe quanto tempo a SUA\n// aplicacao esperou por uma vaga no pool — e e esse numero que distingue dois\n// sintomas identicos na tela: latencia alta com CPU do banco baixa. Se a espera\n// e alta e o banco esta folgado, o pool e pequeno. Se a espera e baixa e a\n// latencia e alta, o banco e o gargalo. As correcoes sao opostas.\npublic sealed class MedidorDeEspera : DbConnectionInterceptor\n{\n    static readonly Meter Medidor = new(\"FFV.Banco\");\n    static readonly Histogram<double> Espera =\n        Medidor.CreateHistogram<double>(\"pool.espera_ms\", unit: \"ms\");\n\n    public override Task ConnectionOpenedAsync(\n        System.Data.Common.DbConnection conexao,\n        ConnectionEndEventData dados, CancellationToken ct = default)\n    {\n        // `Duration` cobre a obtencao da conexao. Com provedor agrupado, isso\n        // inclui a espera na fila do pool: p99 acima de 50 ms aqui e pool\n        // pequeno, e nao banco lento.\n        Espera.Record(dados.Duration.TotalMilliseconds,\n                      new KeyValuePair<string, object?>(\"destino\", conexao.DataSource));\n        return Task.CompletedTask;\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Do lado de quem escreve consulta, a decisão aparece como um argumento com nome. Isso é deliberado: um argumento explícito sobrevive a uma refatoração que mova o código para outra requisição, e uma marca implícita não sobrevive."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "csharp",
+            "filename": "PedidosEndpoints.cs",
+            "code": "// PedidosEndpoints.cs — como a decisao aparece para quem escreve consulta.\n\n// Gravacao: sempre no primario. O interceptador marca a requisicao, e daqui para\n// a frente toda leitura DELA volta ao primario mesmo se pedir a replica.\napp.MapPost(\"/api/pedidos\", async (NovoPedido entrada, Roteador rota) =>\n{\n    var pedido = Pedido.De(entrada);\n    rota.Escrita.Pedidos.Add(pedido);\n    await rota.Escrita.SaveChangesAsync();\n    return Results.Created($\"/api/pedidos/{pedido.Id}\", pedido.Id);\n});\n\n// Conferencia imediata: NAO tolera atraso, e isso e declarado. Ainda que a marca\n// de escrita cobrisse este caso, a declaracao sobrevive a uma refatoracao que\n// mova o codigo para outra requisicao — e a marca nao sobrevive.\napp.MapGet(\"/api/pedidos/{id}\", async (long id, Roteador rota) =>\n    await rota.Pedidos(toleraAtraso: false).FirstOrDefaultAsync(p => p.Id == id)\n        is { } p ? Results.Ok(p) : Results.NotFound());\n\n// Painel: tolera atraso. E o caminho que o indice deste laboratorio acelerou e\n// que a replica passou a isolar da gravacao.\napp.MapGet(\"/api/paineis/loja/{lojaId}\",\n    async (int lojaId, Roteador rota, Degradacao deg) =>\n{\n    var desde = DateTime.UtcNow.AddDays(-7);\n    try\n    {\n        return Results.Ok(await rota.Pedidos(toleraAtraso: true)\n            .Where(p => p.LojaId == lojaId && p.CriadoEm >= desde)\n            .OrderByDescending(p => p.CriadoEm)\n            .Take(50)\n            .ToListAsync());\n    }\n    catch (NpgsqlException e)\n    {\n        // A replica falhou. Registra e cai para o primario, com JANELA: se o\n        // retorno virasse regime silencioso, o primario voltaria a receber tudo e\n        // o incidente original se reproduziria com uma peca a mais na conta.\n        deg.Registrar(e);\n        return Results.Ok(await rota.Pedidos(toleraAtraso: false)\n            .Where(p => p.LojaId == lojaId && p.CriadoEm >= desde)\n            .OrderByDescending(p => p.CriadoEm)\n            .Take(50)\n            .ToListAsync());\n    }\n});\n\n// Relatorio de 90 dias: o requisito que de fato justificou a replica. Agregacao\n// pesada por natureza, que nenhum indice torna leve, e que competia por nucleos\n// com a gravacao de pedido. O ganho aqui e ISOLAMENTO, nao velocidade.\napp.MapGet(\"/api/relatorios/mensal\", async (Roteador rota) =>\n{\n    var desde = DateTime.UtcNow.AddDays(-90);\n    return Results.Ok(await rota.Pedidos(toleraAtraso: true)\n        .Where(p => p.CriadoEm >= desde)\n        .GroupBy(p => new { p.LojaId, Mes = p.CriadoEm.Month })\n        .Select(g => new { g.Key.LojaId, g.Key.Mes, Total = g.Sum(x => x.Total) })\n        .ToListAsync());\n});\n\n// ── A alternativa de menos linhas, e por que ela nao substitui isto ─────────\n//\n// O Npgsql aceita varios hosts num texto de conexao e escolhe por\n// `Target Session Attributes`, com os valores `any`, `primary`, `standby`,\n// `prefer-primary`, `prefer-standby`, `read-write` e `read-only`. Ele detecta o\n// papel consultando `pg_is_in_recovery()` e `default_transaction_read_only`, e\n// revisa a cada `Host Recheck Seconds` (padrao 10). E menos codigo:\n//\n//   Host=primario.rds,replica.rds;Target Session Attributes=prefer-standby\n//\n// O que essa forma NAO consegue expressar e justamente a decisao deste modulo:\n// \"esta leitura precisa do primario porque segue uma gravacao\". O atributo vale\n// para a CONEXAO, e a tolerancia a atraso e por OPERACAO. Use os multiplos hosts\n// para o que ele resolve bem — sobreviver a troca de papel sem trocar\n// configuracao — e mantenha a decisao de rota no codigo.\n//\n// E NAO ligue `Load Balance Hosts=true` com primario e replica na mesma lista\n// junto de `Target Session Attributes=Any`: cada abertura comeca num ponto\n// diferente da lista, e uma gravacao vai cair na replica de tempo em tempo,\n// falhando com erro de transacao somente para consulta numa fracao das\n// requisicoes. O sintoma e intermitente, que e o pior tipo.\n"
+          }
+        },
+        {
+          "id": "b11_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "A prontidão que não deve consultar a réplica",
+            "content": "A rota de prontidão toca o primário e não toca a réplica, e o motivo é o mesmo do L03 aplicado a um caso novo. Se a prontidão dependesse da réplica, uma falha do caminho de relatório marcaria as seis tasks como inaptas, o balanceador as removeria e uma degradação parcial viraria indisponibilidade total — com o agravante de que as tasks novas nasceriam igualmente inaptas. Prontidão verifica o que impede a task de trabalhar, não tudo com que ela conversa. A saúde da réplica vira uma terceira rota, que alimenta painel e alarme e não remove task nenhuma."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar e medir: cinco provas com número"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco medições, cada uma com o comando, o resultado que aprova e o que a reprovação significa. Prova sem número é afirmação, e este módulo tem quatro afirmações que só valem medidas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medicoes. Nenhuma conclusao vem de \"parece melhor\".\n\n# ── PROVA 1: o standby nao atende leitura, e nao existe endereco para tentar ──\n# Nao ha endpoint de standby para listar. A ausencia E a prova.\naws rds describe-db-instances --db-instance-identifier ffv-lab-primario \\\n  --query \"DBInstances[0].{Endpoint:Endpoint.Address,MultiAZ:MultiAZ,\\\nAZ:AvailabilityZone,SecundariaAZ:SecondaryAvailabilityZone}\"\n# APROVA se: MultiAZ=true, com AZ e SecundariaAZ diferentes, e UM unico Endpoint.\n# REPROVA se voce encontrar um segundo endereco: entao nao e Multi-AZ com standby\n# unico, e sim um cluster Multi-AZ — que tem dois leitores que ATENDEM consulta,\n# endpoint de leitura e replicacao semissincrona. Sao produtos diferentes.\n\npsql \"$ESCRITA\" -Atc \"SELECT pg_is_in_recovery();\"   # esperado: f (sempre)\npsql \"$LEITURA\" -Atc \"SELECT pg_is_in_recovery();\"   # esperado: t\npsql \"$LEITURA\" -Atc \"INSERT INTO pedido (loja_id, total) VALUES (1, 10);\" || true\n# APROVA com: ERROR: cannot execute INSERT in a read-only transaction (SQLSTATE 25006)\n\n# ── PROVA 2: o indice, medido antes e depois ─────────────────────────────────\npsql \"$ESCRITA\" -c \"EXPLAIN (ANALYZE, BUFFERS, COSTS OFF) $CONSULTA_DO_PAINEL\"\n# APROVA se: o plano deixa de conter \"Seq Scan on pedido\" e o Execution Time cai\n# de tres digitos de milissegundo para um. Medido na Cadencia: 2180,9 ms -> 3,4 ms,\n# com blocos lidos caindo de 68.312 para 6. A CPU do primario foi de 98% a 24%.\n# REPROVA se o plano continua em Seq Scan: quase sempre a ordem das colunas do\n# indice esta invertida, ou a consulta aplica funcao sobre a coluna filtrada.\n\n# ── PROVA 3: o teto de sessoes e tasks x pool ────────────────────────────────\npsql \"$ESCRITA\" -Atc \"SHOW max_connections;\"                    # ~900 em 8 GiB\npsql \"$ESCRITA\" -Atc \"SELECT count(*) FROM pg_stat_activity;\"\nTASKS=$(aws ecs describe-services --cluster ffv-lab --services ffv-lab-api \\\n          --query \"services[0].runningCount\" --output text)\necho \"pior caso = $TASKS x (10 + 40) = $(( TASKS * 50 )) sessoes\"\n# APROVA se: o pior caso calculado fica abaixo de 70% do max_connections.\n# Na Cadencia: 6 x 50 = 300 contra ~900, e antes do ajuste 6 x 100 = 600.\n# Para VER o teto agir, suba tasks e mantenha carga; o erro que aparece e\n# \"FATAL: remaining connection slots are reserved for non-replication superuser\n# connections\" (SQLSTATE 53300) — e ele atinge o operador tambem.\n\n# ── PROVA 4: o atraso de replicacao existe e e mensuravel ────────────────────\nID=$(psql \"$ESCRITA\" -Atc \\\n  \"INSERT INTO pedido (loja_id, total) VALUES (314, 99) RETURNING id;\")\npsql \"$LEITURA\" -Atc \"SELECT count(*) FROM pedido WHERE id = $ID;\"\n# APROVA com 0 em alguma das tentativas sob carga: e a demonstracao de \"gravei e\n# nao vejo\". Repita 200 vezes e conte. Na Cadencia, com o lote noturno rodando,\n# 7 de 200 leituras imediatas nao encontraram a linha.\naws cloudwatch get-metric-statistics --namespace AWS/RDS --metric-name ReplicaLag \\\n  --dimensions Name=DBInstanceIdentifier,Value=ffv-lab-leitura \\\n  --start-time \"$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)\" \\\n  --end-time \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \\\n  --period 60 --statistics Maximum Average\n# Na Cadencia: p50 de 12 ms, p95 de 240 ms, maximo de 1,9 s no lote noturno.\n\n# ── PROVA 5: o failover, ensaiado e cronometrado nos DOIS lados ──────────────\n( while true; do\n    inicio=$(date +%s%3N)\n    if psql \"$ESCRITA\" -Atc \"INSERT INTO sonda (t) VALUES (now());\" >/dev/null 2>&1\n      then echo \"$(date +%T.%3N) ok $(( $(date +%s%3N) - inicio ))ms\"\n      else echo \"$(date +%T.%3N) FALHA\"\n    fi\n    sleep 0.2\n  done ) > sonda-escrita.log &\nSONDA=$!\n\naws rds reboot-db-instance --db-instance-identifier ffv-lab-primario --force-failover\naws rds describe-events --source-identifier ffv-lab-primario \\\n  --source-type db-instance --duration 10 \\\n  --query \"Events[].{Q:Date,M:Message}\" --output table\nsleep 180; kill $SONDA\ngrep -c FALHA sonda-escrita.log\n# APROVA se: existe uma janela contigua de FALHA e ela termina sozinha, sem\n# reiniciar task nenhuma. Medido no ensaio de exemplo: 47 s no total, com a\n# resolucao do nome mudando por volta de 34 s e os 13 s restantes gastos\n# esvaziando sessoes do pool que apontavam para o endereco antigo.\n#\n# ATENCAO ao interpretar: a documentacao da AWS diz que a troca \"tipicamente\"\n# leva de 60 a 120 s, e nao promete numero. Os 47 s deste ensaio sao de UMA\n# instancia pequena com transacao curta em voo, e nao valem como referencia para\n# a sua. O que vale como metodo e a DECOMPOSICAO: mede-se a troca e mede-se o\n# esvaziamento do pool separadamente, porque eles tem donos diferentes.\n"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "sql",
+            "filename": "lag.sql",
+            "code": "-- lag.sql — medir atraso de replicacao dos dois lados.\n\n-- NA REPLICA: quanto tempo faz que a ultima transacao replicada foi aplicada.\nSELECT pg_is_in_recovery()                                  AS e_replica,\n       now() - pg_last_xact_replay_timestamp()              AS atraso,\n       pg_last_wal_replay_lsn()                             AS posicao_aplicada;\n-- Na Cadencia, sob carga de pico: p50 de 12 ms, p95 de 240 ms, e 1,9 s durante\n-- o lote noturno de fechamento. O alarme ficou em 30 s, com folga de uma ordem\n-- de grandeza sobre o pior caso observado.\n\n-- ARMADILHA DOCUMENTADA: sem transacao no primario, a replica reporta atraso de\n-- ATE CINCO MINUTOS. O calculo e `now() - ultima_transacao_confirmada`, e o RDS\n-- troca o segmento do registro de escrita a cada 5 minutos — so entao o numero\n-- cai. Alarme de atraso configurado em 60 s dispara toda madrugada em ambiente\n-- ocioso, e o time aprende a ignorar o alarme. Combine com carga de escrita.\n\n-- NO PRIMARIO: quem esta conectado replicando, e o quanto cada um esta atras.\nSELECT client_addr, state, sync_state,\n       pg_current_wal_lsn() - replay_lsn AS bytes_atras\n  FROM pg_stat_replication;\n-- `sync_state` distingue as duas replicacoes deste laboratorio: o standby do\n-- Multi-AZ e sincrono e nao aparece aqui como sessao sua; a replica de leitura\n-- aparece como assincrona. Sao mecanismos diferentes, com garantias diferentes.\n\n-- A CERCA RIGOROSA de leitura-apos-escrita, para quando marcar a requisicao nao\n-- basta. No primario, apos o commit:\nSELECT pg_current_wal_lsn() AS marca;\n-- Na replica, antes de responder:\nSELECT pg_last_wal_replay_lsn() >= '0/1A2B3C4D'::pg_lsn AS ja_chegou;\n-- Se `false`, espere ou leia do primario. Isto custa uma ida a mais e resolve o\n-- caso que a marcacao por requisicao nao cobre: usuario que grava numa aba e le\n-- em outra, em requisicoes diferentes.\n"
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Prova",
+              "O que aprova",
+              "O que a reprovação significa"
+            ],
+            "rows": [
+              [
+                "1 · o standby não atende leitura",
+                "um único endereço no primário, com zona secundária diferente da principal",
+                "se houver um segundo endereço de leitura, você tem um cluster Multi-AZ e não um standby — outra topologia, outras garantias"
+              ],
+              [
+                "2 · o índice, medido no plano",
+                "2.180,9 ms para 3,4 ms, com blocos lidos caindo de 68.312 para 6",
+                "plano continua em varredura sequencial: ordem das colunas invertida, ou função aplicada sobre a coluna filtrada"
+              ],
+              [
+                "3 · o teto é `tasks × pool`",
+                "pior caso calculado abaixo de 70% do teto: 6 × 50 = 300 contra ~900",
+                "acima disso, o operador perde o acesso junto com a aplicação, e o diagnóstico fica impossível justamente na hora do incidente"
+              ],
+              [
+                "4 · atraso de replicação existe",
+                "ao menos uma leitura imediata sem encontrar a linha: 7 em 200, sob carga",
+                "zero falhas em 200 não prova ausência de atraso, prova que a carga do teste era baixa; repita durante o lote noturno"
+              ],
+              [
+                "5 · a troca, cronometrada",
+                "janela contígua de falha que termina sozinha, sem reiniciar task: 47 s no ensaio, 34 s de troca e 13 s de pool",
+                "se a janela não termina sozinha, o pool não está descartando sessão morta e a aplicação precisa de reinício — que é o defeito, não a solução"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O número do ensaio não é referência para a sua conta",
+            "content": "Os 47 s vieram de uma instância pequena com transação curta em voo. A documentação da AWS diz que a troca leva tipicamente de 60 a 120 s e não promete valor, avisando que transação grande ou recuperação longa aumentam esse tempo. O que vale como método, e não como número, é a DECOMPOSIÇÃO: meça a troca e o esvaziamento do pool separadamente, porque eles têm donos diferentes e correções diferentes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada falha abaixo se provoca em um comando e se diagnostica em outro. O objetivo não é ver o erro: é reconhecer o sintoma antes de ele aparecer em produção com gente esperando."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "quebrar.sh",
+            "code": "# FALHA 1 — apague o indice e veja a CPU voltar.\npsql \"$ESCRITA\" -c \"DROP INDEX ix_pedido_loja_data;\"\n# Sintoma: p95 do painel volta a segundos; CPU sobe; sessoes seguem POUCAS.\n# Onde olhar: pg_stat_statements ordenado por tempo total. O item campeao\n# reaparece no topo com quase todo o tempo, e DBLoadRelativeToNumVCPUs\n# continua abaixo de 1 — o que confirma consulta, e nao concorrencia.\n# Correcao: recriar com CONCURRENTLY. E a licao: monitore a EXISTENCIA dos\n# indices criticos, porque migracao mal escrita apaga indice em silencio.\n\n# FALHA 2 — mande TODA a leitura para a replica, inclusive a que segue\n# gravacao. Basta trocar o argumento na rota de conferencia.\n#   rota.Pedidos(toleraAtraso: true)   // era false\n# Sintoma: o cliente grava um pedido, e a tela seguinte diz que ele nao\n# existe. Intermitente, e mais frequente sob carga — o pior tipo, porque\n# nao reproduz na maquina do desenvolvedor, onde nao ha atraso.\n# Onde olhar: correlacione o horario da reclamacao com ReplicaLag. Se o\n# atraso subiu naquele minuto, o diagnostico esta fechado.\n# Correcao: `toleraAtraso: false` na conferencia, e a marca por requisicao\n# como rede de seguranca para quem esquecer.\n\n# FALHA 3 — devolva os pools ao padrao e escale as tasks.\naws ecs update-service --cluster ffv-lab --service ffv-lab-api --desired-count 20\n# Com MaxPoolSize em 100 nos dois destinos: 20 x 200 = 4.000 sessoes possiveis\n# contra ~900. Sintoma: \"FATAL: remaining connection slots are reserved for\n# non-replication superuser connections\" (SQLSTATE 53300).\n# O detalhe que dói: o operador tambem nao conecta. Voce perde o acesso ao\n# banco exatamente quando precisa dele para diagnosticar.\npsql \"$ESCRITA\" -Atc \"SELECT count(*) FROM pg_stat_activity;\"  # pode falhar\n# Correcao imediata: reduzir desired-count. Correcao real: pool derivado do\n# teto, e porta na frente para que escalar nao toque o parametro do banco."
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Falha provocada",
+              "Sintoma na tela",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Índice removido",
+                "p95 do painel volta a segundos, com sessões ainda poucas",
+                "estatística de consulta por tempo total; carga relativa aos núcleos abaixo de 1",
+                "recriar sem travar escrita, e vigiar a existência dos índices críticos"
+              ],
+              [
+                "Leitura de conferência na réplica",
+                "gravei e não vejo, intermitente e pior sob carga",
+                "horário da reclamação contra a curva de atraso de replicação",
+                "declarar a intolerância na rota, com a marca por requisição como rede"
+              ],
+              [
+                "Pool no padrão com 20 tasks",
+                "recusa de vaga de conexão, e o operador também sem acesso",
+                "contagem de sessões por estado, e o teto do parâmetro da classe",
+                "pool derivado do teto; porta na frente para desacoplar escala de parâmetro"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Um banco RDS PostgreSQL com Multi-AZ ligado está com CPU em 98% durante o pico, e apenas 84 conexões abertas contra um `max_connections` de 900. A equipe quer reduzir a latência das consultas de painel. Qual é o primeiro movimento?",
+        "options": [
+          "Rotear as consultas de painel para o standby do Multi-AZ, que já está pago",
+          "Criar uma réplica de leitura e apontar todo o painel para ela",
+          "Ler o plano de execução da consulta que concentra o tempo e corrigir o índice",
+          "Aumentar o tamanho máximo do pool de conexões na aplicação"
+        ],
+        "correctIndex": 2,
+        "explanation": "CPU alta com poucas sessões descreve trabalho por consulta, não concorrência: consumo de CPU acompanha a quantidade de dado lido, e uma varredura sequencial satura núcleos com dez sessões. O plano de execução dá o número que decide — blocos lidos — e um índice composto o derruba sem nenhum recurso novo na fatura.\n\nA primeira alternativa é impossível, e é a confusão que este laboratório existe para desfazer: a documentação da AWS afirma que o standby não pode servir tráfego de leitura, e não existe endereço para conectar nele. A terceira alternativa não é impossível, é fora de ordem: a réplica executaria a MESMA consulta ruim em uma instância nova, então você pagaria hardware para repetir o desperdício em dois lugares, e ainda acrescentaria atraso de replicação como defeito novo. O quarto distrator inverte causa e efeito: o pool não está esgotado, e mais sessões contra um banco saturado somam troca de contexto ao problema original — o pool grande não acelera consulta lenta, apenas deixa mais gente esperando junto."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o que muda quando o banco ganha uma segunda porta"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova é uma superfície nova. A réplica é um banco alcançável, a porta de conexão é um destino alcançável, e o segundo segredo é uma credencial a mais para rotacionar. Nenhuma delas é problema; todas são responsabilidade."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Réplica criada com acesso público",
+                "média — é uma caixa de seleção, e o padrão do console varia",
+                "alto: banco com dado de pedido exposto à internet",
+                "`publicly_accessible = false` explícito, e grupo de segurança que referencia o grupo da task, nunca faixa de endereço",
+                "regra de conformidade sobre instâncias públicas, e revisão do grupo de segurança",
+                "modificar a instância; considerar o dado como potencialmente exposto e rotacionar credencial"
+              ],
+              [
+                "Credencial de gravação usada no caminho de leitura",
+                "alta — é o caminho de menos linhas",
+                "médio: gravação acidental na réplica, ou pior, no primário por rota errada",
+                "papel restrito a consulta com transação somente para leitura por padrão, e segundo segredo",
+                "auditoria de comando no log do PostgreSQL; contagem de erro de privilégio",
+                "trocar a credencial do caminho de leitura e revisar quem a lia"
+              ],
+              [
+                "Segredo com credencial em variável de ambiente",
+                "média — é o atalho de todo tutorial",
+                "alto: quem lê a definição da task lê a senha",
+                "referência de ARN na definição do contêiner, lida em execução; nunca em variável",
+                "inspeção da definição da task; alerta sobre valor com aparência de segredo",
+                "rotacionar imediatamente e recriar a revisão da definição — o valor antigo permanece nas revisões"
+              ],
+              [
+                "Estatística de consulta expondo dado de cliente",
+                "baixa — a extensão normaliza literais",
+                "baixo a médio: texto de consulta pode conter identificador em consulta construída por concatenação",
+                "consulta parametrizada sempre; a extensão substitui o literal por marcador",
+                "revisar o texto das consultas mais custosas procurando valor embutido",
+                "corrigir a consulta para usar parâmetro; zerar a estatística acumulada"
+              ],
+              [
+                "Retenção longa de dado de desempenho",
+                "média — é uma opção que parece só técnica",
+                "baixo em segurança, real em fatura e em governança de dado",
+                "sete dias de retenção, que ficam na camada sem custo adicional",
+                "revisão de custo por serviço; inventário de recursos com retenção",
+                "reduzir a retenção; a decisão de guardar mais precisa de dono"
+              ],
+              [
+                "Porta de conexão sem exigência de transporte cifrado",
+                "baixa — mas o padrão não protege",
+                "alto: credencial atravessa a rede em claro",
+                "`require_tls = true` na porta, e verificação de certificado no cliente",
+                "tentativa de conexão sem cifra deve falhar; teste isso explicitamente",
+                "ligar a exigência e rotacionar a credencial que trafegou"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O privilégio restrito como rede de segurança, não como muro",
+            "content": "O papel de consulta não existe para impedir um invasor: quem já tem a credencial de gravação não é barrado por ela. Ele existe para que um ERRO DE ROTEAMENTO falhe com mensagem clara, na borda do privilégio, em vez de falhar por acaso — dependendo de a réplica recusar a gravação. Defesa em profundidade é isso: a camada de dentro transforma um defeito silencioso em um erro nomeado. E como o papel é criado no primário, ele chega à réplica pela própria replicação, sem passo extra."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Painel não é coleção de gráfico. Cada linha abaixo é uma pergunta que alguém faz às 12h de um dia ruim, com a métrica que a responde e o limiar que a torna acionável."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": false,
+            "items": [
+              "A CPU alta é consulta ruim ou máquina pequena? Carga relativa ao número de núcleos, contra 1.",
+              "Qual consulta está consumindo o banco agora? Carga por texto de consulta no Performance Insights, mais estatística acumulada por tempo total.",
+              "A frota está perto do teto de sessões? Sessões abertas contra 70% do teto da classe.",
+              "A latência é do banco ou da espera por vaga no pool? Histograma de espera para obter conexão, medido na aplicação — o banco não tem como dar esse número.",
+              "A réplica está longe do primário? Atraso de replicação, contra 30 s, com o artefato de base ociosa em mente.",
+              "A leitura está voltando ao primário por degradação? Contador de retorno, que deve ser zero em regime.",
+              "Houve troca de zona? Assinatura da categoria de evento, não vigilância de métrica."
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Alarme",
+              "Métrica",
+              "Limiar inicial",
+              "Por que este número",
+              "O que fazer ao disparar"
+            ],
+            "rows": [
+              [
+                "Sessões perto do teto",
+                "`DatabaseConnections`",
+                "630, que é 70% de ~900",
+                "acima disso o operador perde o acesso junto com a aplicação",
+                "reduzir tasks; conferir se algum pool voltou ao padrão de 100"
+              ],
+              [
+                "Carga acima dos núcleos",
+                "`DBLoadRelativeToNumVCPUs`",
+                "acima de 1 por 5 min",
+                "mais sessões ativas que núcleos significa fila real, não consulta ruim",
+                "olhar evento de espera antes de mexer em capacidade"
+              ],
+              [
+                "Réplica atrasada",
+                "`ReplicaLag`",
+                "acima de 30 s por 3 min",
+                "folga de mais de uma ordem de grandeza sobre o pior caso medido de 1,9 s",
+                "suspender o caminho de leitura na réplica; investigar consulta longa nela"
+              ],
+              [
+                "Espera por vaga no pool",
+                "histograma próprio da aplicação",
+                "p99 acima de 50 ms",
+                "é o número que separa banco lento de pool pequeno, e só a aplicação o tem",
+                "aumentar o pool SE o banco estiver folgado; senão, o problema é o banco"
+              ],
+              [
+                "Retorno ao primário",
+                "contador próprio da aplicação",
+                "qualquer valor acima de zero",
+                "a porta de retorno é medida temporária, e regime silencioso reproduz o incidente original",
+                "restabelecer a réplica; não deixar o retorno virar arquitetura"
+              ],
+              [
+                "Consulta lenta registrada",
+                "log do PostgreSQL acima de 1 s",
+                "contagem crescente em 15 min",
+                "em 1 s o log registra o que importa; em 100 ms registra tudo e ninguém lê",
+                "levar a consulta ao plano de execução antes de qualquer decisão de capacidade"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "A métrica que o banco não tem como dar",
+            "content": "O banco sabe quantas sessões existem. Ele não tem como saber quanto tempo a sua aplicação esperou por uma vaga no pool — e é justamente esse número que distingue dois sintomas idênticos na tela: latência alta com CPU do banco baixa. Se a espera por vaga é alta e o banco está folgado, o pool é pequeno. Se a espera é baixa e a latência é alta, o banco é o gargalo. Sem essa medição, os dois casos parecem o mesmo, e a correção de um é o oposto da correção do outro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão, e a perda de uma zona"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A pergunta de escala não é \"quantos usuários aguenta\". É \"o que quebra primeiro, e a resposta muda de natureza em qual ordem de grandeza\". Neste desenho, o que muda de natureza é o lugar do gargalo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Ordem de grandeza",
+              "O que acontece",
+              "O que quebra primeiro",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 lojas",
+                "uma instância só, sem réplica e sem porta de conexão",
+                "nada; a arquitetura do L01 basta e a réplica seria adorno",
+                "não construir este laboratório ainda, e ter os índices certos"
+              ],
+              [
+                "400 lojas — hoje",
+                "primário com índice, réplica isolando relatório, pool derivado",
+                "a espera por vaga no pool durante o pico, se o pool voltar ao padrão",
+                "exatamente o que este laboratório entrega"
+              ],
+              [
+                "10 mil lojas",
+                "várias réplicas de leitura, com o painel distribuído entre elas",
+                "a gravação: 1 milhão de inserções por dia começam a competir com a manutenção de índice",
+                "separar relatório em réplica dedicada; considerar particionamento de `pedido` por data"
+              ],
+              [
+                "1 milhão de lojas",
+                "o primário único deixa de ser suficiente para gravação",
+                "a escrita, que não escala com réplica: réplica multiplica leitura, não gravação",
+                "particionar por chave de negócio, ou trocar o modelo de acesso — é o L14 e o L16"
+              ],
+              [
+                "Pico de 20× em uma hora",
+                "tasks escalam, e o teto de sessões vira o limite",
+                "o parâmetro do banco, se a porta de conexão não estiver na frente",
+                "porta na frente e pool derivado; a política de escala do L06 depende disso"
+              ],
+              [
+                "Perda da zona do primário",
+                "o standby assume, o nome passa a resolver para ele",
+                "a gravação, por 60 a 120 s tipicamente, mais o esvaziamento do seu pool",
+                "ensaiar a troca e medir; reciclar sessão por tempo de vida"
+              ],
+              [
+                "Perda da zona da réplica",
+                "a leitura degrada e volta ao primário",
+                "o primário, que recebe de volta a carga de relatório que havia sido isolada",
+                "limitar o retorno e alarmá-lo; réplica em duas zonas quando o relatório for crítico"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Réplica multiplica leitura, e não faz nada pela gravação",
+            "content": "É a limitação que decide quando esta arquitetura acaba. Toda gravação passa pelo primário, e cada réplica nova acrescenta trabalho de replicação a ele em vez de aliviá-lo. Um banco que satura em escrita não melhora com dez réplicas: melhora com particionamento, com mudança de modelo de acesso ou com um motor cuja camada de armazenamento seja compartilhada. Reconhecer que o gargalo migrou de leitura para escrita é o gatilho para sair deste desenho, e ele aparece como atraso de replicação crescendo sem que a carga de consulta tenha mudado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: as dimensões, três cenários e o que ninguém nota"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Nenhum preço absoluto aparece aqui, e a razão é prática: preço varia por região e envelhece mais rápido que o conteúdo. O que decide arquitetura é o MODELO de cobrança, e ele muda pouco. Calcule no AWS Pricing Calculator com as dimensões abaixo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": false,
+            "items": [
+              "Instância por hora ligada, e Multi-AZ cobra DUAS instâncias mesmo com uma atendendo.",
+              "Armazenamento por GB-mês, e Multi-AZ o cobra em dobro também.",
+              "Réplica de leitura cobra como instância cheia, na classe dela — não há desconto por ser réplica.",
+              "Entrada e saída de dados: a replicação entre primário e réplica na MESMA região não é cobrada, o que a documentação afirma explicitamente; entre regiões, é.",
+              "Porta de conexão por hora e por capacidade da instância que ela atende.",
+              "Retenção de backup acima do tamanho do banco, e snapshot manual que ninguém apaga.",
+              "Dado de desempenho com retenção longa; sete dias ficam na camada sem custo adicional.",
+              "Operações de entrada e saída ou taxa de transferência provisionada, dependendo do tipo de disco."
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Composição",
+              "Onde o custo se concentra",
+              "Alavanca de redução"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "uma instância em zona única, sem réplica e sem porta",
+                "na instância; o resto é arredondamento",
+                "desligar fora do horário de estudo, e classe pequena"
+              ],
+              [
+                "Produção pequena — a Cadência",
+                "primário Multi-AZ, uma réplica sem Multi-AZ, porta na escrita",
+                "nas três instâncias somadas: são três, e o desenho parece ter duas",
+                "réplica em classe menor; e o índice, que evitou subir a classe do primário"
+              ],
+              [
+                "Alta escala",
+                "primário maior, duas ou três réplicas, retenção longa de dado de desempenho",
+                "na multiplicação de réplicas e no armazenamento em dobro do Multi-AZ",
+                "compromisso de uso para a capacidade estável; particionamento reduz o dado quente"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "Os três custos ocultos deste laboratório",
+            "content": "O primeiro é a réplica que sobrevive à demonstração: ela cobra por hora ligada como qualquer instância, e não aparece na conversa porque \"é só uma réplica\". O segundo é o Multi-AZ ser cobrado no armazenamento também, e não só na instância — muita gente calcula o dobro de computação e esquece o dobro de disco. O terceiro é o mais silencioso: a economia que este laboratório GEROU, e que ninguém registra. O índice evitou subir a classe do primário, e essa é a linha da fatura que não existe. Vale escrever no registro da decisão, porque no trimestre seguinte a memória de que \"resolvemos com um índice\" é o que impede a compra reflexa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação depois deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "troca de zona ensaiada com tempo medido, e alarmes ligados a perguntas",
+                "o ensaio foi feito uma vez; ambiente muda e o número envelhece",
+                "ensaio periódico agendado, com o número registrado a cada rodada",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "papel restrito para consulta, dois segredos, transporte cifrado na porta",
+                "as credenciais são estáticas e a rotação é manual",
+                "rotação automática do segredo, que é o L04",
+                "alta"
+              ],
+              [
+                "Confiabilidade",
+                "standby em outra zona com troca ensaiada; réplica em terceira zona",
+                "a réplica não é alvo automático de troca, e a restauração nunca foi cronometrada",
+                "ensaio de restauração com tempo de retomada e ponto de recuperação medidos, que é o L10",
+                "alta"
+              ],
+              [
+                "Eficiência de desempenho",
+                "consulta corrigida no plano, carga de relatório isolada, pool derivado",
+                "o índice cobre a consulta de hoje; consulta nova volta a varrer",
+                "revisão periódica da estatística de consulta; alerta sobre consulta acima de 1 s",
+                "média"
+              ],
+              [
+                "Otimização de custo",
+                "a classe do primário não subiu, e a réplica ficou em classe menor",
+                "três instâncias ligadas 24 horas, com pico de duas horas por dia",
+                "avaliar capacidade elástica no motor, que é o Serverless do L15",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "ler 6 blocos em vez de 68.312 é menos energia por requisição, medidamente",
+                "réplica ligada o dia inteiro para uma carga de duas horas",
+                "concentrar relatório em janela, ou capacidade que acompanhe a demanda",
+                "baixa"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O pilar que este laboratório mais mexeu, e não é o esperado",
+            "content": "A intuição diz eficiência de desempenho, porque o sintoma era latência. O pilar que mudou mais foi excelência operacional: antes, a equipe não tinha como responder \"qual consulta está consumindo o banco\" nem \"quanto tempo a gravação fica fora quando a zona cai\". Ganhar resposta para essas duas perguntas muda a próxima decisão, e a próxima depois dela. Otimização de consulta é um resultado; capacidade de diagnosticar é uma capacidade."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco e compra outro, e é a terceira coluna que raramente se escreve."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Nível",
+              "O que muda",
+              "Novo risco",
+              "Impacto de custo"
+            ],
+            "rows": [
+              [
+                "Nível 1 — Protótipo",
+                "uma instância em zona única, pool no padrão, nenhuma métrica de banco",
+                "perda da zona derruba tudo, e não há como saber qual consulta consome o banco",
+                "o mais baixo possível: uma instância e um disco"
+              ],
+              [
+                "Nível 2 — Aplicação básica (o L01)",
+                "Multi-AZ ligado, banco em sub-rede privada, backup automático",
+                "acredita-se que Multi-AZ escala leitura, e essa crença não tem sintoma próprio",
+                "dobra instância e disco, e acrescenta latência de commit entre zonas"
+              ],
+              [
+                "Nível 3 — Produção (este laboratório)",
+                "consulta corrigida no plano, réplica isolando relatório, pool derivado, porta na escrita, troca ensaiada",
+                "atraso de replicação chega ao usuário como gravei e não vejo; e a réplica é peça a mais para operar",
+                "acrescenta uma instância de leitura e uma porta, ambas por hora ligada"
+              ],
+              [
+                "Nível 4 — Alta escala",
+                "várias réplicas, particionamento de tabela por data, cache na frente do que repete",
+                "invalidação de cache errada mostra dado velho sem medição; e a gravação passa a ser o gargalo",
+                "multiplica réplicas e acrescenta camada de cache, com cobrança por hora e por memória"
+              ],
+              [
+                "Nível 5 — Plataforma",
+                "motor com armazenamento compartilhado e capacidade elástica, endpoint de leitura gerenciado, recuperação entre regiões ensaiada",
+                "a complexidade organizacional passa a superar a técnica, e o custo fica difícil de atribuir a um time",
+                "troca cobrança por instância por cobrança por capacidade e por operação de entrada e saída"
+              ],
+              [
+                "Nível 6 — Dados e IA sobre o próprio banco",
+                "extração incremental para o lago de dados, separando carga analítica do operacional; recomendação de índice a partir do histórico de planos; vetor no Postgres para busca semântica no catálogo",
+                "modelo que recomenda índice a partir de pouca amostra sugere estrutura que só custa manutenção; e o lago vira cópia sem dono",
+                "baixo no começo, porque o dado já existe; cresce com varredura e com armazenamento do lago"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "O nível 4 acrescenta cache, e cache sobre consulta sem índice esconde o defeito em duas camadas em vez de uma: quando o cache esfria, a latência original volta inteira e agora com um suspeito a mais. O nível 5 troca o motor, e trocar de motor sem saber medir onde a carga dói é escolher pela propaganda. Cada nível deste laboratório existe para que o seguinte seja uma decisão em vez de uma aposta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA generativa não resolve o problema central, e forçá-la seria o antipadrão que a série critica. A pergunta \"por que a CPU está em 100%\" tem resposta determinística e barata: o plano de execução diz, com número, quantos blocos foram lidos. Um modelo não melhora uma medição exata."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um uso honesto e ele é modesto: interpretar plano de execução é uma habilidade escassa, e um modelo lê plano bem. Pedir a leitura de um plano longo, com junção aninhada e estimativa errada de cardinalidade, economiza tempo real de quem está aprendendo. O que não se pode fazer é aceitar a sugestão sem medir: o modelo sugere índice plausível, e índice plausível que o planejador não usa é manutenção paga por nada. A verificação é a mesma de sempre — rodar o plano antes e depois."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "reduzir o tempo de quem ainda não lê plano de execução com fluência, e sugerir candidatos de índice"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "para o caso deste laboratório, uma regra basta: consulta no topo da estatística por tempo total, e plano em varredura sequencial. IA só se justifica em plano complexo, com muitas junções"
+              ],
+              [
+                "De onde viriam os dados?",
+                "a estatística de consulta, o log de consulta lenta e a saída do plano — tudo já existe no banco, sem coleta nova"
+              ],
+              [
+                "O que acontece quando ela erra?",
+                "sugere índice que o planejador ignora: custo de manutenção sem ganho. Detectável em uma medição, e por isso o erro é barato — desde que a medição exista"
+              ],
+              [
+                "Onde a IA já está, sem hype?",
+                "a detecção de anomalia do próprio serviço de desempenho é aprendizado de máquina aplicada a séries temporais, e não precisa ser chamada de IA para funcionar"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"olhar as métricas e dizer se o banco está bem\" troca um sinal exato — carga relativa aos núcleos, atraso de replicação, sessões contra o teto — por um probabilístico. Onde existe medição direta, um modelo acrescenta latência e a chance de errar com confiança. IA sobre observabilidade tem lugar quando o sinal é ambíguo ou volumoso demais para regra, e três métricas com limiar derivado não são nenhum dos dois. Para IA como objeto de arquitetura, os laboratórios da banda 9 tratam o assunto com o rigor que ele exige."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Ligar Multi-AZ esperando ganho de leitura",
+                "porque \"duas instâncias\" soa como duas trabalhando, e o console não desmente",
+                "o standby não atende consulta: você dobrou a fatura e acrescentou latência de commit sem ganhar capacidade",
+                "custo dobra, latência de escrita sobe alguns milissegundos, e a CPU do primário continua no mesmo lugar",
+                "Multi-AZ para disponibilidade, réplica para leitura; ou cluster Multi-AZ, que faz as duas",
+                "sempre correto como decisão de disponibilidade — o defeito é o motivo, não a peça"
+              ],
+              [
+                "Subir a classe da instância antes de ler o plano",
+                "é o menor número de cliques que melhora o gráfico, e melhora de imediato",
+                "trata sintoma: a varredura cresce com a tabela, então a solução tem prazo de validade e a fatura fica atada ao crescimento do dado",
+                "alívio por semanas, e o mesmo incidente com uma classe maior alguns meses depois",
+                "ler o plano primeiro; subir a classe só quando a carga relativa aos núcleos passar de 1",
+                "durante um incidente, como medida de emergência declarada como temporária"
+              ],
+              [
+                "Apontar toda a leitura para a réplica",
+                "porque \"leitura vai na réplica\" é a regra que se decora, e ela é quase certa",
+                "ignora que a replicação é assíncrona: a consulta que segue uma gravação pode não ver o que acabou de ser gravado",
+                "gravei e não vejo, intermitente, pior sob carga e irreproduzível na máquina do desenvolvedor",
+                "declarar a tolerância a atraso por operação, e prender no primário a leitura que segue gravação",
+                "relatório, painel e histórico, que toleram segundos de defasagem"
+              ],
+              [
+                "Aumentar o pool para \"não faltar conexão\"",
+                "porque o erro fala de conexão, e o pool é o botão que tem o nome do erro",
+                "cada sessão do PostgreSQL é um processo com memória própria; mais sessões contra banco saturado somam troca de contexto ao problema original",
+                "latência piora depois do aumento, e o teto do parâmetro passa a ser atingido",
+                "derivar o pool do teto do banco dividido pelo número de tasks, com folga para operador",
+                "quando a espera por vaga é alta E o banco está comprovadamente folgado"
+              ],
+              [
+                "Deixar o pool no padrão da biblioteca",
+                "porque não escrever uma linha parece mais seguro do que escrever um número errado",
+                "o padrão de 100 por processo é razoável para UM processo e virou 600 para seis; o multiplicador não aparece em nenhum arquivo",
+                "recusa de vaga de conexão no primeiro pico depois de escalar a frota",
+                "escrever o número, derivado, junto do comentário que mostra a conta",
+                "processo único, como uma ferramenta de linha de comando"
+              ],
+              [
+                "Testar a troca de zona apenas em documento",
+                "porque forçar a troca dá medo, e o plano escrito dá a sensação de estar coberto",
+                "o tempo de retomada não é a duração da troca: metade dele costuma ser o esvaziamento do seu pool, e isso só aparece medindo",
+                "na primeira troca real, a indisponibilidade dura mais do que o previsto e ninguém sabe por quê",
+                "forçar a troca em ambiente equivalente e cronometrar os dois lados separadamente",
+                "nunca; o ensaio é o entregável deste laboratório"
+              ],
+              [
+                "Distribuir hosts com balanceamento e atributo qualquer",
+                "porque é uma linha no texto de conexão e parece dar tolerância a falha de graça",
+                "cada abertura escolhe um ponto diferente da lista, então gravação cai na réplica de tempo em tempo e falha por transação somente para consulta",
+                "erro intermitente em uma fração das gravações, que não reproduz sob teste",
+                "atributo de sessão explícito por destino, e a decisão de rota no código",
+                "quando todos os hosts da lista aceitam gravação, o que não é o caso aqui"
+              ],
+              [
+                "Esperar que a porta de conexão distribua leitura",
+                "porque ela se chama porta e fica na frente do banco, então parece rotear",
+                "o limite é documentado: em instâncias do RDS em replicação, ela se associa apenas à instância de escrita",
+                "a réplica fica ociosa, a leitura continua no primário, e ninguém entende por quê",
+                "porta na escrita para o problema de sessão; roteamento de leitura na aplicação",
+                "nunca para roteamento; sempre útil para o problema de sessão que ela resolve"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "CPU do banco alta com poucas sessões",
+                "consulta lendo muito mais blocos do que precisa",
+                "ordene a estatística de consulta por tempo TOTAL e leia o plano da campeã",
+                "estatística de consulta acumulada; plano com blocos lidos",
+                "índice com a coluna de igualdade primeiro e a de faixa depois"
+              ],
+              [
+                "CPU alta com muitas sessões ativas",
+                "concorrência acima do que a máquina comporta — problema diferente do anterior",
+                "compare a carga relativa ao número de núcleos com 1",
+                "carga por evento de espera no serviço de desempenho",
+                "reduzir concorrência ou aumentar capacidade; aqui a classe maior é a resposta certa"
+              ],
+              [
+                "Recusa de vaga de conexão",
+                "`tasks × pool` acima do teto do parâmetro da classe",
+                "multiplique tasks em execução pela soma dos pools e compare com o teto",
+                "contagem de sessões por estado; teto do parâmetro",
+                "pool derivado; porta na frente para desacoplar escala de parâmetro"
+              ],
+              [
+                "Latência alta com CPU do banco baixa",
+                "espera por vaga no pool, ou travamento entre transações",
+                "olhe o histograma de espera para obter conexão, na aplicação",
+                "histograma próprio; registro de espera por travamento no log",
+                "aumentar o pool se o banco está folgado; se for travamento, encurtar a transação"
+              ],
+              [
+                "Gravei e não vejo, intermitente",
+                "leitura que segue gravação foi para a réplica assíncrona",
+                "correlacione o horário da reclamação com a curva de atraso de replicação",
+                "atraso de replicação por minuto; rota que atendeu a requisição",
+                "declarar intolerância a atraso na rota, com marca por requisição como rede"
+              ],
+              [
+                "Gravação recusada com erro de transação somente leitura",
+                "gravação chegou pelo caminho de leitura, por rota errada ou balanceamento de hosts",
+                "confira qual destino a operação usou e se há balanceamento ligado",
+                "código de estado 25006 no log da aplicação",
+                "rota correta; e privilégio restrito para que o erro apareça na borda"
+              ],
+              [
+                "Atraso de replicação em minutos, com o banco ocioso",
+                "artefato documentado: sem transação no primário, o número sobe até 5 minutos",
+                "verifique se há escrita acontecendo; o cálculo usa a última transação confirmada",
+                "atraso de replicação contra volume de gravação no mesmo minuto",
+                "nada a corrigir; ajuste o alarme para 30 s e combine com sinal de carga"
+              ],
+              [
+                "Atraso de replicação crescente sob carga normal",
+                "a réplica é pequena demais para aplicar o volume, ou uma consulta longa a bloqueia",
+                "compare a classe da réplica com a do primário e procure consulta longa nela",
+                "atraso de replicação; sessões ativas na réplica",
+                "aumentar a classe da réplica, ou mover a consulta longa para janela"
+              ],
+              [
+                "Troca de zona feita, mas o erro continua",
+                "sessões no pool apontando para o endereço antigo",
+                "meça quando o nome passou a resolver para o novo destino e quando o erro cessou",
+                "resolução do nome do endpoint; janela de falha na sonda",
+                "reciclar sessão por tempo de vida, descartar o pool na falha, ou porta na frente"
+              ],
+              [
+                "A zona não mudou no console",
+                "a documentação avisa que a mudança pode levar minutos para aparecer",
+                "leia o log de eventos da instância, que registra a troca antes do console",
+                "eventos da instância com a categoria de troca",
+                "nada a corrigir; é leitura de instrumento, não sintoma"
+              ],
+              [
+                "Estatística de consulta vazia",
+                "grupo de parâmetros customizado sem a biblioteca pré-carregada",
+                "confira a lista de bibliotecas pré-carregadas no grupo em uso",
+                "parâmetro de bibliotecas pré-carregadas; extensões instaladas",
+                "acrescentar a biblioteca no grupo e reiniciar, porque o parâmetro é estático"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório acrescenta duas peças que cobram por hora ligada e uma que cobra por armazenamento indefinidamente. Nenhuma delas some sozinha, e a terceira é a que aparece na fatura do mês seguinte."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Derrube o que o Terraform administra neste laboratorio.\nterraform destroy -auto-approve\n\n# 2. REPLICA DE LEITURA: confirme que sumiu. Ela cobra como instancia cheia,\n#    24 horas por dia, e o nome \"replica\" faz a linha parecer pequena.\naws rds describe-db-instances \\\n  --query \"DBInstances[?DBInstanceIdentifier=='ffv-lab-leitura'].DBInstanceStatus\" \\\n  --output text\naws rds delete-db-instance --db-instance-identifier ffv-lab-leitura \\\n  --skip-final-snapshot 2>/dev/null || true\n\n# 3. PORTA DE CONEXAO: cobra por hora e por capacidade da instancia atendida.\naws rds describe-db-proxies --query \"DBProxies[].DBProxyName\" --output table\naws rds delete-db-proxy --db-proxy-name ffv-lab-proxy-escrita 2>/dev/null || true\n\n# 4. SNAPSHOT: o destroy do PRIMARIO cria snapshot final quando\n#    skip_final_snapshot e falso — e snapshot cobra por GB-mes para sempre.\n#    Liste os manuais: os automaticos morrem com a instancia, os manuais nao.\naws rds describe-db-snapshots --snapshot-type manual \\\n  --query \"DBSnapshots[].{Nome:DBSnapshotIdentifier,GB:AllocatedStorage}\" \\\n  --output table\n# Apague com delete-db-snapshot o que voce nao vai restaurar no L10.\n\n# 5. GRUPO DE LOGS do PostgreSQL: criado pela exportacao de log, com ciclo\n#    proprio. Sobrevive a instancia e continua cobrando ingestao retida.\naws logs describe-log-groups --log-group-name-prefix /aws/rds/instance/ffv-lab \\\n  --query \"logGroups[].{Nome:logGroupName,Retencao:retentionInDays}\" --output table\naws logs delete-log-group \\\n  --log-group-name /aws/rds/instance/ffv-lab-leitura/postgresql 2>/dev/null || true\n\n# 6. GRUPO DE PARAMETROS e ASSINATURA DE EVENTOS: nao cobram, mas ficam. Um\n#    grupo de parametros em uso nao pode ser apagado, o que e uma pista util.\naws rds delete-db-parameter-group --db-parameter-group-name ffv-lab-pg16 \\\n  2>/dev/null || true\naws rds delete-event-subscription --subscription-name ffv-lab-eventos-de-troca \\\n  2>/dev/null || true\n\n# 7. SEGREDO do papel de leitura: fica em exclusao agendada, por padrao, e\n#    ocupa o nome durante a janela. Isso quebra o proximo terraform apply.\naws secretsmanager delete-secret --secret-id ffv-lab-banco-leitura \\\n  --recovery-window-in-days 7 2>/dev/null || true\n\n# 8. O que veio do L01 e continua cobrando por hora: o PRIMARIO em Multi-AZ,\n#    o balanceador, o endpoint de VPC e o Elastic IP do NAT, se existirem.\n#    Se voce nao vai seguir para o L10, rode a limpeza do L01 tambem.\naws ec2 describe-addresses \\\n  --query \"Addresses[?AssociationId==null].PublicIp\" --output table\n\n# 9. Prova final: nada com a etiqueta do laboratorio de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Lab,Values=L07 \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Réplica de leitura",
+                "sim",
+                "sim, por hora ligada",
+                "é instância cheia; o nome faz a linha da fatura parecer menor do que é"
+              ],
+              [
+                "Porta de conexão",
+                "sim",
+                "sim, por hora e por capacidade atendida",
+                "apagar a instância não apaga a porta; ela é recurso independente"
+              ],
+              [
+                "Snapshot manual",
+                "não",
+                "sim, GB-mês para sempre",
+                "snapshot automático morre com a instância; manual não, e o L10 vai querer um"
+              ],
+              [
+                "Grupo de logs do PostgreSQL",
+                "não",
+                "sim, retenção de log ingerido",
+                "criado pela exportação de log, com ciclo próprio e retenção independente"
+              ],
+              [
+                "Grupo de parâmetros",
+                "sim, se não estiver em uso",
+                "não",
+                "não pode ser apagado enquanto uma instância o referencia — e essa recusa é pista"
+              ],
+              [
+                "Segredo do papel de leitura",
+                "sim, com janela de recuperação",
+                "centavos",
+                "fica em exclusão agendada e ocupa o nome, o que quebra a próxima aplicação"
+              ],
+              [
+                "Primário Multi-AZ e balanceador do L01",
+                "não, pertencem a outro estado",
+                "sim, por hora, e o Multi-AZ cobra dobrado no disco também",
+                "são do L01; se você não seguir para o L10, rode a limpeza dele"
+              ],
+              [
+                "Índice criado à mão",
+                "não",
+                "espaço no disco do banco",
+                "foi criado por comando e não pelo Terraform; sobrevive a tudo, e deve sobreviver"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "A pegadinha do segredo em exclusão agendada",
+            "content": "Apagar um segredo não o apaga: por padrão ele entra numa janela de recuperação e continua ocupando o nome. Se você reconstruir o laboratório amanhã, a criação falha porque o nome está tomado por um segredo que \"não existe mais\". A saída é forçar a exclusão imediata, e ela é irreversível — decisão consciente em laboratório, e nunca em produção."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "CPU em 100% com poucas sessões",
+                "índice composto por loja e data",
+                "CPU proporcional ao dado lido é sintoma de consulta, e nenhuma peça de arquitetura corrige plano de execução"
+              ],
+              [
+                "Relatório de 90 dias competindo com pedido",
+                "réplica de leitura em terceira zona",
+                "o ganho é isolamento de concorrência; a réplica não torna a agregação rápida, ela a tira do caminho da gravação"
+              ],
+              [
+                "Perda de uma zona",
+                "standby síncrono do Multi-AZ",
+                "é a única peça que assume gravação sozinha; a réplica não é alvo automático de troca"
+              ],
+              [
+                "Gravei e não vejo",
+                "cerca de leitura após gravação no roteamento",
+                "a replicação é assíncrona por projeto, então a correção é de roteamento e não de configuração do banco"
+              ],
+              [
+                "Teto de sessões atingido no pico",
+                "pool derivado do teto dividido pelas tasks",
+                "o pool é por processo e o teto é da frota; escrever o número torna o multiplicador visível"
+              ],
+              [
+                "Escalar tasks sem tocar no banco",
+                "porta de conexão na frente da escrita",
+                "ela reaproveita sessão física por transação, e move o limite para um lugar com instrumento"
+              ],
+              [
+                "Não saber qual consulta consome o banco",
+                "estatística de consulta e dado de desempenho ligados",
+                "sem eles o incidente é indiagnosticável depois do fato, e a decisão vira palpite"
+              ],
+              [
+                "Não saber quanto a gravação fica fora",
+                "ensaio de troca com sonda de 200 ms",
+                "a documentação dá faixa típica e não promete número; só a medição no seu ambiente responde"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Perda da zona do primário",
+                "standby síncrono com troca automática",
+                "a janela de esvaziamento do seu pool, que é sua e não da AWS"
+              ],
+              [
+                "Saturação de leitura",
+                "réplica de leitura",
+                "saturação de gravação, que réplica nenhuma alivia"
+              ],
+              [
+                "Surto de conexão",
+                "porta na frente e pool derivado",
+                "consulta lenta, que continua lenta e segura sessão física do mesmo jeito"
+              ],
+              [
+                "Consulta que varre a tabela",
+                "índice com colunas na ordem certa",
+                "consulta NOVA sem índice, que volta a varrer sem avisar"
+              ],
+              [
+                "Gravação no caminho errado",
+                "papel restrito a consulta",
+                "roteamento errado de LEITURA, que não gera erro nenhum e só mostra dado velho"
+              ],
+              [
+                "Perda do dado",
+                "backup automático e snapshot",
+                "nada aqui foi cronometrado; tempo de retomada e ponto de recuperação são o L10"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Mede-se a carga relativa aos núcleos: abaixo de 1, o problema é consulta.",
+              "Ordena-se a estatística por tempo total, e um único item responde por 78%.",
+              "Lê-se o plano: varredura sequencial em 4,2 milhões de linhas, 68.312 blocos.",
+              "Cria-se o índice com a coluna de igualdade primeiro: 2.180,9 ms viram 3,4 ms.",
+              "A CPU cai de 98% para 24% sem nenhum recurso novo entrar na fatura.",
+              "O relatório de 90 dias continua pesado, e é ele que ganha a réplica.",
+              "A réplica vai para uma terceira zona, não para a do standby.",
+              "O pool passa a ser derivado: 6 × (10 + 40) = 300 contra um teto de cerca de 900.",
+              "A leitura que segue gravação fica presa no primário até o fim da requisição.",
+              "Força-se a troca de zona e cronometra-se: 34 s de troca, 13 s de pool, 47 s de janela."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "O standby do RDS Multi-AZ pode atender consulta de leitura?",
+            "answer": "Não. A documentação da AWS afirma diretamente que a opção de alta disponibilidade não é solução de escala para cenários somente de leitura e que o standby não pode ser usado para servir tráfego de leitura. Ele não tem endereço próprio para conectar: existe um único endpoint, que aponta para a instância ativa e passa a apontar para o standby quando há troca de papel. Para atender leitura existem duas opções: réplica de leitura, que é instância separada com endereço próprio e replicação assíncrona, ou uma implantação em cluster Multi-AZ, cujos dois leitores atendem consulta e também servem de alvo de troca."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Réplica de leitura no RDS serve para alta disponibilidade?",
+            "answer": "Parcialmente, e não da forma que se espera. A réplica não é alvo automático de troca: se o primário cai, nada promove a réplica sozinho, e a promoção é uma operação manual e irreversível que a transforma em banco independente. Ela ajuda em disponibilidade de LEITURA, porque continua respondendo consulta quando o primário está indisponível — com dado possivelmente defasado, já que a replicação é assíncrona. Para gravação voltar sem intervenção humana, o mecanismo é o standby síncrono do Multi-AZ. As duas peças convivem no mesmo banco e resolvem problemas diferentes."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Por que a CPU do RDS fica em 100% com poucas conexões abertas?",
+            "answer": "Porque consumo de CPU acompanha a quantidade de dado lido, e não o número de sessões. Uma consulta sem índice adequado faz varredura sequencial: ela lê a tabela inteira a cada execução, então dez sessões executando uma varredura em quatro milhões de linhas saturam vários núcleos sem nenhuma fila aparente. O diagnóstico tem dois passos, na ordem: comparar a carga relativa ao número de núcleos com 1 — abaixo de 1 significa que não há concorrência excessiva — e ordenar a estatística de consulta acumulada por tempo total de execução. Se um único item concentra a maior parte do tempo, o problema é aquela consulta, e instância maior apenas varre mais rápido a mesma tabela."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Quantas conexões meu pool abre no RDS com 6 tasks no Fargate?",
+            "answer": "Até seis vezes o tamanho máximo do pool, porque cada task é um processo com pool próprio e nenhuma delas sabe das outras. Com o padrão do Npgsql, que é 100, seis tasks autorizam 600 sessões; com dois destinos, escrita e leitura, o pior caso dobra. O teto do outro lado é o `max_connections` da instância, cujo padrão no RDS para PostgreSQL é derivado da memória pela expressão `LEAST({DBInstanceClassMemory/9531392}, 5000)` — cerca de 900 em uma instância de 8 GiB, com parte das vagas reservada para superusuário. A conta a escrever é `tasks × soma dos pools`, mantida abaixo de 70% do teto para que migração, rotina agendada e o terminal do operador ainda consigam conectar."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Quanto tempo demora o failover do RDS Multi-AZ?",
+            "answer": "A documentação da AWS diz que a troca leva tipicamente de 60 a 120 segundos, e avisa que transação grande ou processo longo de recuperação aumentam esse tempo. Isso não é garantia, e não é o número que o seu usuário sente. O tempo percebido soma duas janelas: a troca em si, medida pela AWS, e o esvaziamento do pool da sua aplicação, que é seu. O endpoint é um nome de DNS e a troca reescreve o destino dele, mas uma conexão já estabelecida não volta a resolver nome nenhum — então cada sessão guardada no pool falha uma vez antes de ser descartada, e o erro continua chegando ao usuário durante esse esvaziamento. Meça as duas janelas separadamente, forçando a troca com reinício e cronometrando com uma sonda de gravação."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Como roteio leitura para a réplica em EF Core e Npgsql?",
+            "answer": "Com dois `NpgsqlDataSource`, um por destino, e dois contextos sobre o mesmo modelo — o de leitura como subclasse do de escrita, para herdar o mapeamento sem duplicá-lo, e configurado sem rastreamento de entidade. A decisão de destino tem de ser por OPERAÇÃO e não por processo: um texto de conexão vale para todo o processo, e a tolerância a atraso de replicação é uma propriedade da consulta. O Npgsql também aceita vários hosts com o atributo de sessão escolhendo entre primário e standby, que é menos código e resolve bem sobreviver à troca de papel — mas não consegue expressar \"esta leitura precisa do primário porque segue uma gravação\", que é a regra que evita o defeito visível ao usuário."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "O RDS Proxy funciona com réplica de leitura?",
+            "answer": "Não para instâncias do RDS. A documentação é explícita: em configurações de replicação, o proxy pode ser associado apenas à instância de escrita, nunca a uma réplica de leitura. Isso decide o desenho: o proxy resolve o problema de SESSÃO do lado da gravação — reaproveitando conexões físicas por transação, enfileirando surto em vez de repassar recusa de vaga ao banco — e o roteamento de leitura continua sendo trabalho da aplicação. Esperar que ele distribua consulta entre réplicas produz uma topologia que a AWS não implementa, e o sintoma é a réplica ociosa com a leitura ainda no primário."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Como sei se a réplica de leitura está atrasada?",
+            "answer": "Pelos dois lados, e os dois importam. Na réplica, `now() - pg_last_xact_replay_timestamp()` dá o atraso em tempo, e `pg_last_wal_replay_lsn()` dá a posição exata aplicada; no primário, `pg_stat_replication` mostra quanto cada consumidor está atrás em bytes. No CloudWatch, a métrica é `ReplicaLag`. Há um artefato documentado que engana quase todo mundo: quando não há transação de usuário no primário, a réplica reporta atraso de até cinco minutos, porque o cálculo usa a última transação confirmada e o segmento do registro de escrita só é trocado a cada cinco minutos. Alarme configurado em 60 segundos dispara toda madrugada em ambiente ocioso, e o time aprende a ignorá-lo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Uma aplicação .NET 8 roda em 8 tasks no ECS Fargate, cada uma com dois pools do Npgsql no padrão da biblioteca, um para escrita e um para leitura. O `max_connections` da instância é 900. Qual afirmação descreve corretamente o risco?",
+            "options": [
+              "O risco só existe se `Pooling` estiver desligado no texto de conexão",
+              "O RDS Proxy elimina o risco automaticamente nos dois caminhos, escrita e leitura",
+              "Não há risco: o pool reaproveita conexões, então o total nunca passa de 100",
+              "O pior caso é 8 × 200 = 1.600 sessões, acima do teto, e o operador perde o acesso junto com a aplicação"
+            ],
+            "correctIndex": 3,
+            "explanation": "O pool é por PROCESSO e o teto é da FROTA. O padrão de tamanho máximo do Npgsql é 100, e com dois destinos cada task autoriza 200 sessões: oito tasks chegam a 1.600 contra 900 disponíveis, dos quais parte fica reservada para superusuário. Quando o teto é atingido, a recusa de vaga atinge também quem tenta conectar para diagnosticar — você perde o acesso ao banco exatamente quando precisa dele.\n\nA primeira alternativa confunde reaproveitamento com limite global: o pool realmente reaproveita, mas dentro de um processo, e nenhum dos oito sabe quantas sessões os outros sete abriram. A terceira alternativa inverte o papel do agrupamento: sem ele o número de sessões seria pior, porque cada requisição abriria a sua — o agrupamento não é a causa, é o que impede algo ainda maior. O quarto distrator ignora um limite documentado: em instâncias do RDS em configuração de replicação, a porta de conexão se associa apenas à instância de escrita, nunca a uma réplica, então o caminho de leitura continua abrindo sessões diretas e o risco permanece nele."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Depois de rotear leitura para a réplica, usuários relatam que um pedido acabado de gravar às vezes não aparece na tela de conferência. O atraso de replicação medido é de 240 ms no p95. Qual é a correção adequada?",
+            "options": [
+              "Manter no primário a leitura que segue uma gravação, declarando por operação a tolerância a atraso",
+              "Reduzir o atraso de replicação aumentando a classe da réplica até chegar a zero",
+              "Trocar a réplica de leitura pelo standby do Multi-AZ, cuja replicação é síncrona",
+              "Ligar balanceamento de hosts no texto de conexão para distribuir melhor as leituras"
+            ],
+            "correctIndex": 0,
+            "explanation": "A replicação para réplica de leitura é assíncrona por projeto, então existe sempre uma janela em que o dado está confirmado no primário e ainda não chegou à réplica. Como a janela não pode ser eliminada, a correção é de roteamento: a leitura que não tolera atraso — conferência, saldo, estoque — fica no primário, e a requisição que gravou permanece nele até terminar.\n\nA primeira alternativa persegue um alvo inalcançável: classe maior reduz o atraso, nunca o zera, e gastar para diminuir uma janela que continua existindo não fecha o defeito. A terceira alternativa parte de uma premissa correta e conclui algo impossível: a replicação para o standby é de fato síncrona, mas ele não atende consulta e não tem endereço para conectar, então não existe como ler dele. O quarto distrator agrava em vez de corrigir: com balanceamento e atributo de sessão permissivo, cada abertura escolhe um ponto diferente da lista, então gravações passam a cair na réplica de tempo em tempo e falham com erro de transação somente para consulta — troca-se um defeito intermitente de leitura por um intermitente de gravação."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L01 no ar (ECS Fargate, RDS PostgreSQL Multi-AZ em sub-rede privada, balanceador), SQL básico e leitura de plano de execução"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "CPU alta com poucas sessões como assinatura de consulta ruim; standby síncrono sem endereço contra réplica assíncrona com endereço; a conta `tasks × pool` contra o teto do parâmetro; atraso de replicação como defeito que chega ao usuário; a decomposição do tempo de troca em janela da AWS e janela do pool"
+              ],
+              [
+                "Entregável — o que você terá ao final",
+                "painel e relatório atendidos pela réplica de leitura, com o pool derivado e escrito, e uma troca de zona forçada e cronometrada nos dois lados"
+              ],
+              [
+                "Limitação que fica",
+                "a cerca de leitura após gravação vale dentro de uma requisição, e não cobre gravar numa aba e ler em outra; a gravação continua em um único primário; e nenhuma restauração foi cronometrada"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L14 — escolher o banco pela carga no mesmo caso de uso. Ele parte da medição que você acabou de aprender a fazer, e é ela que torna a comparação honesta"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L10 (voltar de um desastre com ensaio) e L13 (cache que salva o banco) dependem da medição daqui; L15 leva a troca ensaiada ao Aurora com capacidade elástica; L18 usa o mesmo banco para migrar schema sem parar"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Multi-AZ DB instance deployments for Amazon RDS",
+                "code": true
+              },
+              {
+                "text": " — a afirmação de que a alta disponibilidade não é solução de escala de leitura e de que o standby não pode servir tráfego de leitura; "
+              },
+              {
+                "text": "Multi-AZ DB cluster deployments for Amazon RDS",
+                "code": true
+              },
+              {
+                "text": " — replicação semissíncrona com dois leitores que atendem consulta e servem de alvo de troca; "
+              },
+              {
+                "text": "Working with DB instance read replicas",
+                "code": true
+              },
+              {
+                "text": " — replicação assíncrona, promoção manual e irreversível, e a réplica convivendo com standby em zonas distintas; "
+              },
+              {
+                "text": "Working with read replicas for Amazon RDS for PostgreSQL",
+                "code": true
+              },
+              {
+                "text": " — o artefato de atraso reportado de até cinco minutos em base sem transação; "
+              },
+              {
+                "text": "Failing over a Multi-AZ DB instance for Amazon RDS",
+                "code": true
+              },
+              {
+                "text": " — a faixa típica de 60 a 120 s e a reescrita do destino do nome de DNS; "
+              },
+              {
+                "text": "Rebooting a DB instance",
+                "code": true
+              },
+              {
+                "text": " — o reinício com troca forçada como forma de simular falha, e a necessidade de reabrir conexões; "
+              },
+              {
+                "text": "Amazon RDS Proxy",
+                "code": true
+              },
+              {
+                "text": " — o enfileiramento de conexão sob surto e o limite de associação apenas à instância de escrita; "
+              },
+              {
+                "text": "Amazon CloudWatch metrics for Amazon RDS Performance Insights",
+                "code": true
+              },
+              {
+                "text": " — as métricas de carga, incluindo a carga relativa ao número de núcleos; e a documentação do Npgsql sobre parâmetros do texto de conexão e sobre múltiplos hosts. Nenhum preço absoluto aparece neste módulo: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que NÃO foi verificado, e você deve medir na sua conta",
+            "content": "Três classes de número aqui são medição de exemplo, não referência. Os tempos do ensaio de troca — 47 s no total, com cerca de 34 s de troca e 13 s de esvaziamento de pool — vieram de uma instância pequena com transação curta em voo, e ficaram abaixo da faixa típica que a AWS documenta; a decomposição é o método, os números não são a sua. Os valores de atraso de replicação (12 ms no p50, 240 ms no p95 e 1,9 s no lote noturno) dependem da classe da réplica e do seu volume de gravação. E o teto de cerca de 900 sessões vale para 8 GiB pela expressão padrão: confirme com `SHOW max_connections`, porque a variável de memória já desconta o que a AWS reserva. Os códigos numéricos de evento do RDS não foram confirmados na documentação e por isso não aparecem: assine a categoria de evento, que é estável."
+          }
+        }
+      ]
+    }
+  ]
+}

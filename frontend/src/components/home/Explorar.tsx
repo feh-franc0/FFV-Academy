@@ -1,8 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { HUBS, getHubStats } from '@/lib/curriculum';
-import { PLAYLISTS } from '@/lib/playlists';
+import { HUBS } from '@/lib/curriculum/hubs';
+// Renderiza na home — `getHubStatsLeve` usa CURRICULO_LEVE, não o currículo
+// completo. `getHubStats` (barril) arrastaria os ~92 KB gz de `desc`/`keywords`
+// só para somar módulos/XP/minutos por hub.
+import { getHubStatsLeve } from '@/lib/curriculum/queries-leves';
+// Dado puro, sem o currículo completo por trás (ver playlists-data.ts) —
+// renderiza na home, e só usa id/title/subtitle/color/emoji/moduleSlugs.length.
+import { PLAYLISTS } from '@/lib/playlists-data';
 
 export function Explorar() {
   return (
@@ -50,7 +56,7 @@ export function Explorar() {
           style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}
         >
           {HUBS.map(hub => {
-            const stats = getHubStats(hub);
+            const stats = getHubStatsLeve(hub);
             return (
               <Link
                 key={hub.id}
@@ -65,11 +71,13 @@ export function Explorar() {
                 }}
                 onMouseOver={e => {
                   e.currentTarget.style.borderColor = `${hub.color}80`;
-                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  e.currentTarget.style.transform = 'translateY(-5px)';
+                  e.currentTarget.style.boxShadow = `0 24px 50px -24px ${hub.color}66`;
                 }}
                 onMouseOut={e => {
                   e.currentTarget.style.borderColor = `${hub.color}25`;
                   e.currentTarget.style.transform = '';
+                  e.currentTarget.style.boxShadow = '';
                 }}
               >
                 <div className="flex items-center gap-2">
@@ -126,8 +134,8 @@ export function Explorar() {
               <div className="flex items-center gap-2 mb-2">
                 <span style={{ fontSize: 18 }}>{p.emoji}</span>
                 <span
-                  className="font-mono text-[10px] font-bold"
-                  style={{ color: p.color, letterSpacing: '0.06em' }}
+                  className="font-mono text-[10px] font-bold ffv-acento-texto"
+                  style={{ '--ffv-acento': p.color, letterSpacing: '0.06em' } as React.CSSProperties}
                 >
                   {p.moduleSlugs.length} MÓDULOS
                 </span>

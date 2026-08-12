@@ -129,16 +129,22 @@ export default function OGImage() {
             fontWeight: '400',
           }}
         >
-          Zero hype. Arquitetura real. 17 trilhas gamificadas — IA, AWS, Sistemas Distribuídos e mais.
+          Zero hype. Arquitetura real. 38 trilhas gamificadas — IA na AWS, arquitetura de solução e produção.
         </p>
 
         {/* Stat pills */}
         <div style={{ display: 'flex', gap: '16px' }}>
+          {/*
+            Números conferidos contra o CURRICULUM por `numeros-publicos.test.ts`.
+            Diziam "17 trilhas" e "570+ módulos" — a imagem que TODO link
+            compartilhado do site mostrava anunciava um catálogo que não existia
+            (nem para mais, nem para menos: 38 trilhas e 490 módulos).
+          */}
           {[
-            { label: '17 trilhas', color: '#38bdf8' },
-            { label: '570+ módulos', color: '#818cf8' },
+            { label: '38 trilhas', color: '#38bdf8' },
+            { label: '490 módulos', color: '#818cf8' },
             { label: '100% gratuito', color: '#a78bfa' },
-            { label: 'XP + Gamificação', color: '#34d399' },
+            { label: 'XP + revisão espaçada', color: '#34d399' },
           ].map(({ label, color }) => (
             <div
               key={label}

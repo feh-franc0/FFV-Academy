@@ -1,0 +1,29 @@
+## 1. GitHub Actions
+
+- [x] 1.1 Pinadas por SHA todas as ~18 actions de terceiro (base única, mesmo repo usado por vários sub-paths como `github/codeql-action/{init,autobuild,analyze,upload-sarif}`) em `ci.yml`, `deploy.yml`, `security.yml`, `pr-checks.yml`, `lighthouse.yml`. Cada SHA resolvida via `gh api repos/<owner>/<repo>/commits/<tag>` e comentada com a versão original (`@<sha> # vX.Y.Z`) para leitura humana. Prioridade cumprida: `appleboy/scp-action` e `appleboy/ssh-action` (recebem `VPS_SSH_KEY`) estão entre as pinadas.
+- [x] 1.2 Dependabot **já cobria** o ecosystem `github-actions` (`directory: /`, weekly) — nenhuma mudança necessária ali. Adicionado, à parte, um ecosystem `docker` para `/frontend` (só havia para `/backend/deployments`) — necessário porque a tarefa 2 pinou o `frontend/Dockerfile` por digest, e sem entrada no Dependabot esse digest nunca seria atualizado.
+- [x] 1.3 `gitleaks-action` em `security.yml` sem `continue-on-error` — mas isso exigiu investigação primeiro: rodando `gitleaks detect` localmente com histórico completo (303 commits), havia **6 achados**, todos falsos positivos confirmados manualmente (nonce de exemplo do RFC 6455 em conteúdo didático de WebSocket, `sk_test_placeholder` literal em compose de dev, nome de constante `MIGRATION_DONE_KEY`, texto de marketing "LinkedIn Criador", trecho de código PASETO de exemplo). Criado `.gitleaks.toml` na raiz com allowlist por regex/path triada — sem ele, remover `continue-on-error` teria quebrado o CI permanentemente, que era exatamente por que a flag existia. Confirmado localmente: `gitleaks detect --config .gitleaks.toml` → "no leaks found".
+- [x] 1.4 `permissions:` mínimo explícito adicionado em `lighthouse.yml` (top-level, `contents: read`) e nos 4 jobs de `deploy.yml` que herdavam o default (`check`: `contents: read`; `deploy-backend`: `contents: read`; `smoke-test-backend` e `notify`: `permissions: {}`, nenhum dos dois toca a API do GitHub).
+
+## 2. Imagens Docker
+
+- [x] 2.1 `golang:1.26-alpine`, `gcr.io/distroless/static-debian12:nonroot`, `node:20-alpine` (3 estágios do Dockerfile do frontend), `nginx:1.27-alpine`, `postgres:16-alpine`, `redis:7-alpine` pinadas por digest (`@sha256:...`) — digests resolvidos via API de registro (Docker Hub / GCR) com token anônimo, tag mantida como comentário. `mailhog/mailhog:latest` (só dev, `docker-compose.yml`) **não pinada** — fora da lista explícita da tarefa, ferramenta de teste local sem exposição.
+- [x] 2.2 Confirmado com Docker real (não só leitura de manifesto): `docker pull` dos 6 digests bateu certo, `docker build` completo de `backend/deployments/Dockerfile` e de `frontend/Dockerfile` (com `--build-arg NEXT_PUBLIC_API_BASE_URL`) rodaram do zero e terminaram sem erro.
+
+## 3. Nginx
+
+- [x] 3.1 `frontend.conf`: `X-Forwarded-For $remote_addr` (sobrescreve, igual a `api.conf`) — antes usava `$proxy_add_x_forwarded_for`, que ANEXA ao valor do cliente.
+- [x] 3.2 HSTS ganhou `includeSubDomains` nos dois vhosts (`api.conf` e `frontend.conf`). `preload` avaliado e **não incluído** — submissão à hstspreload.org é efetivamente irreversível (meses pra sair da lista embutida nos browsers) e o domínio raiz ainda está em migração DNS+SSL, decisão documentada em comentário nos dois arquivos.
+- [x] 3.3 `ssl_ciphers` trocado de `HIGH:!aNULL:!MD5` (lista aberta, muda sozinha com a versão do OpenSSL da imagem) para uma lista Mozilla "Intermediate" explícita, nos dois vhosts.
+- [x] 3.4 Novo `backend/deployments/nginx/conf.d/default.conf`: bloco `default_server` em 443 usando `ssl_reject_handshake on` (rejeita na camada de SNI, sem precisar de certificado dummy) para Host/SNI não reconhecido, e bloco `default_server` em 80 retornando 444. Sem isso, o "vhost default" era uma função acidental de ORDEM ALFABÉTICA de arquivo (`api.conf` antes de `frontend.conf`), não uma decisão.
+
+## 4. Higiene
+
+- [x] 4.1 `.gitignore` raiz: adicionados `*.key`, `*.crt`, `*.pfx`, `id_rsa*`, `id_ed25519*` e `.env.*` (mais amplo que o `.env.*.local` que já existia). As negações `!**/.env.example`/`!**/.env.local.example` foram preservadas e continuam funcionando — verificado com `git check-ignore` que os 3 arquivos `.env*.example` reais do repo continuam NÃO ignorados.
+- [x] 4.2 `.claude/settings.local.json` revisado manualmente: é uma allowlist de padrões de comando Bash/WebFetch do Claude Code (ex. `Bash(npm run *)`, `WebFetch(domain:api.github.com)`) — **nenhum segredo, chave ou credencial presente**. Resultado documentado aqui; conteúdo do arquivo não reproduzido.
+
+## 5. Travar
+
+- [~] 5.1 Push de teste em branch descartável **não executado** — exigiria commitar toda a árvore de trabalho desta sessão (dezenas de arquivos de packs anteriores, ainda não commitados por política: só commitar quando o usuário pedir explicitamente). Substituído por verificação estática equivalente: (a) `yaml.safe_load` dos 5 workflows editados, todos válidos; (b) `actionlint` nos 5 workflows — zero achados novos (só um `shellcheck` pré-existente e fora de escopo em `deploy.yml:302`, não tocado por esta mudança); (c) as 18 SHAs pinadas re-verificadas contra `gh api repos/<repo>/commits/<sha>` — todas resolvem para o commit exato esperado.
+- [x] 5.2 `nginx -t` validado num container `nginx:1.27-alpine` real (o mesmo digest pinado), montando `nginx.conf` + `conf.d/` reais e certificados dummy autoassinados nos paths esperados — `nginx: configuration file /etc/nginx/nginx.conf test is successful`. Únicos avisos são `listen ... http2` deprecated, pré-existentes nas 3 linhas originais (não introduzidos por esta mudança, fora de escopo).
+- [x] 5.3 Migração SSH→OIDC documentada em `PENDENCIAS.md` como item **F-1**, com os dois caminhos possíveis (bastion OIDC-aware, ou migrar deploy para um provedor com STS nativo) e a mitigação atual (chave pinada por SHA nas actions que a recebem, nunca em log).

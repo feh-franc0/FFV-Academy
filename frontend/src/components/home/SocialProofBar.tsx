@@ -36,21 +36,22 @@ export function SocialProofBar() {
           <div>
             <p className="text-sm font-semibold">
               {showRealNumber
-                ? `${stats!.totalUsers.toLocaleString('pt-BR')}+ devs estudando aqui`
-                : 'Primeira leva de devs já está estudando'}
+                ? `${stats!.totalUsers.toLocaleString('pt-BR')}+ devs construindo com IA aqui`
+                : 'Faça parte da primeira leva de devs da FFV'}
             </p>
             <p className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
               {showRealNumber && stats!.activeWeekly > 0
                 ? `${stats!.activeWeekly} ativos esta semana`
-                : 'Junte-se à comunidade que está se preparando para a nova era da IA'}
+                : 'A comunidade de quem aprende a construir com IA de verdade — em PT-BR'}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-6 text-xs" style={{ color: 'var(--ffv-muted)' }}>
-          <Tag icon="⚡" label="100% gratuito" />
+          <Tag icon="🎯" label="Foco: IA, Claude & AWS" />
+          <Tag icon="⚡" label="100% gratuito, sem paywall" />
           <Tag icon="🔁" label="Revisão espaçada (SM-2)" />
-          <Tag icon="🇧🇷" label="Conteúdo em PT-BR" />
+          <Tag icon="🇧🇷" label="Em PT-BR" />
         </div>
       </div>
     </section>
@@ -67,7 +68,10 @@ function AvatarStack() {
           className="w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold border-2"
           style={{
             background: colorForInitials(init),
-            color: '#fff',
+            // Os acentos da paleta são CLAROS (amarelo, verde-menta, lilás):
+            // branco sobre eles mede 1,66:1 a 2,52:1. O fundo escuro da marca é
+            // o par legível de todos os cinco, nos dois temas.
+            color: '#0d1117',
             borderColor: 'var(--ffv-bg2)',
             zIndex: initials.length - i,
           }}

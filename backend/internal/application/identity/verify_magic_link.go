@@ -64,10 +64,24 @@ type VerifyMagicLinkUseCase struct {
 	refreshTokenTTL time.Duration
 	logger          *slog.Logger
 	devMode         bool
+	// maxAttempts é o teto de AÇÕES relacionadas a magic-link (pedidos +
+	// verificações, combinados) por email dentro da janela de 10min do
+	// contador Redis — mesmo `attemptsKey` que RequestMagicLinkUseCase já
+	// usava só para limitar pedido de código novo. Achado P-01/P-03 da
+	// auditoria de 11/ago/2026: verify nunca chamava IncrAttempts, então um
+	// atacante com poucos IPs conseguia varrer boa parte do espaço de 10⁶
+	// códigos dentro do TTL do token — o único freio era rate-limit por IP.
+	maxAttempts int64
 }
 
-// NewVerifyMagicLinkUseCase cria o use case com logger padrão (slog.Default).
-// Use WithLogger para substituir em produção pelo logger configurado.
+// defaultVerifyMaxAttempts é o valor usado quando WithMaxAttempts não é
+// chamado — 5 é conservador o bastante pra não incomodar um usuário real
+// (erro de digitação raramente passa de 1-2) e apertado o bastante pra
+// inviabilizar varredura de 10⁶ combinações.
+const defaultVerifyMaxAttempts = 5
+
+// NewVerifyMagicLinkUseCase cria o use case com logger padrão (slog.Default)
+// e maxAttempts padrão. Use WithLogger/WithMaxAttempts para substituir.
 func NewVerifyMagicLinkUseCase(
 	tokenStore identity.MagicTokenStore,
 	userRepo identity.UserRepository,
@@ -86,12 +100,21 @@ func NewVerifyMagicLinkUseCase(
 		refreshTokenTTL: refreshTokenTTL,
 		logger:          slog.Default(),
 		devMode:         devMode,
+		maxAttempts:     defaultVerifyMaxAttempts,
 	}
 }
 
 // WithLogger substitui o logger — chamado em main.go após o construtor.
 func (uc *VerifyMagicLinkUseCase) WithLogger(l *slog.Logger) *VerifyMagicLinkUseCase {
 	uc.logger = l
+	return uc
+}
+
+// WithMaxAttempts substitui o teto de tentativas — em produção, chamado com
+// o MESMO valor passado a NewRequestMagicLinkUseCase (main.go), pra que os
+// dois use cases compartilhem um único orçamento por email.
+func (uc *VerifyMagicLinkUseCase) WithMaxAttempts(n int64) *VerifyMagicLinkUseCase {
+	uc.maxAttempts = n
 	return uc
 }
 
@@ -118,8 +141,10 @@ func (uc *VerifyMagicLinkUseCase) Execute(ctx context.Context, cmd VerifyMagicLi
 
 	// Dev bypass: em desenvolvimento, o código 000000 autentica qualquer email sem Redis.
 	if !uc.devMode || strings.TrimSpace(cmd.Token) != "000000" {
-		// Consome token do Redis (atômico: GETDEL — garante uso único).
-		storedToken, err := uc.tokenStore.Consume(ctx, email)
+		// Peek (GET, não deleta) antes de validar — um palpite errado NÃO PODE
+		// apagar o código correto que ainda está pendente. Só Consume (GETDEL)
+		// depois do match confirmado, para manter o uso único (anti-replay).
+		storedToken, err := uc.tokenStore.Peek(ctx, email)
 		if err != nil {
 			if errors.Is(err, shared.ErrNotFound) {
 				uc.logger.WarnContext(ctx, "token não encontrado ou expirado",
@@ -129,12 +154,51 @@ func (uc *VerifyMagicLinkUseCase) Execute(ctx context.Context, cmd VerifyMagicLi
 				)
 				return VerifyMagicLinkResult{}, fmt.Errorf("%w: token não encontrado ou expirado", shared.ErrUnauthorized)
 			}
-			uc.logger.ErrorContext(ctx, "falha ao consumir token do Redis",
+			uc.logger.ErrorContext(ctx, "falha ao ler token do Redis",
 				"use_case", "VerifyMagicLink",
 				"request_id", middleware.RequestIDFromContext(ctx),
 				"error", err.Error(),
 			)
-			return VerifyMagicLinkResult{}, fmt.Errorf("verify magic link: consume token: %w", err)
+			return VerifyMagicLinkResult{}, fmt.Errorf("verify magic link: peek token: %w", err)
+		}
+
+		// Lockout por tentativas (achado P-03): checa ANTES de avaliar
+		// expiry/match, pra que a checagem em si não vire mais uma tentativa
+		// "grátis". attempts >= maxAttempts recusa mesmo que o código enviado
+		// agora esteja correto — sem isso, um código de 6 dígitos com TTL de
+		// 10min é varrível por quem controla poucos IPs (o rate-limit de
+		// requestToken é por IP; este é por EMAIL, o eixo que o atacante não
+		// controla).
+		attempts, attErr := uc.tokenStore.GetAttempts(ctx, email)
+		if attErr != nil {
+			uc.logger.ErrorContext(ctx, "falha ao verificar contador de tentativas",
+				"use_case", "VerifyMagicLink",
+				"request_id", middleware.RequestIDFromContext(ctx),
+				"error", attErr.Error(),
+			)
+			return VerifyMagicLinkResult{}, fmt.Errorf("verify magic link: check attempts: %w", attErr)
+		}
+		if attempts >= uc.maxAttempts {
+			uc.logger.WarnContext(ctx, "lockout de verificação atingido",
+				"use_case", "VerifyMagicLink",
+				"request_id", middleware.RequestIDFromContext(ctx),
+				"email_hash", hashEmail(cmd.Email),
+				"attempts", attempts,
+			)
+			return VerifyMagicLinkResult{}, shared.ErrRateLimited
+		}
+		// Conta ESTA tentativa antes de saber o resultado — inclusive a
+		// correta soma pro orçamento (mesmo contador que RequestMagicLink usa
+		// pra limitar pedido de código novo; os dois dividem a mesma janela
+		// de 10min por email). Falha ao incrementar é logada mas não trava o
+		// login: contar errado é preferível a derrubar login legítimo por
+		// instabilidade do Redis que o próprio Peek acima já teria pego.
+		if _, incrErr := uc.tokenStore.IncrAttempts(ctx, email); incrErr != nil {
+			uc.logger.ErrorContext(ctx, "falha ao incrementar contador de tentativas",
+				"use_case", "VerifyMagicLink",
+				"request_id", middleware.RequestIDFromContext(ctx),
+				"error", incrErr.Error(),
+			)
 		}
 
 		if storedToken.IsExpired(now) {
@@ -152,6 +216,37 @@ func (uc *VerifyMagicLinkUseCase) Execute(ctx context.Context, cmd VerifyMagicLi
 				"email_hash", hashEmail(cmd.Email),
 			)
 			return VerifyMagicLinkResult{}, fmt.Errorf("%w: token inválido", shared.ErrUnauthorized)
+		}
+
+		// A posse do código já está PROVADA neste ponto (Peek+Matches). Antes de
+		// queimar o token (Consume), checa se o email é de usuário novo sem dados
+		// de registro — se for, devolve ErrRegistrationRequired SEM consumir: o
+		// mesmo código volta a ser reenviado, agora com nome/telefone, no
+		// próximo POST. Checar isso ANTES do match seria enumeração de conta
+		// (responder "precisa cadastro" para qualquer email, sem provar posse);
+		// checar DEPOIS de consumir queimaria o código à toa.
+		if cmd.Registration == nil {
+			if _, findErr := uc.userRepo.FindByEmail(ctx, email); errors.Is(findErr, shared.ErrNotFound) {
+				uc.logger.InfoContext(ctx, "código válido, registro pendente — token preservado",
+					"use_case", "VerifyMagicLink",
+					"request_id", middleware.RequestIDFromContext(ctx),
+					"email_hash", hashEmail(cmd.Email),
+				)
+				return VerifyMagicLinkResult{}, fmt.Errorf("%w: dados de registro obrigatórios para novo usuário", shared.ErrRegistrationRequired)
+			}
+		}
+
+		// Match confirmado e (se novo usuário) registro presente — consome
+		// agora (GETDEL), garantindo uso único. Erro aqui (ex: outra requisição
+		// já consumiu em corrida) é tratado como token inválido, não como 500:
+		// a corrida é exatamente o cenário que o uso único deve barrar.
+		if _, err := uc.tokenStore.Consume(ctx, email); err != nil {
+			uc.logger.WarnContext(ctx, "token consumido em corrida com outra requisição",
+				"use_case", "VerifyMagicLink",
+				"request_id", middleware.RequestIDFromContext(ctx),
+				"email_hash", hashEmail(cmd.Email),
+			)
+			return VerifyMagicLinkResult{}, fmt.Errorf("%w: token já utilizado", shared.ErrUnauthorized)
 		}
 	}
 
@@ -233,6 +328,17 @@ func (uc *VerifyMagicLinkUseCase) findOrCreate(
 ) (*identity.User, bool, error) {
 	existing, err := uc.userRepo.FindByEmail(ctx, email)
 	if err == nil {
+		// Decisão explícita: dados de registro enviados para um email que já
+		// tem conta são IGNORADOS, não aplicados — login não é o fluxo de
+		// edição de perfil (isso é PATCH /me). Antes esse descarte era
+		// silencioso (nenhum log); agora fica registrado, para não parecer
+		// perda de dado por omissão.
+		if reg != nil {
+			uc.logger.InfoContext(ctx, "dados de registro enviados para email já cadastrado — ignorados",
+				"use_case", "VerifyMagicLink",
+				"email_hash", hashEmail(email.String()),
+			)
+		}
 		return existing, false, nil
 	}
 

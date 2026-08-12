@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { playPop } from '@/lib/sounds';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 
 export interface StreakRepairModalProps {
   open: boolean;
@@ -30,6 +31,9 @@ export function StreakRepairModal({
   onConfirm,
   onDismiss,
 }: StreakRepairModalProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, open);
+
   useEffect(() => {
     if (!open) return;
     playPop();
@@ -48,9 +52,11 @@ export function StreakRepairModal({
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label={`Sua sequência de ${streak} dias está em risco`}
+      tabIndex={-1}
       data-testid="streak-repair-modal"
       className="fixed inset-0 z-[95] flex items-center justify-center px-4"
       style={{

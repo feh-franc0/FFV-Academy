@@ -69,12 +69,21 @@ func (m *mockAttemptRepoCert) FindActiveByUserAndSimulado(_ context.Context, _ s
 func (m *mockAttemptRepoCert) ListByUser(_ context.Context, _ shared.UserID, _, _ int) ([]*domsim.Attempt, int, error) {
 	return nil, 0, nil
 }
+func (m *mockAttemptRepoCert) UpsertAnswer(_ context.Context, _ shared.AttemptID, _ shared.QuestionID, _ domsim.OptionID, _ time.Time) (bool, error) {
+	return true, nil
+}
+func (m *mockAttemptRepoCert) ClaimXPCredit(_ context.Context, _ shared.AttemptID, _ shared.UserID, _ time.Time) (bool, error) {
+	return true, nil
+}
+func (m *mockAttemptRepoCert) ListFinishedByUserAndSimulado(_ context.Context, _ shared.UserID, _ shared.SimuladoID) ([]*domsim.Attempt, error) {
+	return nil, nil
+}
 
 // --- Helpers ---
 
 func finishedAttempt(t *testing.T, userID shared.UserID, simID shared.SimuladoID, value int, passed bool, now time.Time) *domsim.Attempt {
 	t.Helper()
-	a := domsim.StartAttempt(shared.NewAttemptID(), userID, simID, 90, now)
+	a := domsim.StartAttempt(shared.NewAttemptID(), userID, simID, 90, []shared.QuestionID{"q1"}, now)
 	if err := a.Finish(domsim.NewScore(domsim.ScoreResult{Value: value, Passed: passed, TotalQuestions: 10, CorrectCount: value / 10}), now); err != nil {
 		t.Fatalf("finish attempt: %v", err)
 	}
@@ -128,7 +137,7 @@ func Test_IssueCertificate_Execute_WrongOwner_ReturnsForbidden(t *testing.T) {
 func Test_IssueCertificate_Execute_AttemptNotFinished_ReturnsValidation(t *testing.T) {
 	now := time.Now()
 	userID := shared.NewUserID()
-	attempt := domsim.StartAttempt(shared.NewAttemptID(), userID, "s1", 90, now) // not finished
+	attempt := domsim.StartAttempt(shared.NewAttemptID(), userID, "s1", 90, []shared.QuestionID{"q1"}, now) // not finished
 	uc := appcert.NewIssueCertificateUseCase(newMockCertRepo(),
 		&mockAttemptRepoCert{byID: map[shared.AttemptID]*domsim.Attempt{attempt.ID(): attempt}},
 		shared.FixedClock{T: now})

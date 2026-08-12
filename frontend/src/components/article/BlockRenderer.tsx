@@ -38,6 +38,7 @@ import {
   MindMap,
 } from './primitives';
 import { QuizBlock } from './QuizBlock';
+import { AwsDiagram } from './AwsDiagram';
 import type { Block } from './blocks/schemas';
 import { BLOCK_DATA_SCHEMAS } from './blocks/schemas';
 
@@ -48,6 +49,36 @@ function asText(value: unknown): string {
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   if (Array.isArray(value)) return value.map(asText).join(' ');
   if (value && typeof value === 'object' && 'text' in value) return asText((value as { text: unknown }).text);
+  return '';
+}
+
+/**
+ * Primeiro campo com texto, entre vários nomes possíveis.
+ *
+ * ─── Por que isso existe ───
+ *
+ * Os primitives em `primitives.tsx` aceitam mais nomes de campo do que os
+ * adapters entregavam. `ArchFlow` lê `header` e `footer`; `AnnotatedFormula` lê
+ * `text` e `annotation`; `StackFlow` lê `sub`, `detail` e `icon`; `LayerStack` lê
+ * `content`. Os adapters achatavam o dado para um subconjunto antes de passar
+ * adiante, e o que ficava fora era descartado.
+ *
+ * Consequência medida em ago/2026, varrendo os 393 seeds: mais de 1.300 campos
+ * escritos por autor não apareciam em nenhuma página, em 100+ módulos. O caso
+ * mais grave era `annotated_formula`, onde 148 de 197 anotações saíam com os três
+ * campos visíveis vazios — a página mostrava a fórmula e um bloco em branco
+ * embaixo. Nada quebrava, nada logava: o bloco renderizava, só sem conteúdo.
+ *
+ * Nenhum gate pegava porque todos verificavam se o bloco é VÁLIDO, e ele era.
+ * `scripts/validate_primitives_render.py` agora verifica se ele tem CONTEÚDO.
+ */
+function primeiroTexto(fonte: unknown, ...chaves: string[]): string {
+  if (!fonte || typeof fonte !== 'object') return '';
+  const obj = fonte as Record<string, unknown>;
+  for (const k of chaves) {
+    const v = asText(obj[k]);
+    if (v.trim()) return v;
+  }
   return '';
 }
 
@@ -72,12 +103,31 @@ const ADAPTERS: Record<string, AdapterEntry> = {
     allowsChildren: false,
     render: (data) => {
       const content = Array.isArray(data?.content) ? data.content : [];
+      // overflowWrap: identificador longo sem espaço não tem onde quebrar e
+      // empurra a página lateralmente no mobile — um nome de finding do
+      // GuardDuty tem 56 caracteres corridos. Só age em token que já não
+      // caberia; texto normal continua quebrando por palavra.
       return (
-        <p className="text-base leading-relaxed mb-4" style={{ color: 'var(--foreground)' }}>
+        <p
+          className="text-base leading-relaxed mb-4"
+          style={{ color: 'var(--foreground)', overflowWrap: 'anywhere' }}
+        >
           {content.map((node: any, i: number) => {
             const text = node?.text ?? '';
             let el: ReactNode = text;
-            if (node?.code) el = <code key={i} className="px-1 rounded" style={{ background: 'var(--ffv-bg2)' }}>{el}</code>;
+            {/* `overflow-wrap: anywhere` porque identificador longo em code
+                inline não tem espaço para quebrar e empurra a página lateralmente
+                no mobile: `SageMakerVariantInvocationsPerInstance` mede 373px
+                num viewport de 375px. Sem isto, 19 artigos rolavam de lado. */}
+            if (node?.code) el = (
+              <code
+                key={i}
+                className="px-1 rounded"
+                style={{ background: 'var(--ffv-bg2)', overflowWrap: 'anywhere' }}
+              >
+                {el}
+              </code>
+            );
             if (node?.bold) el = <strong key={i}>{el}</strong>;
             if (node?.italic) el = <em key={i}>{el}</em>;
             if (node?.link) el = <a key={i} href={node.link} className="underline" style={{ color: 'var(--ffv-blue)' }}>{el}</a>;
@@ -114,7 +164,29 @@ const ADAPTERS: Record<string, AdapterEntry> = {
             {data.filename}
           </div>
         ) : null}
-        <pre className="p-4 overflow-x-auto text-sm font-mono" style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
+        {/*
+          `scrollable-region-focusable`, a mesma correção que o `arch_diagram`
+          recebeu em ago/2026 e que ficou sem generalizar. `overflow-x-auto` sem
+          `tabIndex` deixa o conteúdo à direita inalcançável por teclado — e num
+          bloco de código o que fica à direita costuma ser o fim do comando,
+          justamente a parte que se copia.
+
+          Alcance medido em 07/ago/2026: **136 dos 427 módulos** têm ao menos um
+          `code_block` com linha acima de 88 caracteres, de 1.089 blocos de código
+          na base. O axe só flagra onde o elemento realmente rola, então o defeito
+          aparecia por página e nenhuma das 20 rotas auditadas o exercia.
+
+          `role="group"` e não `region`: `region` é landmark, e nove blocos de
+          código numa página produziriam nove landmarks de ruído no leitor de
+          tela. `group` aceita nome acessível e não entra na lista de landmarks.
+        */}
+        <pre
+          tabIndex={0}
+          role="group"
+          aria-label={data?.filename ? `Código: ${asText(data.filename)}` : `Bloco de código${data?.language ? ` em ${asText(data.language)}` : ''}`}
+          className="p-4 overflow-x-auto text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ffv-blue)]"
+          style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}
+        >
           <code data-language={data?.language ?? 'text'}>{asText(data?.code)}</code>
         </pre>
       </div>
@@ -148,8 +220,11 @@ const ADAPTERS: Record<string, AdapterEntry> = {
         winner={asText(data?.winner)}
         why={asText(data?.why)}
         alternatives={(data?.alternatives ?? []).map((a: any) => ({
-          name: asText(a?.name),
-          downside: asText(a?.downside ?? ''),
+          // `label` e `note` são os nomes usados na maior parte do conteúdo
+          // existente; sem eles, 286 de 355 alternativas saíam sem a desvantagem
+          // — que é justamente o que a caixa de decisão serve para mostrar.
+          name: primeiroTexto(a, 'name', 'label'),
+          downside: primeiroTexto(a, 'downside', 'note', 'when'),
         }))}
       />
     ),
@@ -186,10 +261,12 @@ const ADAPTERS: Record<string, AdapterEntry> = {
         <FlowDiagram
           title={asText(data?.title)}
           orientation={(data?.orientation === 'vertical' ? 'vertical' : 'horizontal') as 'horizontal' | 'vertical'}
-          steps={steps.map((s: any) => ({
-            // Primitive aceita {label, desc} — adapter aceita também title/body.
-            label: asText(s?.label ?? s?.title),
-            desc: asText(s?.desc ?? s?.body ?? s?.subtitle ?? ''),
+          steps={steps.map((s: any) => (typeof s === 'string' ? s : {
+            label: primeiroTexto(s, 'label', 'title', 'text'),
+            desc: primeiroTexto(s, 'desc', 'body', 'subtitle', 'detail'),
+            // O primitive desenha o ícone acima do rótulo; 47 dos 436 passos
+            // trazem um, e o adapter não o passava.
+            icon: primeiroTexto(s, 'icon') || undefined,
           }))}
         />
       );
@@ -204,10 +281,25 @@ const ADAPTERS: Record<string, AdapterEntry> = {
       return (
         <StackFlow
           title={asText(data?.title)}
-          items={items.map((s: any) => ({
-            label: asText(s?.label ?? s?.title),
-            text: asText(s?.text ?? s?.body ?? ''),
-          }))}
+          items={items.map((s: any) => {
+            if (typeof s === 'string') return s;
+            const rotulo = primeiroTexto(s, 'label', 'layer', 'title');
+            // O corpo do card no primitive é `detail` — NÃO `text`. O adapter
+            // antigo passava só `{label, text}`, e como o StackFlow usa `text`
+            // apenas como fallback de label, o texto do card não aparecia em 282
+            // de 367 itens. `sub`, `icon` e `connector` eram descartados junto.
+            const corpo = primeiroTexto(s, 'detail', 'text', 'body', 'desc', 'description');
+            return {
+              // Sem rótulo próprio, o corpo assume o rótulo — card com título e
+              // sem texto lê melhor que card sem título. E evita repetir o mesmo
+              // texto nas duas posições.
+              label: rotulo || corpo,
+              detail: rotulo ? corpo : '',
+              icon: primeiroTexto(s, 'icon') || undefined,
+              sub: primeiroTexto(s, 'sub', 'tech') || undefined,
+              connector: primeiroTexto(s, 'connector') || undefined,
+            };
+          })}
         />
       );
     },
@@ -222,8 +314,14 @@ const ADAPTERS: Record<string, AdapterEntry> = {
         <ArchFlow
           title={asText(data?.title)}
           columns={columns.map((c: any) => ({
-            title: asText(c?.title),
+            // 86 das 121 colunas usam `header`; o primitive lê os dois, o adapter
+            // lia só `title`. `footer` e `useCases` eram descartados inteiros.
+            title: primeiroTexto(c, 'title', 'header'),
+            header: primeiroTexto(c, 'header') || undefined,
+            headerColor: primeiroTexto(c, 'headerColor') || undefined,
+            footer: primeiroTexto(c, 'footer') || undefined,
             items: Array.isArray(c?.items) ? c.items.map(asText) : [],
+            useCases: Array.isArray(c?.useCases) ? c.useCases.map(asText) : undefined,
           }))}
         />
       );
@@ -240,11 +338,20 @@ const ADAPTERS: Record<string, AdapterEntry> = {
         <NodeGraph
           title={asText(data?.title)}
           columns={columns.map((c: any) => ({
-            title: asText(c?.title),
-            nodes: Array.isArray(c?.nodes) ? c.nodes.map((n: any) => ({
-              label: asText(n?.label),
-              note: asText(n?.note ?? ''),
-            })) : [],
+            // `label` é o nome usado em 126 das 141 colunas do conteúdo; sem ele
+            // a coluna aparecia sem cabeçalho.
+            title: primeiroTexto(c, 'title', 'label'),
+            nodes: Array.isArray(c?.nodes) ? c.nodes.map((n: any) => (
+              typeof n === 'string' ? n : {
+                label: primeiroTexto(n, 'label', 'title'),
+                // O primitive renderiza `sub`, não `note` — e 279 dos 318 nós do
+                // conteúdo usam `sub`. O adapter passava só `note`, então o
+                // subtítulo do nó não aparecia em nenhum diagrama de nó.
+                sub: primeiroTexto(n, 'sub', 'note') || undefined,
+                icon: primeiroTexto(n, 'icon') || undefined,
+                tone: typeof n?.tone === 'string' ? n.tone : undefined,
+              }
+            )) : [],
           }))}
           legend={legend.map((l: any) => ({ label: asText(l?.label), color: asText(l?.color ?? '') }))}
         />
@@ -355,10 +462,17 @@ const ADAPTERS: Record<string, AdapterEntry> = {
           title={asText(data?.title)}
           separatorLabel={asText(data?.separatorLabel ?? '')}
           variant={(data?.variant === 'compact' ? 'compact' : 'default') as 'default' | 'compact'}
+          // `instruction` e `content` são slots DIFERENTES no primitive (um é a
+          // orientação, o outro o corpo em mono). O adapter só passava
+          // `instruction`, e 42 das 60 camadas do conteúdo usam `content` — a
+          // camada aparecia com o rótulo e nada embaixo.
           layers={layers.map((l: any) => ({
-            label: asText(l?.label ?? l?.title),
-            instruction: asText(l?.instruction ?? l?.body ?? ''),
-            note: asText(l?.note ?? l?.badge ?? ''),
+            label: primeiroTexto(l, 'label', 'title'),
+            instruction: primeiroTexto(l, 'instruction', 'body'),
+            content: primeiroTexto(l, 'content') || undefined,
+            note: primeiroTexto(l, 'note', 'badge'),
+            tone: typeof l?.tone === 'string' ? l.tone : undefined,
+            separatorAfter: l?.separatorAfter === true,
           }))}
         />
       );
@@ -391,11 +505,18 @@ const ADAPTERS: Record<string, AdapterEntry> = {
         <AnnotatedFormula
           title={asText(data?.title)}
           formula={asText(data?.formula)}
+          // O adapter mapeava para `symbol`/`description`/`color` — campos que o
+          // primitive NÃO tem. Ele renderiza `text`, `label`, `name`,
+          // `annotation`, `note` e `highlight`. Resultado: 148 das 197 anotações
+          // saíam com todos os campos visíveis vazios, e 19 módulos mostravam a
+          // fórmula seguida de uma caixa em branco.
           parts={parts.map((p: any) => ({
-            symbol: asText(p?.symbol),
-            name: asText(p?.name),
-            color: asText(p?.color ?? 'var(--ffv-blue)'),
-            description: asText(p?.description ?? ''),
+            text: primeiroTexto(p, 'text', 'symbol'),
+            label: primeiroTexto(p, 'label') || undefined,
+            name: primeiroTexto(p, 'name') || undefined,
+            annotation: primeiroTexto(p, 'annotation', 'description') || undefined,
+            note: primeiroTexto(p, 'note') || undefined,
+            highlight: p?.highlight === true,
           }))}
         />
       );
@@ -407,6 +528,116 @@ const ADAPTERS: Record<string, AdapterEntry> = {
     render: (data) => (
       <ExamDomainBadge domain={asText(data?.domain)} weight={asText(data?.weight)} />
     ),
+  },
+
+  /**
+   * Diagrama de arquitetura com ícones. `arch_diagram` é o canônico.
+   *
+   * `aws_diagram` continua registrado abaixo como alias: sem ele, todo seed que
+   * ainda usasse o tipo antigo cairia em "no schema for block type" e o bloco
+   * desapareceria da página sem erro — a falha mais perigosa desta base.
+   */
+  arch_diagram: {
+    allowsChildren: false,
+    render: (data) => {
+      const groups = Array.isArray(data?.groups) ? data.groups : [];
+      if (groups.length === 0) return null;
+
+      // Só arestas e passos que referenciam nós existentes: id errado vira
+      // aresta invisível apontando para lugar nenhum, que confunde mais que ajuda.
+      const ids = new Set<string>();
+      const cleanGroups = groups.map((g: any) => ({
+        label: g?.label ? asText(g.label) : undefined,
+        kind: ['account', 'vpc', 'region', 'plain'].includes(g?.kind) ? g.kind : 'plain',
+        nodes: (Array.isArray(g?.nodes) ? g.nodes : []).map((n: any) => {
+          const id = asText(n?.id);
+          if (id) ids.add(id);
+          return {
+            id,
+            service: asText(n?.service),
+            label: n?.label ? asText(n.label) : undefined,
+            note: n?.note ? asText(n.note) : undefined,
+          };
+        }).filter((n: any) => n.id && n.service),
+      })).filter((g: any) => g.nodes.length > 0);
+
+      const edges = (Array.isArray(data?.edges) ? data.edges : [])
+        .map((e: any) => ({
+          from: asText(e?.from),
+          to: asText(e?.to),
+          label: e?.label ? asText(e.label) : undefined,
+          style: e?.style === 'dashed' ? 'dashed' as const : 'solid' as const,
+        }))
+        .filter((e: any) => ids.has(e.from) && ids.has(e.to));
+
+      const steps = (Array.isArray(data?.steps) ? data.steps : []).map((s: any) => ({
+        label: asText(s?.label),
+        detail: s?.detail ? asText(s.detail) : undefined,
+        nodes: Array.isArray(s?.nodes) ? s.nodes.map(asText).filter((i: string) => ids.has(i)) : undefined,
+        edges: Array.isArray(s?.edges) ? s.edges.map(asText) : undefined,
+      })).filter((s: any) => s.label);
+
+      return (
+        <AwsDiagram
+          title={asText(data?.title)}
+          caption={data?.caption ? asText(data.caption) : undefined}
+          groups={cleanGroups}
+          edges={edges}
+          steps={steps}
+        />
+      );
+    },
+  },
+  aws_diagram: {
+    allowsChildren: false,
+    render: (data) => {
+      const groups = Array.isArray(data?.groups) ? data.groups : [];
+      if (groups.length === 0) return null;
+
+      // Só arestas e passos que referenciam nós existentes: id errado vira
+      // aresta invisível apontando para lugar nenhum, que confunde mais que ajuda.
+      const ids = new Set<string>();
+      const cleanGroups = groups.map((g: any) => ({
+        label: g?.label ? asText(g.label) : undefined,
+        kind: ['account', 'vpc', 'region', 'plain'].includes(g?.kind) ? g.kind : 'plain',
+        nodes: (Array.isArray(g?.nodes) ? g.nodes : []).map((n: any) => {
+          const id = asText(n?.id);
+          if (id) ids.add(id);
+          return {
+            id,
+            service: asText(n?.service),
+            label: n?.label ? asText(n.label) : undefined,
+            note: n?.note ? asText(n.note) : undefined,
+          };
+        }).filter((n: any) => n.id && n.service),
+      })).filter((g: any) => g.nodes.length > 0);
+
+      const edges = (Array.isArray(data?.edges) ? data.edges : [])
+        .map((e: any) => ({
+          from: asText(e?.from),
+          to: asText(e?.to),
+          label: e?.label ? asText(e.label) : undefined,
+          style: e?.style === 'dashed' ? 'dashed' as const : 'solid' as const,
+        }))
+        .filter((e: any) => ids.has(e.from) && ids.has(e.to));
+
+      const steps = (Array.isArray(data?.steps) ? data.steps : []).map((s: any) => ({
+        label: asText(s?.label),
+        detail: s?.detail ? asText(s.detail) : undefined,
+        nodes: Array.isArray(s?.nodes) ? s.nodes.map(asText).filter((i: string) => ids.has(i)) : undefined,
+        edges: Array.isArray(s?.edges) ? s.edges.map(asText) : undefined,
+      })).filter((s: any) => s.label);
+
+      return (
+        <AwsDiagram
+          title={asText(data?.title)}
+          caption={data?.caption ? asText(data.caption) : undefined}
+          groups={cleanGroups}
+          edges={edges}
+          steps={steps}
+        />
+      );
+    },
   },
 
   mind_map: {

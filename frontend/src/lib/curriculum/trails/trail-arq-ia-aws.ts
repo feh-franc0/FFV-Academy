@@ -1,0 +1,148 @@
+import type { Trail } from '../types';
+
+/**
+ * 100 Arquiteturas de IA na AWS — uma por solução do catálogo.
+ *
+ * O módulo `aws-ia-100-solucoes` (na trilha do Bedrock) é o CATÁLOGO: cem linhas
+ * de tabela com problema, cadeia de serviços e a decisão que ensina. Esta trilha
+ * é o DESENHO: cada uma das cem soluções ganha um `arch_diagram` percorrível,
+ * com grupos, arestas rotuladas e 5 passos.
+ *
+ * A separação existe porque cadeia em texto (`A → B → C`) não mostra o que é
+ * paralelo, o que é assíncrono, onde entra revisão humana nem o que a camada de
+ * governança envolve. Os seeds são gerados por
+ * `scripts/seo/gerar_arquiteturas_100.py`, que lê o catálogo como fonte — e falha
+ * se a cadeia mudar por baixo do desenho.
+ */
+export const trilha_trail_arq_ia_aws: Trail = {
+    id: 'trail-arq-ia-aws',
+    name: '100 Arquiteturas de IA na AWS',
+    color: '#01a88d',
+    icon: '🧱',
+    desc: 'Cem problemas reais de IA na AWS, cada um com a arquitetura desenhada e percorrível: grupos, serviços, arestas rotuladas e cinco passos que reconstroem a decisão. Dez famílias — atendimento, documento, busca, agentes, copiloto interno, dados, mídia, risco, plataforma e operação. Derivado do catálogo de 100 soluções, com origem rotulada: 21 casos públicos com fonte, 32 arquiteturas de referência da AWS e 47 padrões compostos.',
+    level: 'advanced',
+    href: '/arquiteturas-ia-aws',
+    prerequisites: ['trail-bedrock'],
+    modules: [
+      {
+        slug: 'arq-ia-aws-atendimento',
+        title: '10 arquiteturas de IA para atendimento ao cliente',
+        icon: '🎧',
+        xp: 80,
+        readTime: 21,
+        desc: 'Atendimento tem alguém esperando, e isso muda a engenharia: o prazo até a primeira resposta elimina modelos antes de qualquer discussão de qualidade. Contact center com prazo de 2,5 s, escalonamento como caminho de primeira classe, ferramentas de leitura que reduzem transferência, RAG sobre acervo oficial, agente noturno de escopo estreito, catálogo mais estoque, tradução do acervo, resumo em lote, classificação antes de gerar e voz com interrupção.',
+        objetivo: 'Você desenha uma arquitetura de atendimento com IA na AWS escolhendo o modelo pelo prazo de resposta, não só pela qualidade.',
+        keywords: 'arquitetura ia atendimento aws, amazon connect bedrock, ia contact center aws, agente virtual reduzir escalonamento, bot voz aws polly transcribe, custo ia atendimento',
+        nextSuggested: ['arq-ia-aws-documentos'],
+        level: 'advanced',
+      },
+      {
+        slug: 'arq-ia-aws-documentos',
+        title: '10 arquiteturas de extração inteligente de documentos',
+        icon: '📄',
+        xp: 80,
+        readTime: 21,
+        desc: 'Extração determinística primeiro, modelo depois — e limiar de confiança POR CAMPO, não agregado. IDP orientado a evento, orquestração por agente quando os passos dependem do documento, integração auditável com o ERP, prontuário para FHIR, norma com citação obrigatória, sinistro com revisão parcial, corte por cláusula, documento multimodal, pico sazonal com fila e rastro por extração.',
+        keywords: 'arquitetura idp aws, extrair dados pdf ia aws, bedrock data automation textract, extração documento confiança por campo, idp evento s3 eventbridge, auditoria extração automática',
+        prerequisites: ['arq-ia-aws-atendimento'],
+        nextSuggested: ['arq-ia-aws-busca'],
+        level: 'advanced',
+      },
+      {
+        slug: 'arq-ia-aws-busca',
+        title: '10 arquiteturas de busca e conhecimento interno (RAG)',
+        icon: '🔎',
+        xp: 80,
+        readTime: 21,
+        desc: 'Dez RAGs, uma conclusão: a qualidade é decidida na recuperação, não na geração. Conector gerenciado, fronteira em protocolo padrão, citação verificável, recuperação em vários saltos, filtro por permissão nas duas pontas, índice híbrido para token raro, custo do índice em memória, ingestão por evento, avaliação separando as duas etapas e troca de embedding com virada por alias.',
+        keywords: 'arquitetura rag aws, knowledge bases bedrock arquitetura, busca híbrida vetorial léxico, permissão rag por usuário, custo índice vetorial aws, avaliar rag recuperação geração',
+        prerequisites: ['arq-ia-aws-documentos'],
+        nextSuggested: ['arq-ia-aws-agentes'],
+        level: 'advanced',
+      },
+      {
+        slug: 'arq-ia-aws-agentes',
+        title: '10 arquiteturas de agentes que agem em produção',
+        icon: '🤖',
+        xp: 85,
+        readTime: 22,
+        desc: 'Quem executa a ferramenta é o seu código — e por isso a fronteira de segurança é o adaptador, nunca o prompt. Decisão logística com estado real, runtime gerenciado e o que ele não resolve, agente em pesquisa, triagem de alerta, descoberta de esquema, consolidação de seis agentes em um, escrita em legado, teto que impede laço, confirmação humana em ação irreversível e reação por evento.',
+        keywords: 'arquitetura agente ia aws, bedrock agentcore arquitetura, tool use producao aws, agente ia sistema legado, evitar laço agente ia, confirmação humana agente ia',
+        prerequisites: ['arq-ia-aws-busca'],
+        nextSuggested: ['arq-ia-aws-copiloto'],
+        level: 'advanced',
+      },
+      {
+        slug: 'arq-ia-aws-copiloto',
+        title: '10 arquiteturas de copiloto interno e produtividade',
+        icon: '🧭',
+        xp: 80,
+        readTime: 20,
+        desc: 'A família com mais retorno e menos apresentação: IA voltada para dentro. Modernização de legado com revisão por módulo, assistente sobre incidentes e runbooks, revisão de código com critério de saída, barreira na geração versus permissão na execução, documentação que propõe em vez de publicar, onboarding por convenção, texto-para-SQL contido, triagem com amostragem, portal interno e rastro por ferramenta.',
+        keywords: 'copiloto interno empresa aws, ia produtividade engenharia, revisão código ia ci, texto para sql seguro aws, plataforma ia funcionários, observabilidade agente engenharia',
+        prerequisites: ['arq-ia-aws-agentes'],
+        nextSuggested: ['arq-ia-aws-dados'],
+        level: 'advanced',
+      },
+      {
+        slug: 'arq-ia-aws-dados',
+        title: '10 arquiteturas de dados, analytics e BI conversacional',
+        icon: '📊',
+        xp: 80,
+        readTime: 20,
+        desc: 'O modelo não adivinha o significado da coluna: catálogo descrito rende mais que instrução elaborada. Pergunta de negócio que exige SQL, camada conversacional com procedência, dado varrido como alavanca de custo, teste na fronteira de cada etapa, enriquecimento em lote, previsão tabular com explicação em linguagem, descrição de coluna aprovada, evolução de esquema com histórico, captura de mudança e dado sensível barrado na ingestão.',
+        keywords: 'bi conversacional aws arquitetura, texto para sql athena redshift, custo consulta gerada athena, qualidade de dado pipeline aws, cdc analitico aws, dado sensivel lake formation',
+        prerequisites: ['arq-ia-aws-copiloto'],
+        nextSuggested: ['arq-ia-aws-conteudo'],
+        level: 'advanced',
+      },
+      {
+        slug: 'arq-ia-aws-conteudo',
+        title: '10 arquiteturas de conteúdo, mídia e personalização',
+        icon: '🎬',
+        xp: 80,
+        readTime: 20,
+        desc: 'Serviço especializado para o determinístico, modelo de linguagem para o ambíguo — e lote onde ninguém espera. Narração ao vivo com janela de agregação, treino de fronteira com retomada, recomendação separada da redação, moderação em camadas, acervo de vídeo em lote, glossário determinístico, adaptador de estilo, resumo de reunião com schema, busca dentro de vídeo por minuto e voz com cache de frase fixa.',
+        keywords: 'arquitetura ia midia aws, moderação conteúdo aws rekognition guardrails, transcribe lote legenda capitulo, geração imagem identidade marca bedrock, busca dentro de video aws, polly cache frase',
+        prerequisites: ['arq-ia-aws-dados'],
+        nextSuggested: ['arq-ia-aws-risco'],
+        level: 'advanced',
+      },
+      {
+        slug: 'arq-ia-aws-risco',
+        title: '10 arquiteturas de risco, fraude e conformidade',
+        icon: '🛡️',
+        xp: 85,
+        readTime: 21,
+        desc: 'O escore decide, o texto justifica — e endpoint privado controla o CAMINHO, IAM controla a AUTORIZAÇÃO. Subscrição de seguro, explicabilidade regulatória, modelo próprio quando o dado é o diferencial, perímetro privado sem permissão aberta, conformidade contínua, decisão reconstituível, negação condicional por região e modelo, redação antes do prompt, residência de dado e acesso de terceiro sem juntar redes.',
+        keywords: 'ia conformidade aws arquitetura, bedrock privatelink iam por modelo, explicabilidade decisão ia regulador, residencia de dados bedrock regiao, redação dado pessoal prompt, auditoria decisão automatizada',
+        prerequisites: ['arq-ia-aws-conteudo'],
+        nextSuggested: ['arq-ia-aws-plataforma'],
+        level: 'advanced',
+      },
+      {
+        slug: 'arq-ia-aws-plataforma',
+        title: '10 arquiteturas de plataforma de IA corporativa',
+        icon: '🏛️',
+        xp: 85,
+        readTime: 20,
+        desc: 'Custo de IA é variável por uso: sem atribuição, a fatura é um número que ninguém sabe reduzir. Portal com cota e identidade, perfil de inferência por inquilino (porque etiqueta no chamador não separa a chamada de modelo), metadado na requisição, isolamento por credencial e não por prompt, rede compartilhada, cache semântico, roteamento por dificuldade com avaliação própria, escolha de modelo medida, versão de prompt e fluxo visual versus código.',
+        keywords: 'plataforma ia corporativa aws, custo por time bedrock, perfil de inferência aplicação bedrock, cache semantico memorydb bedrock, roteamento de modelo custo, prompt management versao alias',
+        prerequisites: ['arq-ia-aws-risco'],
+        nextSuggested: ['arq-ia-aws-operacao'],
+        level: 'advanced',
+      },
+      {
+        slug: 'arq-ia-aws-operacao',
+        title: '10 arquiteturas de operação e segurança de IA',
+        icon: '🚨',
+        xp: 85,
+        readTime: 21,
+        desc: 'Filtro de texto não separa dado de comando: o que resolve injeção é o agente não PODER fazer o que a instrução pede. Injeção indireta, exfiltração por ferramenta com permissão legítima, jailbreak em aplicação pública, degradação silenciosa detectada por sonda, falha em cascata no laço do agente, alarme sobre a derivada do gasto, rastro com motivo declarado, canário com fixação por sessão, versão de modelo fixada e as quatro perguntas da conformidade.',
+        keywords: 'segurança agente ia aws, injeção de prompt indireta defesa, exfiltração dados agente ia, guardrails jailbreak registro, detectar queda qualidade ia produção, alarme custo bedrock por hora',
+        prerequisites: ['arq-ia-aws-plataforma'],
+        nextSuggested: ['aif-intro'],
+        level: 'advanced',
+      },
+    ],
+  };

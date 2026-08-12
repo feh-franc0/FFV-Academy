@@ -1,6 +1,34 @@
 import { describe, it, expect } from 'vitest';
-import { buildPool, pickDailyQuestion, hashString } from '../random-question';
+import { buildPool, pickDailyQuestion, hashString, type PoolQuestion } from '../random-question';
 import type { GameState } from '../engine';
+
+/**
+ * Fixture da fonte 'simulado', usada no lugar do catálogo de produção.
+ *
+ * Até ago/2026 este teste chamava `buildPool()` sem argumentos e confiava em
+ * `SIMULADOS_CATALOG` ter pelo menos um simulado com `questions` inline — o
+ * que era um acidente de conteúdo (a SAA-C03 ainda era 5 questões de prévia),
+ * não uma garantia de contrato. Quando a SAA ganhou banco real no Postgres e
+ * o catálogo passou a `questions: []` em todo simulado, o pool ficou vazio e
+ * o teste passou a testar a ausência de bug errado.
+ *
+ * `buildPool` agora recebe a amostra de simulado como PARÂMETRO explícito —
+ * ver `fetchSimuladoSample` em `random-question.ts` para quem a produz em
+ * produção (busca na API). Aqui, a fixture testa o CONTRATO de `buildPool`
+ * sem depender de dado incidental de um arquivo de conteúdo.
+ */
+const SIMULADO_SAMPLE: PoolQuestion[] = [
+  {
+    id: 'sim_fixture_q1', source: 'simulado', stem: 'Fixture 1?',
+    options: [{ id: 'A', text: 'x' }, { id: 'B', text: 'y' }],
+    correctId: 'A', explanation: 'porque sim', topic: 'Fixture', difficulty: 'easy',
+  },
+  {
+    id: 'sim_fixture_q2', source: 'simulado', stem: 'Fixture 2?',
+    options: [{ id: 'A', text: 'x' }, { id: 'B', text: 'y' }],
+    correctId: 'B', explanation: 'porque sim', topic: 'Fixture', difficulty: 'easy',
+  },
+];
 
 function emptyState(overrides: Partial<GameState> = {}): GameState {
   return {
@@ -47,10 +75,18 @@ describe('hashString', () => {
 });
 
 describe('buildPool', () => {
-  it('retorna pelo menos 1 item de simulado mesmo sem reviewCards', () => {
+  it('sem reviewCards nem amostra de simulado, o pool fica vazio — não é bug, é o chamador que precisa buscar a amostra', () => {
+    // Este é o comportamento que causava o card "Pergunta do Dia" sumir para
+    // usuário novo até ago/2026, quando ninguém buscava a amostra. Hoje é
+    // esperado e documentado: `DailyQuestionCard` chama `fetchSimuladoSample`.
     const pool = buildPool();
-    expect(pool.length).toBeGreaterThan(0);
+    expect(pool).toEqual([]);
+  });
+
+  it('inclui source=simulado quando uma amostra pré-buscada é fornecida', () => {
+    const pool = buildPool(undefined, SIMULADO_SAMPLE);
     expect(pool.some(q => q.source === 'simulado')).toBe(true);
+    expect(pool).toHaveLength(SIMULADO_SAMPLE.length);
   });
 
   it('inclui source=module quando reviewCards são providos', () => {
@@ -76,7 +112,7 @@ describe('buildPool', () => {
 
 describe('pickDailyQuestion', () => {
   const today = '2026-05-14';
-  const pool = buildPool();
+  const pool = buildPool(undefined, SIMULADO_SAMPLE);
 
   it('é determinístico para mesma seed', () => {
     const state = emptyState();
@@ -89,8 +125,9 @@ describe('pickDailyQuestion', () => {
     const state = emptyState();
     const a = pickDailyQuestion(state, pool, today, 'user-aaa');
     const b = pickDailyQuestion(state, pool, today, 'user-zzz');
-    // Pool tem >10 itens — improvável que duas seeds aleatórias coincidam
-    // (não é garantia matemática, mas válido como smoke test)
+    // Não afirma que a e b são DIFERENTES — com pool pequeno (fixture de 2
+    // itens) duas seeds podem legitimamente colidir. O que importa aqui é que
+    // nenhuma delas retorna null com pool não vazio.
     expect(a).not.toBeNull();
     expect(b).not.toBeNull();
   });

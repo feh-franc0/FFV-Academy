@@ -1,17 +1,18 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { BASE, social } from '@/lib/metadata-social';
 
 export const metadata: Metadata = {
-  title: 'Cheatsheet Claude Code + IA para Código (PDF grátis) — FFV Academy',
+  title: 'Cheatsheet Claude Code + IA para Código (PDF grátis)',
   description: 'Receba o PDF de Cheatsheet do Claude Code: hooks, skills, sub-agents, MCP e atalhos de produtividade. Grátis, direto no email. Zero spam.',
   keywords: 'cheatsheet claude code, pdf claude code, cola claude code, atalhos claude code, referencia ia codigo',
-  alternates: { canonical: 'https://fernandofrancovalle.com/cheatsheet' },
-  openGraph: {
-    title: 'Cheatsheet Claude Code (PDF grátis)',
-    description: 'Hooks, skills, sub-agents, MCP e atalhos. PDF direto no email.',
-    type: 'article',
-    url: 'https://fernandofrancovalle.com/cheatsheet',
-  },
+  alternates: { canonical: `${BASE}/cheatsheet` },
+  ...social({
+    titulo: 'Cheatsheet Claude Code (PDF grátis) — FFV Academy',
+    descricao: 'Hooks, skills, sub-agents, MCP e atalhos. PDF direto no email.',
+    caminho: '/cheatsheet',
+    tipo: 'article',
+  }),
 };
 
 // Substituir pela URL real do Buttondown ao configurar a conta
@@ -70,7 +71,7 @@ export default function CheatsheetPage() {
           <button
             type="submit"
             className="px-5 py-3 rounded-lg font-semibold text-sm"
-            style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
+            style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
           >
             Receber cheatsheet →
           </button>
@@ -85,7 +86,7 @@ export default function CheatsheetPage() {
           Ou pule o email e abra a trilha completa:
         </p>
         <Link
-          href="/claude-code-masterclass"
+          href="/aws-bedrock"
           className="inline-block px-5 py-2.5 rounded-full font-semibold text-sm"
           style={{ background: 'var(--ffv-bg2)', color: 'var(--foreground)', border: '1px solid var(--ffv-border)' }}
         >

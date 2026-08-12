@@ -79,7 +79,7 @@ export function PlaylistsClient() {
                 <div className="flex items-start gap-4 mb-4 flex-wrap">
                   <span className="text-3xl">{pl.emoji}</span>
                   <div className="flex-1 min-w-[200px]">
-                    <h2 className="text-xl font-bold mb-1" style={{ color: pl.color }}>{pl.title}</h2>
+                    <h2 className="text-xl font-bold mb-1 ffv-acento-texto" style={{ '--ffv-acento': pl.color } as React.CSSProperties}>{pl.title}</h2>
                     <p className="text-sm mb-2">{pl.subtitle}</p>
                     <p className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
                       <b>Pra quem:</b> {pl.audience}

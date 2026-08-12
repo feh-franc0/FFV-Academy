@@ -1,0 +1,2725 @@
+{
+  "slug": "lab-deploy-ecr-rolling-update-drenagem",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência é uma equipe de duas pessoas que mantém uma API de pedidos para trinta lojas. A aplicação é a mesma do "
+              },
+              {
+                "text": "L01",
+                "code": true
+              },
+              {
+                "text": ": .NET 8 em ECS Fargate, banco em sub-rede privada, balanceador na frente. Tudo o que este laboratório muda é como uma versão nova entra no ar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Hoje o procedimento é escrito num documento e obedecido: avisar no canal, esperar o horário de menor movimento, rodar "
+              },
+              {
+                "text": "terraform apply",
+                "code": true
+              },
+              {
+                "text": ", olhar o painel até o serviço responder de novo. Entre o aviso e a volta passam de seis a doze minutos. Ninguém considera isso um defeito — considera-se o custo de publicar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A consequência real não é o tempo fora do ar. É que publicar dói, então publica-se pouco: a cada duas semanas, com trinta commits juntos. Quando algo quebra, há trinta suspeitos, e o diagnóstico que levaria minutos leva uma tarde. A janela de indisponibilidade e a lentidão da entrega são o mesmo problema, e quem resolve o primeiro resolve o segundo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Básico — depende do L01 e não pressupõe experiência com CI/CD"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L01 concluído e no ar, Docker local, Git, Terraform"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 35 min · implementação 1 h 30 a 2 h"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Muito baixo: o excedente durante a troca dura minutos; o que já cobra é a infraestrutura do L01"
+              },
+              {
+                "k": "Serviços",
+                "v": "ECR, ECS Fargate, ALB (grupo de destino), CloudWatch, KMS"
+              },
+              {
+                "k": "Volume atual",
+                "v": "30 lojas, cerca de 9 mil requisições por dia, p99 de 400 ms"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "publicar em horário comercial sem erro visível ao cliente"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "nenhuma rota faz upload longo, streaming ou WebSocket — é o que autoriza baixar o prazo de drenagem"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "imagem versionada por SHA no ECR e um rollout observado sem um único 5xx, com a prova gravada"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é CI/CD. Aqui o deploy continua sendo disparado por uma pessoa, de um script. Tirar a credencial da máquina do dev e colocar o rollout num pipeline federado é o L54, e ele depende deste. Misturar as duas coisas faria você depurar permissão de OIDC enquanto tenta entender drenagem de conexão."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que o 503 do deploy aparece sem nenhuma linha nos logs da aplicação.",
+              "Nomear os três relógios do rollout e dizer qual deles domina o tempo total.",
+              "Derivar a ordem entre drenagem e SIGTERM a partir dos estados do ciclo de vida da task.",
+              "Distinguir vivacidade de prontidão e justificar por que a prontidão consulta o banco e a vivacidade não.",
+              "Configurar prazo de drenagem a partir do p99 medido, em vez de copiar um valor.",
+              "Publicar com tag imutável e voltar para a versão anterior sem reconstruir imagem.",
+              "Provar que o rollout não gerou erro de cliente, com medição durante a troca.",
+              "Diagnosticar um rollout que não estabiliza, distinguindo três causas pelo sintoma."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Rolling update e capacidade",
+                "DVA-C02, SAA-C03",
+                "o par mínimo/máximo que autoriza o excedente",
+                "por que máximo 200 sem mínimo 100 não garante nada"
+              ],
+              [
+                "Drenagem de conexão",
+                "DVA-C02, SOA-C02",
+                "atributo do grupo de destino, derivado do p99",
+                "que o prazo é teto e não espera; e que ele é do grupo, não do ALB"
+              ],
+              [
+                "Health check: ALB vs contêiner",
+                "DVA-C02, SOA-C02",
+                "duas rotas, dois propósitos",
+                "qual decide receber tráfego e qual decide substituir o contêiner"
+              ],
+              [
+                "Ciclo de vida da task",
+                "DVA-C02, SAP-C02",
+                "DEACTIVATING precede STOPPING",
+                "onde ocorre a desregistragem e onde o sinal de parada é enviado"
+              ],
+              [
+                "Imutabilidade de tag",
+                "DVA-C02, DOP-C02",
+                "IMMUTABLE no repositório e SHA como tag",
+                "por que rollback depende de identidade de conteúdo"
+              ],
+              [
+                "Disjuntor de implantação",
+                "DOP-C02",
+                "volta automática de rollout que não estabiliza",
+                "a diferença entre rollout que falha e versão que responde errado"
+              ],
+              [
+                "Métrica de 5xx: alvo vs balanceador",
+                "SOA-C02, DOP-C02",
+                "o alarme mede o alvo",
+                "que o mesmo número nas duas métricas conta histórias opostas"
+              ],
+              [
+                "Multi-stage build e superfície",
+                "DVA-C02",
+                "SDK fora da imagem final",
+                "efeito no tempo de partida e na superfície de ataque"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica dá um serviço com uma task, mínimo 100% e máximo 100%, e pede por que o deploy não avança. A resposta é aritmética: sem excedente autorizado, o ECS não pode criar a task nova, e sem descer abaixo do mínimo não pode remover a velha. Não é lentidão — é impossibilidade."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito não funcional que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Erro visível ao cliente durante o deploy",
+                "zero",
+                "obriga excedente: mínimo 100% e máximo 200%, com pelo menos duas tasks"
+              ],
+              [
+                "Duração do rollout",
+                "abaixo de 3 min por versão",
+                "health check em 2 × 5 s em vez de 5 × 30 s, e prazo de drenagem em 30 s"
+              ],
+              [
+                "p99 de resposta",
+                "400 ms",
+                "é a medida que autoriza drenagem curta; com upload longo o valor seria outro"
+              ],
+              [
+                "Rollback sem reconstruir",
+                "obrigatório",
+                "tag imutável com SHA, e revisões da task definition preservadas"
+              ],
+              [
+                "Publicar sem vigília",
+                "requisito da equipe de duas pessoas",
+                "disjuntor de implantação com volta automática, mais alarme de 5xx do alvo"
+              ],
+              [
+                "Migration na partida",
+                "existe, leva até 20 s",
+                "período de graça de 60 s, senão a task é morta antes de ficar pronta"
+              ],
+              [
+                "Disponibilidade",
+                "99,9% em horário comercial",
+                "duas tasks em duas AZs — o mesmo número que o rollout já exige"
+              ],
+              [
+                "Rastreabilidade do que está no ar",
+                "auditável",
+                "a tag é o SHA do commit; publicar árvore suja é bloqueado no script"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o deploy que derruba"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem hoje, e ele é legítimo como ponto de partida: publica de verdade, com poucas linhas. O laboratório começa por medir a janela dele — porque um número torna o defeito discutível, e \"o deploy demora\" não."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O deploy de dez minutos fora do ar",
+            "caption": "Este desenho publica, e é por isso que ele sobrevive: são as menores linhas de Terraform que trocam a versão. A indisponibilidade não vem de nenhuma configuração errada — vem de duas ausentes e de uma tag que não identifica nada. Percorra os passos e repare que a janela sem alvo saudável é aritmética, não azar.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "dev",
+                    "service": "ide",
+                    "label": "Máquina do dev",
+                    "note": "constrói e envia a imagem; é também de onde o deploy é disparado à mão"
+                  },
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente",
+                    "note": "é quem mede a indisponibilidade, e é o único que a percebe em tempo real"
+                  }
+                ]
+              },
+              {
+                "label": "Registro de imagem",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ecr",
+                    "service": "ecr",
+                    "label": "ECR, tag :latest",
+                    "note": "a tag é sobrescrita a cada envio — depois do push não existe mais a versão anterior para voltar"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB com um alvo",
+                    "note": "devolve 503 quando nenhum alvo está saudável; não é erro dele, é ausência de destino"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "svc",
+                    "service": "ecs",
+                    "label": "Serviço ECS, desiredCount = 1",
+                    "note": "uma task só: não há como ter a versão nova de pé antes de matar a velha"
+                  },
+                  {
+                    "id": "task",
+                    "service": "fargate",
+                    "label": "Task .NET 8",
+                    "note": "sobe em cerca de 40 s e só então começa a responder ao health check"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "dev",
+                "to": "ecr",
+                "label": "docker push :latest",
+                "style": "solid"
+              },
+              {
+                "from": "dev",
+                "to": "svc",
+                "label": "update-service --force-new-deployment",
+                "style": "solid"
+              },
+              {
+                "from": "svc",
+                "to": "task",
+                "label": "para a antiga, sobe a nova",
+                "style": "solid"
+              },
+              {
+                "from": "ecr",
+                "to": "task",
+                "label": "pull da imagem em :latest",
+                "style": "dashed"
+              },
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "HTTPS 443",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "task",
+                "label": "encaminha só para alvo saudável",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A tag não identifica versão nenhuma",
+                "detail": "Com `:latest`, a task definition aponta para um nome, não para um conteúdo. Duas tasks subindo em momentos diferentes podem rodar imagens diferentes, e a pergunta \"qual versão está no ar?\" não tem resposta. Rollback também não tem: o envio anterior foi sobrescrito.",
+                "nodes": [
+                  "ecr",
+                  "dev"
+                ],
+                "edges": [
+                  "dev>ecr"
+                ]
+              },
+              {
+                "label": "Uma task só, e a aritmética fecha contra você",
+                "detail": "Com `desired_count = 1`, trocar a versão exige que a única task pare. Não há excedente para a nova conviver com a velha, e não existe configuração que resolva isso sem uma segunda task.",
+                "nodes": [
+                  "svc",
+                  "task"
+                ],
+                "edges": [
+                  "svc>task"
+                ]
+              },
+              {
+                "label": "A janela de 503 é a soma de duas esperas",
+                "detail": "Entre a velha parar e a nova ser declarada saudável passam o tempo de provisionar a interface de rede, baixar a imagem, iniciar o processo e — a maior parcela — os ciclos do health check. No padrão do grupo de destino, são 5 verificações de 30 s: 150 s só de espera.",
+                "nodes": [
+                  "alb",
+                  "task"
+                ],
+                "edges": [
+                  "alb>task"
+                ]
+              },
+              {
+                "label": "O cliente vê 503, e o log da aplicação está limpo",
+                "detail": "É a parte que mais atrasa o diagnóstico. O 503 é gerado pelo próprio ALB, porque não há alvo saudável para escolher. Nenhuma requisição chega à aplicação, então nenhum log dela registra o incidente.",
+                "nodes": [
+                  "user",
+                  "alb"
+                ],
+                "edges": [
+                  "user>alb"
+                ]
+              },
+              {
+                "label": "Deploy ruim não tem volta automática",
+                "detail": "Se a versão nova sobe e responde 500, ninguém desfaz nada. E como a tag foi sobrescrita, voltar exige reconstruir a imagem antiga a partir do código — na pressa, sem certeza de que é o mesmo binário.",
+                "nodes": [
+                  "ecr",
+                  "svc"
+                ],
+                "edges": [
+                  "ecr>task"
+                ]
+              },
+              {
+                "label": "Por que alguém publica assim",
+                "detail": "Porque funciona, e porque é o menor número de linhas que leva código à nuvem. O aviso no canal antes do deploy é o remendo social de um defeito técnico — e enquanto ele existe, o defeito não é tratado como defeito.",
+                "nodes": [
+                  "dev",
+                  "svc"
+                ],
+                "edges": [
+                  "dev>svc"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Antes de mudar qualquer coisa, meça. Este laço roda durante um deploy do desenho atual e devolve a duração da janela em requisições perdidas, o que é mais honesto do que cronômetro no relógio de parede."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "filename": "medir-a-janela.sh",
+            "code": "# Rode ANTES de mudar nada. O numero que sair daqui e a linha de base.\nURL=\"https://$(terraform output -raw dominio)/api/health/ready\"\nruins=0; total=0\n( while true; do\n    c=$(curl -s -o /dev/null -w \"%{http_code}\" --max-time 3 \"$URL\")\n    total=$((total+1)); [ \"$c\" = \"200\" ] || ruins=$((ruins+1))\n    echo \"$(date +%T) $c\"; sleep 0.2\n  done ) &\nLACO=$!\nterraform apply -auto-approve   # o deploy do desenho MINIMO\nkill $LACO\n# Na Cadencia: 1.847 requisicoes, 412 nao-200 — cerca de 82 s de janela real,\n# contra os \"seis a doze minutos\" do documento. Medir corrigiu as duas pontas."
+          }
+        },
+        {
+          "id": "b4_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "Os dois 5xx do deploy não são a mesma falha",
+            "content": "O 503 vem do balanceador e significa ausência de alvo saudável — nenhuma requisição chegou à aplicação, e é por isso que o log dela está limpo. O 502 e o 504 vêm de conexão cortada ou resposta inválida de um alvo que existia. O primeiro é problema de capacidade durante a troca; o segundo é problema de drenagem ou da versão nova. Tratá-los como \"erro de deploy\" indistintamente é o que faz o time ajustar o parâmetro errado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. Se você não conseguir apontar o requisito, a peça é adorno — e este desenho não tem nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Excedente, drenagem e volta automática",
+            "caption": "A troca deixa de ser \"para e sobe\" e passa a ser \"sobe, prova, drena e só então para\". O que muda no desenho é a existência SIMULTÂNEA das duas versões e um grupo de destino com prazo de drenagem próprio. Percorra os passos: cada peça nova rastreia a um requisito da seção anterior.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "dev",
+                    "service": "ide",
+                    "label": "Commit no repositório",
+                    "note": "o SHA do commit passa a ser a identidade da imagem — é o que torna rollback possível"
+                  },
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente",
+                    "note": "não percebe a troca; é o critério de aceite do laboratório"
+                  }
+                ]
+              },
+              {
+                "label": "Registro imutável",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ecr",
+                    "service": "ecr",
+                    "label": "ECR com tag imutável",
+                    "note": "imutabilidade impede sobrescrever; varredura na entrada reprova imagem com CVE conhecida"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — pública, duas AZs",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB em 2 AZs",
+                    "note": "não drena nada: ele encaminha. Quem drena é o grupo de destino abaixo"
+                  },
+                  {
+                    "id": "tg",
+                    "service": "targetgroup",
+                    "label": "Grupo de destino",
+                    "note": "aqui moram o health check e o deregistration_delay — os dois relógios do rollout"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada, duas AZs: as duas versões convivem",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "svc",
+                    "service": "ecs",
+                    "label": "Serviço ECS 100% / 200%",
+                    "note": "o mínimo garante capacidade durante a troca; o máximo autoriza o excedente que a permite"
+                  },
+                  {
+                    "id": "nova",
+                    "service": "fargate",
+                    "label": "Task nova (SHA b)",
+                    "note": "existe antes de a velha morrer — é a diferença estrutural em relação ao desenho anterior"
+                  },
+                  {
+                    "id": "velha",
+                    "service": "fargate",
+                    "label": "Task velha (SHA a)",
+                    "note": "passa por DEACTIVATING (drenagem) antes de STOPPING (SIGTERM), nesta ordem"
+                  }
+                ]
+              },
+              {
+                "label": "Observação e volta",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Alarme de 5xx",
+                    "note": "mede o alvo, não o ALB: 5xx do alvo acusa a versão nova; 5xx do ALB acusa falta de alvo"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "dev",
+                "to": "ecr",
+                "label": "push com tag = SHA do commit",
+                "style": "solid"
+              },
+              {
+                "from": "dev",
+                "to": "svc",
+                "label": "nova revisão da task definition",
+                "style": "solid"
+              },
+              {
+                "from": "svc",
+                "to": "nova",
+                "label": "sobe a nova sem parar a velha",
+                "style": "solid"
+              },
+              {
+                "from": "ecr",
+                "to": "nova",
+                "label": "pull por digest imutável",
+                "style": "dashed"
+              },
+              {
+                "from": "tg",
+                "to": "nova",
+                "label": "health check até 2 respostas boas",
+                "style": "dashed"
+              },
+              {
+                "from": "svc",
+                "to": "velha",
+                "label": "só então: DEACTIVATING",
+                "style": "solid"
+              },
+              {
+                "from": "tg",
+                "to": "velha",
+                "label": "drena até o alvo virar UNUSED",
+                "style": "dashed"
+              },
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "HTTPS 443 sem interrupção",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "tg",
+                "label": "escolhe entre os alvos saudáveis",
+                "style": "solid"
+              },
+              {
+                "from": "cw",
+                "to": "svc",
+                "label": "alarme dispara volta à revisão anterior",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A identidade da imagem é o SHA do commit",
+                "detail": "Com tag imutável, a pergunta \"qual versão está no ar?\" tem uma resposta exata, e voltar é apontar para a revisão anterior da task definition — que continua existindo, com a imagem que continua existindo. Rollback deixa de ser reconstrução e passa a ser referência.",
+                "nodes": [
+                  "ecr",
+                  "dev"
+                ],
+                "edges": [
+                  "dev>ecr"
+                ]
+              },
+              {
+                "label": "O excedente é o que permite não haver janela",
+                "detail": "`maximum_percent = 200` autoriza o serviço a ter o dobro das tasks durante a troca; `minimum_healthy_percent = 100` proíbe descer abaixo da capacidade declarada. Um sem o outro não resolve: o máximo dá o espaço, o mínimo é quem obriga a usá-lo.",
+                "nodes": [
+                  "svc",
+                  "nova"
+                ],
+                "edges": [
+                  "svc>nova"
+                ]
+              },
+              {
+                "label": "Prontidão precisa dizer a verdade",
+                "detail": "Se a rota de saúde devolve 200 antes de a aplicação poder atender — sem o pool do banco aberto, por exemplo — o grupo de destino declara a task saudável e o ALB manda tráfego real para quem vai responder 500. O 5xx aparece DEPOIS do rollout e ninguém liga uma coisa à outra.",
+                "nodes": [
+                  "tg",
+                  "nova"
+                ],
+                "edges": [
+                  "tg>nova"
+                ]
+              },
+              {
+                "label": "A drenagem acontece antes do SIGTERM, não depois",
+                "detail": "O ciclo de vida da task é explícito: a desregistragem do grupo de destino ocorre em `DEACTIVATING`, e o `SIGTERM` só é enviado em `STOPPING`, que é o estado seguinte. A consequência é contraintuitiva e vale saber: aplicação que ignora `SIGTERM` não corta requisição HTTP em voo, desde que o prazo de drenagem cubra a requisição mais longa.",
+                "nodes": [
+                  "velha",
+                  "tg"
+                ],
+                "edges": [
+                  "svc>velha",
+                  "tg>velha"
+                ]
+              },
+              {
+                "label": "O prazo de drenagem é um teto, não uma espera",
+                "detail": "O que o ECS aguarda é o balanceador informar que a conexão keep-alive do cliente fechou — o alvo entra no estado `UNUSED`. Se isso acontece em 2 s, o rollout segue em 2 s. Os 300 s do padrão são o limite de paciência, e é por isso que baixá-los acelera o deploy sem cortar nada.",
+                "nodes": [
+                  "tg",
+                  "velha"
+                ],
+                "edges": [
+                  "tg>velha"
+                ]
+              },
+              {
+                "label": "A volta é automática, e é ela que permite publicar sem plateia",
+                "detail": "Com o disjuntor de implantação ligado e a volta habilitada, um rollout que não estabiliza retorna à revisão anterior sozinho. O alarme de 5xx do alvo é o segundo par de olhos, para o caso em que a task fica saudável e a resposta, errada.",
+                "nodes": [
+                  "cw",
+                  "svc"
+                ],
+                "edges": [
+                  "cw>svc"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação ao desenho anterior não é uma caixa a mais: é a existência simultânea de duas versões. Tudo o mais — grupo de destino com prazo próprio, alarme, volta automática — existe para administrar essa convivência."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "annotated_formula",
+          "position": 3,
+          "data": {
+            "title": "Quanto dura um rollout, e qual parcela você controla",
+            "formula": "rollout ≈ partida + (limiar_saudável × intervalo) + drenagem_real + desligamento",
+            "parts": [
+              {
+                "symbol": "partida",
+                "name": "Provisionar, baixar e iniciar",
+                "description": "Interface de rede, pull da imagem e boot do processo. Imagem menor encurta esta parcela, e é o único ganho real de otimizar o Dockerfile aqui."
+              },
+              {
+                "symbol": "limiar_saudável × intervalo",
+                "name": "A espera até ser declarada pronta",
+                "description": "A maior parcela no padrão: 5 verificações a cada 30 s dão 150 s. Baixar para 2 × 5 s dá 10 s. É o ajuste com maior efeito por linha alterada.",
+                "highlight": true
+              },
+              {
+                "symbol": "drenagem_real",
+                "name": "O tempo até o alvo virar UNUSED",
+                "description": "Não é o valor configurado: é quanto a conexão keep-alive do cliente demora a fechar, limitado por aquele valor. O prazo é teto, não duração."
+              },
+              {
+                "symbol": "desligamento",
+                "name": "Do SIGTERM ao fim do processo",
+                "description": "Zero se a aplicação encerra sozinha ao receber o sinal; o stopTimeout inteiro se ela o ignora. É onde tratar SIGTERM devolve tempo de deploy."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "success",
+            "title": "O ajuste com maior efeito por linha alterada",
+            "content": "Das quatro parcelas, a que domina no padrão é a espera do health check: 5 verificações a cada 30 s são 150 s antes de a task nova receber a primeira requisição. Baixar para 2 × 5 s tira 140 s de cada rollout, e é uma linha. Otimizar o Dockerfile — que é onde a atenção costuma ir — mexe na parcela da partida, tipicamente dezenas de segundos."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de um deploy, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os nomes dos estados não são jargão: eles são a prova da ordenação. A desregistragem do grupo de destino acontece em "
+              },
+              {
+                "text": "DEACTIVATING",
+                "code": true
+              },
+              {
+                "text": ", e o sinal de parada só é enviado em "
+              },
+              {
+                "text": "STOPPING",
+                "code": true
+              },
+              {
+                "text": " — que é o estado seguinte. Isso é observável com "
+              },
+              {
+                "text": "describe-tasks",
+                "code": true
+              },
+              {
+                "text": " durante o rollout, e a seção de provas faz exatamente isso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Os estados de uma task ao ser substituída — e onde cada relógio corre",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "PROVISIONING (nova)",
+                "desc": "A interface de rede da task é provisionada. Em modo awsvpc, cada task recebe a sua — e é aqui que esgotamento de endereços na sub-rede aparece como deploy travado."
+              },
+              {
+                "label": "PENDING (nova)",
+                "desc": "Espera por capacidade. Em Fargate é curto; quando demora, a causa está em cota da conta."
+              },
+              {
+                "label": "ACTIVATING (nova)",
+                "desc": "Baixa a imagem, cria o contêiner, configura a rede e REGISTRA no grupo de destino. O registro acontece aqui, antes de a task estar saudável."
+              },
+              {
+                "label": "RUNNING (nova) — e o health check começa",
+                "desc": "A task roda, mas só recebe tráfego quando acumula respostas boas suficientes. É a maior parcela do tempo de rollout no padrão."
+              },
+              {
+                "label": "DEACTIVATING (velha) — a drenagem",
+                "desc": "A desregistragem do grupo de destino ocorre NESTE estado. O balanceador para de enviar requisição nova e aguarda a conexão keep-alive fechar, até o teto do prazo."
+              },
+              {
+                "label": "STOPPING (velha) — o SIGTERM",
+                "desc": "Só agora o sinal de parada é enviado ao contêiner, e o SIGKILL vem depois do stopTimeout. Este estado é POSTERIOR à drenagem, e é o fato que desmonta a crença de que ignorar SIGTERM corta requisição em voo."
+              },
+              {
+                "label": "DEPROVISIONING → STOPPED (velha)",
+                "desc": "A interface de rede é desanexada e removida. A task deixa de contar para o serviço."
+              },
+              {
+                "label": "O rollout repete por task",
+                "desc": "Com duas tasks, a sequência acontece duas vezes, respeitando o mínimo saudável. É por isso que o tempo total cresce com o número de tasks, não com o tamanho da imagem."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A consequência contraintuitiva, e vale saber com precisão",
+            "content": "Como a drenagem termina ANTES de o SIGTERM ser enviado, uma aplicação que ignora completamente o sinal não corta requisição HTTP em voo — desde que o prazo de drenagem cubra a requisição mais longa. Isso contraria o conselho mais repetido sobre deploy em contêiner. Tratar SIGTERM continua valendo, por dois motivos diferentes do que se costuma dizer: encurta o rollout (o processo sai em vez de esperar o stopTimeout inteiro) e protege trabalho que não é requisição — consumo de fila, tarefa agendada, escrita em lote."
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "O que o ECS aguarda durante a drenagem também merece precisão. Não é um relógio contando até o valor configurado: é o balanceador informar que a conexão keep-alive do cliente fechou, momento em que o alvo entra no estado "
+              },
+              {
+                "text": "UNUSED",
+                "code": true
+              },
+              {
+                "text": ". O valor configurado é o limite de paciência. Numa API com resposta em 400 ms, a drenagem real termina em menos de um segundo — os 300 s do padrão nunca são gastos, mas o ECS os respeitaria se a conexão insistisse em ficar aberta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_4",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "json",
+            "filename": "evento-de-rollout.json",
+            "code": "// O que o EventBridge entrega quando o rollout muda de fase. E o payload que\n// vale assinar para saber de deploy revertido sem ninguem olhando painel.\n{\n  \"source\": \"aws.ecs\",\n  \"detail-type\": \"ECS Deployment State Change\",\n  \"resources\": [\"arn:aws:ecs:us-east-1:111122223333:service/ffv-lab/ffv-lab-api\"],\n  \"detail\": {\n    \"eventType\": \"ERROR\",\n    \"eventName\": \"SERVICE_DEPLOYMENT_FAILED\",\n    \"deploymentId\": \"ecs-svc/9223370491062737000\",\n    \"updatedAt\": \"2026-08-07T14:22:31.618Z\",\n    // A mensagem do disjuntor: o rollout nao estabilizou e foi revertido.\n    // Repare que a versao anterior volta sozinha — ninguem foi acordado.\n    \"reason\": \"ECS deployment circuit breaker: rolling back to desired count.\"\n  }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Publicar várias vezes por dia uma API .NET 8 em ECS Fargate, com duas pessoas no time, sem plantão noturno e sem orçamento para infraestrutura nova.",
+            "winner": "Rolling update do próprio ECS, com excedente, disjuntor de implantação e volta automática",
+            "why": "O rolling update não pede nenhum recurso adicional na fatura: o excedente durante a troca dura minutos e some. Ele resolve o problema declarado — publicar sem janela — e o disjuntor cobre a parte que o time não tem gente para vigiar, que é perceber o rollout ruim de madrugada. Blue/green e canário resolvem um problema DIFERENTE, que é decidir com tráfego real se a versão nova é boa; enquanto a pergunta for \"como publicar sem derrubar\", pagar por eles é comprar resposta para pergunta que ainda não se fez.",
+            "alternatives": [
+              {
+                "name": "Blue/green com CodeDeploy",
+                "downside": "Duas frotas inteiras conviverem exige um segundo grupo de destino e dobra a capacidade durante a troca. É o desenho certo quando a migração de schema não é compatível para trás ou quando se quer trocar 100% do tráfego de uma vez — e é exatamente o L39."
+              },
+              {
+                "name": "Canário por peso no ALB",
+                "downside": "Dá decisão baseada em tráfego real, e cobra observabilidade que distinga as duas versões nas métricas. Sem essa distinção, o canário é rolling update com mais peças."
+              },
+              {
+                "name": "Recreate (parar tudo, subir tudo)",
+                "downside": "É o desenho mínimo deste módulo. Continua legítimo para ambiente de desenvolvimento, onde a janela não custa nada e a simplicidade vale mais."
+              },
+              {
+                "name": "Lambda com alias e deslocamento de peso",
+                "downside": "Publicação sem janela sai de graça no modelo, mas troca a arquitetura inteira: não é uma alternativa de deploy, é uma alternativa de computação. Fica no L21."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Identidade da imagem",
+                "SHA do commit, tag imutável",
+                "`:latest`; versão semântica; digest direto",
+                "rollback passa a ser referência, não reconstrução",
+                "a tag deixa de ser legível por humano; exige o commit para interpretar"
+              ],
+              [
+                "Prazo de drenagem",
+                "30 s, derivado do p99 de 400 ms",
+                "300 s (padrão); 5 s (recomendação da AWS para resposta sub-segundo)",
+                "cobre o p99 com duas ordens de grandeza de folga e não alonga o rollout",
+                "se um dia entrar rota de upload longo, este valor passa a cortar conexão legítima"
+              ],
+              [
+                "Health check do grupo",
+                "2 × 5 s em `/health/ready`",
+                "5 × 30 s (padrão); 2 × 10 s",
+                "tira 140 s de cada rollout e é a parcela dominante",
+                "mais requisições de verificação; e task instável entra em serviço mais rápido"
+              ],
+              [
+                "Vivacidade e prontidão",
+                "duas rotas distintas",
+                "uma rota só para os dois usos",
+                "evita reinício em laço quando o banco cai e evita tráfego para quem não atende",
+                "mais código e a obrigação de manter a distinção clara para quem chegar depois"
+              ],
+              [
+                "Estratégia de troca",
+                "rolling update do ECS",
+                "blue/green (L39); canário por peso; recreate",
+                "resolve o problema declarado sem recurso novo na fatura",
+                "as duas versões convivem: exige compatibilidade de schema para trás"
+              ],
+              [
+                "Volta automática",
+                "disjuntor com rollback",
+                "só alarme; rollback manual",
+                "a equipe de duas pessoas não tem vigília noturna",
+                "rollout legitimamente lento pode ser revertido; ajusta-se com o período de graça"
+              ],
+              [
+                "Sessão pegajosa",
+                "desligada",
+                "cookie do balanceador",
+                "conexão que dura mais faz drenagem durar mais, e não há estado em memória",
+                "nada aqui; seria diferente se houvesse sessão local"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que o rolling update cria, e que este módulo não paga",
+            "content": "Se as duas versões convivem por dois minutos, uma migration que remove coluna quebra a versão velha enquanto ela ainda atende. O rolling update TRANSFERE o problema para o schema, e é honesto dizer isso aqui: a solução é expand/contract, e ela é o L18. Enquanto você não tiver isso, mantenha as migrations aditivas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: a imagem, e por que o SDK não vai para produção"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O multi-stage não é economia de disco. Ele é duas coisas que importam ao rollout: menos bytes para baixar em cada task nova, que encurta a parcela de partida; e menos superfície, porque compilador e gerenciador de pacote não têm função em produção."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "dockerfile",
+            "filename": "Dockerfile",
+            "code": "# Dockerfile — multi-stage, e por que cada estagio existe\n\n# ── Estagio de build: traz o SDK inteiro, que nao vai para producao ───────────\nFROM mcr.microsoft.com/dotnet/sdk:8.0 AS build\nWORKDIR /src\n\n# Copiar SO o csproj antes do restore aproveita o cache de camada: mudar codigo\n# nao invalida o restore, e o build cai de minutos para segundos. E tambem\n# encurta a parcela `partida` da formula de rollout.\nCOPY [\"Api/Api.csproj\", \"Api/\"]\nRUN dotnet restore \"Api/Api.csproj\"\n\nCOPY . .\nRUN dotnet publish \"Api/Api.csproj\" -c Release -o /app/publish /p:UseAppHost=false\n\n# ── Estagio final: runtime apenas ─────────────────────────────────────────────\n# O SDK tem compilador, NuGet e cadeia de build — nada disso serve em producao, e\n# tudo isso e superficie de ataque e bytes a baixar em CADA task nova.\nFROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final\nWORKDIR /app\n\n# Usuario sem privilegio. A imagem `aspnet` ja traz o `app` (UID 64198) criado.\nUSER app\n\n# curl e para o health check do conteiner declarado na task definition. Se voce\n# preferir imagem sem shell nem curl, troque por uma rota checada apenas pelo\n# grupo de destino — mas ai perca a deteccao de conteiner vivo que nao serve.\nCOPY --from=build /app/publish .\n\nEXPOSE 8080\nENV ASPNETCORE_URLS=http://+:8080\n\nENTRYPOINT [\"dotnet\", \"Api.dll\"]\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem do COPY é a otimização real",
+            "content": "Copiar só o `.csproj` antes do `restore` faz a camada de dependências sobreviver a mudança de código. Sem isso, cada commit rebaixa todas as dependências e o build passa de segundos a minutos. É a diferença entre publicar quando precisa e publicar quando dá."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o registro com tag imutável"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A imutabilidade é o que sustenta todo o raciocínio de rollback deste módulo. Sem ela, apontar para a revisão anterior da task definition não garante nada — a imagem daquela tag pode ter sido sobrescrita."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "ecr.tf",
+            "code": "# ecr.tf — o registro, e a imutabilidade que torna rollback possível\n\nresource \"aws_ecr_repository\" \"api\" {\n  name = \"${var.projeto}-api\"\n\n  # A trava central deste laboratório. Com IMMUTABLE, enviar de novo a mesma tag\n  # falha em vez de sobrescrever — então a task definition que aponta para\n  # `...:a1b2c3d` continua se referindo ao MESMO conteúdo daqui a seis meses.\n  # É o que transforma rollback de \"reconstruir e esperar dar certo\" em \"apontar\".\n  image_tag_mutability = \"IMMUTABLE\"\n\n  # Varredura na entrada. Reprovar aqui é barato; descobrir a CVE em produção não.\n  image_scanning_configuration {\n    scan_on_push = true\n  }\n\n  encryption_configuration {\n    encryption_type = \"KMS\"\n    kms_key         = aws_kms_key.app.arn\n  }\n}\n\n# Sem política de ciclo de vida, tag imutável vira dívida de armazenamento: cada\n# commit deixa uma imagem para sempre. Mantemos as 30 últimas — o suficiente para\n# voltar alguns dias, que é o horizonte real de um rollback.\nresource \"aws_ecr_lifecycle_policy\" \"api\" {\n  repository = aws_ecr_repository.api.name\n\n  policy = jsonencode({\n    rules = [{\n      rulePriority = 1\n      description  = \"Mantem as 30 imagens mais recentes\"\n      selection = {\n        tagStatus   = \"any\"\n        countType   = \"imageCountMoreThan\"\n        countNumber = 30\n      }\n      action = { type = \"expire\" }\n    }]\n  })\n}\n\n# A task só precisa LER do registro, e quem lê é o agente de execução — não a\n# aplicação. Menor privilégio aqui é separar os dois papéis, e é por isso que\n# existem `execution_role` e `task_role` distintos.\ndata \"aws_iam_policy_document\" \"pull_imagem\" {\n  statement {\n    effect = \"Allow\"\n    actions = [\n      \"ecr:GetAuthorizationToken\",\n      \"ecr:BatchCheckLayerAvailability\",\n      \"ecr:GetDownloadUrlForLayer\",\n      \"ecr:BatchGetImage\",\n    ]\n    # GetAuthorizationToken nao aceita recurso especifico: e uma operacao de\n    # conta, nao de repositorio. As outras tres sao restritas ao repositorio,\n    # e e assim que o `*` se justifica em vez de se esconder.\n    resources = [\"*\"]\n  }\n}\n\noutput \"repositorio_api\" {\n  value       = aws_ecr_repository.api.repository_url\n  description = \"URL do repositorio; a tag e sempre o SHA do commit\"\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "Tag imutável sem política de ciclo de vida é dívida",
+            "content": "Se nada expira, cada commit deixa uma imagem para sempre, e o armazenamento do registro cresce sem teto. Trinta imagens cobrem o horizonte real de um rollback — que é de dias, não de meses. Escolha o número pela sua cadência de publicação, não pelo que parece seguro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: prontidão que diz a verdade"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Duas rotas, duas perguntas. "
+              },
+              {
+                "text": "/health/live",
+                "code": true
+              },
+              {
+                "text": " responde \"o processo está vivo?\" e não toca em dependência nenhuma. "
+              },
+              {
+                "text": "/health/ready",
+                "code": true
+              },
+              {
+                "text": " responde \"posso receber requisição agora?\" e por isso consulta o banco."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Inverter isso produz o pior incidente desta arquitetura: se a vivacidade consultasse o banco, uma indisponibilidade do banco marcaria todos os contêineres como mortos, o ECS os substituiria em laço, e uma falha parcial — banco fora, aplicação de pé — viraria falha total, com o agravante de que as tasks novas também nasceriam mortas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "csharp",
+            "filename": "Program.cs",
+            "code": "// Program.cs — prontidao que diz a verdade, e desligamento que devolve tempo\n\nvar builder = WebApplication.CreateBuilder(args);\n\nbuilder.Services.AddDbContextPool<AppDb>(o =>\n    o.UseNpgsql(builder.Configuration.GetConnectionString(\"Padrao\")));\n\n// As duas rotas de saude respondem a perguntas DIFERENTES, e e por isso que sao\n// duas. Misturá-las produz um dos dois defeitos: ou o balanceador manda trafego\n// para quem nao pode atender, ou o ECS mata um conteiner que estava so ocupado.\nbuilder.Services.AddHealthChecks()\n    // VIVACIDADE: \"o processo esta vivo?\". Nao toca em dependencia nenhuma.\n    // Se ela consultasse o banco, uma queda do banco reiniciaria todas as tasks\n    // em laco — trocando indisponibilidade parcial por indisponibilidade total.\n    .AddCheck(\"self\", () => HealthCheckResult.Healthy(), tags: [\"live\"])\n    // PRONTIDAO: \"posso receber requisicao AGORA?\". Aqui a dependencia entra,\n    // porque uma task sem pool de conexao aberto vai responder 500 ao primeiro\n    // cliente — e esse 500 aparece depois do rollout, sem ninguem ligar as duas coisas.\n    .AddNpgSql(\n        builder.Configuration.GetConnectionString(\"Padrao\")!,\n        name: \"banco\",\n        tags: [\"ready\"]);\n\n// Coerente com o stopTimeout de 30 s da definicao da task: o .NET tem de\n// terminar ANTES de o ECS perder a paciencia e enviar SIGKILL.\nbuilder.Services.Configure<HostOptions>(o =>\n    o.ShutdownTimeout = TimeSpan.FromSeconds(\n        builder.Configuration.GetValue(\"SHUTDOWN_TIMEOUT_SECONDS\", 25)));\n\nvar app = builder.Build();\n\napp.MapHealthChecks(\"/health/live\", new HealthCheckOptions\n{\n    Predicate = r => r.Tags.Contains(\"live\")\n});\n\napp.MapHealthChecks(\"/health/ready\", new HealthCheckOptions\n{\n    Predicate = r => r.Tags.Contains(\"ready\")\n});\n\n// O ASP.NET Core ja trata SIGTERM: ele para de aceitar conexao nova, termina o\n// que esta em voo e sai. O log abaixo existe para o laboratorio — e para tornar\n// a ordem dos estados OBSERVAVEL, que e a prova da secao seguinte.\nvar vida = app.Services.GetRequiredService<IHostApplicationLifetime>();\nvar log = app.Services.GetRequiredService<ILogger<Program>>();\n\nvida.ApplicationStopping.Register(() =>\n    log.LogWarning(\"SIGTERM recebido em {Instante} — drenagem do grupo de destino JA terminou\",\n        DateTimeOffset.UtcNow.ToString(\"O\")));\n\nvida.ApplicationStopped.Register(() =>\n    log.LogWarning(\"processo encerrado em {Instante}\", DateTimeOffset.UtcNow.ToString(\"O\")));\n\napp.MapGet(\"/api/pedidos/{id:guid}\", async (Guid id, AppDb db) =>\n    await db.Pedidos.FindAsync(id) is { } p ? Results.Ok(p) : Results.NotFound());\n\napp.Run();\n"
+          }
+        },
+        {
+          "id": "b10_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "Por que o log de SIGTERM está ali",
+            "content": "Ele não é diagnóstico de produção: é instrumento do laboratório. O horário desse log, comparado ao instante em que o alvo saiu de `draining`, é a prova empírica de que a drenagem terminou antes de o sinal chegar. É a diferença entre saber a ordem dos estados e tê-la verificado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: os três relógios, explícitos no Terraform"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os três estão em objetos diferentes, e é isso que faz com que quase nunca sejam lidos juntos: o do health check e o da drenagem no grupo de destino, o do desligamento na definição da task. Os comentários amarram um ao outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "deploy.tf",
+            "code": "# deploy.tf — os tres relogios do rollout, explicitos\n\n# ── Relogio 1: quanto tempo até a task nova ser considerada pronta ────────────\nresource \"aws_lb_target_group\" \"api\" {\n  name        = \"${var.projeto}-api\"\n  port        = 8080\n  protocol    = \"HTTP\"\n  vpc_id      = aws_vpc.principal.id\n  target_type = \"ip\" # awsvpc: o alvo e o IP da task, nao a instancia\n\n  health_check {\n    path = \"/health/ready\" # prontidao, nao vivacidade — sao rotas diferentes\n    # 2 × 5 s = 10 s para entrar em servico, contra 150 s do padrao\n    # (5 × 30 s). E o ajuste com maior efeito sobre a duracao do rollout.\n    interval            = 5\n    timeout             = 4 # < interval, senao verificacoes se sobrepoem\n    healthy_threshold   = 2\n    unhealthy_threshold = 2\n    matcher             = \"200\"\n  }\n\n  # ── Relogio 2: o TETO da drenagem ──────────────────────────────────────────\n  # Nao e uma espera fixa. O ECS aguarda o balanceador informar que a conexao\n  # keep-alive do cliente fechou (alvo em UNUSED); este valor e o limite dessa\n  # paciencia. Como o p99 desta API e 400 ms, 30 s cobre com folga de duas ordens\n  # de grandeza. O padrao de 300 s nao esta errado — esta apenas generoso, e\n  # multiplica por dez o tempo de cada rollout.\n  #\n  # NAO baixe para 5 s se a rota tiver upload lento, download longo, SSE ou\n  # WebSocket: ai o prazo passa a cortar conexao legitima.\n  deregistration_delay = 30\n\n  stickiness {\n    enabled = false # sessao pegajosa faz a conexao durar mais e a drenagem tambem\n    type    = \"lb_cookie\"\n  }\n}\n\nresource \"aws_ecs_task_definition\" \"api\" {\n  family                   = \"${var.projeto}-api\"\n  requires_compatibilities = [\"FARGATE\"]\n  network_mode             = \"awsvpc\"\n  cpu                      = 512\n  memory                   = 1024\n  execution_role_arn       = aws_iam_role.execucao.arn\n  task_role_arn            = aws_iam_role.task.arn\n\n  container_definitions = jsonencode([{\n    name = \"api\"\n\n    # O SHA do commit, injetado pelo pipeline. Nunca `:latest`: e o que permite\n    # dizer qual versao esta no ar e voltar para a anterior.\n    image     = \"${aws_ecr_repository.api.repository_url}:${var.sha_da_imagem}\"\n    essential = true\n\n    portMappings = [{ containerPort = 8080, protocol = \"tcp\" }]\n\n    # ── Relogio 3: do SIGTERM ao SIGKILL ─────────────────────────────────────\n    # Em Fargate isto vai na definicao da task. O ECS_CONTAINER_STOP_TIMEOUT que\n    # a documentacao cita e opcao do AGENTE, configurada na instancia — e em\n    # Fargate voce nao tem instancia, entao ele nao se aplica. Confundir os dois\n    # faz alguem ajustar uma variavel que nunca sera lida.\n    stopTimeout = 30\n\n    healthCheck = {\n      # Health check do ECS ≠ health check do grupo de destino. Este decide se o\n      # CONTEINER e substituido; o do grupo decide se ele RECEBE TRAFEGO. Ter os\n      # dois evita a task viva que nao serve e nunca e trocada.\n      command     = [\"CMD-SHELL\", \"curl -f http://localhost:8080/health/live || exit 1\"]\n      interval    = 10\n      timeout     = 5\n      retries     = 3\n      startPeriod = 30\n    }\n\n    environment = [\n      { name = \"ASPNETCORE_URLS\", value = \"http://+:8080\" },\n      # Coerente com o stopTimeout acima: o .NET encerra antes de o ECS perder a\n      # paciencia. Se ficar maior, o SIGKILL chega no meio do desligamento limpo.\n      { name = \"SHUTDOWN_TIMEOUT_SECONDS\", value = \"25\" },\n    ]\n\n    secrets = [{\n      name      = \"ConnectionStrings__Padrao\"\n      valueFrom = aws_secretsmanager_secret.banco.arn\n    }]\n\n    logConfiguration = {\n      logDriver = \"awslogs\"\n      options = {\n        \"awslogs-group\"         = aws_cloudwatch_log_group.api.name\n        \"awslogs-region\"        = var.regiao\n        \"awslogs-stream-prefix\" = \"api\"\n      }\n    }\n  }])\n}\n\nresource \"aws_ecs_service\" \"api\" {\n  name            = \"${var.projeto}-api\"\n  cluster         = aws_ecs_cluster.principal.id\n  task_definition = aws_ecs_task_definition.api.arn\n  desired_count   = 2 # duas AZs; e tambem o minimo para haver rollout sem janela\n  launch_type     = \"FARGATE\"\n\n  # O par que autoriza a troca sem janela. O maximo da o espaco para a task nova\n  # existir; o minimo PROIBE descer abaixo da capacidade declarada. Um sem o\n  # outro nao resolve: com maximo 200 e minimo 0, o ECS pode parar tudo primeiro.\n  deployment_minimum_healthy_percent = 100\n  deployment_maximum_percent         = 200\n\n  # Rollout que nao estabiliza volta sozinho para a revisao anterior. E o que\n  # permite publicar sem alguem de vigia — que era o problema real da equipe.\n  deployment_circuit_breaker {\n    enable   = true\n    rollback = true\n  }\n\n  # Tempo em que o health check do balanceador e IGNORADO depois de a task subir.\n  # Sem isto, aplicacao com migration na partida e marcada insalubre, morta e\n  # reiniciada — um ciclo que parece \"o deploy travou\" e nao deixa erro claro.\n  health_check_grace_period_seconds = 60\n\n  network_configuration {\n    subnets          = aws_subnet.privada[*].id\n    security_groups  = [aws_security_group.task.id]\n    assign_public_ip = false\n  }\n\n  load_balancer {\n    target_group_arn = aws_lb_target_group.api.arn\n    container_name   = \"api\"\n    container_port   = 8080\n  }\n\n  depends_on = [aws_lb_listener.https]\n}\n\n# Mede o ALVO, nao o balanceador. A distincao e diagnostica: 5xx do alvo acusa a\n# versao nova respondendo errado; 5xx do ALB acusa ausencia de alvo saudavel.\n# O mesmo numero nas duas metricas conta historias opostas.\nresource \"aws_cloudwatch_metric_alarm\" \"erro_5xx_do_alvo\" {\n  alarm_name          = \"${var.projeto}-api-5xx-alvo\"\n  namespace           = \"AWS/ApplicationELB\"\n  metric_name         = \"HTTPCode_Target_5XX_Count\"\n  statistic           = \"Sum\"\n  period              = 60\n  evaluation_periods  = 2\n  threshold           = 5\n  comparison_operator = \"GreaterThanThreshold\"\n  treat_missing_data  = \"notBreaching\" # ausencia de erro nao e ausencia de dado\n\n  dimensions = {\n    LoadBalancer = aws_lb.principal.arn_suffix\n    TargetGroup  = aws_lb_target_group.api.arn_suffix\n  }\n\n  alarm_actions = [aws_sns_topic.alertas.arn]\n}\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A pegadinha do stopTimeout em Fargate",
+            "content": "A documentação de drenagem cita `ECS_CONTAINER_STOP_TIMEOUT`, que é opção do AGENTE do ECS — configurada na instância EC2. Em Fargate você não tem instância, então essa variável não se aplica: o que vale é `stopTimeout` na definição do contêiner. Quem lê a página sem notar a distinção ajusta uma variável que nunca será lida e conclui que \"não funciona\"."
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Onde",
+              "Parâmetro",
+              "Padrão",
+              "Aqui",
+              "Por quê"
+            ],
+            "rows": [
+              [
+                "Grupo de destino",
+                "`interval` × `healthy_threshold`",
+                "30 s × 5 = 150 s",
+                "5 s × 2 = 10 s",
+                "é a parcela dominante do rollout, e a API responde em 400 ms"
+              ],
+              [
+                "Grupo de destino",
+                "`deregistration_delay`",
+                "300 s",
+                "30 s",
+                "teto de paciência; cobre o p99 com folga sem alongar a troca"
+              ],
+              [
+                "Definição da task",
+                "`stopTimeout`",
+                "30 s",
+                "30 s (explícito)",
+                "explícito para ficar ao lado do `ShutdownTimeout` do .NET, que é 25 s"
+              ],
+              [
+                "Aplicação .NET",
+                "`HostOptions.ShutdownTimeout`",
+                "30 s",
+                "25 s",
+                "menor que o `stopTimeout`, senão o SIGKILL chega no meio do desligamento limpo"
+              ],
+              [
+                "Serviço ECS",
+                "`health_check_grace_period_seconds`",
+                "0",
+                "60 s",
+                "a migration na partida leva até 20 s; sem graça, a task é morta antes de ficar pronta"
+              ],
+              [
+                "Serviço ECS",
+                "mínimo / máximo",
+                "100% / 200%",
+                "100% / 200%",
+                "o padrão já é o correto — mas explícito, porque é o par que autoriza o excedente"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar que ninguém viu"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "implantar.sh",
+            "code": "#!/usr/bin/env bash\n# implantar.sh — a ordem importa, e cada passo tem prova\nset -euo pipefail\n\nPROJETO=\"${PROJETO:?defina PROJETO}\"\nREGIAO=\"${REGIAO:-us-east-1}\"\nCONTA=\"$(aws sts get-caller-identity --query Account --output text)\"\nREPO=\"${CONTA}.dkr.ecr.${REGIAO}.amazonaws.com/${PROJETO}-api\"\n\n# A identidade da imagem. `--short=12` e legivel e nao colide na pratica; use o\n# SHA completo se preferir. `--dirty` impede publicar arvore com alteracao nao\n# comitada, que produziria imagem sem commit correspondente.\nSHA=\"$(git describe --always --dirty --match='' --abbrev=12)\"\nif [[ \"$SHA\" == *-dirty ]]; then\n  echo \"arvore com alteracao nao comitada: a imagem nao teria commit que a explique\" >&2\n  exit 1\nfi\n\naws ecr get-login-password --region \"$REGIAO\" \\\n  | docker login --username AWS --password-stdin \"${CONTA}.dkr.ecr.${REGIAO}.amazonaws.com\"\n\ndocker build --platform linux/amd64 -t \"${REPO}:${SHA}\" .\n\n# Com tag imutavel, reenviar a mesma tag FALHA — e essa falha e desejavel: ela\n# diz que este commit ja foi publicado, e que nao ha nada novo a implantar.\ndocker push \"${REPO}:${SHA}\" || {\n  echo \"push recusado: a tag ${SHA} ja existe (imutabilidade). Nada a publicar.\" >&2\n  exit 0\n}\n\n# Terraform cria a REVISAO nova da task definition e atualiza o servico. A\n# revisao anterior continua existindo — e e para ela que o rollback aponta.\nterraform apply -var=\"sha_da_imagem=${SHA}\" -auto-approve\n\n# `services-stable` volta quando o rollout terminou E estabilizou. Sem esta\n# espera, o pipeline segue e um rollout que sera revertido em 90 s e reportado\n# como sucesso.\naws ecs wait services-stable \\\n  --cluster \"${PROJETO}\" --services \"${PROJETO}-api\" --region \"$REGIAO\"\n\necho \"no ar: ${SHA}\"\n"
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Quatro provas. Nenhuma delas aceita \"parece que funcionou\" como resultado — cada uma tem um número ou um estado esperado, e a quarta é a que mais gente esquece de fazer."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — quatro medições; nenhuma conclusão vem de \"parece que funcionou\"\n\nPROJETO=ffv-lab; REGIAO=us-east-1\nTG=$(aws elbv2 describe-target-groups --names \"${PROJETO}-api\" \\\n      --query 'TargetGroups[0].TargetGroupArn' --output text)\n\n# ── Prova 1: zero erro do cliente durante o rollout inteiro ──────────────────\n# Um laco de requisicoes em paralelo ao deploy. E a unica prova que interessa ao\n# criterio de aceite: qualquer codigo diferente de 200 aqui reprova o rollout.\nURL=\"https://$(terraform output -raw dominio)/api/health/ready\"\n( while true; do\n    curl -s -o /dev/null -w '%{http_code} ' \"$URL\"; sleep 0.2\n  done ) & LACO=$!\n./implantar.sh\nkill $LACO\n# Esperado: uma fileira continua de 200. Um unico 503 significa janela sem alvo\n# saudavel; um 502 ou 504 significa conexao cortada na drenagem.\n\n# ── Prova 2: a ordem dos estados, observada — não decorada ───────────────────\n# Roda durante o rollout. A task velha tem de passar por DEACTIVATING ANTES de\n# STOPPING, e e isto que mostra que a drenagem precede o SIGTERM.\nwatch -n1 \"aws ecs describe-tasks --cluster $PROJETO \\\n  --tasks \\$(aws ecs list-tasks --cluster $PROJETO --service-name ${PROJETO}-api \\\n              --desired-status ALL --query 'taskArns' --output text) \\\n  --query 'tasks[].{ver:taskDefinitionArn,ultimo:lastStatus,desejado:desiredStatus}' \\\n  --output table\"\n\n# ── Prova 3: o SIGTERM chega DEPOIS da drenagem ──────────────────────────────\n# Compare o instante do log da aplicacao com o instante em que o alvo saiu de\n# `draining`. O log da aplicacao tem de ser o mais TARDIO dos dois.\naws logs filter-log-events \\\n  --log-group-name \"/ecs/${PROJETO}-api\" \\\n  --filter-pattern \"SIGTERM recebido\" \\\n  --query 'events[].message' --output text\n\n# ── Prova 4: a imutabilidade da tag realmente impede sobrescrever ────────────\n# Deve falhar. Se passar, `image_tag_mutability` nao esta como IMMUTABLE, e todo\n# o raciocinio de rollback deste modulo esta sem base.\nSHA=$(git describe --always --abbrev=12)\ndocker push \"$(terraform output -raw repositorio_api):${SHA}\" \\\n  && echo \"FALHA DA PROVA: a tag foi sobrescrita\" \\\n  || echo \"OK: o registro recusou sobrescrever ${SHA}\"\n"
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Cliente não vê erro",
+                "laço de `curl` durante o rollout",
+                "fileira contínua de 200",
+                "um 503 é janela sem alvo; um 502/504 é conexão cortada na drenagem"
+              ],
+              [
+                "2 · A ordem dos estados",
+                "`describe-tasks` em laço",
+                "a task velha passa por `DEACTIVATING` antes de `STOPPING`",
+                "se você não vê `DEACTIVATING`, o serviço não está atrelado ao grupo de destino"
+              ],
+              [
+                "3 · SIGTERM depois da drenagem",
+                "log da aplicação vs. saída de `draining`",
+                "o log da aplicação é o mais tardio dos dois",
+                "ordem inversa indicaria que a task foi parada fora do fluxo do serviço"
+              ],
+              [
+                "4 · A tag é imutável",
+                "reenviar a mesma tag",
+                "o registro recusa",
+                "se aceitou, `image_tag_mutability` não está IMMUTABLE e o rollback não tem base"
+              ],
+              [
+                "5 · O rollback funciona",
+                "apontar para a revisão anterior",
+                "volta ao ar sem build",
+                "se exigiu reconstruir, a imagem antiga expirou no ciclo de vida"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_4",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "bash",
+            "filename": "voltar.sh",
+            "code": "# O rollback que o resto do modulo tornou possivel: sem build, sem push.\n# A revisao anterior da task definition continua existindo, e a imagem dela\n# tambem — porque a tag e imutavel e o ciclo de vida guarda 30.\nPROJETO=ffv-lab\nANTERIOR=$(aws ecs describe-services --cluster $PROJETO \\\n  --services ${PROJETO}-api \\\n  --query \"services[0].deployments[?status=='ACTIVE'].taskDefinition | [0]\" \\\n  --output text)\n\n# Se o disjuntor ja reverteu sozinho, este comando nao tem o que fazer — e\n# essa e a situacao desejada. O rollback manual e a rede sob a rede.\naws ecs update-service --cluster $PROJETO --service ${PROJETO}-api \\\n  --task-definition \"$ANTERIOR\"\naws ecs wait services-stable --cluster $PROJETO --services ${PROJETO}-api\n\n# Confirme QUAL versao voltou. \"O rollback funcionou\" sem o SHA na mao e fe.\naws ecs describe-task-definition --task-definition \"$ANTERIOR\" \\\n  --query \"taskDefinition.containerDefinitions[0].image\" --output text"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três acontecem de verdade, e as três se parecem no sintoma superficial — \"o deploy não terminou\". O que as separa é onde se olha."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Prontidão que mente",
+                "faça `/health/ready` devolver 200 fixo, sem consultar o banco, e suba com o segredo do banco errado",
+                "rollout conclui com sucesso e o 5xx do alvo começa DEPOIS",
+                "alarme de `HTTPCode_Target_5XX_Count` sobe com o rollout já terminado",
+                "prontidão consulta a dependência; o disjuntor só protege quem admite estar doente"
+              ],
+              [
+                "Graça insuficiente",
+                "ponha `health_check_grace_period_seconds = 0` e mantenha a migration na partida",
+                "tasks sobem e morrem em laço; o deploy nunca estabiliza",
+                "`describe-services` mostra eventos de alvo insalubre em sequência, sem erro na aplicação",
+                "período de graça maior que o pior tempo de partida, medido — não estimado"
+              ],
+              [
+                "Drenagem curta demais",
+                "baixe `deregistration_delay` para 1 s e gere uma requisição de 3 s",
+                "502 ou 504 esporádico, só durante o deploy, difícil de reproduzir",
+                "`RequestCount` do alvo em `draining` ainda diferente de zero quando ele fecha",
+                "prazo ≥ p99 real; e se houver rota longa, ela decide o valor, não a média"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A falha que o disjuntor NÃO pega",
+            "content": "O disjuntor observa se o rollout estabiliza, ou seja, se as tasks ficam saudáveis. Uma versão que sobe, fica saudável e responde 500 para o cliente passa por ele sem ser notada — porque, do ponto de vista do ECS, o rollout deu certo. É exatamente por isso que o alarme de 5xx do alvo existe, e por que ele é medido no alvo e não no balanceador. As duas proteções cobrem falhas diferentes, e nenhuma cobre as duas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Um serviço ECS com `desired_count = 2`, `minimum_healthy_percent = 100` e `maximum_percent = 100` não consegue concluir nenhum deploy. Por quê?",
+        "options": [
+          "O health check está com intervalo alto demais e o rollout expira",
+          "Faltam duas AZs configuradas na rede do serviço",
+          "Não há excedente autorizado: o ECS não pode criar a task nova nem remover a velha",
+          "O prazo de drenagem de 300 s impede a task velha de terminar"
+        ],
+        "correctIndex": 2,
+        "explanation": "É aritmética de capacidade, não lentidão. Com o máximo em 100%, o ECS não pode passar de 2 tasks, então não há espaço para criar a nova; com o mínimo em 100%, ele não pode descer para 1 task, então não pode remover a velha. As duas restrições juntas tornam a troca impossível, e o rollout fica parado — não é que demore, é que não existe movimento legal. A correção é máximo 200%.\n\nA primeira alternativa confunde a coisa com a espera do health check, que realmente domina a DURAÇÃO do rollout, mas só depois de a task nova poder ser criada — aqui ela nunca é. A terceira confunde capacidade com distribuição: duas AZs melhoram a resiliência e não têm relação com a autorização de excedente. A quarta inverte a ordem dos eventos: a drenagem da task velha só começa depois de a nova estar saudável, e nesse cenário isso nunca acontece — além de o prazo ser um teto, e não uma espera obrigatória."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o que muda quando o deploy fica fácil"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Publicar sem dor aumenta a frequência de publicação, e isso desloca o risco: a superfície deixa de ser \"a versão no ar\" e passa a ser \"o caminho pelo qual qualquer versão entra\". Quem pode enviar imagem passa a poder executar código na sua VPC."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Imagem com CVE conhecida entra em produção",
+                "alta",
+                "médio",
+                "varredura na entrada do registro; falhar o pipeline por severidade",
+                "achados do ECR e do Inspector",
+                "reconstruir com base atualizada; a tag imutável garante saber o que estava no ar"
+              ],
+              [
+                "Credencial de longa duração na máquina do dev",
+                "alta",
+                "alto",
+                "este laboratório NÃO resolve — é o L54, com OIDC federado",
+                "CloudTrail: `PutImage` de fora do pipeline",
+                "revogar a chave, rotacionar, mover o deploy para o pipeline"
+              ],
+              [
+                "Sobrescrita de tag para mascarar conteúdo",
+                "baixa",
+                "alto",
+                "`image_tag_mutability = \"IMMUTABLE\"`",
+                "CloudTrail em `PutImage` recusado",
+                "auditar quem tentou; a recusa já impediu o efeito"
+              ],
+              [
+                "Segredo do banco no log de deploy",
+                "média",
+                "alto",
+                "segredo por referência de ARN no `secrets`, nunca em `environment`",
+                "busca por padrão de credencial no grupo de logs",
+                "rotacionar o segredo; corrigir a definição"
+              ],
+              [
+                "Excesso de permissão no papel de execução",
+                "média",
+                "médio",
+                "papéis separados de execução e de task; leitura restrita ao repositório",
+                "IAM Access Analyzer sobre uso real",
+                "derivar a política do uso medido — é o L41"
+              ],
+              [
+                "Rollback para versão vulnerável",
+                "baixa",
+                "médio",
+                "ciclo de vida guarda 30 imagens, e o alarme não olha versão",
+                "varredura contínua também nas imagens retidas",
+                "marcar a versão como não elegível a rollback e avançar, não voltar"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O `*` que aparece na política, e por que ele se justifica",
+            "content": "`ecr:GetAuthorizationToken` é uma operação de CONTA, não de repositório: ela não aceita recurso específico, e escrevê-la com ARN de repositório simplesmente não autoriza nada. As outras três ações da mesma política são restritas ao repositório. A regra não é \"nunca use `*`\" — é \"todo `*` tem de ter uma frase explicando por que não pode ser mais estreito\". Sem essa frase, é preguiça; com ela, é decisão."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um painel de deploy tem uma função estreita: dizer, durante os três minutos do rollout, se ele deve continuar. Métrica que não ajuda nessa decisão pertence a outro painel."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "A troca gerou erro para o cliente?",
+                "`HTTPCode_ELB_5XX_Count`",
+                "ausência de alvo saudável — janela de capacidade",
+                "qualquer valor > 0 durante rollout"
+              ],
+              [
+                "A versão nova está respondendo errado?",
+                "`HTTPCode_Target_5XX_Count`",
+                "a task está saudável e a resposta não presta",
+                "> 5 em 2 períodos de 1 min"
+              ],
+              [
+                "Quantas tasks estão em serviço agora?",
+                "`HealthyHostCount` do grupo",
+                "abaixo do desejado durante a troca é o excedente não funcionando",
+                "< 2 por 2 min"
+              ],
+              [
+                "O rollout avançou?",
+                "`describe-services` → `deployments[].rolloutState`",
+                "`IN_PROGRESS` por muito tempo é task que não fica pronta",
+                "> 5 min"
+              ],
+              [
+                "A latência mudou com a versão nova?",
+                "`TargetResponseTime` p99",
+                "regressão de desempenho que o health check não pega",
+                "> 2× a linha de base"
+              ],
+              [
+                "Qual SHA está no ar?",
+                "imagem da task definition ativa",
+                "a pergunta que `:latest` tornava impossível",
+                "sempre respondível"
+              ],
+              [
+                "Alguém publicou de fora do caminho?",
+                "CloudTrail em `PutImage` e `UpdateService`",
+                "deploy manual em produção",
+                "qualquer identidade fora da esperada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana durante o rollout",
+            "content": "`RunningTaskCount` sobe para 4 quando o excedente entra em ação, e um alarme de \"tasks demais\" dispara em todo deploy. O número não indica problema: ele é a condição de o deploy não ter janela. Alarme sobre contagem de tasks precisa de janela que tolere o excedente, ou vira ruído que ninguém mais lê."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece com o rollout",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 req/s, 2 tasks",
+                "duas substituições em sequência; cerca de 2 min",
+                "nada; é o cenário do laboratório",
+                "nada"
+              ],
+              [
+                "500 req/s, 8 tasks",
+                "oito substituições; o tempo cresce com a contagem",
+                "o rollout passa de 8 min e a janela de risco se alonga",
+                "aumentar o excedente (`maximum_percent` acima de 200) para trocar em lotes maiores"
+              ],
+              [
+                "5 mil req/s, 60 tasks",
+                "excedente de 60 tasks exige endereços e cota",
+                "esgotamento de IP na sub-rede e limite de tasks da conta",
+                "dimensionar a sub-rede pelo DOBRO da frota; conferir cota antes de escalar"
+              ],
+              [
+                "Pico durante o deploy",
+                "a escala automática e o rollout competem",
+                "duas forças mexendo na contagem ao mesmo tempo",
+                "não é para impedir; é para saber. O mínimo de 100% protege a capacidade"
+              ],
+              [
+                "Falha de AZ durante o rollout",
+                "metade dos alvos some no meio da troca",
+                "com 2 tasks, sobra 1 — o mínimo de 100% não pode ser satisfeito",
+                "a partir de 4 tasks o rollout sobrevive a uma AZ; com 2, ele pausa e espera"
+              ],
+              [
+                "Requisição longa aparece no produto",
+                "a drenagem de 30 s passa a cortá-la",
+                "o valor derivado do p99 de 400 ms deixou de valer",
+                "rever o prazo quando a distribuição de latência mudar — é decisão com prazo de validade"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O gargalo que só aparece em frota grande",
+            "content": "Em modo `awsvpc` cada task consome um endereço da sub-rede. Durante um rollout com excedente de 100%, a frota dobra — então a sub-rede precisa de espaço para o dobro do regime permanente. Quem dimensionou para a frota exata vê o deploy travar em `PROVISIONING` sem nenhum erro de aplicação. É o L02 cobrando o plano de endereçamento que ele mandou documentar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "É o laboratório mais barato da banda, e vale entender por quê: quase tudo o que ele introduz é configuração, não recurso. O excedente existe por minutos e desaparece."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "1 deploy/semana, 2 tasks",
+                "minutos de excedente e alguns MB de registro",
+                "desprezível",
+                "nenhuma; otimizar aqui é gastar atenção onde não há dinheiro"
+              ],
+              [
+                "Produção pequena",
+                "5 deploys/dia, 2 tasks",
+                "excedente somado no mês fica na ordem de horas de uma task; 30 imagens no registro",
+                "baixa e previsível",
+                "ciclo de vida no registro; imagem menor reduz transferência do pull"
+              ],
+              [
+                "Alta escala",
+                "20 deploys/dia, 60 tasks",
+                "excedente de 60 tasks por vários minutos, 20 vezes ao dia",
+                "passa a ser linha visível na fatura de Fargate",
+                "trocar em lotes menores (excedente de 25%) troca custo por duração do rollout"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Fargate durante o excedente",
+                "vCPU-segundo e GB-segundo das tasks extras",
+                "é proporcional a deploys × tasks × duração do rollout — encurtar o rollout economiza aqui"
+              ],
+              [
+                "Armazenamento do ECR",
+                "GB-mês de imagem retida",
+                "tag imutável sem ciclo de vida cresce para sempre"
+              ],
+              [
+                "Transferência do pull",
+                "saída do registro para a task",
+                "de graça na mesma região; com endpoint de VPC evita-se também o NAT (L44)"
+              ],
+              [
+                "NAT durante o pull",
+                "GB processados",
+                "cada task nova baixa a imagem inteira; 20 deploys × 60 tasks × 200 MB soma"
+              ],
+              [
+                "CloudWatch Logs",
+                "GB ingerido e retido",
+                "log de partida repetido a cada task nova; retenção curta em ambiente de teste"
+              ],
+              [
+                "Alarmes",
+                "por alarme-mês",
+                "valor pequeno e fixo; não é onde se economiza"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho de custo que não está na fatura de infraestrutura",
+            "content": "Reduzir o rollout de 82 s de indisponibilidade para zero não aparece em nenhuma linha da AWS. Aparece na frequência de publicação: a Cadência passou de um deploy a cada duas semanas para vários por dia, e o lote de trinta commits virou lote de um. O custo que se atacou aqui era o tempo de diagnóstico, e ele estava na folha de pagamento."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "deploy roteirizado, com prova de ausência de erro e volta automática",
+                "o deploy ainda sai da máquina de uma pessoa",
+                "pipeline com credencial federada (L54)",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "imagem varrida, tag imutável, segredo por referência, papéis separados",
+                "credencial de longa duração no laptop",
+                "OIDC federado (L54) e política derivada do uso (L41)",
+                "alta"
+              ],
+              [
+                "Confiabilidade",
+                "troca sem janela, disjuntor com volta, período de graça dimensionado",
+                "compatibilidade de schema entre versões que convivem",
+                "expand/contract nas migrations (L18)",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "rollout abaixo de 3 min; imagem enxuta; health check ajustado ao p99",
+                "a escala ainda é manual no número de tasks",
+                "escala automática por métrica (L06)",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "excedente efêmero, ciclo de vida no registro",
+                "o pull passa pelo NAT e paga por GB",
+                "endpoint de VPC para o ECR (L44)",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "imagem menor e menos bytes movidos por task",
+                "imagem retida sem uso ocupa armazenamento indefinidamente",
+                "o ciclo de vida já configurado cobre; revisar o número 30 com dados de uso",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco e compra outro, e é a segunda coluna que raramente se escreve."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do deploy manual à entrega contínua — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Deploy manual com `:latest`, uma task, janela aceita. É onde a Cadência estava, e continua legítimo em ambiente de desenvolvimento.",
+                "note": "Risco resolvido: nenhum. Novo risco: publicar dói, então publica-se pouco, e o lote grande esconde a causa. Custo: o mais baixo — sem excedente."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Tag por SHA, excedente, três relógios ajustados, disjuntor com volta e alarme de 5xx do alvo.",
+                "note": "Risco resolvido: janela de indisponibilidade e rollback impossível. Novo risco: as duas versões convivem, então migration destrutiva quebra a velha. Custo: minutos de excedente por deploy — desprezível."
+              },
+              {
+                "label": "Nível 3 — Produção com pipeline",
+                "instruction": "O deploy sai da máquina do dev: credencial federada por OIDC, build reprodutível, aprovação para produção (L54).",
+                "note": "Risco resolvido: chave estática no laptop e deploy sem rastro. Novo risco: o pipeline passa a ser alvo — quem o compromete publica na sua conta. Custo: minutos de build por deploy."
+              },
+              {
+                "label": "Nível 4 — Decidir com tráfego real",
+                "instruction": "Canário ou blue/green com deslocamento de peso e rollback por métrica de negócio, não só por saúde (L39).",
+                "note": "Risco resolvido: versão saudável que responde errado chega a 100% do tráfego. Novo risco: observabilidade tem de distinguir as duas versões, senão o canário é rolling update com mais peças. Custo: capacidade duplicada durante a troca."
+              },
+              {
+                "label": "Nível 5 — Plataforma e governança",
+                "instruction": "Conta por ambiente, promoção de artefato entre contas, assinatura de imagem e admissão que recusa imagem não assinada.",
+                "note": "Risco resolvido: erro humano com alcance amplo e procedência de imagem desconhecida. Novo risco: a complexidade organizacional passa a superar a técnica. Custo: duplicação de recursos fixos por conta."
+              },
+              {
+                "label": "Nível 6 — Dados e IA no próprio deploy",
+                "instruction": "O histórico de rollouts vira dado: correlacionar SHA, métrica e incidente para prever qual mudança merece canário mais lento.",
+                "note": "Risco resolvido: tratar todo deploy como igualmente arriscado. Novo risco: modelo que aprende de poucos incidentes e reprova mudança boa — precisa de avaliação e de caminho manual. Custo: baixo; o dado já existe no CloudWatch e no CloudTrail."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Canário no nível 4 depende de observabilidade que distinga versões, que depende do SHA como identidade — que é o nível 2. Quem tenta canário antes de ter identidade de imagem monta a mecânica de deslocamento de tráfego sem conseguir dizer qual versão gerou qual métrica. É a decoração que o nível anterior evita."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não resolve o problema central, e forçá-la seria o antipadrão que a própria série critica. A pergunta \"como publicar sem derrubar\" tem resposta determinística: excedente autorizado, prontidão honesta e prazo de drenagem derivado do p99. Um modelo não melhora nenhuma das três — elas são aritmética e configuração."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar onde IA acrescentaria valor real, e ele é modesto: decidir quanto risco uma mudança carrega. Hoje todo deploy é tratado igual, e não é: alterar uma consulta com índice novo não tem o mesmo perfil que trocar uma string. Um classificador sobre o histórico de rollouts — diff, arquivos tocados, SHA, métrica pós-deploy, incidente aberto — poderia sugerir canário mais lento para as mudanças que historicamente quebraram."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "graduar o risco por mudança, em vez de tratar todo deploy igual"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "uma regra bastaria para começar: \"toca migration → canário lento\" cobre a maior parte. IA só se justifica depois que a regra simples estiver no lugar e mostrar seu limite"
+              ],
+              [
+                "De onde viriam os dados?",
+                "CloudTrail, eventos de rollout do EventBridge, métricas do CloudWatch e o histórico de incidentes — tudo já existe"
+              ],
+              [
+                "Qual o risco?",
+                "aprender de poucos incidentes e reprovar mudança boa, ou aprovar a ruim; exige avaliação com dado retido e caminho manual sempre disponível"
+              ],
+              [
+                "Por que não agora?",
+                "porque a equipe tem 30 deploys de histórico. Modelo sobre 30 exemplos é superstição com aparência de estatística"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"analisar o log e dizer se o deploy foi bem\" troca um sinal determinístico — a métrica de 5xx do alvo, que é exata — por um probabilístico. Onde existe medição direta, um modelo só acrescenta latência e a chance de errar com confiança. IA sobre observabilidade tem lugar quando o sinal é ambíguo ou volumoso demais para regra, e o deploy de duas tasks não é nenhum dos dois."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "`:latest` na task definition",
+                "é o padrão de todo tutorial e economiza uma variável",
+                "a versão no ar deixa de ser identificável e o rollback vira reconstrução",
+                "\"não sei qual versão está rodando\"; duas tasks com código diferente",
+                "tag = SHA do commit, com repositório imutável",
+                "nunca em produção; em teste local, indiferente"
+              ],
+              [
+                "Uma rota de saúde para os dois usos",
+                "parece duplicação desnecessária",
+                "ou o balanceador manda tráfego para quem não pode atender, ou uma queda de dependência reinicia toda a frota em laço",
+                "banco cai e todas as tasks entram em ciclo de reinício",
+                "vivacidade sem dependência, prontidão com dependência",
+                "aplicação genuinamente sem dependência externa"
+              ],
+              [
+                "Prazo de drenagem copiado de um blog",
+                "o número aparece pronto e \"funcionou lá\"",
+                "curto demais corta conexão legítima; longo demais multiplica o rollout por dez",
+                "502 esporádico só durante deploy, irreprodutível depois",
+                "derivar do p99 medido, e revisar quando a latência mudar",
+                "aceitar o padrão de 300 s enquanto a duração do rollout não incomodar"
+              ],
+              [
+                "Mínimo saudável em 0%",
+                "faz o deploy \"andar mais rápido\" e destrava rollout preso",
+                "autoriza o ECS a parar tudo antes de subir qualquer coisa: é a janela, por configuração",
+                "exatamente a indisponibilidade que se tentava eliminar",
+                "mínimo 100% com máximo 200%",
+                "job em lote sem tráfego, onde janela não tem custo"
+              ],
+              [
+                "Período de graça em 0 com migration na partida",
+                "ninguém sabe que o parâmetro existe",
+                "a task é marcada insalubre e morta antes de terminar de subir, em laço",
+                "\"o deploy travou\" sem nenhum erro na aplicação",
+                "graça maior que o pior tempo de partida medido",
+                "aplicação que sobe em poucos segundos e não faz trabalho de partida"
+              ],
+              [
+                "Confiar só no disjuntor",
+                "ele reverte sozinho e dá sensação de rede completa",
+                "ele mede estabilidade, não correção: versão saudável respondendo 500 passa",
+                "rollout \"bem-sucedido\" e 5xx do alvo subindo depois",
+                "disjuntor MAIS alarme de 5xx do alvo — cobrem falhas diferentes",
+                "nunca; são complementares, não alternativos"
+              ],
+              [
+                "Ajustar `ECS_CONTAINER_STOP_TIMEOUT` em Fargate",
+                "é o que a documentação de drenagem menciona",
+                "é opção do agente, configurada na instância; em Fargate não há instância",
+                "o valor não tem efeito nenhum e conclui-se que \"não funciona\"",
+                "`stopTimeout` na definição do contêiner",
+                "em launch type EC2, onde o agente é seu"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "503 durante o deploy",
+                "sem excedente: mínimo 0% ou uma task só",
+                "confira mínimo, máximo e `desired_count` do serviço",
+                "`describe-services` → `deploymentConfiguration`",
+                "mínimo 100%, máximo 200%, ao menos 2 tasks"
+              ],
+              [
+                "502 ou 504 esporádico só no deploy",
+                "prazo de drenagem menor que a requisição mais longa",
+                "compare o p99 do alvo com o prazo configurado",
+                "`TargetResponseTime` e `deregistration_delay`",
+                "prazo ≥ p99; se há rota longa, ela decide o valor"
+              ],
+              [
+                "Rollout em `IN_PROGRESS` sem avançar",
+                "a task nova nunca fica saudável",
+                "leia os eventos do serviço em ordem cronológica",
+                "`describe-services` → `events`",
+                "se é alvo insalubre, veja a rota de prontidão; se é `PROVISIONING`, veja endereços"
+              ],
+              [
+                "Tasks subindo e morrendo em laço",
+                "período de graça menor que o tempo de partida",
+                "meça quanto a aplicação leva até responder na porta",
+                "log da aplicação vs. eventos de substituição",
+                "graça maior que o pior tempo de partida medido"
+              ],
+              [
+                "Deploy trava em `PROVISIONING`",
+                "sub-rede sem endereço livre para o excedente",
+                "conte endereços disponíveis contra o dobro da frota",
+                "`describe-subnets` → `AvailableIpAddressCount`",
+                "sub-rede dimensionada para o dobro do regime — é o plano do L02"
+              ],
+              [
+                "`CannotPullContainerError`",
+                "sem caminho de saída, ou papel de execução sem permissão de leitura",
+                "distinga rede de permissão: um dá tempo esgotado, o outro nega acesso",
+                "razão de parada da task; CloudTrail no repositório",
+                "rota pelo NAT ou endpoint de VPC (L44); política de leitura no papel de execução"
+              ],
+              [
+                "Push recusado com tag já existente",
+                "imutabilidade funcionando como projetado",
+                "confirme se o SHA já foi publicado",
+                "`describe-images` no repositório",
+                "nada a corrigir: não há mudança a publicar. Comite antes"
+              ],
+              [
+                "Rollback não encontra a imagem",
+                "o ciclo de vida expirou a versão antiga",
+                "liste imagens e compare com a revisão que se quer",
+                "política de ciclo de vida e `describe-images`",
+                "aumentar a retenção; avançar com correção em vez de voltar"
+              ],
+              [
+                "5xx do alvo depois do rollout concluído",
+                "prontidão que não reflete a dependência",
+                "chame a rota de prontidão com a dependência derrubada",
+                "`HTTPCode_Target_5XX_Count` e a rota `/health/ready`",
+                "prontidão consulta o banco; o disjuntor só protege quem admite estar doente"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em parâmetro, pergunte: o erro é do balanceador ou do alvo? 5xx do ELB significa que não havia destino — problema de capacidade durante a troca. 5xx do alvo significa que havia destino e ele respondeu mal — problema da versão nova ou da drenagem. As duas métricas têm nomes parecidos e apontam para lados opostos do diagnóstico."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório acrescenta pouco recurso, mas dois dos que acrescenta sobrevivem ao "
+              },
+              {
+                "text": "terraform destroy",
+                "code": true
+              },
+              {
+                "text": " — e um deles cobra por armazenamento indefinidamente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Derrube o que o Terraform administra.\nterraform destroy -auto-approve\n\n# 2. REPOSITORIO ECR COM IMAGEM: o destroy falha se houver imagem dentro, a\n#    menos que force_delete esteja ligado. Se voce interrompeu no meio, o\n#    repositorio pode continuar de pe COM as 30 imagens, cobrando GB-mes.\naws ecr describe-repositories --query \"repositories[].repositoryName\" --output table\naws ecr list-images --repository-name ffv-lab-api \\\n  --query \"length(imageIds)\" --output text\naws ecr batch-delete-image --repository-name ffv-lab-api \\\n  --image-ids \"$(aws ecr list-images --repository-name ffv-lab-api \\\n                  --query 'imageIds' --output json)\" 2>/dev/null || true\naws ecr delete-repository --repository-name ffv-lab-api --force\n\n# 3. GRUPO DE LOGS: tem retencao propria e nao pertence ao ciclo do servico.\n#    Fica cobrando ingestao retida depois de tudo apagado.\naws logs delete-log-group --log-group-name /ecs/ffv-lab-api 2>/dev/null || true\n\n# 4. REVISOES DA TASK DEFINITION: nao cobram, mas acumulam e poluem. Um\n#    rollout de 20 deploys deixa 20 revisoes ATIVAS.\nfor arn in $(aws ecs list-task-definitions --family-prefix ffv-lab-api \\\n               --query \"taskDefinitionArns\" --output text); do\n  aws ecs deregister-task-definition --task-definition \"$arn\" >/dev/null\ndone\n\n# 5. ALARME e topico SNS, se voce os criou fora do Terraform.\naws cloudwatch delete-alarms --alarm-names ffv-lab-api-5xx-alvo 2>/dev/null || true\n\n# 6. E o que veio do L01 e continua cobrando por hora: ALB, RDS, endpoint de\n#    VPC, NAT Gateway e o Elastic IP dele. Se voce nao vai seguir para o L04,\n#    rode a limpeza do L01 tambem — e confira o Elastic IP orfao, que cobra\n#    justamente por NAO estar associado a nada.\naws ec2 describe-addresses --query \"Addresses[?AssociationId==null].PublicIp\" \\\n  --output table\n\n# 7. Prova final: nada com nome do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Serviço e definição de task",
+                "sim",
+                "não",
+                "as revisões permanecem registradas, sem custo"
+              ],
+              [
+                "Repositório ECR",
+                "só com `force_delete`",
+                "sim, GB-mês",
+                "o destroy falha se houver imagem dentro; interrupção no meio deixa tudo de pé"
+              ],
+              [
+                "Imagens no registro",
+                "não",
+                "sim, GB-mês",
+                "o ciclo de vida expira aos 30, o que não é o mesmo que apagar tudo"
+              ],
+              [
+                "Grupo de logs",
+                "depende de `skip_destroy`",
+                "sim, retenção",
+                "tem ciclo próprio; sobrevive ao serviço que o alimentava"
+              ],
+              [
+                "Grupo de destino e ALB",
+                "sim",
+                "sim, por hora",
+                "vêm do L01; conferir se o listener foi removido antes"
+              ],
+              [
+                "Alarme e tópico SNS",
+                "sim se em Terraform",
+                "centavos",
+                "alarme criado à mão no console não aparece no estado"
+              ],
+              [
+                "Elastic IP do NAG (L01/L02)",
+                "sim",
+                "sim, justamente quando ocioso",
+                "cobra por NÃO estar associado; é o campeão de fatura esquecida"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, serviço e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Não sei qual versão está no ar",
+                "tag = SHA com repositório imutável",
+                "identidade de conteúdo é o que torna a pergunta respondível e o rollback possível"
+              ],
+              [
+                "Janela sem alvo saudável",
+                "mínimo 100% / máximo 200% com 2 tasks",
+                "o máximo dá espaço ao excedente; o mínimo obriga a usá-lo"
+              ],
+              [
+                "Tráfego para task que não pode atender",
+                "`/health/ready` consultando o banco",
+                "prontidão que mente é a única falha que o disjuntor não pega"
+              ],
+              [
+                "Frota reiniciando quando o banco cai",
+                "`/health/live` sem dependência",
+                "vivacidade com dependência transforma falha parcial em total"
+              ],
+              [
+                "Conexão cortada na troca",
+                "`deregistration_delay` derivado do p99",
+                "o prazo é teto de paciência; derivá-lo do dado evita cortar e evita alongar"
+              ],
+              [
+                "Rollout ruim de madrugada",
+                "disjuntor com volta automática",
+                "a equipe de duas pessoas não tem vigília — a volta não pode depender de gente"
+              ],
+              [
+                "Versão saudável respondendo errado",
+                "alarme de 5xx do ALVO",
+                "o disjuntor mede estabilidade, não correção; são falhas diferentes"
+              ],
+              [
+                "Task morta antes de terminar de subir",
+                "período de graça de 60 s",
+                "a migration na partida leva 20 s, e o balanceador não sabe disso"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Janela de indisponibilidade no deploy",
+                "excedente com mínimo 100%",
+                "migration destrutiva entre versões que convivem"
+              ],
+              [
+                "Versão nova que não sobe",
+                "disjuntor com volta automática",
+                "versão que sobe saudável e responde errado"
+              ],
+              [
+                "Versão que responde errado",
+                "alarme de 5xx do alvo",
+                "regressão de latência sem erro — precisa de alarme de p99"
+              ],
+              [
+                "Conexão cortada na drenagem",
+                "prazo ≥ p99",
+                "rota longa nova que mudou a distribuição de latência"
+              ],
+              [
+                "Imagem sobrescrita",
+                "tag imutável",
+                "imagem legítima com vulnerabilidade — é a varredura"
+              ],
+              [
+                "Deploy travado por falta de endereço",
+                "sub-rede para o dobro da frota",
+                "cota de tasks da conta, que é limite separado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Commit gera um SHA, que passa a ser a identidade da imagem.",
+              "A imagem é construída em multi-stage e enviada ao registro imutável.",
+              "O Terraform cria uma revisão nova da definição de task apontando para aquele SHA.",
+              "O ECS sobe a task nova sem parar a velha, porque o máximo autoriza o excedente.",
+              "O grupo de destino verifica a prontidão e, em 2 × 5 s, declara a task apta.",
+              "A task velha entra em DEACTIVATING e o grupo drena a conexão do cliente.",
+              "Só então vem STOPPING, com o SIGTERM, e a aplicação encerra sozinha.",
+              "Se o rollout não estabiliza, o disjuntor devolve a revisão anterior.",
+              "Se estabiliza e o 5xx do alvo sobe, o alarme avisa — é a outra falha.",
+              "O laço de curl durante tudo isso registrou 200 do começo ao fim."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que meu deploy no ECS causa erro 503 se a aplicação está saudável?",
+            "answer": "O 503 vem do próprio balanceador e significa que ele não tinha nenhum alvo saudável para escolher — nenhuma requisição chegou à sua aplicação, e é por isso que o log dela está limpo. A causa quase sempre é ausência de excedente durante a troca: com uma única task, ou com `minimum_healthy_percent` em 0%, o ECS pode parar a versão velha antes de a nova estar apta. A correção é `desired_count` de pelo menos 2, mínimo saudável em 100% e máximo em 200%, que autoriza a task nova a existir antes de a velha morrer. Se o 503 persistir com essa configuração, o problema mudou de lugar: a task nova não está ficando saudável, e a investigação passa a ser a rota de prontidão e o período de graça."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "O ECS envia SIGTERM antes ou depois de drenar as conexões?",
+            "answer": "Depois. O ciclo de vida da task é explícito: a desregistragem do grupo de destino acontece no estado `DEACTIVATING`, e o sinal de parada só é enviado em `STOPPING`, que é o estado seguinte. A consequência é contraintuitiva e vale saber: uma aplicação que ignora completamente o SIGTERM não corta requisição HTTP em voo, desde que o prazo de drenagem cubra a requisição mais longa. Tratar o sinal continua valendo, mas por dois motivos diferentes do que se costuma dizer — encurta o rollout, porque o processo sai em vez de esperar o `stopTimeout` inteiro, e protege trabalho que não é requisição HTTP, como consumo de fila e tarefa agendada."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Qual valor devo usar em deregistration_delay?",
+            "answer": "Derive do seu p99 de resposta, não copie. O prazo é um TETO de paciência, não uma espera fixa: o ECS aguarda o balanceador informar que a conexão keep-alive do cliente fechou, e se isso ocorre em 300 ms o rollout segue em 300 ms. Numa API com p99 de 400 ms, 30 s cobre com duas ordens de grandeza de folga; a AWS chega a recomendar 5 s para serviços com resposta abaixo de um segundo. O padrão de 300 s não está errado, está generoso — e multiplica por dez a duração de cada rollout. O cuidado é a exceção explícita: se houver upload lento, download longo, streaming ou WebSocket, o prazo curto passa a cortar conexão legítima, e o valor tem de ser decidido pela rota mais longa, não pela média."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Preciso de dois health checks? Não posso usar a mesma rota nos dois lugares?",
+            "answer": "Pode, e é a origem de um dos piores incidentes desta arquitetura. As duas verificações respondem a perguntas diferentes: o health check do grupo de destino decide se a task RECEBE TRÁFEGO, e o do contêiner decide se ela é SUBSTITUÍDA. Se a rota de vivacidade consultar o banco, uma queda do banco marca todas as tasks como mortas, o ECS as substitui em laço, e as novas nascem igualmente mortas — você transformou uma falha parcial numa falha total. No sentido inverso, se a prontidão não consultar o banco, o balanceador manda tráfego real para uma task sem pool de conexão aberto, e o 5xx aparece depois do rollout sem ninguém ligar as duas coisas. Vivacidade sem dependência, prontidão com dependência."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Por que não usar a tag :latest, se é mais simples?",
+            "answer": "Porque ela transforma a pergunta \"qual versão está no ar?\" em algo sem resposta, e o rollback em reconstrução. Com `:latest`, a definição de task aponta para um nome, não para um conteúdo: duas tasks que subiram em momentos diferentes podem estar rodando imagens diferentes com a mesma tag. E quando a versão nova quebra, a anterior já foi sobrescrita — voltar exige reconstruir a partir do código, na pressa, sem garantia de ser o mesmo binário. Usar o SHA do commit como tag, com o repositório em `IMMUTABLE`, custa uma variável no pipeline e devolve identidade de conteúdo: a revisão anterior da definição de task continua apontando para uma imagem que continua existindo, e o rollback passa a ser uma referência em vez de uma corrida."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "O disjuntor de implantação me protege de qualquer deploy ruim?",
+            "answer": "Não, e essa é a distinção que mais custa quando se descobre em produção. O disjuntor observa se o rollout ESTABILIZA — se as tasks ficam saudáveis. Uma versão que sobe, passa no health check e responde 500 para o cliente atravessa o disjuntor sem ser notada, porque do ponto de vista do ECS o rollout deu certo. É exatamente por isso que existe também o alarme de `HTTPCode_Target_5XX_Count`, medido no ALVO e não no balanceador. As duas proteções cobrem falhas diferentes: uma pega a versão que não sobe, a outra pega a que sobe e está errada. Nenhuma cobre as duas, e ter só uma delas deixa metade do risco descoberto."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Por que meu deploy trava em PROVISIONING sem nenhum erro de aplicação?",
+            "answer": "A causa mais frequente é esgotamento de endereços na sub-rede. Em modo `awsvpc` cada task consome um endereço IP, e durante um rollout com excedente de 100% a frota dobra — então a sub-rede precisa de espaço para o dobro do regime permanente, não para a frota exata. Confira com `describe-subnets` o campo `AvailableIpAddressCount`. A segunda causa é cota da conta, que é um limite separado e não aparece como erro de rede. Nenhuma das duas produz log na aplicação, porque a aplicação nunca chegou a iniciar: é por isso que o sintoma parece silencioso."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Rolling update ou blue/green — qual devo escolher?",
+            "answer": "Eles resolvem perguntas diferentes, e a escolha vem de qual pergunta você está fazendo. Rolling update responde \"como publicar sem derrubar\" e não pede recurso novo: o excedente dura minutos e desaparece da fatura. Blue/green responde \"como decidir, com tráfego real, se a versão nova presta\", e cobra duas frotas inteiras convivendo e um segundo grupo de destino. Há um caso em que blue/green deixa de ser opcional: quando as duas versões NÃO podem coexistir — migration que remove coluna, mudança de contrato incompatível — porque o rolling update as faz conviver por minutos. Enquanto suas migrations forem aditivas e a pergunta for só \"sem janela\", rolling update é a resposta mais barata; o dia em que a pergunta virar \"quero avaliar antes de comprometer\", vá ao L39."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Sua aplicação ignora completamente o SIGTERM. O prazo de drenagem é 60 s e o p99 de resposta é 300 ms. O que acontece com as requisições em voo durante o deploy?",
+            "options": [
+              "Terminam apenas se o stopTimeout for maior que o prazo de drenagem",
+              "São cortadas, gerando 502 — é por isso que tratar SIGTERM é obrigatório",
+              "São redistribuídas para a task nova automaticamente pelo balanceador",
+              "Terminam normalmente: a drenagem ocorre em DEACTIVATING, antes do SIGTERM em STOPPING"
+            ],
+            "correctIndex": 3,
+            "explanation": "A ordem dos estados do ciclo de vida decide isso, e ela é explícita: a desregistragem do grupo de destino acontece em `DEACTIVATING`, e o SIGTERM só é enviado em `STOPPING`, o estado seguinte. Quando o sinal chega, a drenagem já terminou e não há mais requisição em voo — então ignorá-lo não corta nada. Tratar SIGTERM continua valendo por outros dois motivos: encurta o rollout, porque o processo sai em vez de esperar o `stopTimeout` inteiro, e protege trabalho que não é requisição HTTP, como consumo de fila.\n\nA primeira alternativa é o conselho mais repetido sobre deploy em contêiner, e é onde está o erro de raciocínio: ela assume que drenagem e sinal de parada são simultâneos, o que seria verdade num `docker stop` avulso, mas não no fluxo de um serviço ECS atrelado a grupo de destino. A terceira inverte a relação: o `stopTimeout` conta a partir do SIGTERM, ou seja, depois da drenagem — comparar os dois valores não faz sentido nessa ordem. A quarta atribui ao balanceador uma capacidade que ele não tem: uma requisição HTTP já em processamento não é transferível para outro alvo, e nenhum balanceador reexecuta requisição em voo."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Um rollout conclui com sucesso, o disjuntor não reverte nada, e cinco minutos depois o `HTTPCode_Target_5XX_Count` está subindo. Qual é a causa mais provável?",
+            "options": [
+              "O prazo de drenagem é curto demais e está cortando conexões",
+              "O disjuntor está desabilitado no serviço",
+              "A rota de prontidão devolve 200 sem verificar a dependência de que a aplicação precisa",
+              "A sub-rede ficou sem endereços IP para o excedente"
+            ],
+            "correctIndex": 2,
+            "explanation": "A métrica acusa o ALVO, não o balanceador: houve destino, ele recebeu a requisição e respondeu com erro. Combinado ao fato de o rollout ter concluído, isso descreve exatamente a prontidão que mente — a task passou no health check porque a rota devolve 200 fixo, e o erro só aparece quando tráfego real exige a dependência que ela nunca verificou. É também a única falha desta arquitetura que o disjuntor não pega, porque ele mede estabilidade e não correção.\n\nA primeira alternativa erra o código e a janela: drenagem curta produz 502 ou 504 DURANTE a troca, e não erro que começa depois de ela terminar. A segunda descreve um sintoma incompatível com o enunciado: falta de endereço travaria o rollout em `PROVISIONING`, e aqui ele concluiu. A quarta confunde ausência de proteção com causa: mesmo habilitado, o disjuntor não reverteria este caso — o problema não é ele estar desligado, é o rollout ter sido genuinamente estável do ponto de vista do ECS."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L01 no ar (ECS Fargate, RDS em sub-rede privada, ALB), Docker, Git e Terraform básicos"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "os três relógios do rollout e qual domina; a ordem entre drenagem e SIGTERM derivada do ciclo de vida; vivacidade vs prontidão; identidade de imagem como base do rollback; o que o disjuntor cobre e o que não cobre"
+              ],
+              [
+                "Limitação que fica",
+                "o deploy ainda sai da máquina de uma pessoa, com credencial de longa duração; e as duas versões convivem, então migration destrutiva quebra a velha"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L04 — segredo fora do código com rotação. Reutiliza a definição de task deste módulo, e é onde a credencial do banco deixa de ser estática"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L39 (blue/green e canário) e L54 (pipeline com OIDC) dependem do rollout confiável construído aqui; L18 (migration sem parar) resolve a dívida de schema que ele criou"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Amazon ECS task lifecycle",
+                "code": true
+              },
+              {
+                "text": " — os estados e o que ocorre em cada um, que é a fonte da ordenação entre desregistragem e sinal de parada; e "
+              },
+              {
+                "text": "Optimize load balancer connection draining parameters for Amazon ECS",
+                "code": true
+              },
+              {
+                "text": " — a natureza do prazo de drenagem como teto e a recomendação de 5 s para serviços com resposta abaixo de um segundo, com a ressalva explícita para conexão longa. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "Os tempos de partida citados — cerca de 40 s para a task e até 20 s de migration — são os medidos na aplicação de exemplo, e servem como ordem de grandeza, não como referência. O período de graça e o limiar do health check devem ser derivados da SUA medição: o pior tempo de partida da sua aplicação, não o típico. Da mesma forma, o prazo de drenagem de 30 s vale para um p99 de 400 ms sem rota longa; se o seu produto tem upload, streaming ou relatório demorado, esse número está errado para você."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -24,25 +24,32 @@ type FinishAttemptResult struct {
 // FinishAttemptUseCase finaliza e calcula o score server-side.
 //
 // IDEMPOTENTE: se já finalizada, retorna o resultado existente.
-// SEGURANÇA: score calculado no servidor contra o catálogo embebido.
-// O cliente não pode mentir o score.
+// SEGURANÇA: score calculado contra as questões REAIS que foram sorteadas
+// para esta tentativa (attempt.QuestionIDs(), buscadas no Postgres) — não
+// mais o catálogo estático embutido no binário, que ficou desatualizado em
+// relação ao banco real assim que os bancos de questão passaram a viver no
+// Postgres (CLF/DVA/AIF/SAA). O cliente não pode mentir o score nem escolher
+// contra qual gabarito ele é medido.
 type FinishAttemptUseCase struct {
-	attemptRepo domsimulado.AttemptRepository
-	catalog     domsimulado.CatalogProvider
-	scorer      domsimulado.Scorer
-	clock       shared.Clock
+	attemptRepo  domsimulado.AttemptRepository
+	catalog      domsimulado.CatalogProvider
+	questionRepo domsimulado.QuestionRepository
+	scorer       domsimulado.Scorer
+	clock        shared.Clock
 }
 
 func NewFinishAttemptUseCase(
 	repo domsimulado.AttemptRepository,
 	catalog domsimulado.CatalogProvider,
+	questionRepo domsimulado.QuestionRepository,
 	clock shared.Clock,
 ) *FinishAttemptUseCase {
 	return &FinishAttemptUseCase{
-		attemptRepo: repo,
-		catalog:     catalog,
-		scorer:      domsimulado.Scorer{},
-		clock:       clock,
+		attemptRepo:  repo,
+		catalog:      catalog,
+		questionRepo: questionRepo,
+		scorer:       domsimulado.Scorer{},
+		clock:        clock,
 	}
 }
 
@@ -61,8 +68,13 @@ func (uc *FinishAttemptUseCase) Execute(ctx context.Context, cmd FinishAttemptCo
 		return FinishAttemptResult{}, fmt.Errorf("finish attempt: get simulado: %w", err)
 	}
 
-	// Calcula score server-side.
-	scoreResult := uc.scorer.Calculate(sim, attempt.Answers())
+	examSim, err := uc.buildExamSimulado(ctx, attempt, sim.PassingScore)
+	if err != nil {
+		return FinishAttemptResult{}, fmt.Errorf("finish attempt: build exam: %w", err)
+	}
+
+	// Calcula score server-side, contra as questões reais desta tentativa.
+	scoreResult := uc.scorer.Calculate(examSim, attempt.Answers())
 
 	// Se já finalizada, retorna resultado existente (idempotência).
 	// Usa NewScore(scoreResult) — Score{} é zero-value e WeakTopics retornaria
@@ -94,19 +106,66 @@ func (uc *FinishAttemptUseCase) Execute(ctx context.Context, cmd FinishAttemptCo
 	}, nil
 }
 
+// buildExamSimulado monta um *Simulado transiente cujas Questions vêm do
+// Postgres real (attempt.QuestionIDs(), via QuestionRepository.FindByIDs) —
+// não do catálogo estático embutido. Usado por FinishAttempt e por
+// ResumeAttempt (no auto-finish por expiração) para que os dois pontuem
+// exatamente as mesmas questões que o usuário de fato recebeu.
+func buildExamSimulado(
+	ctx context.Context,
+	questionRepo domsimulado.QuestionRepository,
+	attempt *domsimulado.Attempt,
+	passingScore int,
+) (*domsimulado.Simulado, error) {
+	ids := make([]string, len(attempt.QuestionIDs()))
+	for i, id := range attempt.QuestionIDs() {
+		ids[i] = string(id)
+	}
+
+	dbQuestions, err := questionRepo.FindByIDs(ctx, attempt.SimuladoID().String(), ids)
+	if err != nil {
+		return nil, fmt.Errorf("find by ids: %w", err)
+	}
+
+	questions := make([]domsimulado.Question, len(dbQuestions))
+	for i, q := range dbQuestions {
+		questions[i] = domsimulado.Question{
+			ID:         shared.QuestionID(q.ID),
+			Stem:       q.Stem,
+			Options:    q.Options,
+			CorrectID:  q.CorrectID,
+			Topic:      q.Topic,
+			Difficulty: q.Difficulty,
+		}
+	}
+
+	return &domsimulado.Simulado{
+		ID:            attempt.SimuladoID(),
+		Questions:     questions,
+		QuestionCount: len(questions),
+		PassingScore:  passingScore,
+	}, nil
+}
+
+func (uc *FinishAttemptUseCase) buildExamSimulado(ctx context.Context, attempt *domsimulado.Attempt, passingScore int) (*domsimulado.Simulado, error) {
+	return buildExamSimulado(ctx, uc.questionRepo, attempt, passingScore)
+}
+
 // ResumeAttemptUseCase retorna o estado atual de uma attempt ativa.
 type ResumeAttemptUseCase struct {
-	attemptRepo domsimulado.AttemptRepository
-	catalog     domsimulado.CatalogProvider
-	clock       shared.Clock
+	attemptRepo  domsimulado.AttemptRepository
+	catalog      domsimulado.CatalogProvider
+	questionRepo domsimulado.QuestionRepository
+	clock        shared.Clock
 }
 
 func NewResumeAttemptUseCase(
 	repo domsimulado.AttemptRepository,
 	catalog domsimulado.CatalogProvider,
+	questionRepo domsimulado.QuestionRepository,
 	clock shared.Clock,
 ) *ResumeAttemptUseCase {
-	return &ResumeAttemptUseCase{attemptRepo: repo, catalog: catalog, clock: clock}
+	return &ResumeAttemptUseCase{attemptRepo: repo, catalog: catalog, questionRepo: questionRepo, clock: clock}
 }
 
 type ResumeAttemptResult struct {
@@ -128,7 +187,11 @@ func (uc *ResumeAttemptUseCase) Execute(ctx context.Context, userID shared.UserI
 	// Verifica se expirou — se sim, finaliza automaticamente.
 	now := uc.clock.Now()
 	if attempt.IsExpired(now) {
-		scoreResult := domsimulado.Scorer{}.Calculate(sim, attempt.Answers())
+		examSim, buildErr := buildExamSimulado(ctx, uc.questionRepo, attempt, sim.PassingScore)
+		if buildErr != nil {
+			return ResumeAttemptResult{}, fmt.Errorf("resume attempt: build exam: %w", buildErr)
+		}
+		scoreResult := domsimulado.Scorer{}.Calculate(examSim, attempt.Answers())
 		score := domsimulado.NewScore(scoreResult)
 		_ = attempt.Finish(score, now)
 		_ = uc.attemptRepo.Update(ctx, attempt)

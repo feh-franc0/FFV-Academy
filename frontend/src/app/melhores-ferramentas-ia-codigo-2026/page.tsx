@@ -1,17 +1,18 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { BASE, social } from '@/lib/metadata-social';
 
 export const metadata: Metadata = {
   title: 'Melhores Ferramentas de IA para Código em 2026 — Ranking técnico',
   description: 'Ranking técnico das melhores ferramentas de IA para código em 2026: Claude Code, Cursor, Codex, Copilot, Amazon Q, Kiro. Sem hype — filosofia, arquitetura e quando usar.',
   keywords: 'melhores ferramentas ia codigo 2026, ranking ia programacao, claude code, cursor, codex, github copilot, amazon q, kiro, coding agents 2026',
-  alternates: { canonical: 'https://fernandofrancovalle.com/melhores-ferramentas-ia-codigo-2026' },
-  openGraph: {
-    title: 'Melhores Ferramentas de IA para Código em 2026',
-    description: 'Filosofia, arquitetura e caso de uso real. Sem hype.',
-    type: 'article',
-    url: 'https://fernandofrancovalle.com/melhores-ferramentas-ia-codigo-2026',
-  },
+  alternates: { canonical: `${BASE}/melhores-ferramentas-ia-codigo-2026` },
+  ...social({
+    titulo: 'Melhores Ferramentas de IA para Código em 2026',
+    descricao: 'Filosofia, arquitetura e caso de uso real. Sem hype.',
+    caminho: '/melhores-ferramentas-ia-codigo-2026',
+    tipo: 'article',
+  }),
 };
 
 const tools = [
@@ -50,9 +51,9 @@ export default function MelhoresFerramentasPage() {
         {tools.map(t => (
           <div key={t.name} className="p-5 rounded-xl" style={{ background: 'var(--ffv-bg2)', border: `1px solid ${t.color}40` }}>
             <div className="flex items-center gap-3 mb-2 flex-wrap">
-              <h3 className="text-lg font-bold" style={{ color: t.color }}>{t.name}</h3>
-              <span className="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full"
-                style={{ background: `${t.color}20`, color: t.color, border: `1px solid ${t.color}40` }}>
+              <h3 className="text-lg font-bold ffv-acento-texto" style={{ '--ffv-acento': t.color } as React.CSSProperties}>{t.name}</h3>
+              <span className="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full ffv-acento-texto"
+                style={{ background: `${t.color}20`, '--ffv-acento': t.color, border: `1px solid ${t.color}40` } as React.CSSProperties}>
                 {t.tag}
               </span>
               <span className="text-xs" style={{ color: 'var(--ffv-muted)' }}>· {t.vendor}</span>
@@ -77,7 +78,7 @@ export default function MelhoresFerramentasPage() {
         <Link
           href="/claude-code-vs-cursor"
           className="inline-block px-5 py-2.5 rounded-full font-semibold text-sm"
-          style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
+          style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
         >
           Ler comparação técnica →
         </Link>

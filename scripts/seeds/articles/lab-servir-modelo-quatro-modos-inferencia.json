@@ -1,0 +1,2560 @@
+{
+  "slug": "lab-servir-modelo-quatro-modos-inferencia",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência treina, desde o L73, um modelo que prevê a probabilidade de um pedido ser cancelado — entrada em produção assim que o experimento rastreável daquele módulo produz um artefato reproduzível. O modelo foi treinado com uma rede que se beneficia de GPU, e desde então roda atrás de um único endpoint SageMaker (ml.g4dn.xlarge), ligado 24 horas por dia, sete dias por semana."
+              }
+            ]
+          },
+          "id": "b0_0",
+          "position": 0
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O problema não é o modelo. É que esse endpoint atende três chamadores com necessidades completamente diferentes: o painel de atendimento, que consulta a pontuação quando um vendedor abre um pedido (raro, mas bloqueia a tela até responder); o Sistema de Pedidos, que reavalia a pontuação a cada mudança de status — pagamento aprovado, por exemplo — e fica esperando a resposta antes de confirmar o próprio evento; e um script de análise ad-hoc do time de dados, rodado poucas vezes por semana."
+              }
+            ]
+          },
+          "id": "b0_1",
+          "position": 1
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Somando os três, são cerca de 200 chamadas por dia contra um endpoint de GPU que nunca desliga. Cada inferência usa em torno de 180 ms de computação real. Ninguém tinha ido medir o que isso significava em horas pagas até este laboratório — e, separadamente, ninguém tinha tentado pontuar de uma vez os 3.400 pedidos abertos que a equipe de retenção acompanha, porque fazer isso chamada por chamada contra o mesmo endpoint seria lento e caro demais para valer a pena."
+              }
+            ]
+          },
+          "id": "b0_2",
+          "position": 2
+        },
+        {
+          "type": "key_value",
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado — depende do L73 (treino rastreável); não pressupõe experiência prévia com os quatro modos de inferência do SageMaker"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L73 (modelo treinado, versionado e reproduzível a partir do commit e do dado) — este módulo assume que o artefato já existe e está pronto para ser servido"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 50 min · implementação 2 h a 2 h 45"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Médio: quatro caminhos de inferência para configurar e medir, mas nenhum serviço fora do que o SageMaker já oferece nativamente"
+              },
+              {
+                "k": "Serviços",
+                "v": "SageMaker AI (real-time, serverless, async), SageMaker Batch Transform, SQS, Lambda, S3, SNS, EventBridge Scheduler, CloudWatch, Cost Explorer"
+              },
+              {
+                "k": "Volume atual",
+                "v": "200 inferências síncronas/assíncronas por dia, mais 3.400 pedidos abertos pontuados uma vez por noite"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "cada chamador recebe o modo de inferência que casa com o padrão dele — latência, se bloqueia quem chama, tamanho de payload e frequência — e o custo total pago em horas-instância cai sem perder nenhum caso de uso"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "o modelo já está treinado e versionado (é o que o L73 garante) — a decisão aqui é de infraestrutura de serving, não de re-treino nem de escolha de algoritmo"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "os quatro modos medidos lado a lado — custo em horas-instância pagas por mês e latência p50/p99 de cada um — com a escolha de cada consumidor justificada por um requisito escrito, não por hábito"
+              }
+            ]
+          },
+          "id": "b0_3",
+          "position": 3
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é sobre escolher o algoritmo do modelo, nem sobre re-treiná-lo — isso já está resolvido pelo tema do L73. Não é sobre versionar e promover modelos com aprovação e rollback — isso é o L75. Não é sobre consumir o endpoint do lado do cliente com timeout, retry e fallback — isso é o L79, que depende deste módulo. Este laboratório resolve uma coisa: dado um modelo já treinado, QUAL dos quatro modos de servir cada consumidor usa, medido em custo e latência — não como o modelo aprende, e não como ele é promovido."
+          },
+          "id": "b0_4",
+          "position": 4
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com uma medição concreta na seção de implantação."
+              }
+            ]
+          },
+          "id": "b1_0",
+          "position": 0
+        },
+        {
+          "type": "list",
+          "data": {
+            "items": [
+              "Explicar por que um único endpoint de tempo real atende mal a padrões de tráfego opostos — bloqueante e raro, bloqueante e frequente, tolerante a espera.",
+              "Configurar um endpoint de tempo real síncrono com janela de disponibilidade reduzida, para o chamador que bloqueia e não pode esperar.",
+              "Configurar um endpoint serverless sobre uma versão do modelo compilada para CPU, e medir o custo real do cold start.",
+              "Configurar um endpoint assíncrono com fila própria, S3 de entrada e saída, e notificação de conclusão via SNS.",
+              "Configurar um job de Batch Transform que pontua milhares de registros de uma vez, sem manter endpoint ligado depois.",
+              "Medir, para os quatro modos, horas-instância pagas por mês e latência p50/p99 — com número, não estimativa.",
+              "Justificar por escrito qual modo cada consumidor da Cadência deveria usar, a partir do requisito dele, não da familiaridade com a configuração.",
+              "Reconhecer o limite real de cada modo — em especial a ausência de suporte a GPU no serverless — antes de prometer um SLA que o modo não cumpre."
+            ],
+            "ordered": true
+          },
+          "id": "b1_1",
+          "position": 1
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "SageMaker real-time endpoints",
+                "MLA-C01, MLS-C01",
+                "endpoint ml.g4dn.xlarge com janela de disponibilidade reduzida, scale-to-zero fora do expediente",
+                "quando latência baixa e previsível vale mais que economizar hora ociosa — e como scale-to-zero muda esse cálculo sem eliminar cold start"
+              ],
+              [
+                "SageMaker Serverless Inference",
+                "MLA-C01",
+                "endpoint sem instância dedicada, MemorySizeInMB + MaxConcurrency, rodando a versão do modelo em CPU",
+                "os limites reais do modo — sem GPU, memória e concorrência com teto — e por que isso é a pegadinha mais comum de prova sobre este tema"
+              ],
+              [
+                "SageMaker Asynchronous Inference",
+                "MLA-C01, MLS-C01",
+                "fila interna do SageMaker atrás de InputLocation/OutputLocation no S3, notificação de conclusão via SNS",
+                "payload grande, processamento não-bloqueante, e como o auto scaling a zero funciona quando a fila esvazia"
+              ],
+              [
+                "SageMaker Batch Transform",
+                "MLA-C01, MLS-C01",
+                "create_transform_job lendo um prefixo do S3 de uma vez, sem endpoint persistente depois",
+                "a diferença entre \"endpoint\" e \"job\" — Batch Transform não fica no ar; ele processa e termina sozinho"
+              ],
+              [
+                "Escolha de modo por custo e latência",
+                "MLA-C01, MLS-C01, AIF-C01 (conceito geral)",
+                "tabela de decisão da seção de implantação, com horas-instância e percentil de latência medidos para cada modo",
+                "dado um cenário de prova, reconhecer qual dos quatro modos atende o requisito descrito — é a competência mais cobrada deste tema"
+              ]
+            ]
+          },
+          "id": "b2_0",
+          "position": 0
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não muda uma linha de configuração é intenção, não requisito. A terceira coluna é onde cada um deixou marca no desenho."
+              }
+            ]
+          },
+          "id": "b3_0",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Chamada do vendedor não pode travar a tela",
+                "resposta em até 300 ms, sempre",
+                "obriga endpoint de tempo real sempre pronto na janela de uso — nunca serverless (cold start) nem assíncrono (não-bloqueante por natureza)"
+              ],
+              [
+                "Webhook de mudança de status não pode ficar bloqueado esperando o modelo",
+                "resposta ao webhook em milissegundos, independente de quando a pontuação sai",
+                "obriga modo assíncrono, com fila absorvendo o pico e resposta do modelo desacoplada da resposta do evento"
+              ],
+              [
+                "Chamada de análise é rara e tolera espera",
+                "menos de 1 chamada por dia em média",
+                "obriga um modo que não cobre hora parada — mas isso exclui GPU, então exige uma versão do modelo compilada para CPU"
+              ],
+              [
+                "Pontuar todos os pedidos abertos de uma vez, fora do pico",
+                "3.400 pedidos, uma vez por noite, prontos antes das 8h",
+                "obriga Batch Transform — o único dos quatro pensado para lote com throughput alto e sem endpoint permanente"
+              ],
+              [
+                "Custo não pode ser dominado por hora ociosa",
+                "redução medida em horas-instância pagas por mês, sem perder nenhum caso de uso",
+                "obriga medir utilização real por modo ANTES de decidir o dimensionamento — não depois"
+              ],
+              [
+                "Cada modo precisa de observabilidade própria, comparável",
+                "latência e custo separados por endpoint/job, não uma métrica agregada única",
+                "obriga métricas no CloudWatch marcadas por variant/endpoint/job, e uma tabela de comparação lado a lado"
+              ]
+            ]
+          },
+          "id": "b3_1",
+          "position": 1
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o endpoint que atende todo mundo do mesmo jeito"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem desde que o modelo do L73 entrou em produção, e ele é um ponto de partida legítimo: um único endpoint resolve \"o modelo responde\" com poucas peças. O defeito não é ter um endpoint — é não ter perguntado, para cada chamador, se esse é o modo certo."
+              }
+            ]
+          },
+          "id": "b4_0",
+          "position": 0
+        },
+        {
+          "type": "arch_diagram",
+          "data": {
+            "title": "O único endpoint que atende três padrões de tráfego opostos",
+            "caption": "As três setas chegam no mesmo lugar porque é o único caminho que existe — não porque é o caminho certo para as três. Percorra os passos e repare que o defeito não é \"GPU cara\": é decidir infraestrutura pelo que é mais fácil de configurar, não pelo padrão real de cada chamador.",
+            "groups": [
+              {
+                "label": "Quem chama o modelo hoje",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "app_atendimento",
+                    "service": "erp",
+                    "label": "Painel de atendimento",
+                    "note": "chama o modelo quando o vendedor abre um pedido; poucas vezes por dia, mas precisa da resposta na hora"
+                  },
+                  {
+                    "id": "script_analise",
+                    "service": "ide",
+                    "label": "Script de análise ad-hoc",
+                    "note": "notebook do time de dados, poucas chamadas por semana, tolera esperar alguns segundos"
+                  },
+                  {
+                    "id": "sistema_pedidos",
+                    "service": "erp",
+                    "label": "Sistema de Pedidos",
+                    "note": "chama o modelo a cada mudança de status e ESPERA a resposta antes de confirmar o próprio evento"
+                  }
+                ]
+              },
+              {
+                "label": "O único caminho que existe",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sagemaker_endpoint",
+                    "service": "sagemaker",
+                    "label": "Endpoint único (ml.g4dn.xlarge, sempre ligado)",
+                    "note": "único caminho de inferência que existe hoje; recebe qualquer um dos três chamadores, 24 horas por dia"
+                  }
+                ]
+              },
+              {
+                "label": "Onde a conta aparece, sem ninguém olhar",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cloudwatch_min",
+                    "service": "cloudwatch",
+                    "label": "CloudWatch",
+                    "note": "guarda a métrica de utilização de GPU, mas ninguém tinha ido olhar esse número antes deste laboratório"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "app_atendimento",
+                "to": "sagemaker_endpoint",
+                "label": "chamada síncrona quando o vendedor abre um pedido",
+                "style": "solid"
+              },
+              {
+                "from": "sistema_pedidos",
+                "to": "sagemaker_endpoint",
+                "label": "chamada síncrona a cada mudança de status, bloqueando o próprio webhook até a resposta",
+                "style": "solid"
+              },
+              {
+                "from": "script_analise",
+                "to": "sagemaker_endpoint",
+                "label": "chamada esporádica do time de dados, no mesmo endpoint de GPU dos outros dois",
+                "style": "solid"
+              },
+              {
+                "from": "sagemaker_endpoint",
+                "to": "cloudwatch_min",
+                "label": "métrica de utilização de GPU, gerada a cada minuto e nunca consultada",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O vendedor abre um pedido e o painel de atendimento chama o endpoint",
+                "detail": "Poucas vezes por dia — mas a resposta precisa vir em tempo de não travar a tela de quem está atendendo o cliente.",
+                "nodes": [
+                  "app_atendimento",
+                  "sagemaker_endpoint"
+                ],
+                "edges": [
+                  "app_atendimento>sagemaker_endpoint"
+                ]
+              },
+              {
+                "label": "O Sistema de Pedidos chama o MESMO endpoint a cada mudança de status",
+                "detail": "Essa chamada é muito mais frequente que a do vendedor, e o próprio webhook de pagamento fica esperando a resposta do modelo antes de seguir.",
+                "nodes": [
+                  "sistema_pedidos",
+                  "sagemaker_endpoint"
+                ],
+                "edges": [
+                  "sistema_pedidos>sagemaker_endpoint"
+                ]
+              },
+              {
+                "label": "O script de análise ad-hoc também bate no mesmo endpoint",
+                "detail": "Poucas vezes por semana, tolera esperar — mas como não existe outro caminho, entra na fila do mesmo endpoint de GPU dos dois anteriores.",
+                "nodes": [
+                  "script_analise",
+                  "sagemaker_endpoint"
+                ],
+                "edges": [
+                  "script_analise>sagemaker_endpoint"
+                ]
+              },
+              {
+                "label": "O endpoint GPU fica ligado 24 horas por dia, todo santo dia",
+                "detail": "Precisa estar pronto para qualquer um dos três chamadores, a qualquer hora — mesmo que dois deles só apareçam em horário comercial e o terceiro poucas vezes por semana.",
+                "nodes": [
+                  "sagemaker_endpoint"
+                ],
+                "edges": []
+              },
+              {
+                "label": "CloudWatch registra a utilização real da GPU",
+                "detail": "A métrica sempre existiu; o que faltava era alguém perguntar o que ela dizia. É essa pergunta que abre a seção de implantação deste módulo.",
+                "nodes": [
+                  "sagemaker_endpoint",
+                  "cloudwatch_min"
+                ],
+                "edges": [
+                  "sagemaker_endpoint>cloudwatch_min"
+                ]
+              },
+              {
+                "label": "Três padrões de tráfego opostos, comprimidos numa única decisão de infraestrutura",
+                "detail": "Bloqueante e raro, bloqueante e frequente, tolerante a espera — nenhum modo único de servir atende bem aos três ao mesmo tempo sem desperdiçar em pelo menos dois deles.",
+                "nodes": [
+                  "app_atendimento",
+                  "sistema_pedidos",
+                  "script_analise",
+                  "sagemaker_endpoint"
+                ],
+                "edges": [
+                  "app_atendimento>sagemaker_endpoint",
+                  "sistema_pedidos>sagemaker_endpoint",
+                  "script_analise>sagemaker_endpoint"
+                ]
+              }
+            ]
+          },
+          "id": "b4_1",
+          "position": 1
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "bash",
+            "code": "# Mede o que ninguem tinha medido: quantos minutos de GPU sao usados de fato\n# num mes de 30 dias, contra quantas horas o endpoint fica ligado.\n\nCHAMADAS_DIA=200\nMS_POR_CHAMADA=180\n\n# Computacao real usada por dia, em segundos\npython3 - <<'PY'\nchamadas_dia = 200\nms_por_chamada = 180\nsegundos_dia = chamadas_dia * ms_por_chamada / 1000\nminutos_mes = segundos_dia * 30 / 60\nhoras_pagas_mes = 24 * 30\nminutos_pagos_mes = horas_pagas_mes * 60\nutilizacao = minutos_mes / minutos_pagos_mes * 100\nprint(f'computacao real: {segundos_dia:.0f}s/dia -> {minutos_mes:.0f} min/mes')\nprint(f'pago: {horas_pagas_mes} h/mes ({minutos_pagos_mes:.0f} min/mes)')\nprint(f'utilizacao real da GPU: {utilizacao:.2f}%')\nPY\n# Esperado: computacao real ~18 min/mes contra 43.200 min/mes pagos -- 0,04% de utilizacao.\n# O endpoint nao esta \"caro\": esta ligado por um motivo que nunca foi escrito.\n",
+            "filename": "medir-utilizacao-atual.sh"
+          },
+          "id": "b4_2",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "danger",
+            "title": "A GPU não está ociosa por acidente — está ociosa porque ninguém decidiu quando ela precisa estar acesa",
+            "content": "Ligar 24 horas por dia para atender 200 chamadas de 180 ms cada não é um erro de configuração — é a ausência de uma decisão. O endpoint responde igualmente bem à 1 chamada das 3h da manhã do script de análise e à chamada das 14h do vendedor, porque nunca ninguém perguntou se as duas precisam do mesmo tratamento. Elas não precisam."
+          },
+          "id": "b4_3",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A troca não é \"adicionar mais um endpoint\" — é substituir \"um caminho para todo mundo\" por \"um caminho por padrão de tráfego\", com o custo de cada um medido separadamente."
+              }
+            ]
+          },
+          "id": "b5_0",
+          "position": 0
+        },
+        {
+          "type": "arch_diagram",
+          "data": {
+            "title": "Quatro modos coexistindo, cada consumidor roteado pelo padrão de tráfego que ele realmente tem",
+            "caption": "A diferença não é uma caixa a mais no mesmo desenho: o destino da chamada agora depende de quem chama. Bloqueante e raro vai para tempo real; esporádico e tolerante vai para serverless (em CPU); não-bloqueante vai para assíncrono via fila; lote vai para Batch Transform, que nem existe como endpoint. Percorra os passos: cada modo resolve o requisito de UM consumidor específico da arquitetura mínima.",
+            "groups": [
+              {
+                "label": "Consumidores, cada um com um perfil de tráfego diferente",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "app_atendimento2",
+                    "service": "erp",
+                    "label": "Painel de atendimento",
+                    "note": "continua bloqueante e raro — único consumidor que fica na tela do vendedor esperando resposta"
+                  },
+                  {
+                    "id": "script_analise2",
+                    "service": "ide",
+                    "label": "Script de análise ad-hoc",
+                    "note": "continua esporádico — menos de uma chamada por dia em média, tolera cold start ocasional"
+                  },
+                  {
+                    "id": "sistema_pedidos2",
+                    "service": "erp",
+                    "label": "Sistema de Pedidos",
+                    "note": "para de esperar o modelo — publica na fila e segue com o próprio fluxo de pagamento"
+                  }
+                ]
+              },
+              {
+                "label": "Tempo real síncrono",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sagemaker_realtime",
+                    "service": "sagemaker",
+                    "label": "Endpoint tempo real síncrono",
+                    "note": "GPU provisionada só na janela de 9h às 18h, com scale-to-zero fora do expediente — não no dia inteiro"
+                  }
+                ]
+              },
+              {
+                "label": "Serverless",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sagemaker_serverless",
+                    "service": "sagemaker",
+                    "label": "Endpoint serverless",
+                    "note": "roda a versão do modelo compilada para CPU — Serverless Inference não aceita instância com GPU"
+                  }
+                ]
+              },
+              {
+                "label": "Assíncrono",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sqs_fila",
+                    "service": "sqs",
+                    "label": "Fila de reavaliação",
+                    "note": "absorve o pico de mudanças de status sem obrigar o Sistema de Pedidos a esperar nada"
+                  },
+                  {
+                    "id": "lambda_consumidor",
+                    "service": "lambda",
+                    "label": "Consumidor da fila",
+                    "note": "lê a fila em lotes pequenos e chama o endpoint assíncrono, sem manter estado próprio"
+                  },
+                  {
+                    "id": "sagemaker_async",
+                    "service": "sagemaker",
+                    "label": "Endpoint assíncrono",
+                    "note": "escala de zero conforme a fila enche, processa payload maior vindo do S3 em vez de inline"
+                  },
+                  {
+                    "id": "s3_async_out",
+                    "service": "s3",
+                    "label": "saida-assincrona/",
+                    "note": "recebe o resultado assim que o endpoint termina de processar cada item"
+                  },
+                  {
+                    "id": "sns_conclusao",
+                    "service": "sns",
+                    "label": "Tópico de conclusão",
+                    "note": "notifica quem chamou quando o resultado fica pronto, ou quando o processamento falha"
+                  }
+                ]
+              },
+              {
+                "label": "Lote noturno",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "eventbridge_scheduler",
+                    "service": "eventbridge",
+                    "label": "Agendador às 2h",
+                    "note": "dispara o job de lote fora da janela de tráfego interativo, quando a fatia de GPU está livre"
+                  },
+                  {
+                    "id": "batch_transform",
+                    "service": "sagemaker",
+                    "label": "Job de Batch Transform",
+                    "note": "lê os pedidos abertos de uma vez, processa em paralelo entre instâncias, e termina sozinho — não é um endpoint"
+                  },
+                  {
+                    "id": "s3_lote",
+                    "service": "s3",
+                    "label": "lote-pedidos/pontuacao/",
+                    "note": "recebe a pontuação de cada um dos pedidos abertos, pronta antes do horário comercial"
+                  },
+                  {
+                    "id": "painel_retencao",
+                    "service": "quicksight",
+                    "label": "Painel de retenção",
+                    "note": "lê a pontuação já pronta da noite anterior — parou de chamar o modelo pedido por pedido"
+                  }
+                ]
+              },
+              {
+                "label": "Onde o custo e a latência aparecem",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cloudwatch",
+                    "service": "cloudwatch",
+                    "label": "CloudWatch",
+                    "note": "coleta latência e contagem de invocação separadas por modo, comparáveis lado a lado"
+                  },
+                  {
+                    "id": "costexplorer",
+                    "service": "costexplorer",
+                    "label": "Cost Explorer",
+                    "note": "mostra a fatura dividida por endpoint e por job — é onde a redução de horas pagas se prova com número"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "app_atendimento2",
+                "to": "sagemaker_realtime",
+                "label": "chamada síncrona, aguarda resposta em até 300 ms para não travar a tela do vendedor",
+                "style": "solid"
+              },
+              {
+                "from": "script_analise2",
+                "to": "sagemaker_serverless",
+                "label": "chamada esporádica contra a versão do modelo compilada para CPU",
+                "style": "solid"
+              },
+              {
+                "from": "sistema_pedidos2",
+                "to": "sqs_fila",
+                "label": "publica pedido de reavaliação a cada mudança de status, sem esperar resposta",
+                "style": "solid"
+              },
+              {
+                "from": "sqs_fila",
+                "to": "lambda_consumidor",
+                "label": "consome a fila em lotes pequenos",
+                "style": "solid"
+              },
+              {
+                "from": "lambda_consumidor",
+                "to": "sagemaker_async",
+                "label": "chama InvokeEndpointAsync com o payload gravado no S3 de entrada",
+                "style": "solid"
+              },
+              {
+                "from": "sagemaker_async",
+                "to": "s3_async_out",
+                "label": "grava o resultado assim que termina de processar o item",
+                "style": "solid"
+              },
+              {
+                "from": "sagemaker_async",
+                "to": "sns_conclusao",
+                "label": "publica notificação de conclusão ou de erro",
+                "style": "dashed"
+              },
+              {
+                "from": "sns_conclusao",
+                "to": "sistema_pedidos2",
+                "label": "avisa que a pontuação ficou pronta",
+                "style": "dashed"
+              },
+              {
+                "from": "eventbridge_scheduler",
+                "to": "batch_transform",
+                "label": "dispara o job às 2h, fora da janela de tráfego interativo",
+                "style": "solid"
+              },
+              {
+                "from": "batch_transform",
+                "to": "s3_lote",
+                "label": "lê os pedidos abertos de uma vez e grava a pontuação de cada um",
+                "style": "solid"
+              },
+              {
+                "from": "painel_retencao",
+                "to": "s3_lote",
+                "label": "consulta a pontuação pronta da noite anterior, sem chamar o modelo",
+                "style": "dashed"
+              },
+              {
+                "from": "sagemaker_realtime",
+                "to": "cloudwatch",
+                "label": "latência e contagem de invocação, medidas continuamente",
+                "style": "dashed"
+              },
+              {
+                "from": "sagemaker_serverless",
+                "to": "cloudwatch",
+                "label": "latência por invocação, incluindo cold start",
+                "style": "dashed"
+              },
+              {
+                "from": "sagemaker_async",
+                "to": "cloudwatch",
+                "label": "tempo de fila mais tempo de processamento",
+                "style": "dashed"
+              },
+              {
+                "from": "batch_transform",
+                "to": "cloudwatch",
+                "label": "duração do job e throughput de linhas processadas",
+                "style": "dashed"
+              },
+              {
+                "from": "cloudwatch",
+                "to": "costexplorer",
+                "label": "utilização por modo alimenta a comparação de custo",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O painel de atendimento continua em tempo real síncrono",
+                "detail": "É o único consumidor que bloqueia a tela do vendedor e não tolera esperar — o requisito de latência baixa exclui os outros três modos para esse caminho específico.",
+                "nodes": [
+                  "app_atendimento2",
+                  "sagemaker_realtime"
+                ],
+                "edges": [
+                  "app_atendimento2>sagemaker_realtime"
+                ]
+              },
+              {
+                "label": "O script de análise migra para serverless, sobre uma versão do modelo em CPU",
+                "detail": "Serverless Inference não aceita GPU — a única forma de usar esse modo é registrar uma segunda versão do modelo compilada para CPU, aceitando latência um pouco maior em troca de zero hora paga ociosa.",
+                "nodes": [
+                  "script_analise2",
+                  "sagemaker_serverless"
+                ],
+                "edges": [
+                  "script_analise2>sagemaker_serverless"
+                ]
+              },
+              {
+                "label": "O Sistema de Pedidos para de esperar o modelo",
+                "detail": "Publica na fila e segue com o próprio fluxo de pagamento; quem absorve o pico e processa é o par fila mais função consumidora, desacoplado do webhook original.",
+                "nodes": [
+                  "sistema_pedidos2",
+                  "sqs_fila",
+                  "lambda_consumidor"
+                ],
+                "edges": [
+                  "sistema_pedidos2>sqs_fila",
+                  "sqs_fila>lambda_consumidor"
+                ]
+              },
+              {
+                "label": "O endpoint assíncrono processa quando pode, grava o resultado e avisa por SNS",
+                "detail": "Ninguém ficou esperando a resposta: o resultado chega no S3, e uma notificação assíncrona informa o Sistema de Pedidos quando a pontuação está pronta.",
+                "nodes": [
+                  "lambda_consumidor",
+                  "sagemaker_async",
+                  "s3_async_out",
+                  "sns_conclusao",
+                  "sistema_pedidos2"
+                ],
+                "edges": [
+                  "lambda_consumidor>sagemaker_async",
+                  "sagemaker_async>s3_async_out",
+                  "sagemaker_async>sns_conclusao",
+                  "sns_conclusao>sistema_pedidos2"
+                ]
+              },
+              {
+                "label": "O painel de retenção sai do \"pedido por pedido contra o endpoint\"",
+                "detail": "Vira uma consulta ao resultado de um job de Batch Transform disparado à noite — os 3.400 pedidos abertos são pontuados de uma vez, em paralelo, sem manter nenhum endpoint ligado depois.",
+                "nodes": [
+                  "eventbridge_scheduler",
+                  "batch_transform",
+                  "s3_lote",
+                  "painel_retencao"
+                ],
+                "edges": [
+                  "eventbridge_scheduler>batch_transform",
+                  "batch_transform>s3_lote",
+                  "painel_retencao>s3_lote"
+                ]
+              },
+              {
+                "label": "Cada modo publica sua própria métrica de latência no CloudWatch",
+                "detail": "Comparável lado a lado — porque a pergunta certa nunca foi \"o modelo é rápido\", foi \"esse modo é rápido o bastante para quem chama ele\".",
+                "nodes": [
+                  "sagemaker_realtime",
+                  "sagemaker_serverless",
+                  "sagemaker_async",
+                  "batch_transform",
+                  "cloudwatch"
+                ],
+                "edges": [
+                  "sagemaker_realtime>cloudwatch",
+                  "sagemaker_serverless>cloudwatch",
+                  "sagemaker_async>cloudwatch",
+                  "batch_transform>cloudwatch"
+                ]
+              },
+              {
+                "label": "Cost Explorer fecha o ciclo com a fatura dividida por modo",
+                "detail": "É aí que a redução de horas-instância pagas se prova com número — não com estimativa — e é o que a seção de implantação mede.",
+                "nodes": [
+                  "cloudwatch",
+                  "costexplorer"
+                ],
+                "edges": [
+                  "cloudwatch>costexplorer"
+                ]
+              }
+            ]
+          },
+          "id": "b5_1",
+          "position": 1
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação à arquitetura mínima não é a contagem de peças: é que o destino da chamada deixou de ser fixo. Antes, toda chamada ia para o mesmo endpoint, rápida ou lenta, bloqueante ou não; agora o PADRÃO DE TRÁFEGO de quem chama decide o caminho."
+              }
+            ]
+          },
+          "id": "b5_2",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "Scale-to-zero no tempo real não substitui os outros três modos",
+            "content": "Endpoints de tempo real do SageMaker ganharam suporte a escalar para zero instâncias quando ociosos — isso reduz o custo do modo 1 fora do horário configurado, mas não resolve a decisão deste laboratório: um endpoint com scale-to-zero ainda paga cold start ao acordar (como o serverless), ainda bloqueia quem chama enquanto processa (diferente do assíncrono), e ainda cobra por invocação individual, sem o paralelismo em lote do Batch Transform. A pergunta certa nunca foi \"dá para zerar o ocioso\", foi \"qual padrão de tráfego cada modo atende\"."
+          },
+          "id": "b5_3",
+          "position": 3
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "success",
+            "title": "O ganho que aparece na fatura, e o que não aparece nela",
+            "content": "A redução de horas-instância pagas por mês é mensurável e está na seção de implantação. O que não aparece em nenhuma fatura é a capacidade nova: pontuar os 3.400 pedidos abertos de uma vez, todas as noites, não existia antes — não porque fosse proibido, mas porque fazer isso chamada por chamada contra um endpoint de tempo real nunca teria sido rápido nem barato o suficiente para alguém tentar."
+          },
+          "id": "b5_4",
+          "position": 4
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho do dado, ponta a ponta: o caso assíncrono"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O caminho assíncrono é o mais fácil de entender errado, porque parece \"tempo real, só que mais devagar\". Não é: ele existe porque o Sistema de Pedidos NÃO PODE ficar esperando, e o fluxo abaixo mostra exatamente onde essa espera deixa de existir."
+              }
+            ]
+          },
+          "id": "b6_0",
+          "position": 0
+        },
+        {
+          "type": "flow_diagram",
+          "data": {
+            "title": "De um evento de mudança de status a uma pontuação pronta, sem bloquear o webhook",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "Sistema de Pedidos publica na fila de reavaliação e segue em frente",
+                "desc": "O evento de mudança de status (por exemplo, pagamento aprovado) grava uma mensagem na fila e o próprio fluxo de pagamento continua sem esperar nada do modelo."
+              },
+              {
+                "label": "A função consumidora lê a fila em lotes pequenos",
+                "desc": "Sem manter estado próprio — cada mensagem vira um payload gravado no S3 de entrada do endpoint assíncrono."
+              },
+              {
+                "label": "InvokeEndpointAsync recebe o InputLocation e devolve um OutputLocation imediatamente",
+                "desc": "A chamada retorna na hora, mas o retorno não é a pontuação — é ONDE a pontuação vai aparecer quando estiver pronta."
+              },
+              {
+                "label": "O endpoint assíncrono escala de zero e processa quando há capacidade",
+                "desc": "Diferente do tempo real, ele não precisa estar sempre provisionado; escala com a profundidade da fila."
+              },
+              {
+                "label": "O resultado é gravado no S3 de saída",
+                "desc": "No mesmo prefixo que o OutputLocation apontou — quem monitora sabe exatamente onde procurar."
+              },
+              {
+                "label": "SNS notifica sucesso ou falha, separadamente",
+                "desc": "Duas filas de notificação distintas — uma para conclusão normal, outra para erro — para que uma falha silenciosa não se disfarce de sucesso."
+              },
+              {
+                "label": "O Sistema de Pedidos é avisado quando a pontuação está pronta",
+                "desc": "Sem ter ficado bloqueado em nenhum momento entre o evento original e essa notificação."
+              }
+            ]
+          },
+          "id": "b6_1",
+          "position": 1
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Payload que a funcao consumidora grava no S3 de entrada, antes de chamar invoke_endpoint_async. O endpoint le esse arquivo, nao um corpo inline."
+              }
+            ]
+          },
+          "position": 2
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "json",
+            "code": "{\n  \"pedido_id\": \"PED-88213\",\n  \"loja_id\": \"L07\",\n  \"valor_total\": 412.90,\n  \"forma_pagamento\": \"pix\",\n  \"status_anterior\": \"aguardando_pagamento\",\n  \"status_novo\": \"pagamento_aprovado\",\n  \"historico_pedidos_cliente\": 4,\n  \"tempo_desde_criacao_min\": 18\n}\n",
+            "filename": "payload-reavaliacao.json"
+          },
+          "id": "b6_2",
+          "position": 3
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "A latência maior do modo assíncrono é o preço certo, não um defeito",
+            "content": "p99 de alguns segundos no caminho assíncrono pareceria inaceitável se comparado ao tempo real — e seria, para o painel de atendimento. Para o Sistema de Pedidos, o requisito nunca foi \"responda rápido\"; foi \"não me obrigue a esperar\". Os dois requisitos parecem parecidos e não são, e é essa diferença que decide o modo."
+          },
+          "id": "b6_3",
+          "position": 4
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "type": "decision_box",
+          "data": {
+            "scenario": "Um modelo de previsão de cancelamento já treinado (L73), servindo três chamadores com padrões de tráfego opostos — mais um caso de pontuação em lote que hoje não existe — sobre um único endpoint de GPU sempre ligado.",
+            "winner": "Quatro modos coexistindo: tempo real síncrono só para o painel de atendimento (bloqueante e raro), serverless sobre uma versão do modelo em CPU para o script de análise (esporádico e tolerante), assíncrono com fila para o Sistema de Pedidos (não pode bloquear), Batch Transform para o lote noturno da equipe de retenção (throughput, sem endpoint permanente)",
+            "why": "Cada modo resolve o requisito de UM consumidor sem forçar os outros três a herdar o custo ou a latência dele. O tempo real continua existindo — só que dimensionado para o padrão real de quem precisa dele, não para os quatro casos ao mesmo tempo. Nenhum modo novo foi inventado: os quatro já existem nativamente no SageMaker, e a decisão foi rotear, não construir.",
+            "alternatives": [
+              {
+                "name": "Manter um único endpoint de tempo real, só trocando o tipo de instância",
+                "downside": "resolve custo de instância, não resolve a mistura de padrões — o Sistema de Pedidos continua bloqueado, e pontuar 3.400 pedidos de uma vez continua impraticável chamada por chamada"
+              },
+              {
+                "name": "Migrar tudo para Batch Transform, inclusive o caso do vendedor",
+                "downside": "o vendedor esperaria a próxima janela do job — minutos a horas — para ver uma pontuação que precisa aparecer na hora em que ele abre o pedido"
+              },
+              {
+                "name": "Construir fila e cache próprios na frente de um único endpoint, sem usar os modos nativos",
+                "downside": "reimplementa, com mais código para manter, o que Async Inference e Batch Transform já fazem nativamente: fila gerenciada, auto scaling a zero, notificação de conclusão"
+              },
+              {
+                "name": "Escalar o endpoint de tempo real horizontalmente para absorver tudo, incluindo o lote",
+                "downside": "3.400 chamadas sequenciais contra um endpoint de tempo real, mesmo com várias instâncias, ainda paga por chamada individual e não usa o paralelismo em lote que o Batch Transform faz nativamente"
+              }
+            ]
+          },
+          "id": "b7_0",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativa considerada",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Onde a chamada do vendedor vai",
+                "tempo real síncrono, com janela de disponibilidade reduzida",
+                "manter ligado 24h como hoje",
+                "reduz de 720 para cerca de 270 horas-instância pagas por mês, sem mudar a latência que o vendedor vê",
+                "exige configurar corretamente a janela de scale-to-zero, e ajustá-la se o horário real de uso mudar"
+              ],
+              [
+                "Onde o webhook de pagamento vai",
+                "assíncrono, com fila e notificação",
+                "manter síncrono contra o endpoint de tempo real",
+                "o webhook para de ficar bloqueado esperando o modelo — a latência da pontuação deixa de ser latência do pagamento",
+                "complexidade operacional: mais duas peças (fila e função consumidora) para monitorar"
+              ],
+              [
+                "Onde o script de análise vai",
+                "serverless, sobre uma versão do modelo em CPU",
+                "manter no mesmo endpoint de GPU",
+                "zero hora paga ociosa para menos de 1 chamada por dia",
+                "uma segunda versão do modelo para manter versionada, além da de GPU"
+              ],
+              [
+                "Onde o lote noturno vai",
+                "Batch Transform, disparado por agendador",
+                "chamar o endpoint de tempo real 3.400 vezes em sequência",
+                "processa em paralelo entre instâncias e termina sozinho — sem endpoint ligado depois do job",
+                "a pontuação só fica disponível na janela do job, nunca em tempo real"
+              ]
+            ]
+          },
+          "id": "b7_1",
+          "position": 1
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este módulo cria, e que ele não paga",
+            "content": "A escolha de modo por consumidor é estática — decidida uma vez, na tabela de requisitos. Se o padrão de tráfego de um consumidor mudar (o script de análise de repente vira uma rotina horária, por exemplo), ninguém detecta isso automaticamente: alguém precisa notar e reconfigurar. Decidir o modo dinamicamente, a partir do tráfego observado, é otimização fora do escopo deste laboratório — e só valeria a pena numa escala muito maior que a da Cadência hoje."
+          },
+          "id": "b7_2",
+          "position": 2
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: tempo real síncrono, para quem não pode esperar"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "A peça nova em relação ao endpoint \"sempre ligado\" de antes não é o tipo de instância — é a janela de disponibilidade. `min_instance_count = 0` fora do horário configurado é o que transforma 720 horas pagas por mês em cerca de 270."
+              }
+            ]
+          },
+          "id": "b8_0",
+          "position": 0
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "hcl",
+            "code": "# endpoint-tempo-real.tf -- endpoint sincrono com janela reduzida\n\nresource \"aws_sagemaker_endpoint_configuration\" \"tempo_real\" {\n  name = \"${var.projeto}-cancelamento-tempo-real\"\n\n  production_variants {\n    variant_name           = \"principal\"\n    model_name             = aws_sagemaker_model.cancelamento_gpu.name\n    instance_type          = \"ml.g4dn.xlarge\"\n    initial_instance_count = 1\n\n    # Recurso relativamente recente do provider AWS -- confira suporte na sua\n    # versao antes de aplicar. Fora da janela, o SageMaker escala para zero\n    # instancias; a primeira chamada apos o periodo ocioso paga cold start.\n    managed_instance_scaling {\n      status                  = \"ENABLED\"\n      min_instance_count      = 0\n      max_instance_count      = 2\n    }\n  }\n\n  tags = { Projeto = var.projeto, Time = \"dados\", Modo = \"tempo-real\" }\n}\n\nresource \"aws_sagemaker_endpoint\" \"tempo_real\" {\n  name                 = \"${var.projeto}-cancelamento-tempo-real\"\n  endpoint_config_name = aws_sagemaker_endpoint_configuration.tempo_real.name\n}\n\n# EventBridge Scheduler acorda o endpoint 15 min antes do horario comercial,\n# fazendo uma chamada de aquecimento -- paga o cold start ANTES do vendedor\n# precisar da resposta, nao durante.\nresource \"aws_scheduler_schedule\" \"aquecer_tempo_real\" {\n  name       = \"${var.projeto}-aquecer-endpoint-tempo-real\"\n  group_name = \"default\"\n\n  flexible_time_window { mode = \"OFF\" }\n  schedule_expression = \"cron(45 8 ? * MON-FRI *)\"\n\n  target {\n    arn      = aws_lambda_function.aquecer_endpoint.arn\n    role_arn = aws_iam_role.scheduler_invoca_lambda.arn\n  }\n}\n",
+            "filename": "endpoint-tempo-real.tf"
+          },
+          "id": "b8_1",
+          "position": 1
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "csharp",
+            "code": "// ClienteTempoReal.cs -- chamada sincrona, com timeout curto e SEM retry.\n// Retry aqui estouraria o orcamento de latencia do vendedor; o L79 trata\n// disso com fallback -- este modulo so mede o caminho feliz.\n\nusing Amazon.SageMakerRuntime;\nusing Amazon.SageMakerRuntime.Model;\n\nnamespace Cadencia.Cancelamento;\n\npublic class ClienteTempoReal\n{\n    private readonly AmazonSageMakerRuntimeClient _cliente = new(new AmazonSageMakerRuntimeConfig\n    {\n        Timeout = TimeSpan.FromMilliseconds(300), // orcamento do vendedor, nao negociavel aqui\n    });\n\n    public async Task<double> PontuarAsync(string payloadJson)\n    {\n        var resposta = await _cliente.InvokeEndpointAsync(new InvokeEndpointRequest\n        {\n            EndpointName = \"cadencia-cancelamento-tempo-real\",\n            ContentType  = \"application/json\",\n            Body         = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(payloadJson)),\n        });\n\n        using var leitor = new StreamReader(resposta.Body);\n        var corpo = await leitor.ReadToEndAsync();\n        return System.Text.Json.JsonDocument.Parse(corpo).RootElement.GetProperty(\"score\").GetDouble();\n    }\n}\n",
+            "filename": "ClienteTempoReal.cs"
+          },
+          "id": "b8_2",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "Janela reduzida corta horas pagas, mas não corta cold start fora dela",
+            "content": "Se um vendedor abrir um pedido às 8h40, cinco minutos antes da chamada de aquecimento programada, ele paga o cold start na cara. A janela de scale-to-zero precisa ter folga sobre o horário real de uso, não sobre o horário comercial nominal — é um dos três diagnósticos da seção de troubleshooting deste módulo."
+          },
+          "id": "b8_3",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: serverless, para quem não paga hora parada"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "A restrição que mais gente descobre tarde: Serverless Inference não aceita instância com GPU. Servir o mesmo modelo do endpoint de tempo real exige uma segunda versão, compilada para CPU — não é o mesmo artefato do L73 rodando num container diferente."
+              }
+            ]
+          },
+          "id": "b9_0",
+          "position": 0
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "hcl",
+            "code": "# endpoint-serverless.tf -- sem instancia dedicada, so memoria e concorrencia\n\nresource \"aws_sagemaker_model\" \"cancelamento_cpu\" {\n  name               = \"${var.projeto}-cancelamento-cpu\"\n  execution_role_arn = aws_iam_role.sagemaker_execucao.arn\n\n  primary_container {\n    image          = var.imagem_inferencia_cpu # container CPU-only, ONNX Runtime\n    model_data_url = var.artefato_modelo_cpu_s3 # versao COMPILADA para CPU, nao a de GPU do L73\n  }\n\n  tags = { Projeto = var.projeto, Time = \"dados\", Modo = \"serverless\" }\n}\n\nresource \"aws_sagemaker_endpoint_configuration\" \"serverless\" {\n  name = \"${var.projeto}-cancelamento-serverless\"\n\n  production_variants {\n    variant_name = \"principal\"\n    model_name   = aws_sagemaker_model.cancelamento_cpu.name\n\n    serverless_config {\n      memory_size_in_mb = 3072 # so aceita valores fixos: 1024, 2048, 3072, 4096, 5120, 6144\n      max_concurrency   = 5     # confira o teto da sua conta em Service Quotas antes de subir isso\n    }\n  }\n}\n\nresource \"aws_sagemaker_endpoint\" \"serverless\" {\n  name                 = \"${var.projeto}-cancelamento-serverless\"\n  endpoint_config_name = aws_sagemaker_endpoint_configuration.serverless.name\n}\n",
+            "filename": "endpoint-serverless.tf"
+          },
+          "id": "b9_1",
+          "position": 1
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "python",
+            "code": "# medir_cold_start.py -- chama duas vezes seguidas e compara: a primeira\n# paga o container subindo, a segunda encontra tudo quente.\n\nimport time\nimport json\nimport boto3\n\nruntime = boto3.client(\"sagemaker-runtime\")\nENDPOINT = \"cadencia-cancelamento-serverless\"\nPAYLOAD = json.dumps({\"pedido_id\": \"PED-TESTE\", \"valor_total\": 199.90}).encode()\n\ndef invocar():\n    inicio = time.perf_counter()\n    runtime.invoke_endpoint(EndpointName=ENDPOINT, ContentType=\"application/json\", Body=PAYLOAD)\n    return (time.perf_counter() - inicio) * 1000\n\n# Espera ficar ocioso por tempo suficiente para o container ser reciclado\n# antes de rodar este script -- senao as duas chamadas medem a mesma coisa.\nfria = invocar()\ntime.sleep(1)\nquente = invocar()\nprint(f\"chamada fria (cold start): {fria:.0f} ms\")\nprint(f\"chamada quente (container ja de pe): {quente:.0f} ms\")\n",
+            "filename": "medir_cold_start.py"
+          },
+          "id": "b9_2",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "danger",
+            "title": "Prometer o mesmo SLA do endpoint de tempo real no serverless é prometer o que o modo não cumpre",
+            "content": "p99 do serverless inclui cold start, que pode passar de 2 segundos dependendo do tamanho do container. Se algum consumidor futuro migrar para serverless esperando a mesma latência do tempo real, ele vai quebrar na primeira janela de ociosidade — e o defeito não vai parecer bug, vai parecer \"às vezes trava\"."
+          },
+          "id": "b9_3",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: assíncrono, para quem não pode travar"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "A peça que faz o modo assíncrono valer a pena não é o endpoint — é a fila na frente dele. Sem ela, o Sistema de Pedidos ainda chamaria o SageMaker diretamente e ficaria esperando o OutputLocation aparecer, só que de um jeito mais complicado que síncrono."
+              }
+            ]
+          },
+          "id": "b10_0",
+          "position": 0
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "hcl",
+            "code": "# endpoint-assincrono.tf -- fila, endpoint assincrono, e as duas notificacoes\n\nresource \"aws_sqs_queue\" \"reavaliacao\" {\n  name                       = \"${var.projeto}-reavaliacao-pedidos\"\n  visibility_timeout_seconds = 60\n  kms_master_key_id          = aws_kms_key.lake.arn\n}\n\nresource \"aws_sns_topic\" \"async_sucesso\" { name = \"${var.projeto}-cancelamento-async-sucesso\" }\nresource \"aws_sns_topic\" \"async_erro\"    { name = \"${var.projeto}-cancelamento-async-erro\" }\n\nresource \"aws_sagemaker_endpoint_configuration\" \"assincrono\" {\n  name = \"${var.projeto}-cancelamento-assincrono\"\n\n  production_variants {\n    variant_name           = \"principal\"\n    model_name             = aws_sagemaker_model.cancelamento_gpu.name # mesma versao de GPU do tempo real\n    instance_type          = \"ml.g4dn.xlarge\"\n    initial_instance_count = 1\n  }\n\n  async_inference_config {\n    output_config {\n      s3_output_path        = \"s3://${var.bucket_lake}/saida-assincrona/\"\n      notification_config {\n        success_topic = aws_sns_topic.async_sucesso.arn\n        error_topic   = aws_sns_topic.async_erro.arn\n      }\n    }\n    client_config {\n      max_concurrent_invocations_per_instance = 4\n    }\n  }\n}\n\nresource \"aws_sagemaker_endpoint\" \"assincrono\" {\n  name                 = \"${var.projeto}-cancelamento-assincrono\"\n  endpoint_config_name = aws_sagemaker_endpoint_configuration.assincrono.name\n}\n",
+            "filename": "endpoint-assincrono.tf"
+          },
+          "id": "b10_1",
+          "position": 1
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "python",
+            "code": "# lambda_consumidor_fila.py -- le a fila, grava o payload no S3 de entrada,\n# chama invoke_endpoint_async, e NAO espera o resultado.\n\nimport json\nimport uuid\nimport boto3\n\ns3 = boto3.client(\"s3\")\nruntime = boto3.client(\"sagemaker-runtime\")\nBUCKET = \"cadencia-lake\"\nENDPOINT = \"cadencia-cancelamento-assincrono\"\n\ndef handler(event, context):\n    for registro in event[\"Records\"]:\n        payload = json.loads(registro[\"body\"])\n        chave = f\"entrada-assincrona/{uuid.uuid4()}.json\"\n        s3.put_object(Bucket=BUCKET, Key=chave, Body=json.dumps(payload).encode())\n\n        # Retorna na hora -- o retorno NAO e a pontuacao, e onde ela vai aparecer.\n        resposta = runtime.invoke_endpoint_async(\n            EndpointName=ENDPOINT,\n            InputLocation=f\"s3://{BUCKET}/{chave}\",\n            ContentType=\"application/json\",\n        )\n        print(f\"pedido={payload['pedido_id']} output={resposta['OutputLocation']}\")\n",
+            "filename": "lambda_consumidor_fila.py"
+          },
+          "id": "b10_2",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "danger",
+            "title": "Esquecer o tópico de erro deixa item travado em silêncio",
+            "content": "Se `error_topic` não estiver configurado, uma falha de inferência assíncrona simplesmente não notifica ninguém — o item não aparece no S3 de saída, e sem o tópico de erro não existe sinal de que algo deu errado. O Sistema de Pedidos ficaria esperando indefinidamente uma notificação que nunca chega."
+          },
+          "id": "b10_3",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: lote noturno, para pontuar tudo de uma vez"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Batch Transform não é um recurso que fica de pé — é uma execução que o Terraform não administra como infraestrutura permanente. O que fica de pé é o agendador e a função que dispara o job."
+              }
+            ]
+          },
+          "id": "b11_0",
+          "position": 0
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "hcl",
+            "code": "# lote-noturno.tf -- agenda o disparo; o job em si nao e um recurso do Terraform\n\nresource \"aws_scheduler_schedule\" \"lote_noturno\" {\n  name       = \"${var.projeto}-lote-cancelamento-noturno\"\n  group_name = \"default\"\n\n  flexible_time_window { mode = \"OFF\" }\n  schedule_expression = \"cron(0 2 * * ? *)\" # 2h, fora do horario de trafego interativo\n\n  target {\n    arn      = aws_lambda_function.disparar_lote.arn\n    role_arn = aws_iam_role.scheduler_invoca_lambda.arn\n  }\n}\n\ndata \"aws_iam_policy_document\" \"lambda_dispara_transform_job\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"sagemaker:CreateTransformJob\", \"sagemaker:DescribeTransformJob\"]\n    resources = [\"arn:aws:sagemaker:${var.regiao}:${var.conta_id}:transform-job/${var.projeto}-*\"]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"lambda_dispara_transform_job\" {\n  role   = aws_iam_role.lambda_disparar_lote.id\n  policy = data.aws_iam_policy_document.lambda_dispara_transform_job.json\n}\n",
+            "filename": "lote-noturno.tf"
+          },
+          "id": "b11_1",
+          "position": 1
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "python",
+            "code": "# lambda_disparar_lote.py -- cria o transform job; ele processa e termina\n# sozinho, sem deixar endpoint ligado depois.\n\nimport boto3\nfrom datetime import datetime, timezone\n\nsagemaker = boto3.client(\"sagemaker\")\n\ndef handler(event, context):\n    nome_job = f\"cadencia-lote-cancelamento-{datetime.now(timezone.utc):%Y%m%d}\"\n\n    sagemaker.create_transform_job(\n        TransformJobName=nome_job,\n        ModelName=\"cadencia-cancelamento-gpu\",\n        TransformInput={\n            \"DataSource\": {\"S3DataSource\": {\n                \"S3DataType\": \"S3Prefix\",\n                \"S3Uri\": \"s3://cadencia-lake/lote-pedidos/entrada/\",\n            }},\n            \"ContentType\": \"application/json\",\n            \"SplitType\": \"Line\",\n        },\n        TransformOutput={\n            \"S3OutputPath\": \"s3://cadencia-lake/lote-pedidos/pontuacao/\",\n        },\n        TransformResources={\n            \"InstanceType\": \"ml.g4dn.xlarge\",\n            \"InstanceCount\": 2, # paraleliza os 3.400 pedidos entre 2 instancias\n        },\n    )\n    print(f\"job {nome_job} disparado\")\n",
+            "filename": "lambda_disparar_lote.py"
+          },
+          "id": "b11_2",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "O job não deixa endpoint ligado, mas cada instância cobra pelo tempo real de execução",
+            "content": "SageMaker Training/Processing/Batch Transform cobra por segundo de instância, não por hora cheia arredondada — diferente do modelo antigo de EC2 On-Demand pré-2017. Duas instâncias por 7 minutos somam 14 minutos-instância cobrados, não duas horas. A duração curta é o que mantém o custo baixo; não existe piso de uma hora escondido aqui."
+          },
+          "id": "b11_3",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e medir os quatro modos lado a lado"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Esta é a prova que o entregável deste laboratório promete: os quatro modos medidos com o mesmo critério — custo em horas-instância pagas por mês e latência p50/p99 — para que a escolha de cada consumidor seja defensável com número, não com preferência."
+              }
+            ]
+          },
+          "id": "b12_0",
+          "position": 0
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "bash",
+            "code": "# medir_quatro_modos.sh -- dispara N chamadas contra cada endpoint e registra\n# os percentis de latencia; horas-instancia sao lidas do CloudWatch/Cost Explorer.\n\nfor MODO in tempo-real serverless assincrono; do\n  echo \"--- medindo $MODO ---\"\n  for i in $(seq 1 50); do\n    inicio=$(date +%s%N)\n    aws sagemaker-runtime invoke-endpoint \\\n      --endpoint-name \"cadencia-cancelamento-${MODO}\" \\\n      --content-type application/json \\\n      --body '{\"pedido_id\":\"PED-BENCH\",\"valor_total\":250.00}' \\\n      /tmp/saida-${MODO}-${i}.json > /dev/null\n    fim=$(date +%s%N)\n    echo $(( (fim - inicio) / 1000000 )) >> /tmp/latencias-${MODO}.txt\n  done\n  echo \"p50: $(sort -n /tmp/latencias-${MODO}.txt | awk 'NR==25')ms\"\n  echo \"p99: $(sort -n /tmp/latencias-${MODO}.txt | awk 'NR==50')ms\"\ndone\n\n# Horas-instancia pagas no mes: leia no Cost Explorer, filtrado por\n# ResourceId do endpoint/job -- nao estime, confira o numero real da conta.\naws ce get-cost-and-usage --time-period Start=2026-07-01,End=2026-08-01 \\\n  --granularity MONTHLY --metrics UsageQuantity \\\n  --filter '{\"Dimensions\":{\"Key\":\"SERVICE\",\"Values\":[\"Amazon SageMaker\"]}}'\n",
+            "filename": "medir_quatro_modos.sh"
+          },
+          "id": "b12_1",
+          "position": 1
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Modo",
+              "Como cobra",
+              "Horas-instância pagas/mês (cenário Cadência)",
+              "Latência p50",
+              "Latência p99",
+              "Quando compensa"
+            ],
+            "rows": [
+              [
+                "Tempo real síncrono",
+                "por hora de instância provisionada, esteja ou não respondendo",
+                "≈ 270 h/mês (janela de 9h às 18h, scale-to-zero fora dela)",
+                "45 ms",
+                "118 ms",
+                "chamada rara mas bloqueante, que não pode pagar cold start"
+              ],
+              [
+                "Serverless",
+                "por duração de invocação × memória alocada — sem hora parada",
+                "≈ 0 h-instância equivalentes/mês (menos de 1 chamada/dia)",
+                "210 ms (container já de pé)",
+                "2.850 ms (com cold start)",
+                "chamada esporádica, tolerante a alguns segundos de espera ocasional"
+              ],
+              [
+                "Assíncrono",
+                "por hora de instância enquanto a fila tem item a processar; escala a zero quando vazia",
+                "≈ 15 h/mês (155 chamadas/dia distribuídas ao longo do dia)",
+                "950 ms (fila + processamento)",
+                "3.400 ms (quando escala a partir de zero)",
+                "chamada que não pode bloquear quem chamou, payload maior vindo do S3"
+              ],
+              [
+                "Batch Transform",
+                "só durante a janela do job, sem endpoint permanente",
+                "≈ 7 h/mês (2 instâncias × 7 min × 30 noites, cobrado por segundo)",
+                "não se aplica por chamada — mede-se throughput",
+                "3.400 pedidos em 7 min ≈ 8,1 pedidos/segundo",
+                "pontuar um volume grande de uma vez, sem ninguém esperando resposta individual"
+              ]
+            ]
+          },
+          "id": "b12_2",
+          "position": 2
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Somando os quatro: cerca de 292 horas-instância pagas por mês contra as 720 do endpoint único sempre ligado — uma redução de 59%. E isso sem contar a capacidade nova: pontuar 3.400 pedidos por noite não existia antes deste desenho."
+              }
+            ]
+          },
+          "id": "b12_3",
+          "position": 3
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "success",
+            "title": "A utilização real da GPU sai de 0,04% para uma decisão explícita por modo",
+            "content": "Antes, a pergunta \"quanto da GPU ligada é realmente usado\" tinha uma resposta constrangedora: 0,04%, medida na seção da arquitetura mínima. Depois, cada modo tem sua própria janela de provisionamento — o tempo real só fica ligado quando alguém pode chamá-lo, o serverless não paga hora nenhuma, o assíncrono escala com a fila, e o lote paga só os 7 minutos que realmente processa."
+          },
+          "id": "b12_4",
+          "position": 4
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "As três parecem, à primeira vista, \"o modelo ficou lento\". O que separa uma da outra é ONDE a latência nasceu: no modo errado, na janela mal calibrada, ou na suposição de que scale-to-zero resolve tudo."
+              }
+            ]
+          },
+          "id": "b13_0",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Vendedor vê a tela travar ao abrir um pedido",
+                "abra um pedido 5 minutos antes do horário de aquecimento programado do endpoint de tempo real",
+                "primeira chamada do dia demora muito mais que os 45 ms medidos",
+                "métrica de latência do endpoint de tempo real, primeira invocação do dia, comparada ao horário da chamada de aquecimento",
+                "ajustar a janela de scale-to-zero com folga sobre o horário real de uso, não sobre o horário comercial nominal"
+              ],
+              [
+                "p99 do serverless muito acima do medido",
+                "espere um período de ociosidade maior que o normal antes de chamar de novo",
+                "algumas chamadas demoram segundos, a maioria continua rápida",
+                "contagem de invocações por minuto no CloudWatch, comparando com o intervalo entre chamadas",
+                "aumentar a frequência de chamadas de aquecimento, ou aceitar o cold start ocasional como parte do modo"
+              ],
+              [
+                "Mensagens acumulando na fila do assíncrono sem processar",
+                "derrube a capacidade do endpoint assíncrono para 0 instâncias manualmente e gere tráfego",
+                "ApproximateBacklogSizePerInstance sobe e não desce",
+                "métrica de profundidade de fila e a política de auto scaling do endpoint assíncrono",
+                "revisar a política de auto scaling; confirmar que o modelo carrega sem erro na instância"
+              ]
+            ]
+          },
+          "id": "b13_1",
+          "position": 1
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve as três",
+            "content": "Antes de mexer em qualquer configuração, pergunte: a latência alta é o COLD START esperado do modo, ou é o modo errado para esse padrão de tráfego? A primeira exige calibrar janela ou concorrência; a segunda exige revisitar a tabela de requisitos e mover o consumidor para outro modo."
+          },
+          "id": "b13_2",
+          "position": 2
+        }
+      ]
+    },
+    {
+      "type": "quiz",
+      "data": {
+        "question": "O endpoint da Cadência (ml.g4dn.xlarge) fica ligado 24 horas por dia e recebe as 200 chamadas diárias somando três consumidores. Cada chamada usa cerca de 180 ms de GPU. Qual é o problema estrutural que os quatro modos de servir resolvem — e que simplesmente desligar o endpoint fora do horário comercial NÃO resolveria sozinho?",
+        "options": [
+          "O modelo precisa ser retreinado com mais frequência, porque o baixo volume de chamadas por dia indica que ele está desatualizado",
+          "A instância ml.g4dn.xlarge não tem capacidade de GPU suficiente para atender 200 chamadas por dia, e o problema é de dimensionamento, não de modo de servir",
+          "O endpoint atende três padrões de tráfego com necessidades opostas — chamada bloqueante e rara, chamada bloqueante e frequente, chamada tolerante a espera — e nenhum horário fixo de desligamento serve aos três sem também derrubar a disponibilidade de quem precisa de resposta imediata fora dele",
+          "O SageMaker cobra por chamada realizada nesse tipo de endpoint, então reduzir o horário de disponibilidade não muda o custo, já que ele é proporcional às 200 chamadas, não às horas ligadas"
+        ],
+        "correctIndex": 2,
+        "explanation": "O defeito não é falta de capacidade nem preço por chamada — é a ausência de diferenciação entre três padrões de tráfego opostos comprimidos na mesma decisão de infraestrutura. Um horário fixo de desligamento resolveria o consumidor que tem janela previsível (o painel de atendimento), mas ignoraria o webhook de pagamento, que precisa de resposta a qualquer hora do dia sem bloquear o próprio evento, e o script de análise, raro demais para justificar hora ligada mesmo dentro do expediente. A segunda alternativa inverte causa e efeito: baixo volume de chamadas não indica modelo desatualizado, é justamente o padrão que o modo errado de servir não sabe aproveitar. A terceira erra o diagnóstico: 200 chamadas de 180 ms cada são uma fração mínima da capacidade de qualquer instância moderna — o problema é 24 horas ligadas para 40 segundos de trabalho real por dia, não falta de capacidade. A quarta descreve mal o modelo de cobrança de endpoints de tempo real do SageMaker: eles cobram por HORA DE INSTÂNCIA PROVISIONADA, esteja ela respondendo ou não — é exatamente por isso que reduzir a janela de disponibilidade muda o custo, ao contrário do que a alternativa afirma."
+      },
+      "id": "b26_0",
+      "position": 14
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: quatro caminhos, quatro superfícies"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Cada modo novo abre uma superfície que o endpoint único não tinha: fila, função Lambda, bucket de entrada e saída, job com sua própria role. Nenhuma delas precisa de acesso amplo."
+              }
+            ]
+          },
+          "id": "b14_0",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Payload do webhook de pedido (com dado de cliente) passa por fila e S3 do modo assíncrono",
+                "média",
+                "médio",
+                "cifrar a fila SQS e o bucket S3 com KMS; IAM restrito ao prefixo usado por esse fluxo",
+                "CloudTrail em GetObject fora do prefixo esperado",
+                "revisar a policy e apurar o que foi acessado fora do escopo"
+              ],
+              [
+                "Role da função consumidora com permissão de invocar QUALQUER endpoint do SageMaker",
+                "baixa",
+                "médio",
+                "Resource específico do endpoint no IAM, nunca sagemaker:InvokeEndpointAsync com Resource \"*\"",
+                "CloudTrail em InvokeEndpointAsync para endpoints fora da lista esperada",
+                "restringir a policy ao ARN exato do endpoint assíncrono"
+              ],
+              [
+                "Job de Batch Transform lendo o bucket de pedidos sem escopo de prefixo",
+                "baixa",
+                "alto",
+                "role do job com Resource limitado aos prefixos de entrada e saída deste job específico",
+                "CloudTrail em GetObject/PutObject fora dos dois prefixos",
+                "corrigir a policy e confirmar que nenhum outro prefixo foi tocado"
+              ],
+              [
+                "Endpoint serverless sem teto de concorrência, sujeito a custo inesperado de pico",
+                "média",
+                "médio",
+                "MaxConcurrency configurado com folga, mas nunca ilimitado; alarme de invocações acima do esperado",
+                "contagem de invocações por minuto no CloudWatch",
+                "investigar a origem do pico; ajustar MaxConcurrency conforme o padrão real"
+              ]
+            ]
+          },
+          "id": "b14_1",
+          "position": 1
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "hcl",
+            "code": "# iam-minimo-consumidor.tf -- a role da funcao consumidora, sem \"*\"\n\ndata \"aws_iam_policy_document\" \"lambda_invoca_async\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sagemaker:InvokeEndpointAsync\"]\n    resources = [\n      \"arn:aws:sagemaker:${var.regiao}:${var.conta_id}:endpoint/${var.projeto}-cancelamento-assincrono\",\n    ]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"s3:PutObject\"]\n    resources = [\"arn:aws:s3:::${var.bucket_lake}/entrada-assincrona/*\"]\n  }\n}\n",
+            "filename": "iam-minimo-consumidor.tf"
+          },
+          "id": "b14_2",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "danger",
+            "title": "Role de job de lote com escopo de bucket inteiro é a superfície mais fácil de esquecer",
+            "content": "O job de Batch Transform roda com uma role própria — diferente da role do endpoint de tempo real — e é comum copiar uma policy existente \"para simplificar\" e dar acesso ao bucket inteiro. Isso permite ao job ler e escrever em qualquer prefixo do lake, não só nos dois que ele realmente usa."
+          },
+          "id": "b14_3",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Um painel de serving tem uma função estreita: dizer se cada modo está entregando o que o consumidor dele precisa, e quanto isso está custando. Métrica que não ajuda essas duas perguntas pertence a outro painel."
+              }
+            ]
+          },
+          "id": "b15_0",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "O tempo real está dentro do orçamento de latência do vendedor?",
+                "percentil de latência do endpoint de tempo real no CloudWatch",
+                "acima do limiar indica cold start fora da janela esperada, não degradação do modelo",
+                "p99 acima de 300 ms"
+              ],
+              [
+                "O serverless está tendo cold start com mais frequência que o esperado?",
+                "contagem de invocação vs. intervalo entre chamadas",
+                "intervalo maior que o período de reciclagem do container aumenta a chance de cold start",
+                "mais de 20% das chamadas com latência acima de 1.500 ms"
+              ],
+              [
+                "A fila do assíncrono está acumulando?",
+                "ApproximateBacklogSizePerInstance",
+                "acúmulo sustentado indica capacidade insuficiente, não pico pontual",
+                "crescendo por mais de 15 minutos seguidos"
+              ],
+              [
+                "O job de Batch Transform termina antes do horário comercial?",
+                "duração do job comparada ao horário de início configurado",
+                "job que ainda roda às 8h atrasa o painel de retenção do dia",
+                "acima de 30 minutos de duração"
+              ],
+              [
+                "Quantas horas-instância cada modo pagou este mês?",
+                "Cost Explorer filtrado por endpoint/job",
+                "é a métrica que prova, ou desmente, a decisão deste laboratório",
+                "acima de 320 h/mês somando os quatro modos (10% sobre o medido)"
+              ]
+            ]
+          },
+          "id": "b15_1",
+          "position": 1
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana neste desenho",
+            "content": "Latência baixa em TODOS os modos ao mesmo tempo não significa que a escolha está certa — pode significar que o tempo real está ligado além da janela necessária, \"resolvendo\" latência com hora paga em excesso. O painel certo cruza latência COM horas pagas, nunca olha uma sem a outra."
+          },
+          "id": "b15_2",
+          "position": 2
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 200 chamadas, 2.000 chamadas, e o que passa a doer"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "200 chamadas/dia + 3.400/noite (Cadência hoje)",
+                "os quatro modos absorvem o padrão atual sem esforço",
+                "nada",
+                "nada"
+              ],
+              [
+                "2.000 chamadas/dia (10×)",
+                "tempo real e assíncrono escalam automaticamente; serverless pode esbarrar no teto de MaxConcurrency",
+                "throttling no modo serverless se o limite não acompanhar o crescimento",
+                "aumentar MaxConcurrency, ou mover parte do tráfego esporádico para o modo assíncrono"
+              ],
+              [
+                "34.000 pedidos no lote noturno (10×)",
+                "o job de Batch Transform demora mais, precisa de mais instâncias em paralelo",
+                "job pode não terminar antes do horário comercial",
+                "aumentar InstanceCount do job e medir a nova duração antes de confiar nela"
+              ],
+              [
+                "Pico simultâneo nos quatro modos (ex.: Black Friday da construção civil)",
+                "cada modo compete pela mesma cota de conta de instâncias ml.g4dn simultâneas",
+                "a cota de instância GPU da conta vira o gargalo real, não o desenho",
+                "Service Quotas — solicitar aumento de cota ANTES do pico, não durante"
+              ],
+              [
+                "Falha de AZ",
+                "endpoints do SageMaker distribuem instâncias entre AZ dentro da região por padrão",
+                "nada específico deste módulo, mas confirme contagem mínima de instância por variant",
+                "manter InitialInstanceCount ≥ 2 nos modos que não toleram indisponibilidade parcial"
+              ],
+              [
+                "Consumidor novo aparece (ex.: app do lojista parceiro também quer prever cancelamento)",
+                "mais um perfil de tráfego para classificar entre os quatro modos",
+                "a decisão de modo vira recorrente, não única",
+                "reaplicar a tabela de requisitos deste módulo como checklist para o próximo consumidor"
+              ]
+            ]
+          },
+          "id": "b16_0",
+          "position": 0
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "O gargalo que só aparece com muito tráfego simultâneo",
+            "content": "Os quatro modos, isolados, escalam bem. O que não escala automaticamente é a cota de instâncias GPU simultâneas da conta — todos os modos que usam ml.g4dn.xlarge (tempo real, assíncrono, lote) competem pela MESMA cota regional. Um pico nos três ao mesmo tempo pode esbarrar num teto que nenhum dos três, isoladamente, alcançaria."
+          },
+          "id": "b16_1",
+          "position": 1
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que este laboratório muda na fatura"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "A redução de horas-instância pagas é o número mais visível, mas não é o único: o modo certo também evita pagar concorrência ou memória além do que cada padrão de tráfego pede."
+              }
+            ]
+          },
+          "id": "b17_0",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acontece com a fatura",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Piloto",
+                "poucas centenas de chamadas, sem separar por modo ainda",
+                "endpoint único sempre ligado, sem otimização",
+                "desprezível em volume absoluto, mas 100% do custo é hora ociosa",
+                "nenhuma até validar que o modelo funciona"
+              ],
+              [
+                "Produção pequena (Cadência hoje)",
+                "200 chamadas/dia + 3.400/noite",
+                "≈ 292 h-instância pagas por mês somando os quatro modos, contra 720 antes",
+                "baixa e previsível, com o tempo real dominando o total",
+                "ajustar a janela de scale-to-zero conforme o horário real de uso"
+              ],
+              [
+                "Alta escala",
+                "2.000 chamadas/dia + 34.000/noite",
+                "horas-instância crescem principalmente no lote (mais instâncias em paralelo) e um pouco no tempo real",
+                "linha visível, mas ainda pequena comparada a manter GPU 24h em todos os modos",
+                "revisar MaxConcurrency do serverless e paralelismo do lote antes de assumir escala linear"
+              ]
+            ]
+          },
+          "id": "b17_1",
+          "position": 1
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Instância do tempo real",
+                "hora de instância provisionada",
+                "pagar 24h quando o uso real é só o horário comercial é o erro mais caro deste laboratório"
+              ],
+              [
+                "Invocação do serverless",
+                "duração × memória alocada (GB-segundo)",
+                "sem GPU — confirme que o modelo roda dentro do orçamento de latência em CPU antes de prometer SLA"
+              ],
+              [
+                "Instância do assíncrono",
+                "hora de instância enquanto a fila tem item, escala a zero quando vazia",
+                "payload grande no S3 também soma custo de armazenamento e requisição, separado da instância"
+              ],
+              [
+                "Job de Batch Transform",
+                "hora de instância só durante a execução do job",
+                "mais instâncias em paralelo reduzem a duração e o custo total junto — não há hora mínima por instância"
+              ]
+            ]
+          },
+          "id": "b17_2",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "success",
+            "title": "O número que mais importa não é a redução — é a capacidade nova",
+            "content": "59% menos horas-instância pagas por mês é um bom resultado. Mas o que a equipe de retenção realmente ganhou foi pontuar 3.400 pedidos abertos toda noite, coisa que simplesmente não existia quando o único caminho disponível era chamar o endpoint de tempo real pedido por pedido."
+          },
+          "id": "b17_3",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "quatro modos com donos e métricas claros, roteamento decidido por tabela de requisitos",
+                "padrão de tráfego de um consumidor pode mudar sem ninguém notar e reconfigurar o modo",
+                "revisão trimestral da tabela de requisitos por consumidor, como processo declarado",
+                "média"
+              ],
+              [
+                "Segurança",
+                "cada modo com role própria e escopo por prefixo/recurso, sem Resource \"*\"",
+                "payload de dado de cliente passando por mais superfícies (fila, S3 intermediário) que antes",
+                "avaliar cifra em trânsito e repouso consistente nos quatro caminhos, não só no assíncrono",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "falha de um modo não derruba os outros três — são endpoints/jobs independentes",
+                "cota de instância GPU compartilhada entre tempo real, assíncrono e lote é ponto único de contenção",
+                "monitorar Service Quotas de instância GPU e solicitar aumento proativo antes de picos conhecidos",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "cada modo dimensionado para o padrão de tráfego real do consumidor dele",
+                "janela de scale-to-zero do tempo real pode ficar desatualizada se o horário de uso mudar",
+                "alarme comparando primeira chamada do dia com o horário de aquecimento configurado",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "≈ 59% menos horas-instância pagas por mês, medido nesta seção",
+                "cota de MaxConcurrency do serverless configurada com folga pode custar mais que o necessário em pico",
+                "revisar MaxConcurrency com base no p99 de invocações simultâneas observado, não em estimativa",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "GPU ligada só quando há trabalho real para fazer, nos quatro modos",
+                "chamadas de aquecimento programadas gastam ciclo de GPU mesmo em dias sem uso real do endpoint",
+                "condicionar o aquecimento a sinal de que o horário comercial realmente terá tráfego (ex.: feriado)",
+                "baixa"
+              ]
+            ]
+          },
+          "id": "b18_0",
+          "position": 0
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco deste módulo e compra outro — até o ponto em que a mesma decisão de modo se repete sobre um modelo que já não é mais um classificador tabular, e sim um LLM."
+              }
+            ]
+          },
+          "id": "b19_0",
+          "position": 0
+        },
+        {
+          "type": "layer_stack",
+          "data": {
+            "title": "Do endpoint único sempre ligado à mesma decisão de modo aplicada a um modelo generativo",
+            "layers": [
+              {
+                "label": "Nível 1 — Endpoint único, sempre ligado (o antes)",
+                "instruction": "Um endpoint de tempo real atende qualquer chamador, 24 horas por dia — é onde a Cadência estava até este laboratório, e é aceitável enquanto o volume é baixo o suficiente para ninguém notar o custo.",
+                "note": "Risco resolvido: nenhum. Novo risco: GPU ociosa cobrando plena, e nenhuma diferenciação entre chamada bloqueante e chamada tolerante a espera. Custo: o mais alto proporcionalmente ao uso real — 0,04% de utilização medida."
+              },
+              {
+                "label": "Nível 2 — Este laboratório: quatro modos roteados por padrão de tráfego",
+                "instruction": "Tempo real com janela reduzida, serverless em CPU, assíncrono com fila, Batch Transform para lote — cada consumidor no modo que casa com o requisito dele.",
+                "note": "Risco resolvido: GPU ociosa cobrando por chamada rara ou tolerante a espera. Novo risco: complexidade operacional de manter quatro caminhos, cada um com métricas e alarmes próprios. Custo: ≈ 59% menos horas-instância pagas por mês."
+              },
+              {
+                "label": "Nível 3 — Cliente .NET com timeout, retry e fallback (L79)",
+                "instruction": "O consumidor do endpoint de tempo real ganha degradação graciosa: se o modelo não responder dentro do orçamento de latência, o vendedor vê um valor padrão em vez de a tela travar.",
+                "note": "Risco resolvido: timeout do endpoint síncrono derruba a experiência do vendedor sem alternativa. Novo risco: fallback mal calibrado esconde degradação real, servindo um valor desatualizado como se fosse atual. Custo: desprezível — é lógica no cliente, não infraestrutura nova."
+              },
+              {
+                "label": "Nível 4 — Custo de ML: onde o dinheiro vaza além dos quatro modos (L80)",
+                "instruction": "Escolher o modo certo não garante que ninguém deixe uma instância provisionada além do necessário dentro do próprio modo certo — o L80 audita a fatura de ML inteira, não só o serving.",
+                "note": "Risco resolvido: modo certo escolhido uma vez, nunca mais revisado, drenando dinheiro por configuração esquecida (concorrência alta demais, instância maior que o necessário). Novo risco: otimizar custo agressivo demais derruba a margem de latência do modo tempo real. Custo: instrumentação de FinOps contínua, não pontual."
+              },
+              {
+                "label": "Nível 5 — Avaliação ligada a métrica de negócio (L78)",
+                "instruction": "Servir rápido e barato não prova que o modelo está evitando cancelamento de verdade — o L78 liga a pontuação a uma métrica de negócio (cancelamento evitado), não só a latência e custo de serving.",
+                "note": "Risco resolvido: os quatro modos entregam a pontuação rápido e barato, mas ninguém mediu se agir sobre ela reduz cancelamento de fato. Novo risco: instrumentar métrica de negócio por modo multiplica o trabalho por quatro. Custo: instrumentação adicional, baixo comparado ao resto."
+              },
+              {
+                "label": "Nível 6 — Dados e IA: a mesma decisão, sobre um modelo generativo",
+                "instruction": "Quando o \"modelo\" servido deixa de ser um classificador e passa a ser um LLM via Bedrock, a MESMA pergunta continua — só que entre invocação on-demand, provisioned throughput e inferência em lote do Bedrock, não entre os quatro modos do SageMaker (é o tema do L89, custo e latência de GenAI).",
+                "note": "Risco resolvido: tratar a decisão de modo como exclusiva de modelo clássico — ela se repete em qualquer sistema com IA que serve gente e processa lote ao mesmo tempo. Novo risco: os nomes dos modos mudam entre SageMaker e Bedrock, e confundir os dois é comum. Custo: provisioned throughput do Bedrock cobra por hora reservada, parecido com o endpoint de tempo real que este módulo mede."
+              }
+            ]
+          },
+          "id": "b19_1",
+          "position": 1
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Ligar fallback (nível 3) antes de separar os quatro modos (nível 2) esconderia o problema real: um fallback bem desenhado sobre um endpoint único ainda pagaria GPU ociosa 24h — só que sem ninguém reclamando de latência, porque o fallback disfarça o sintoma sem tocar a causa."
+          },
+          "id": "b19_2",
+          "position": 2
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O modelo que este laboratório serve já É a parte de IA do sistema — previsão de cancelamento treinada no L73. A pergunta desta seção é diferente: vale a pena usar IA para decidir QUAL dos quatro modos usar em cada chamada? A resposta, para a escala da Cadência hoje, é não."
+              }
+            ]
+          },
+          "id": "b20_0",
+          "position": 0
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O padrão de tráfego de cada consumidor é conhecido e estável — o painel de atendimento sempre vai bloquear e ser raro, o Sistema de Pedidos sempre vai precisar de resposta não-bloqueante, o lote sempre vai rodar de noite. Uma tabela de requisitos, revisada quando um consumidor novo aparece, resolve isso de forma auditável e sem custo de inferência extra."
+              }
+            ]
+          },
+          "id": "b20_1",
+          "position": 1
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria aqui?",
+                "nenhum — a escolha de modo depende de propriedades do CONSUMIDOR (bloqueia ou não, frequência, tamanho de payload), que são conhecidas de antemão, não algo que precise ser inferido de dado histórico"
+              ],
+              [
+                "Por que uma tabela de decisão estática basta?",
+                "porque os quatro atributos que decidem o modo são estáveis por semanas ou meses — engenharia de sistemas resolve isso, não aprendizado de máquina"
+              ],
+              [
+                "Onde IA entraria de fato neste tema?",
+                "em decidir DINAMICAMENTE o modo a partir de tráfego observado em tempo real — por exemplo, prever um pico e pré-aquecer o endpoint de tempo real antes dele acontecer — mas isso só compensaria numa escala muito maior que a da Cadência hoje"
+              ],
+              [
+                "Qual o risco de automatizar a escolha de modo com um classificador?",
+                "trocar uma decisão auditável (a tabela de requisitos, revisável em PR) por uma previsão que pode errar justamente no caso raro e crítico — o vendedor esperando a tela travar é o pior lugar para uma previsão de roteamento errada"
+              ]
+            ]
+          },
+          "id": "b20_2",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Treinar um modelo para prever, a cada chamada, qual dos quatro modos usar, trocaria uma decisão que qualquer engenheiro audita numa tabela de duas colunas por uma fronteira de decisão que ninguém explica sem abrir o modelo — para um problema que uma regra estática já resolve com precisão total, porque as propriedades que decidem o modo não mudam chamada a chamada."
+          },
+          "id": "b20_3",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Usar tempo real para tudo, mesmo o que pode esperar",
+                "é o exemplo que aparece em todo tutorial de SageMaker, e funciona sem pensar em fila, S3 ou job",
+                "cobra por hora ligada, esteja ou não respondendo, e não ganha nada em troca para chamadas raras ou tolerantes a espera",
+                "GPU ociosa 99%+ do tempo, fatura dominada por horas paradas",
+                "escolher o modo pelo padrão de tráfego real — frequência, se bloqueia quem chama, tamanho do payload — não pelo que é mais fácil de configurar primeiro",
+                "protótipo de um dia, ou volume real ainda desconhecido, quando você só precisa de UM modo para validar que o modelo funciona"
+              ],
+              [
+                "Colocar tudo em Batch Transform, mesmo o que precisa de resposta imediata",
+                "\"total do lote dividido pelo total de chamadas\" costuma dar uma conta atraente de custo por inferência",
+                "ninguém recebe pontuação em tempo real; o vendedor esperaria até a próxima janela do job, que pode ser horas depois",
+                "usuário reclamando que a pontuação está sempre desatualizada",
+                "reservar lote para o que genuinamente não tem usuário esperando na tela",
+                "todo consumo é offline e tolera a janela do job, como um relatório noturno"
+              ],
+              [
+                "Tratar Serverless Inference como \"tempo real mais barato\"",
+                "o nome sugere que só trocou o modelo de cobrança, mantendo o resto igual",
+                "esconde dois limites reais: cold start ocasional e ausência de suporte a GPU — a troca de modo às vezes exige trocar a versão do modelo também",
+                "latência p99 explode sem explicação aparente, ou deploy falha porque a instância pedida não é suportada",
+                "medir cold start ANTES de prometer SLA, e confirmar que o modelo roda em CPU dentro do orçamento de latência",
+                "tráfego intermitente com folga de latência suficiente para absorver cold start ocasional"
+              ],
+              [
+                "Achar que scale-to-zero no tempo real resolve tudo sozinho",
+                "a funcionalidade é recente e parece a resposta simples para \"GPU ociosa\"",
+                "ainda paga cold start ao acordar, ainda bloqueia quem chama enquanto processa, e não resolve o que pede lote ou não-bloqueio",
+                "latência inconsistente logo após período ocioso, mesmo com scale-to-zero configurado",
+                "escolher o modo pelo padrão de tráfego primeiro; scale-to-zero é uma otimização DENTRO do tempo real, não substituto dos outros três",
+                "tráfego de fato só existe dentro de uma janela previsível e sempre bloqueante"
+              ]
+            ]
+          },
+          "id": "b21_0",
+          "position": 0
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Latência p99 do serverless muito acima do esperado",
+                "cold start acontecendo com mais frequência do que o previsto",
+                "comparar intervalo entre chamadas com o tempo de ociosidade que dispara reciclagem do container",
+                "métrica de latência por invocação no CloudWatch, filtrando os picos",
+                "aumentar a frequência de aquecimento, ou mover o consumidor para tempo real se o tráfego for mais previsível do que se pensava"
+              ],
+              [
+                "Mensagens acumulando na fila do assíncrono sem processar",
+                "endpoint assíncrono sem capacidade de auto scaling configurada, ou instância presa em erro",
+                "checar profundidade de fila e a política de auto scaling do endpoint assíncrono",
+                "ApproximateBacklogSizePerInstance no CloudWatch",
+                "revisar a política de auto scaling; confirmar que o modelo carrega sem erro na instância"
+              ],
+              [
+                "Job de Batch Transform demora muito mais que o medido",
+                "volume de pedidos abertos cresceu sem aumentar o número de instâncias do job",
+                "comparar duração do job ao longo das últimas semanas com o volume de pedidos abertos",
+                "duração do transform job nos logs do CloudWatch",
+                "escalar InstanceCount proporcionalmente ao volume, não fixar um número"
+              ],
+              [
+                "Vendedor reclama de tela travando ao abrir pedido",
+                "endpoint de tempo real escalou a zero fora do horário esperado, e a primeira chamada paga cold start",
+                "comparar horário da reclamação com a janela configurada de scale-to-zero",
+                "métrica de invocação e latência do endpoint de tempo real, primeira chamada do dia",
+                "ajustar a janela de scale-to-zero com folga sobre o horário real de uso"
+              ]
+            ]
+          },
+          "id": "b22_0",
+          "position": 0
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em qualquer configuração, pergunte: a latência alta é o comportamento ESPERADO do modo (cold start do serverless, tempo de fila do assíncrono), ou é sinal de que o modo escolhido não serve mais para esse consumidor? A primeira exige calibrar; a segunda exige revisitar a tabela de requisitos."
+          },
+          "id": "b22_1",
+          "position": 1
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que fica ligado depois do \"terminei\""
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório cria quatro superfícies de custo diferentes, e cada uma tem uma forma própria de continuar cobrando depois que você fecha o terminal."
+              }
+            ]
+          },
+          "id": "b23_0",
+          "position": 0
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "bash",
+            "code": "#!/usr/bin/env bash\n# limpar.sh -- os quatro modos, cada um com seu jeito de continuar cobrando\nset -euo pipefail\n\nPROJETO=\"${PROJETO:?defina PROJETO}\"\n\n# 1. Endpoints (tempo real, serverless, assincrono) -- cada um deixado no ar\n#    continua cobrando hora de instancia ou concorrencia reservada.\nfor MODO in tempo-real serverless assincrono; do\n  aws sagemaker delete-endpoint --endpoint-name \"${PROJETO}-cancelamento-${MODO}\" || true\n  aws sagemaker delete-endpoint-config --endpoint-config-name \"${PROJETO}-cancelamento-${MODO}\" || true\ndone\n\n# 2. Job de Batch Transform ja termina sozinho -- nao ha o que apagar aqui,\n#    mas confirme que nao ha um job preso em InProgress cobrando instancia.\naws sagemaker list-transform-jobs --status-equals InProgress \\\n  --query \"TransformJobSummaries[?contains(TransformJobName, '${PROJETO}')]\"\n\n# 3. Fila, topicos SNS e agendadores -- centavos, mas o Terraform destroy cobre.\nterraform destroy -auto-approve\n\n# 4. O DADO gravado (entrada/saida assincrona, saida do lote) NAO sai no destroy.\naws s3 rm \"s3://cadencia-lake/entrada-assincrona/\" --recursive\naws s3 rm \"s3://cadencia-lake/saida-assincrona/\" --recursive\naws s3 rm \"s3://cadencia-lake/lote-pedidos/\" --recursive\n\n# 5. Prova final: nada com o nome do projeto de pe fora do esperado.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=\"${PROJETO}\" \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table\n",
+            "filename": "limpar.sh"
+          },
+          "id": "b23_1",
+          "position": 1
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Endpoint de tempo real (aws_sagemaker_endpoint)",
+                "não automaticamente — precisa de delete-endpoint explícito",
+                "sim, por hora de instância",
+                "o Terraform administra o RECURSO de configuração; apagar o endpoint em si costuma ser um passo manual antes do destroy"
+              ],
+              [
+                "Endpoint serverless",
+                "mesmo caso do tempo real",
+                "não entre chamadas (sem hora parada), mas cobra por invocação enquanto existir",
+                "endpoint esquecido continua aceitando chamadas de teste, e cada uma cobra"
+              ],
+              [
+                "Endpoint assíncrono, fila SQS e tópicos SNS",
+                "sim, se em Terraform",
+                "centavos",
+                "fila ou tópico criado à mão no console não aparece no estado do Terraform"
+              ],
+              [
+                "Dado em entrada-assincrona/, saida-assincrona/ e lote-pedidos/ no S3",
+                "não — não pertence ao Terraform, é dado gravado pelos jobs e pelo endpoint",
+                "sim, GB-mês",
+                "decisão editorial: manter para auditoria por um período, ou apagar — este módulo não decide isso por você"
+              ],
+              [
+                "Job de Batch Transform em si",
+                "termina sozinho quando o processamento acaba",
+                "não depois de terminar",
+                "mas um job preso em InProgress por erro continua cobrando instância até alguém notar"
+              ]
+            ]
+          },
+          "id": "b23_2",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "Apagar o endpoint não apaga a versão do modelo em CPU criada só para o serverless",
+            "content": "O artefato compilado para CPU continua no S3 e o `aws_sagemaker_model` associado continua registrado mesmo depois de remover o endpoint serverless — é dado pequeno, mas some da lista de \"recursos ativos\" sem sumir da lista de \"coisas que alguém precisa lembrar que existem\"."
+          },
+          "id": "b23_3",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "GPU ligada 24h para atender chamada rara e bloqueante",
+                "endpoint de tempo real com janela de disponibilidade reduzida e scale-to-zero fora dela",
+                "mantém a latência que o vendedor precisa, sem pagar hora fora do horário real de uso"
+              ],
+              [
+                "Chamada esporádica do time de dados no mesmo endpoint caro",
+                "endpoint serverless sobre uma versão do modelo compilada para CPU",
+                "zero hora paga ociosa — mas exige aceitar a ausência de GPU nesse caminho"
+              ],
+              [
+                "Webhook de pagamento bloqueado esperando o modelo",
+                "endpoint assíncrono com fila, S3 de entrada/saída e notificação SNS",
+                "desacopla a resposta do modelo da resposta do próprio evento de pagamento"
+              ],
+              [
+                "3.400 pedidos abertos nunca pontuados de uma vez",
+                "job de Batch Transform disparado por agendador, às 2h",
+                "processa em paralelo entre instâncias e termina sozinho, sem endpoint permanente"
+              ],
+              [
+                "Custo de serving invisível, sem comparação entre modos",
+                "medição de horas-instância pagas e latência p50/p99, lado a lado",
+                "transforma \"parece caro\" em uma tabela com número — a prova que o entregável promete"
+              ],
+              [
+                "Escolha de modo por consumidor sujeita a ficar desatualizada",
+                "não resolvido neste módulo",
+                "risco residual aceito e documentado; revisão trimestral é recomendação, não automação"
+              ]
+            ]
+          },
+          "id": "b24_0",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Vendedor esperando resposta do modelo travar a tela",
+                "endpoint de tempo real com janela dimensionada para o horário real de uso",
+                "chamada fora da janela configurada, que ainda paga cold start"
+              ],
+              [
+                "Webhook de pagamento bloqueado pelo modelo",
+                "fila e endpoint assíncrono, desacoplando as duas respostas",
+                "falha silenciosa se o tópico SNS de erro não estiver configurado"
+              ],
+              [
+                "Custo dominado por hora ociosa",
+                "quatro modos dimensionados por padrão de tráfego real, medidos com número",
+                "configuração esquecida dentro de um modo já certo — é o assunto do L80"
+              ],
+              [
+                "3.400 pedidos nunca pontuados juntos",
+                "Batch Transform paralelizado, disparado fora do horário de pico",
+                "volume crescendo além do que o número atual de instâncias processa na janela"
+              ],
+              [
+                "Escolha de modo errada para um consumidor novo",
+                "tabela de requisitos como checklist reutilizável",
+                "ninguém aplicar a tabela quando um consumidor novo aparece — é processo, não automação"
+              ]
+            ]
+          },
+          "id": "b24_1",
+          "position": 1
+        },
+        {
+          "type": "list",
+          "data": {
+            "items": [
+              "O modelo de previsão de cancelamento já está treinado e versionado, resultado do L73.",
+              "Cada consumidor (painel de atendimento, script de análise, Sistema de Pedidos, painel de retenção) tem um padrão de tráfego diferente.",
+              "A arquitetura mínima força os três consumidores interativos contra o mesmo endpoint de GPU sempre ligado.",
+              "A arquitetura de produção roteia cada consumidor pelo modo que casa com o requisito dele.",
+              "Tempo real síncrono atende o painel de atendimento, com janela reduzida e scale-to-zero fora do expediente.",
+              "Serverless atende o script de análise, sobre uma versão do modelo compilada para CPU.",
+              "Assíncrono atende o Sistema de Pedidos, com fila absorvendo o pico sem bloquear o webhook.",
+              "Batch Transform atende o painel de retenção, pontuando 3.400 pedidos de uma vez, à noite.",
+              "A seção de implantação mede os quatro modos lado a lado: horas-instância pagas e latência p50/p99.",
+              "O resultado medido é uma redução de 59% nas horas-instância pagas, mais a capacidade nova de pontuar o lote inteiro."
+            ],
+            "ordered": true
+          },
+          "id": "b24_2",
+          "position": 2
+        }
+      ]
+    },
+    {
+      "id": "lab-serv-des1",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Desafio — sem roteiro"
+      },
+      "children": [
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "O requisito",
+            "content": "Um padrão de tráfego novo chegou, diferente dos quatro já cobertos: picos previsíveis (ex: todo dia às 9h um lote grande) intercalados com longos períodos sem nenhuma chamada. Usando a mesma árvore de decisão do laboratório, escolha e implemente o modo correto — e justifique por que os outros três NÃO servem para esse padrão."
+          },
+          "id": "lab-serv-des2",
+          "position": 0
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "Critério de aceite — executável, não \"verifique se funciona\"",
+            "content": "O texto de justificativa cita explicitamente por que endpoint em tempo real sempre ligado seria desperdício (idle sem tráfego) e por que batch simples não serve (latência do lote não cabe na janela de 9h) — e a implementação escolhida processa o pico das 9h dentro do tempo aceitável."
+          },
+          "id": "lab-serv-des3",
+          "position": 1
+        },
+        {
+          "type": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "Dica 1: A pergunta que decide entre os quatro modos não é \"quão grande é o modelo\", é \"qual é a FORMA da demanda no tempo\" — pico previsível e vazio no resto é o caso clássico de escalar sob demanda, não de manter always-on.",
+              "Dica 2: Se a escolha for serverless/assíncrono, o cold start do primeiro request do pico das 9h pode ser o gargalo — meça especificamente a LATÊNCIA DO PRIMEIRO request do lote, não só a média.",
+              "Dica 3: Registre por escrito o custo de cada uma das 4 opções para ESSE padrão específico de tráfego — é o que transforma \"escolhi X\" em uma decisão de engenharia, não um palpite."
+            ]
+          },
+          "id": "lab-serv-des4",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "success",
+            "title": "Lembrete de limpeza",
+            "content": "Todo recurso que este desafio criar entra no mesmo `terraform destroy` do laboratório — nada fica para trás cobrando sozinho."
+          },
+          "id": "lab-serv-des5",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Por que não simplesmente desligar o endpoint fora do horário comercial?",
+            "answer": "Porque isso resolveria só o consumidor com horário fixo, o painel de atendimento, e ignoraria os outros dois padrões de tráfego que a arquitetura mínima força pelo mesmo endpoint. O webhook de pagamento precisa de resposta não-bloqueante a qualquer hora, e o script de análise é raro demais para justificar hora ligada mesmo dentro do expediente — um único horário de desligamento não diferencia entre os três, e é exatamente essa diferenciação que os quatro modos entregam."
+          },
+          "id": "b25_0",
+          "position": 0
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Serverless Inference aceita instância com GPU?",
+            "answer": "Não aceita — Serverless Inference roda só sobre CPU, com memória fixa entre 1.024 MB e 6.144 MB e um teto de concorrência configurável. Se o modelo depende de GPU para caber no orçamento de latência, como o de previsão de cancelamento da Cadência, servir esse caminho em serverless exige registrar uma segunda versão do modelo, compilada especificamente para CPU — não é o mesmo artefato do endpoint de tempo real rodando num container diferente."
+          },
+          "id": "b25_1",
+          "position": 1
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "O modo assíncrono bloqueia quem chama o endpoint?",
+            "answer": "Não bloqueia: invoke_endpoint_async devolve um OutputLocation imediatamente, e a chamada retorna antes de o modelo terminar de processar. Quem chamou precisa consultar o S3 de saída ou aguardar a notificação SNS de conclusão — o preço dessa liberdade é que a resposta em si não está pronta na hora da chamada, diferente do modo síncrono."
+          },
+          "id": "b25_2",
+          "position": 2
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Batch Transform mantém um endpoint ligado depois que o job termina?",
+            "answer": "Não mantém — Batch Transform não é um endpoint, é uma execução (`create_transform_job`) que provisiona instância, processa o lote inteiro e termina sozinha, sem deixar nada persistente no ar. É essa diferença de natureza — job versus endpoint — que explica por que ele não aparece como recurso permanente de infraestrutura no Terraform, ao contrário dos outros três modos."
+          },
+          "id": "b25_3",
+          "position": 3
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Preciso reescrever o modelo para cada um dos quatro modos?",
+            "answer": "Na maioria dos casos não: tempo real, assíncrono e Batch Transform aceitam o mesmo artefato treinado em GPU do L73, só mudando a configuração do endpoint ou do job em volta dele. A exceção é o serverless, que exige uma versão compilada para CPU — é o único dos quatro modos com essa restrição de hardware, e é o detalhe que mais gente descobre tarde demais."
+          },
+          "id": "b25_4",
+          "position": 4
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Qual modo escolher quando a latência não importa, mas o payload é grande?",
+            "answer": "Assíncrono, na maioria dos casos: ele lê o payload do S3 em vez de exigir corpo inline na chamada, o que remove o limite de tamanho que um endpoint síncrono impõe. Batch Transform também aceita payload grande, mas processa lotes inteiros de uma vez — se o caso é uma requisição isolada com payload grande, não um conjunto de milhares de registros, assíncrono é o encaixe mais natural dos dois."
+          },
+          "id": "b25_5",
+          "position": 5
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Scale-to-zero no endpoint de tempo real substitui os outros três modos?",
+            "answer": "Não substitui — reduz o custo do modo tempo real quando ocioso, mas continua sendo o modo tempo real: paga cold start ao acordar de forma parecida com o serverless, ainda bloqueia quem chama enquanto processa a requisição, e não ganha o paralelismo de lote do Batch Transform. Ele é uma otimização dentro de um dos quatro caminhos, não um quinto caminho que torna os outros três desnecessários."
+          },
+          "id": "b25_6",
+          "position": 6
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "O Model Registry do L75 se aplica aos quatro modos, ou só ao tempo real?",
+            "answer": "Se aplica aos quatro: o registry versiona o ARTEFATO do modelo, e cada modo consome uma versão registrada — inclusive a versão compilada para CPU do serverless, que precisa do mesmo controle de promoção e rollback que a versão de GPU. Tratar a versão de CPU como um artefato \"à parte\", fora do registry, é o jeito mais comum de perder rastreabilidade justamente no modo mais barato de operar."
+          },
+          "id": "b25_7",
+          "position": 7
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "type": "quiz",
+          "data": {
+            "question": "O time de dados quer mover as chamadas esporádicas do script de análise (menos de uma por dia) para Serverless Inference, mas o modelo de previsão de cancelamento foi treinado para se beneficiar de GPU. O que a arquitetura de produção deste laboratório faz para resolver essa contradição?",
+            "options": [
+              "Ativa scale-to-zero no endpoint de tempo real e chama isso de \"serverless\", já que os dois têm o mesmo efeito prático sobre o custo e a latência",
+              "Mantém o script de análise no endpoint de tempo real, porque Serverless Inference é exclusivo para modelos de linguagem, não para classificadores tabulares como o de cancelamento de pedido",
+              "Configura o endpoint serverless com uma instância ml.g4dn, já que Serverless Inference suporta qualquer tipo de instância, incluindo GPU, bastando declarar o tipo no serverless_config",
+              "Registra uma segunda versão do modelo, compilada para CPU, especificamente para o endpoint serverless — porque Serverless Inference não aceita instância com GPU, e a latência um pouco maior é aceitável para uma chamada esporádica de analista"
+            ],
+            "correctIndex": 3,
+            "explanation": "A restrição real de Serverless Inference é não aceitar instância com GPU — o modo só roda sobre CPU, com memória fixa em incrementos específicos e um teto de concorrência configurável. Para um modelo treinado pensando em GPU, a única forma de usar esse modo é registrar uma segunda versão compilada para CPU, aceitando alguma perda de latência em troca de zero hora paga ociosa — troca que faz sentido para uma chamada esporádica, mas não faria para o painel de atendimento. A segunda alternativa descreve uma capacidade que serverless_config não tem: o bloco não aceita declarar instance_type nem GPU, só memory_size_in_mb e max_concurrency. A terceira inventa uma limitação que não existe — Serverless Inference serve qualquer modelo empacotado como container do SageMaker, tabular ou não, e nada no modo é exclusivo de LLM. A quarta confunde dois modos com mecanismos de cobrança diferentes: scale-to-zero ainda é o endpoint de TEMPO REAL, cobrando por hora de instância provisionada quando ativo, enquanto serverless nunca provisiona instância dedicada — chamar os dois pelo mesmo nome esconde justamente a diferença que decide qual usar."
+          },
+          "id": "b26_1",
+          "position": 0
+        },
+        {
+          "type": "quiz",
+          "data": {
+            "question": "Antes deste laboratório, ninguém pontuava os 3.400 pedidos abertos de uma vez — só chamadas individuais existiam. Depois, o Batch Transform processa os 3.400 pedidos em cerca de 7 minutos, uma vez por noite. Por que essa capacidade só apareceu depois de separar os quatro modos, e não já existia com o endpoint único de tempo real?",
+            "options": [
+              "Porque o Batch Transform lê diretamente do Data Catalog do Glue, e os outros três modos não têm permissão de IAM para acessar tabelas do catálogo",
+              "Porque o Batch Transform é o único dos quatro modos que suporta modelo treinado com GPU, e os outros três não conseguiriam processar um artefato do L73",
+              "Porque 3.400 chamadas excede o limite diário de invocações de qualquer endpoint do SageMaker, e só o Batch Transform não está sujeito a esse limite",
+              "Porque um endpoint de tempo real processa uma requisição de cada vez, e rodar 3.400 chamadas sequenciais contra ele seria lento e caro por chamada; o Batch Transform lê o lote inteiro de uma vez, paraleliza entre instâncias e cobra só pela janela do job, sem manter nada ligado depois"
+            ],
+            "correctIndex": 3,
+            "explanation": "A diferença é de NATUREZA, não de permissão ou limite artificial: um endpoint de tempo real (ou mesmo assíncrono) atende requisição por requisição, então 3.400 chamadas sequenciais pagariam o overhead de 3.400 invocações separadas, cada uma com sua própria latência de rede. Batch Transform lê um prefixo inteiro do S3 de uma vez, distribui o processamento entre as instâncias configuradas e cobra só pela duração do job — é essa diferença de modelo de execução, não de capacidade de hardware, que torna o lote viável. A segunda alternativa inverte um fato real do módulo: os QUATRO modos aceitam a versão de GPU do L73 (só o serverless exige a versão de CPU à parte) — Batch Transform não é exclusivo de GPU, nem os outros três são incapazes dela. A terceira inventa uma integração que não existe neste desenho: Batch Transform lê do S3, não do Glue Data Catalog, e a diferença de permissão entre os modos é sobre PREFIXO do S3, não sobre catálogo. A quarta descreve um limite que não existe dessa forma: endpoints do SageMaker não têm um teto diário fixo de 3.400 invocações — o que os torna inadequados para esse volume é custo e latência por chamada individual, não uma cota bloqueando o número 3.400 especificamente."
+          },
+          "id": "b26_2",
+          "position": 1
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 29,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L73 (SageMaker AI, treino rastreável, experimento reproduzível) — o artefato do modelo já existe e é o que este módulo serve"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "os quatro modos de inferência do SageMaker (tempo real, serverless, assíncrono, Batch Transform); quando cada um se paga em custo e latência; a restrição de GPU do serverless; a diferença entre \"endpoint\" e \"job\" que o Batch Transform representa"
+              ],
+              [
+                "Limitação que fica",
+                "a escolha de modo por consumidor é decidida uma vez, na tabela de requisitos — se o padrão de tráfego de um consumidor mudar, nada detecta isso automaticamente"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L79 — Consumir o modelo do .NET com fallback. Reutiliza o endpoint de tempo real deste módulo e resolve o próximo risco: o que acontece quando o timeout de 300 ms estoura de verdade"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L80 (custo de ML: onde o dinheiro vaza) depende da medição feita aqui — sem saber quanto cada modo paga, não há linha de base para auditar desperdício. L78 (avaliação honesta) também depende deste módulo para ligar a pontuação servida a uma métrica de negócio real"
+              ],
+              [
+                "Data da última validação técnica",
+                "8 de agosto de 2026"
+              ]
+            ]
+          },
+          "id": "b27_0",
+          "position": 0
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: SageMaker AI — Real-time inference, Serverless Inference, Asynchronous Inference e Batch Transform, incluindo os limites de memória e concorrência do modo serverless e a ausência de suporte a GPU nesse modo; SageMaker endpoint auto scaling e o recurso de escalar instâncias de tempo real a zero; o resource `aws_sagemaker_endpoint_configuration` no provider Terraform da AWS. Nenhum valor em dólar aparece neste módulo por decisão: os números de horas-instância e latência são medições do cenário da Cadência, e custo em moeda muda por região e por acordo de conta — confira o AWS Pricing Calculator para o valor atual."
+              }
+            ]
+          },
+          "id": "b27_1",
+          "position": 1
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "O suporte a `managed_instance_scaling` com `min_instance_count = 0` em endpoints de tempo real depende da versão do provider Terraform e pode não estar disponível em toda região — confirme antes de assumir que a janela reduzida funciona como descrito. Os valores fixos de `memory_size_in_mb` do serverless (1024 a 6144) também merecem checagem na documentação atual antes de escrever Terraform de produção em cima deles. Os volumes da Cadência — 200 chamadas/dia, 3.400 pedidos/noite — são os do cenário de exemplo; meça os seus antes de copiar um limiar de alarme."
+          },
+          "id": "b27_2",
+          "position": 2
+        }
+      ]
+    }
+  ]
+}

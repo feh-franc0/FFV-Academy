@@ -98,8 +98,8 @@ describe('updatePreferences', () => {
 });
 
 describe('catálogos UI exportados', () => {
-  it('HUB_OPTIONS tem 8 hubs com IDs slug-like', () => {
-    expect(HUB_OPTIONS).toHaveLength(8);
+  it('HUB_OPTIONS tem 5 hubs com IDs slug-like', () => {
+    expect(HUB_OPTIONS).toHaveLength(5);
     for (const opt of HUB_OPTIONS) {
       expect(opt.id).toMatch(/^[a-z0-9-]+$/);
       expect(opt.label).toBeTruthy();

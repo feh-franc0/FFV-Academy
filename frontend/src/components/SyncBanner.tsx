@@ -80,7 +80,7 @@ export function SyncBanner() {
           className="px-4 py-1.5 rounded-lg text-xs md:text-sm font-bold transition-transform hover:scale-[1.04]"
           style={{
             background: 'linear-gradient(90deg, var(--ffv-blue), var(--ffv-purple))',
-            color: '#fff',
+            color: 'var(--primary-foreground)',
             whiteSpace: 'nowrap',
           }}
         >

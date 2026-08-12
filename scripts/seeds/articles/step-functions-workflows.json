@@ -3,7 +3,7 @@
   "title": null,
   "blocks": [
     {
-      "id": "fde8afae-c6fc-4b4d-9118-a30a7e2b2984",
+      "id": "q348-0",
       "type": "section",
       "position": 0,
       "data": {
@@ -11,7 +11,7 @@
       },
       "children": [
         {
-          "id": "efc49fac-c559-4d64-af03-ef06d5601f28",
+          "id": "q348-1",
           "type": "comparison_table",
           "position": 0,
           "data": {
@@ -50,19 +50,288 @@
               ]
             ]
           }
+        },
+        {
+          "type": "arch_diagram",
+          "data": {
+            "title": "Uma saga com compensação em Step Functions",
+            "groups": [
+              {
+                "label": "Entrada",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "start",
+                    "service": "stepfunctions",
+                    "label": "Início",
+                    "note": "pedido recebido"
+                  }
+                ]
+              },
+              {
+                "label": "Passos de negócio",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "res",
+                    "service": "lambda",
+                    "label": "Task · reservar estoque",
+                    "note": "Retry: 3× com backoff"
+                  },
+                  {
+                    "id": "pay",
+                    "service": "lambda",
+                    "label": "Task · cobrar",
+                    "note": "Retry + Catch"
+                  },
+                  {
+                    "id": "ship",
+                    "service": "lambda",
+                    "label": "Task · agendar entrega"
+                  }
+                ]
+              },
+              {
+                "label": "Decisão e espera",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "choice",
+                    "service": "stepfunctions",
+                    "label": "Choice",
+                    "note": "valor alto → revisão humana"
+                  },
+                  {
+                    "id": "wait",
+                    "service": "management",
+                    "label": "Wait / Task Token",
+                    "note": "espera aprovação, sem consumir compute"
+                  }
+                ]
+              },
+              {
+                "label": "Compensação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "undo_pay",
+                    "service": "lambda",
+                    "label": "Estornar cobrança",
+                    "note": "idempotente, com chave"
+                  },
+                  {
+                    "id": "undo_res",
+                    "service": "lambda",
+                    "label": "Liberar estoque",
+                    "note": "idempotente"
+                  }
+                ]
+              },
+              {
+                "label": "Fim",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ok",
+                    "service": "stepfunctions",
+                    "label": "Succeed"
+                  },
+                  {
+                    "id": "fail",
+                    "service": "sqs",
+                    "label": "Fail → DLQ + alerta",
+                    "note": "humano precisa saber"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "start",
+                "to": "res"
+              },
+              {
+                "from": "res",
+                "to": "pay",
+                "label": "reservado"
+              },
+              {
+                "from": "pay",
+                "to": "choice",
+                "label": "cobrado"
+              },
+              {
+                "from": "choice",
+                "to": "wait",
+                "label": "valor alto"
+              },
+              {
+                "from": "choice",
+                "to": "ship",
+                "label": "valor normal"
+              },
+              {
+                "from": "wait",
+                "to": "ship",
+                "label": "aprovado"
+              },
+              {
+                "from": "ship",
+                "to": "ok"
+              },
+              {
+                "from": "pay",
+                "to": "undo_res",
+                "label": "falhou: Catch",
+                "style": "dashed"
+              },
+              {
+                "from": "ship",
+                "to": "undo_pay",
+                "label": "falhou: Catch",
+                "style": "dashed"
+              },
+              {
+                "from": "undo_pay",
+                "to": "undo_res",
+                "style": "dashed"
+              },
+              {
+                "from": "undo_res",
+                "to": "fail",
+                "style": "dashed"
+              }
+            ],
+            "caption": "O ganho não é \"orquestrar Lambda\": é tirar retry, decisão, espera e compensação do seu código e colocar numa definição visível e auditável. Lambda chamando Lambda para simular isso é o antipadrão que o DVA-C02 cobra.",
+            "steps": [
+              {
+                "label": "Retry por passo, não no código",
+                "detail": "Cada Task declara sua própria política: quantas tentativas, intervalo, backoff, e para quais erros. Isso sai do seu código e passa a ser configuração visível na definição do fluxo.",
+                "nodes": [
+                  "start",
+                  "res",
+                  "pay"
+                ],
+                "edges": [
+                  "start>res",
+                  "res>pay"
+                ]
+              },
+              {
+                "label": "Choice ramifica sem código de orquestração",
+                "detail": "A decisão vive na máquina de estados, não numa Lambda que chama outra Lambda. Fluxo legível, e mudança de regra não exige deploy de função.",
+                "nodes": [
+                  "choice",
+                  "ship",
+                  "wait"
+                ],
+                "edges": [
+                  "choice>wait",
+                  "choice>ship"
+                ]
+              },
+              {
+                "label": "Esperar humano sem pagar compute",
+                "detail": "Com Task Token, o fluxo fica suspenso — sem Lambda rodando, sem custo — até alguém chamar a API com o token. Fazer isso com Lambda em polling é caro e frágil.",
+                "nodes": [
+                  "wait",
+                  "ship"
+                ],
+                "edges": [
+                  "wait>ship"
+                ]
+              },
+              {
+                "label": "Catch aciona a compensação",
+                "detail": "Falha no passo N dispara o desfazer dos passos 1..N−1, na ordem inversa. Não existe rollback em sistema distribuído: existe compensação explícita, e ela precisa ser desenhada.",
+                "nodes": [
+                  "pay",
+                  "undo_res",
+                  "ship",
+                  "undo_pay"
+                ],
+                "edges": [
+                  "pay>undo_res",
+                  "ship>undo_pay"
+                ]
+              },
+              {
+                "label": "Compensação também falha — e precisa de destino",
+                "detail": "Estorno que não funciona deixa inconsistência permanente. DLQ mais alerta para humano é obrigatório: alguém precisa saber que três pedidos ficaram no meio do caminho.",
+                "nodes": [
+                  "undo_pay",
+                  "undo_res",
+                  "fail"
+                ],
+                "edges": [
+                  "undo_pay>undo_res",
+                  "undo_res>fail"
+                ]
+              }
+            ]
+          },
+          "id": "q348-2",
+          "position": 1
         }
       ]
     },
     {
-      "id": "ff4e638e-dc03-4197-885f-e54df720872c",
+      "id": "q348-3",
       "type": "section",
       "position": 1,
+      "data": {
+        "title": "Onde isso entra no exame"
+      },
+      "children": [
+        {
+          "id": "q348-4",
+          "type": "exam_domain_badge",
+          "position": 0,
+          "data": {
+            "domain": "Domain 1 — Development with AWS Services",
+            "weight": "32%"
+          }
+        },
+        {
+          "id": "q348-5",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "A questão típica dá um requisito e pede o tipo de workflow: Standard vai até 1 ano, é exactly-once e guarda histórico auditável; Express vai até 5 minutos, é at-least-once e serve alta vazão. Saiba também que `Retry` e `Catch` vivem na state machine — colocar retentativa dentro do código da Lambda é justamente a alternativa errada."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "type": "quiz",
+      "data": {
+        "question": "Um fluxo de aprovação precisa esperar a decisão de um gerente, que pode levar horas ou dias. Qual abordagem?",
+        "options": [
+          "Step Functions com padrão de Task Token (waitForTaskToken), que suspende o fluxo sem consumir compute",
+          "Uma Lambda em loop verificando o status a cada minuto",
+          "Uma Lambda com timeout estendido para 24 horas",
+          "EventBridge com agendamento de verificação a cada hora"
+        ],
+        "correctIndex": 0,
+        "explanation": "Com waitForTaskToken o fluxo fica suspenso, sem nada rodando e sem custo de compute, até alguém chamar SendTaskSuccess com o token — que pode ser horas ou dias depois. Lambda em loop paga por cada verificação e é frágil. Timeout de 24 horas não existe: o limite de execução da Lambda é muito menor, e ainda seria pago o tempo inteiro. EventBridge com polling horário funciona mas adiciona latência de até uma hora e reintroduz a lógica de estado que o Step Functions já mantém."
+      },
+      "id": "q348-13",
+      "position": 2
+    },
+    {
+      "id": "q348-6",
+      "type": "section",
+      "position": 3,
       "data": {
         "title": "Retries e Catch"
       },
       "children": [
         {
-          "id": "59ace6e4-f2df-4bca-9d49-b65fb7791b73",
+          "id": "q348-7",
           "type": "callout",
           "position": 0,
           "data": {
@@ -70,8 +339,97 @@
             "title": "",
             "content": "Cada Task state suporta Retry (com backoff exponencial, max attempts) e Catch (redirecionar pra state de error handling). Essencial pra workflows production: DB falhou? Retry 3x com 5/25/125s. Still fail? Vai pra fallback state que notifica Slack."
           }
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "json",
+            "code": "{\n  \"ChamarServicoExterno\": {\n    \"Type\": \"Task\",\n    \"Resource\": \"arn:aws:states:::lambda:invoke\",\n    \"Parameters\": { \"FunctionName\": \"consulta-parceiro\" },\n\n    \"Retry\": [\n      {\n        \"ErrorEquals\": [\"States.TaskFailed\", \"Lambda.ServiceException\"],\n        \"IntervalSeconds\": 2,\n        \"BackoffRate\": 2.0,\n        \"MaxAttempts\": 4,\n        \"JitterStrategy\": \"FULL\"\n      },\n      {\n        \"ErrorEquals\": [\"ParceiroIndisponivel\"],\n        \"IntervalSeconds\": 30,\n        \"MaxAttempts\": 2\n      }\n    ],\n\n    \"Catch\": [\n      {\n        \"ErrorEquals\": [\"States.ALL\"],\n        \"ResultPath\": \"$.erro\",\n        \"Next\": \"RegistrarFalhaEContinuar\"\n      }\n    ],\n    \"TimeoutSeconds\": 60,\n    \"Next\": \"Proximo\"\n  }\n}",
+            "title": "Retry exponencial e Catch: o par que decide se a falha custa um alerta ou um chamado"
+          },
+          "position": 1,
+          "id": "step-f-cb1"
         }
       ]
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Fluxo padrão ou expresso?",
+            "answer": "Padrão quando a execução é longa, precisa de histórico auditável e exatamente uma execução por evento. Expresso quando o volume é alto e a execução é curta, com custo bem menor e histórico limitado. O enunciado dá a duração e o volume — os dois juntos decidem, não um só."
+          },
+          "id": "q348-9",
+          "position": 0
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Quando vale orquestrar em vez de chamar direto?",
+            "answer": "Quando há vários passos com nova tentativa, ramificação e estado que precisa sobreviver a falha — escrever isso à mão é reimplementar máquina de estado com pior visibilidade. Para dois passos simples, a orquestração acrescenta latência e configuração sem ganho."
+          },
+          "id": "q348-10",
+          "position": 1
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Como tratar erro dentro de um fluxo?",
+            "answer": "Com política de nova tentativa por tipo de erro e captura que desvia para um caminho de tratamento — não deixando a execução falhar inteira. É o que separa fluxo de produção de exemplo de tutorial, e a prova cobra reconhecer que nova tentativa e captura são configuração, não código."
+          },
+          "id": "q348-11",
+          "position": 2
+        }
+      ],
+      "id": "q348-8",
+      "position": 4
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "type": "quiz",
+          "data": {
+            "question": "Numa máquina de estados, o passo de cobrança falhou após todos os retries. O que garante que a reserva de estoque feita antes seja desfeita?",
+            "options": [
+              "O Step Functions faz rollback automático dos passos anteriores",
+              "A transação distribuída é revertida pelo próprio DynamoDB",
+              "Nada — a reserva expira sozinha por TTL",
+              "Um bloco Catch que direciona para um estado de compensação, executando o desfazer explicitamente"
+            ],
+            "correctIndex": 3,
+            "explanation": "Não existe rollback automático em sistema distribuído: cada passo já teve efeito no mundo (estoque reservado, e-mail enviado). O que existe é COMPENSAÇÃO explícita, e o Catch é o mecanismo que direciona a falha para o estado que desfaz. Cada compensação precisa ser idempotente, porque ela também pode ser repetida. DynamoDB tem transação, mas ela cobre apenas escritas naquela tabela, não passos em serviços diferentes. TTL pode ser uma rede de segurança adicional, nunca o mecanismo principal."
+          },
+          "id": "q348-14",
+          "position": 0
+        },
+        {
+          "type": "quiz",
+          "data": {
+            "question": "Qual é a diferença entre Standard e Express workflow no Step Functions?",
+            "options": [
+              "Standard tem execução durável com histórico completo e cobra por transição de estado; Express é otimizado para alto volume e curta duração, cobrando por execução e duração",
+              "Standard roda em VPC e Express não",
+              "Express suporta mais estados por máquina",
+              "Express garante ordem de execução e Standard não"
+            ],
+            "correctIndex": 0,
+            "explanation": "Standard é durável: mantém histórico de cada transição por 90 dias, garante exactly-once nas transições e cobra por transição de estado — adequado a fluxo de negócio longo e auditável. Express é para volume altíssimo e execução curta (na casa de minutos), cobrando por número de execuções e duração, com histórico no CloudWatch Logs em vez de no serviço. A escolha é por volume e necessidade de auditoria, não por número de estados nem por VPC."
+          },
+          "id": "q348-15",
+          "position": 1
+        }
+      ],
+      "id": "q348-12",
+      "position": 5
     }
   ]
 }

@@ -65,7 +65,7 @@ func Test_ExportUserDataUseCase_Execute_IncludesAllSections(t *testing.T) {
 	user, _, err := identity.NewUser(shared.NewUserID(), email, phone, "Alice", false, shared.ReferralID("ref"), now)
 	require.NoError(t, err)
 
-	attempt := domsim.StartAttempt(shared.NewAttemptID(), user.ID(), shared.SimuladoID("aws-clf"), 90, now)
+	attempt := domsim.StartAttempt(shared.NewAttemptID(), user.ID(), shared.SimuladoID("aws-clf"), 90, []shared.QuestionID{"q1"}, now)
 
 	cert, err := domcert.Issue(user.ID(), shared.SimuladoID("aws-clf"), attempt.ID(), "Alice", 80, now)
 	require.NoError(t, err)

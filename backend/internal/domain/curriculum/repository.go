@@ -6,9 +6,16 @@ import "context"
 // Repository define o contrato de persistência de artigos do currículo.
 // Implementado na camada de infraestrutura — o domínio não conhece o banco de dados.
 type Repository interface {
-	// FindBySlug retorna um artigo pelo seu slug permanente.
-	// Retorna shared.ErrNotFound se o artigo não existir ou estiver soft-deleted.
+	// FindBySlug retorna um artigo PUBLICADO pelo seu slug permanente — uso
+	// público (rotas sem autenticação). Retorna shared.ErrNotFound se o artigo
+	// não existir, estiver soft-deleted OU não estiver publicado: um rascunho
+	// não pode ser lido por slug adivinhado.
 	FindBySlug(ctx context.Context, slug string) (*Article, error)
+
+	// FindBySlugForAdmin retorna um artigo pelo slug SEM filtrar por status de
+	// publicação — uso exclusivo de rotas admin (edição de rascunho antes de
+	// publicar). Retorna shared.ErrNotFound se não existir ou estiver soft-deleted.
+	FindBySlugForAdmin(ctx context.Context, slug string) (*Article, error)
 
 	// List retorna artigos de uma trilha com suporte a paginação.
 	// publishedOnly=true filtra apenas artigos publicados (para usuários).

@@ -19,6 +19,9 @@ import { migrateFromLocalStorage } from '@/lib/game-state-storage';
  */
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
+  // Começa `true` no servidor E no primeiro render do cliente: é isso que faz o
+  // HTML entregue e a primeira árvore hidratada serem idênticos.
+  const [carregando, setCarregando] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [reason, setReason] = useState<string | undefined>();
 
@@ -49,8 +52,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     async function restoreSession() {
-      const restored = await refreshSession();
-      if (!cancelled) setUser(restored);
+      try {
+        const restored = await refreshSession();
+        if (!cancelled) setUser(restored);
+      } finally {
+        // Sai do carregamento mesmo quando a renovação falha — senão a tela fica
+        // no esqueleto para sempre quando o backend está fora.
+        if (!cancelled) setCarregando(false);
+      }
     }
     restoreSession();
     return () => { cancelled = true; };
@@ -117,11 +126,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setModalOpen(false);
     pendingResolvers.current?.resolve(u);
     pendingResolvers.current = null;
-    // Pull progresso na nuvem após login — substitui localStorage se servidor
-    // tem estado mais recente. Falha silenciosa em static export.
+    // Pull progresso na nuvem após login — usa a variante "on login", que não
+    // apaga progresso anônimo real nunca sincronizado (ver progress-sync.ts).
+    // Falha silenciosa em static export.
     try {
-      const { pullProgress } = await import('@/lib/progress-sync');
-      await pullProgress();
+      const { pullProgressOnLogin } = await import('@/lib/progress-sync');
+      await pullProgressOnLogin();
     } catch {
       // backend indisponível
     }
@@ -139,6 +149,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value: AuthContextValue = {
+    carregando,
     user,
     isLoggedIn: user !== null,
     requireLogin,

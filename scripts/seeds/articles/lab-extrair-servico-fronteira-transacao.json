@@ -1,0 +1,2596 @@
+{
+  "slug": "lab-extrair-servico-fronteira-transacao",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência, do "
+              },
+              {
+                "text": "L03",
+                "code": true
+              },
+              {
+                "text": ", cresceu: 45 lojas, cinco pessoas no time, e o mesmo monólito .NET 8 em ECS Fargate que atendia pedido agora também administra o catálogo de produtos e envia e-mail de confirmação. Os três domínios vivem no mesmo processo, no mesmo schema do RDS e na mesma suíte de testes."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O sintoma que trouxe o time até aqui: um designer pediu para trocar o texto do e-mail de confirmação. A mudança foi uma string. O pipeline rodou as 2.400 asserções de integração da suíte inteira — pedido, catálogo e notificação — e levou 40 minutos. O deploy reiniciou a mesma task que atende todo pedido em andamento. Nenhuma dessas duas coisas tinha relação com o que mudou."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A reação óbvia — \"separa em microsserviços\" — é onde a maioria dos times erra: separar por SI só não resolve nada; separar pela fronteira ERRADA transforma um deploy lento num bug de concorrência raro, que é pior. Este laboratório aplica um teste único a três candidatos de extração antes de escrever qualquer Terraform."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado — depende do L03 e pressupõe o monólito dele já no ar"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L03 concluído (rolling update, ECR imutável), EF Core básico"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 45 min · implementação 2 h a 2 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo: uma instância RDS pequena a mais, fila e e-mail perto de gratuitos no volume do laboratório"
+              },
+              {
+                "k": "Serviços",
+                "v": "ECS, ALB, RDS (dois), SQS, SES, CloudWatch, IAM"
+              },
+              {
+                "k": "Volume atual",
+                "v": "45 lojas, ~230 pedidos/dia, suíte de 2.400 asserções em 40 min"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "mudança isolada por domínio não pode re-testar nem redeploy o que não mudou"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "confirmação por e-mail pode chegar minutos depois do pedido sem reclamação do cliente — é o que autoriza a fila"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "notificações rodando em serviço, banco e pipeline próprios, com prova de que o pedido sobrevive à indisponibilidade dela"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é \"reescrever em microsserviços\". Só UM serviço é extraído, de propósito — e estoque, que reprova o teste de fronteira transacional deste módulo, fica exatamente onde estava. Extrair tudo de uma vez é o erro mais caro desta banda, e o laboratório mostra por que evitá-lo é decisão, não preguiça."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Aplicar o teste de fronteira transacional a um candidato de extração e justificar a decisão por escrito, não por intuição.",
+              "Nomear o antipadrão \"monólito distribuído\" e reconhecer o sintoma dele numa arquitetura real.",
+              "Implementar o padrão outbox no EF Core, gravando pedido e evento na mesma transação.",
+              "Explicar por que SQS Standard exige consumidor idempotente, e implementar essa checagem.",
+              "Provar que a criação do pedido sobrevive à indisponibilidade do serviço extraído.",
+              "Provar que a reentrega de uma mensagem não produz e-mail duplicado.",
+              "Distinguir qual dos três candidatos de extração (notificações, catálogo, estoque) passa e qual reprova o teste, e explicar por quê.",
+              "Diagnosticar overselling como sintoma de fronteira transacional quebrada, não como bug de concorrência genérico."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Fronteira por capacidade de negócio",
+                "SAP-C02",
+                "teste \"a transação termina sozinha?\" aplicado a 3 candidatos",
+                "reconhecer decomposição por camada técnica como o erro clássico do cenário de prova"
+              ],
+              [
+                "Acoplamento temporal síncrono vs assíncrono",
+                "SAP-C02, DVA-C02",
+                "fila SQS no lugar da chamada de método entre pedido e notificação",
+                "por que uma chamada HTTP direta recria o monólito com rede no meio"
+              ],
+              [
+                "Monólito distribuído (antipadrão)",
+                "SAP-C02",
+                "alternativa descartada explicitamente na seção de decisões",
+                "reconhecer o sintoma: deploy separado, indisponibilidade ainda acoplada"
+              ],
+              [
+                "Consistência eventual e idempotência",
+                "SAP-C02, DVA-C02",
+                "consumidor confere pedido_id antes de agir",
+                "SQS Standard entrega pelo menos uma vez, nunca exatamente uma"
+              ],
+              [
+                "Dual-write problem / transactional outbox",
+                "SAP-C02",
+                "tabela outbox na mesma transação do pedido",
+                "por que publicar antes do commit perde evento, e depois do commit também pode perder"
+              ],
+              [
+                "Database per service",
+                "SAP-C02",
+                "RDS próprio para o serviço extraído",
+                "isolamento de falha e de schema; o trade-off é não poder mais fazer JOIN entre domínios"
+              ],
+              [
+                "Saga como alternativa a 2PC",
+                "SAP-C02",
+                "citado e adiado — estoque não é extraído neste laboratório",
+                "reconhecer quando a fronteira exige compensação (L35) em vez de extração direta"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve dois serviços com deploy, repositório e pipeline separados, e pede se isso é \"arquitetura de microsserviços\". A resposta certa verifica ACOPLAMENTO, não FORMA: se a chamada entre eles é síncrona no caminho crítico, é monólito distribuído com aparência de microsserviço — a rede entre eles não trocou dependência por independência."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A coluna da direita é obrigatória: requisito que não deixa marca no desenho é intenção, não decisão."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Mudança de domínio não re-testa outro domínio",
+                "suíte separada, minutos, não 40 min",
+                "repositório e pipeline próprios para o serviço extraído"
+              ],
+              [
+                "Pedido não pode falhar por causa do e-mail",
+                "zero acoplamento síncrono",
+                "fila entre os dois; outbox garante que o evento não se perde nem trava o commit"
+              ],
+              [
+                "Sem overselling",
+                "zero venda além do estoque disponível",
+                "estoque permanece na MESMA transação do pedido — não é extraído neste laboratório"
+              ],
+              [
+                "Cliente tolera atraso na confirmação",
+                "até alguns minutos",
+                "autoriza fila com retry em vez de exigir resposta síncrona ao cliente"
+              ],
+              [
+                "Entrega de e-mail resiliente a falha transitória",
+                "reentrega automática",
+                "DLQ após 5 tentativas mais alarme — não perda silenciosa"
+              ],
+              [
+                "Time de 5 devs, sem SRE dedicado",
+                "operação simples",
+                "um corte só neste laboratório, não dois — catálogo fica para depois"
+              ],
+              [
+                "Rastreabilidade de qual pedido gerou qual e-mail",
+                "auditável",
+                "log de envio no banco do serviço de notificação, indexado por pedido_id"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b3_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Requisito sem coluna de desenho é intenção, não decisão",
+            "content": "Cada linha acima só entrou porque alguém consegue apontar, no diagrama de produção, a peça exata que ela justifica. \"Sem overselling\" não virou um serviço novo — virou a AUSÊNCIA deliberada de um, porque a peça que atenderia esse requisito ainda não é segura de construir."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura de hoje: o monólito que testa tudo para mudar uma linha"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem, herdado do L03, e ele continua legítimo: publica de verdade e serviu bem até cinco pessoas. O laboratório começa por medir o custo dele em vez de assumi-lo — porque \"está lento\" não é discutível, e \"40 minutos e reinício total para uma string\" é."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Um commit em qualquer lugar, uma suíte inteira, um redeploy inteiro",
+            "caption": "Este desenho é o L03 já em produção — e continua legítimo como está. O defeito não é a topologia: é que os três domínios de negócio (pedido, catálogo, notificação) compilam no mesmo binário, testam na mesma suíte e implantam na mesma task. Percorra os passos e repare que o cliente que só faz pedido paga o preço de uma mudança que ele nunca vai perceber.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "dev",
+                    "service": "ide",
+                    "label": "Commit em qualquer módulo",
+                    "note": "trocar o texto de um e-mail dispara o mesmo caminho que mudar a regra de preço"
+                  },
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente da loja",
+                    "note": "sente o tempo de reinício da task mesmo quando o commit não tocou o caminho de pedido"
+                  }
+                ]
+              },
+              {
+                "label": "Integração contínua",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "pipeline",
+                    "service": "codepipeline",
+                    "label": "Pipeline único",
+                    "note": "roda as 2.400 asserções de pedido, catálogo e notificação juntas, para qualquer diff"
+                  }
+                ]
+              },
+              {
+                "label": "Registro de imagem",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ecr",
+                    "service": "ecr",
+                    "label": "ECR — uma imagem só",
+                    "note": "o artefato carrega os três domínios compilados juntos; não existe implantar um sem os outros"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB único",
+                    "note": "encaminha toda rota para o mesmo processo — não há fronteira nenhuma neste ponto"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "svc",
+                    "service": "ecs",
+                    "label": "Serviço ECS — o monólito",
+                    "note": "reiniciar por causa de notificação reinicia também quem atende pedido e catálogo"
+                  },
+                  {
+                    "id": "task",
+                    "service": "fargate",
+                    "label": "Task .NET 8",
+                    "note": "PedidoService, CatalogoService e NotificacaoService no mesmo processo, por injeção de dependência"
+                  },
+                  {
+                    "id": "db",
+                    "service": "rds",
+                    "label": "RDS — um schema só",
+                    "note": "pedido, produto e log de notificação na mesma transação; é o que torna a extração ingênua perigosa"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "dev",
+                "to": "pipeline",
+                "label": "commit em qualquer arquivo do monorepo",
+                "style": "solid"
+              },
+              {
+                "from": "pipeline",
+                "to": "ecr",
+                "label": "build da imagem única, após a suíte inteira passar",
+                "style": "solid"
+              },
+              {
+                "from": "pipeline",
+                "to": "svc",
+                "label": "atualiza o serviço com a imagem nova",
+                "style": "solid"
+              },
+              {
+                "from": "ecr",
+                "to": "task",
+                "label": "pull da imagem que contém os três domínios",
+                "style": "dashed"
+              },
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "HTTPS 443",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "task",
+                "label": "encaminha para o mesmo processo, qualquer rota",
+                "style": "solid"
+              },
+              {
+                "from": "task",
+                "to": "db",
+                "label": "lê e escreve pedido, produto e notificação na mesma transação",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Um commit, uma suíte inteira",
+                "detail": "A suíte de integração não sabe distinguir \"mudei um template de e-mail\" de \"mudei a regra de preço do pedido\": ela roda as 2.400 asserções dos três domínios porque todos compartilham o mesmo `DbContext` de teste e o mesmo processo de inicialização.",
+                "nodes": [
+                  "dev",
+                  "pipeline"
+                ],
+                "edges": [
+                  "dev>pipeline"
+                ]
+              },
+              {
+                "label": "Uma imagem, três domínios compilados juntos",
+                "detail": "O build só produz um artefato. Não existe \"publicar só a notificação\": o ECR recebe sempre o binário inteiro, e o próximo passo implanta ele inteiro também.",
+                "nodes": [
+                  "pipeline",
+                  "ecr"
+                ],
+                "edges": [
+                  "pipeline>ecr"
+                ]
+              },
+              {
+                "label": "O redeploy reinicia quem não mudou",
+                "detail": "A troca de imagem do serviço ECS substitui a task inteira. O código de pedido e de catálogo, que não mudou uma linha, é recompilado, reempacotado e reiniciado junto.",
+                "nodes": [
+                  "pipeline",
+                  "svc"
+                ],
+                "edges": [
+                  "pipeline>svc"
+                ]
+              },
+              {
+                "label": "O cliente que só faz pedido sente a mudança de notificação",
+                "detail": "Durante o rollout — mesmo o rolling update sem janela do L03 — existe uma janela de reinício. Ela acontece para TODO cliente, mesmo os que nunca vão notar a mudança que a motivou.",
+                "nodes": [
+                  "user",
+                  "alb",
+                  "task"
+                ],
+                "edges": [
+                  "user>alb",
+                  "alb>task"
+                ]
+              },
+              {
+                "label": "A transação única no banco é o que amarra tudo por baixo",
+                "detail": "Pedido, produto e log de notificação vivem no mesmo schema, na mesma conexão, na mesma unidade de trabalho do EF Core. É o que torna qualquer separação ingênua arriscada: quebrar essa transação sem entender o que ela garante quebra uma garantia junto.",
+                "nodes": [
+                  "task",
+                  "db"
+                ],
+                "edges": [
+                  "task>db"
+                ]
+              },
+              {
+                "label": "Por que ninguém separou isso ainda",
+                "detail": "Porque funcionou até cinco pessoas e 45 lojas. Separar por separar, sem saber qual fronteira é segura, troca \"deploy lento\" por \"bug de concorrência raro\" — e o segundo é pior.",
+                "nodes": [
+                  "pipeline",
+                  "svc"
+                ],
+                "edges": [
+                  "pipeline>svc"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O defeito não está em nenhuma linha de configuração",
+            "content": "Diferente do L03, aqui não há um parâmetro errado para corrigir. O defeito é estrutural: três domínios de negócio compartilham processo, schema e suíte. Nenhum ajuste de `deployment_maximum_percent` ou de health check resolve isso — a mudança tem de ser na fronteira, não no ajuste fino."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "O teste, antes de qualquer Terraform"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A pergunta que decide se um serviço está pronto para ser extraído é uma só: "
+              },
+              {
+                "text": "este serviço consegue terminar a própria transação sem depender de outro serviço no mesmo commit?",
+                "code": true
+              },
+              {
+                "text": " Aplicada aos três candidatos do monólito da Cadência, ela dá três respostas diferentes — e só isso já vale mais do que qualquer diagrama."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Candidato",
+              "A escrita que ele faz",
+              "Precisa ser atômica com o pedido?",
+              "Resultado do teste"
+            ],
+            "rows": [
+              [
+                "Notificações",
+                "grava um log de e-mail enviado",
+                "Não — o pedido é válido mesmo que o e-mail atrase, falhe uma vez ou seja reenviado",
+                "PASSA — extraído neste laboratório"
+              ],
+              [
+                "Catálogo / Produto",
+                "grava preço e nome de referência",
+                "Não no momento da escrita do pedido — o preço e o nome são copiados (snapshot) para dentro do próprio pedido, então nunca há JOIN vivo com o catálogo depois",
+                "PASSA, mas fica para depois — dois cortes de uma vez custa mais do que dois cortes valem"
+              ],
+              [
+                "Estoque",
+                "decrementa a quantidade disponível do produto",
+                "Sim — sem atomicidade, duas requisições concorrentes podem ler \"1 disponível\" ao mesmo tempo e vender a mesma unidade duas vezes",
+                "REPROVA — continua no monólito até existir saga (L35)"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Overselling não é bug raro; é matemática de concorrência",
+            "content": "Se estoque fosse extraído hoje com uma chamada de rede simples entre pedido e estoque, a janela entre \"ler disponibilidade\" e \"decrementar\" deixa de ser protegida por uma transação de banco e passa a ser protegida por nada. Duas requisições na mesma unidade, no mesmo milissegundo, conseguem as duas passar na checagem — e a loja vende o que não tem. Isto é dinheiro saindo da conta da Cadência, não um detalhe técnico."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Arquitetura para produção: o corte único"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. Estoque não aparece como serviço separado porque a decisão foi NÃO extraí-lo — e essa ausência também é rastreável: ela vem de reprovar o teste da seção anterior."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Um corte só: notificações fora, pedido e catálogo juntos, fila entre os dois",
+            "caption": "A mudança estrutural não é \"mais uma caixa\": é a existência de DUAS unidades de deploy, cada uma com o próprio pipeline, o próprio banco e a própria suíte — e uma fila no lugar da chamada de método que existia dentro do processo. Percorra os passos: cada peça nova resolve exatamente o requisito que a extraiu, e estoque continua de propósito no monólito.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "dev",
+                    "service": "ide",
+                    "label": "Commit no serviço de notificações",
+                    "note": "aciona só o pipeline e a suíte daquele repositório — pedido e catálogo não rodam"
+                  },
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente da loja",
+                    "note": "recebe a confirmação em minutos, não instantaneamente — é o contrato que a fila autoriza"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB",
+                    "note": "só recebe rota de pedido e catálogo agora; notificação não tem endpoint público"
+                  }
+                ]
+              },
+              {
+                "label": "VPC privada — monólito restante",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "svc_mono",
+                    "service": "ecs",
+                    "label": "ECS — Pedidos e Catálogo",
+                    "note": "continua um processo só, porque nenhum dos dois quebra o teste de fronteira transacional"
+                  },
+                  {
+                    "id": "task_mono",
+                    "service": "fargate",
+                    "label": "Task .NET 8",
+                    "note": "grava o pedido e a linha de outbox na MESMA transação — nunca publica antes de commitar"
+                  },
+                  {
+                    "id": "db_mono",
+                    "service": "rds",
+                    "label": "RDS — pedido, produto, outbox",
+                    "note": "a tabela outbox é o que evita perder o evento se a fila estiver fora do ar"
+                  }
+                ]
+              },
+              {
+                "label": "Mensageria",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "queue",
+                    "service": "sqs",
+                    "label": "Fila PedidoCriado",
+                    "note": "absorve o serviço de notificações estar fora do ar sem derrubar a criação do pedido"
+                  },
+                  {
+                    "id": "dlq",
+                    "service": "sqs",
+                    "label": "DLQ de notificações",
+                    "note": "guarda a mensagem que falhou repetidamente, sem perder o pedido de origem nem travar a fila"
+                  }
+                ]
+              },
+              {
+                "label": "VPC privada — serviço extraído",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "svc_notif",
+                    "service": "ecs",
+                    "label": "ECS — Notificações",
+                    "note": "deploy, escala e teste próprios; um bug aqui não impede ninguém de fazer pedido"
+                  },
+                  {
+                    "id": "task_notif",
+                    "service": "fargate",
+                    "label": "Task .NET 8 — consumidor",
+                    "note": "verifica o pedido_id contra o próprio log antes de decidir se envia"
+                  },
+                  {
+                    "id": "db_notif",
+                    "service": "rds",
+                    "label": "RDS — log de envio",
+                    "note": "guarda o que já foi enviado; é a chave da idempotência contra a reentrega da fila"
+                  }
+                ]
+              },
+              {
+                "label": "Envio e observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ses",
+                    "service": "ses",
+                    "label": "SES",
+                    "note": "envia o e-mail de confirmação; uma falha aqui não desfaz o pedido já commitado"
+                  },
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Alarme de profundidade da DLQ",
+                    "note": "é o sinal de que notificação está falhando de forma sistemática, sem depender de reclamação de cliente"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "dev",
+                "to": "svc_notif",
+                "label": "pipeline e suíte só do serviço de notificações",
+                "style": "solid"
+              },
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "HTTPS — cria o pedido",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "task_mono",
+                "label": "rotas de pedido e catálogo",
+                "style": "solid"
+              },
+              {
+                "from": "task_mono",
+                "to": "db_mono",
+                "label": "grava pedido + linha de outbox, mesma transação",
+                "style": "solid"
+              },
+              {
+                "from": "task_mono",
+                "to": "queue",
+                "label": "publica PedidoCriado depois do commit (worker de outbox)",
+                "style": "solid"
+              },
+              {
+                "from": "queue",
+                "to": "task_notif",
+                "label": "entrega PedidoCriado, pelo menos uma vez",
+                "style": "solid"
+              },
+              {
+                "from": "task_notif",
+                "to": "db_notif",
+                "label": "checa e grava idempotência pelo pedido_id",
+                "style": "solid"
+              },
+              {
+                "from": "task_notif",
+                "to": "ses",
+                "label": "envia e-mail de confirmação",
+                "style": "solid"
+              },
+              {
+                "from": "queue",
+                "to": "dlq",
+                "label": "esgotou as tentativas de entrega",
+                "style": "dashed"
+              },
+              {
+                "from": "dlq",
+                "to": "cw",
+                "label": "profundidade da fila de mensagens não processadas",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O pedido escreve dois registros na mesma transação",
+                "detail": "A tabela `outbox_messages` recebe uma linha no MESMO `SaveChanges` que grava o pedido. Ou os dois são commitados juntos, ou nenhum é — é isso que impede o \"dual-write problem\": nunca existe um pedido salvo sem a intenção de publicar registrada.",
+                "nodes": [
+                  "task_mono",
+                  "db_mono"
+                ],
+                "edges": [
+                  "task_mono>db_mono"
+                ]
+              },
+              {
+                "label": "A publicação só acontece depois do commit",
+                "detail": "Um worker em segundo plano lê linhas não publicadas do outbox e as envia para a fila. Se ele falhar, tenta de novo na próxima varredura — o dado de origem (a linha no outbox) não desaparece enquanto não for marcado como publicado.",
+                "nodes": [
+                  "db_mono",
+                  "queue"
+                ],
+                "edges": [
+                  "task_mono>queue"
+                ]
+              },
+              {
+                "label": "A fila separa os dois relógios",
+                "detail": "A criação do pedido não espera o e-mail. Se o serviço de notificações estiver fora do ar, a mensagem fica retida na fila até ele voltar — a criação do pedido continua respondendo 201 normalmente.",
+                "nodes": [
+                  "queue",
+                  "task_notif"
+                ],
+                "edges": [
+                  "queue>task_notif"
+                ]
+              },
+              {
+                "label": "A idempotência mora no consumidor, não na fila",
+                "detail": "Fila padrão entrega PELO MENOS uma vez, não exatamente uma. O consumidor confere se o `pedido_id` já está no log de envio antes de acionar o SES — é essa checagem, e não a fila, que impede e-mail duplicado.",
+                "nodes": [
+                  "task_notif",
+                  "db_notif"
+                ],
+                "edges": [
+                  "task_notif>db_notif"
+                ]
+              },
+              {
+                "label": "O e-mail que falha não é o pedido que falha",
+                "detail": "Uma rejeição do SES — endereço inválido, limite de envio — fica isolada no serviço de notificações. O pedido já está commitado do outro lado da fila havia minutos; nada aqui desfaz isso.",
+                "nodes": [
+                  "task_notif",
+                  "ses"
+                ],
+                "edges": [
+                  "task_notif>ses"
+                ]
+              },
+              {
+                "label": "Mensagem envenenada vai para a DLQ, não em laço infinito",
+                "detail": "Depois do número máximo de tentativas, a fila redireciona a mensagem para a DLQ em vez de reentregá-la para sempre. O alarme sobre a profundidade dela é o que avisa alguém, em vez de o cliente descobrir sozinho que nunca recebeu confirmação.",
+                "nodes": [
+                  "queue",
+                  "dlq"
+                ],
+                "edges": [
+                  "queue>dlq"
+                ]
+              },
+              {
+                "label": "Deploy do serviço de notificações não testa pedido",
+                "detail": "É a diferença estrutural em relação ao desenho anterior: o pipeline que roda quando alguém muda o texto de um e-mail não toca mais em nenhuma linha de código de pedido ou catálogo.",
+                "nodes": [
+                  "dev",
+                  "svc_notif"
+                ],
+                "edges": [
+                  "dev>svc_notif"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "flow_diagram",
+          "position": 2,
+          "data": {
+            "title": "Do POST /pedidos ao e-mail entregue — os dois relógios que não se esperam",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1 · Cliente envia POST /pedidos",
+                "desc": "A API valida o corpo e verifica estoque disponível — no MESMO banco, na MESMA transação que vai gravar o pedido. É por isso que estoque continua no monólito."
+              },
+              {
+                "label": "2 · Grava pedido + linha de outbox, um COMMIT só",
+                "desc": "O `SaveChanges` do EF Core grava as duas tabelas dentro da mesma transação de banco. Se o commit falhar, nenhuma das duas existe; se tiver sucesso, as duas existem."
+              },
+              {
+                "label": "3 · A API responde 201 ao cliente AGORA",
+                "desc": "O cliente não espera o e-mail. A resposta acontece assim que o commit termina — o envio de notificação está fora do caminho crítico da requisição."
+              },
+              {
+                "label": "4 · Worker de outbox publica no SQS",
+                "desc": "Rodando em segundo plano na mesma task, o worker varre linhas não publicadas e envia cada uma para a fila, marcando-a como publicada só depois da confirmação do SQS."
+              },
+              {
+                "label": "5 · SQS entrega ao consumidor do serviço de notificações",
+                "desc": "Entrega pelo menos uma vez. Reentrega acontece por timeout de visibilidade vencido antes de o consumidor apagar a mensagem — não é falha, é o contrato da fila padrão."
+              },
+              {
+                "label": "6 · Consumidor verifica idempotência pelo pedido_id",
+                "desc": "Antes de qualquer efeito colateral (enviar e-mail), o consumidor consulta o próprio banco. Se o `pedido_id` já está registrado como enviado, a mensagem é descartada sem reenviar."
+              },
+              {
+                "label": "7 · SES envia, log grava, mensagem some da fila",
+                "desc": "Só depois do SES confirmar o envio o consumidor grava o log e apaga a mensagem. Se cair entre o envio e o apagar, a reentrega vai bater no log e não reenviará — é a mesma checagem."
+              },
+              {
+                "label": "8 · Depois de N tentativas sem sucesso, vai para a DLQ",
+                "desc": "A política de redirecionamento move a mensagem automaticamente. O pedido original nunca foi afetado — ele já estava commitado desde o passo 2."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "annotated_formula",
+          "position": 3,
+          "data": {
+            "title": "Quanto tempo leva a confirmação por e-mail, e qual parcela você controla",
+            "formula": "atraso ≈ intervalo_do_worker_de_outbox + entrega_da_fila + processamento_do_consumidor",
+            "parts": [
+              {
+                "symbol": "intervalo_do_worker_de_outbox",
+                "name": "Varredura da tabela outbox",
+                "description": "O worker roda em ciclo, não em tempo real. Um intervalo de 2 s custa consultas extras ao banco a cada ciclo; um intervalo de 30 s atrasa toda confirmação em até 30 s. É o parâmetro com maior efeito na percepção de \"demorou\".",
+                "highlight": true
+              },
+              {
+                "symbol": "entrega_da_fila",
+                "name": "SQS até o consumidor",
+                "description": "Tipicamente subsegundo quando há consumidor de prontidão. Cresce se as tasks do serviço de notificações estiverem subdimensionadas para o volume de mensagens."
+              },
+              {
+                "symbol": "processamento_do_consumidor",
+                "name": "Checar idempotência e chamar o SES",
+                "description": "Uma consulta ao próprio banco mais uma chamada de API — na ordem de dezenas a centenas de milissegundos, e é a parcela mais previsível das três."
+              }
+            ]
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O payload que o outbox publica na fila, e que o consumidor de notificacoes le. Contem so o que o consumidor precisa — nao o pedido inteiro."
+              }
+            ]
+          },
+          "position": 4
+        },
+        {
+          "id": "b6_4",
+          "type": "code_block",
+          "position": 5,
+          "data": {
+            "language": "json",
+            "filename": "evento-pedido-criado.json",
+            "code": "{\n  \"pedidoId\": \"b6f2a9d4-2e1a-4b3c-9a7f-1c8d6e0f2a11\",\n  \"produtoId\": \"f1a2b3c4-5678-4abc-9def-0123456789ab\",\n  \"nomeProdutoNoMomento\": \"Cadeira de escritorio ergonomica\",\n  \"criadoEm\": \"2026-08-07T14:22:31.618Z\"\n}"
+          }
+        },
+        {
+          "id": "b6_5",
+          "type": "callout",
+          "position": 6,
+          "data": {
+            "variant": "success",
+            "title": "Por que o payload não carrega o pedido inteiro",
+            "content": "Enviar só os campos que o consumidor de fato usa evita que o serviço de notificações dependa silenciosamente de um campo do pedido que pode mudar de forma no monólito. Menos campo no contrato é menos superfície de quebra quando um dos dois lados evolui sozinho — que é exatamente o ganho que motivou a extração."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "A Cadência cresceu de 30 para 45 lojas e de duas para cinco pessoas no time. Mudar o texto de um e-mail de confirmação exige rodar as 2.400 asserções da suíte inteira e reimplantar o artefato completo. O time quer parar de pagar esse preço, sem herdar transação distribuída antes de precisar dela.",
+            "winner": "Extrair só o serviço de Notificações, com outbox no monólito e fila entre os dois",
+            "why": "Notificações é o único dos três candidatos que passa no teste de fronteira transacional sem ressalva: o pedido é válido mesmo que o e-mail atrase, falhe ou seja reenviado. Extrair um corte só, e não dois, mantém a superfície operacional do time de cinco pessoas gerenciável — provar o padrão com um serviço antes de escalar para mais é o que evita repetir um erro de decomposição em paralelo, em vez de um por vez.",
+            "alternatives": [
+              {
+                "name": "Extrair Estoque junto",
+                "downside": "Reprova o teste: sem atomicidade com a criação do pedido, duas requisições concorrentes podem vender a última unidade duas vezes. Corrigir isso exige saga com compensação (L35), que o time ainda não tem — extrair agora troca um bug impossível por um raro, o que não é vitória."
+              },
+              {
+                "name": "Extrair Catálogo também, no mesmo corte",
+                "downside": "Passa no mesmo teste que Notificações — o pedido copia preço e nome para dentro do próprio item, sem depender de leitura ao vivo. Mas dois serviços novos de uma vez dobram pipeline, banco e superfície de falha para um time que nunca operou nem um. Fica para depois de o primeiro corte provar o padrão."
+              },
+              {
+                "name": "Extrair Notificações com chamada HTTP síncrona, sem fila",
+                "downside": "Troca uma dependência interna (chamada de método) por uma externa igualmente rígida: se o serviço de notificações cair, a criação do pedido cai junto. É o \"monólito distribuído\" — parece microsserviço porque tem deploy separado, e continua acoplado porque a indisponibilidade de um derruba o outro."
+              },
+              {
+                "name": "Não extrair nada; só separar em projetos/namespaces dentro do mesmo deploy",
+                "downside": "Melhora a organização do código e não resolve o problema real, que é acoplamento de DEPLOY e de TESTE. O pipeline continua rodando a suíte inteira e reimplantando o artefato inteiro para qualquer mudança, porque a fronteira de processo não mudou."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Qual serviço extrair primeiro",
+                "Notificações",
+                "Catálogo; Estoque",
+                "passa no teste de fronteira transacional sem ressalva nenhuma",
+                "catálogo fica para depois; o time reavalia quando o próximo ponto de dor aparecer"
+              ],
+              [
+                "Como propagar o evento",
+                "Outbox + SQS",
+                "chamada HTTP síncrona; publicar antes do commit sem outbox",
+                "nunca publica um evento cujo pedido não foi commitado, nem perde o pedido se a fila estiver fora do ar",
+                "um worker a mais rodando, e o evento chega com atraso de segundos, não instantâneo"
+              ],
+              [
+                "Persistência do serviço extraído",
+                "RDS próprio (instância separada)",
+                "schema separado na mesma instância do monólito",
+                "isolamento de falha e de deploy de schema completos; um ALTER TABLE de notificações não trava nada do monólito",
+                "uma instância RDS a mais na fatura, ainda que pequena"
+              ],
+              [
+                "Idempotência da entrega",
+                "checagem por pedido_id no consumidor",
+                "confiar na deduplicação nativa da fila",
+                "SQS Standard entrega pelo menos uma vez, não exatamente uma; a aplicação tem de tolerar reentrega",
+                "mais uma tabela e uma consulta a cada mensagem processada"
+              ],
+              [
+                "O que NÃO extrair agora",
+                "Estoque continua no monólito",
+                "extrair com chamada síncrona; extrair já com saga",
+                "decrementar estoque exige atomicidade com a criação do pedido — sem saga (L35), extrair agora troca \"impossível vender 2× o último item\" por \"possível, ocasionalmente\"",
+                "nenhuma; adiar corretamente não é abrir mão, é sequenciar"
+              ],
+              [
+                "Rollback do serviço extraído",
+                "independente, por tag SHA (reusa o L03)",
+                "rollback conjunto dos dois serviços",
+                "cada serviço tem o próprio histórico de deploy; reverter notificações não reverte pedido",
+                "os dois podem ficar em revisões \"descasadas\" — aceitável, porque não compartilham transação"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este corte cria, e que este módulo não paga",
+            "content": "Com dois serviços e um contrato de evento em JSON cru, mudar o formato do evento sem combinar com quem consome quebra o consumidor em silêncio. Registro de schema e versionamento de evento é o L24; enquanto você não tiver isso, trate o payload como contrato público e só adicione campo, nunca remova ou renomeie."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: a infraestrutura do corte"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Duas peças novas sustentam o corte inteiro: um banco que o monólito não enxerga, e uma fila que só o worker de outbox pode escrever."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "extracao.tf",
+            "code": "# extracao.tf — a infraestrutura do corte: banco proprio, fila, e os dois papeis\n\n# ── O banco do servico extraido. Nao e o mesmo RDS do monolito. ───────────────\nresource \"aws_db_instance\" \"notificacoes\" {\n  identifier     = \"${var.projeto}-notificacoes\"\n  engine         = \"postgres\"\n  engine_version = \"16\"\n  instance_class = \"db.t4g.micro\" # volume baixo: so o log de envio, sem pedido nem catalogo\n\n  db_name  = \"notificacoes\"\n  username = \"app\"\n  manage_master_user_password = true # segredo gerenciado pelo Secrets Manager, nunca em variavel\n\n  allocated_storage = 20\n  db_subnet_group_name   = aws_db_subnet_group.privada.name\n  vpc_security_group_ids = [aws_security_group.rds_notificacoes.id]\n\n  # Um ALTER TABLE aqui nao trava NENHUMA tabela do monolito: e um banco fisicamente\n  # separado. E o ponto central do padrao \"database per service\".\n  skip_final_snapshot = false\n  final_snapshot_identifier = \"${var.projeto}-notificacoes-final\"\n}\n\n# O security group do RDS aceita conexao SO da task de notificacoes — nunca\n# 0.0.0.0/0, e nunca a task do monolito, que nao tem nada para ler ali.\nresource \"aws_security_group_rule\" \"rds_notificacoes_entrada\" {\n  type                     = \"ingress\"\n  from_port                = 5432\n  to_port                  = 5432\n  protocol                 = \"tcp\"\n  security_group_id        = aws_security_group.rds_notificacoes.id\n  source_security_group_id = aws_security_group.task_notificacoes.id\n}\n\n# ── A fila entre os dois servicos, com DLQ dedicada. ───────────────────────────\nresource \"aws_sqs_queue\" \"pedido_criado_dlq\" {\n  name                      = \"${var.projeto}-pedido-criado-dlq\"\n  message_retention_seconds = 1209600 # 14 dias — o teto do SQS; da tempo de investigar sem perder a mensagem\n}\n\nresource \"aws_sqs_queue\" \"pedido_criado\" {\n  name = \"${var.projeto}-pedido-criado\"\n\n  # Nao alteramos o padrao de 30s de visibility timeout aqui de proposito: o\n  # consumidor processa em centenas de ms, entao o padrao ja sobra. So vale\n  # revisar se o processamento (envio via SES) ficar lento o suficiente para a\n  # mensagem voltar a ficar visivel ANTES de terminar — meça no seu ambiente.\n  redrive_policy = jsonencode({\n    deadLetterTargetArn = aws_sqs_queue.pedido_criado_dlq.arn\n    maxReceiveCount      = 5 # cinco tentativas: falha transitoria se recupera antes disso\n  })\n}\n\n# Quem pode escrever na fila e o SEGREDO de nao virar chamada sincrona: e o\n# outbox worker do monolito, e mais ninguem.\nresource \"aws_sqs_queue_policy\" \"somente_outbox_publica\" {\n  queue_url = aws_sqs_queue.pedido_criado.id\n  policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect    = \"Allow\"\n      Principal = { AWS = aws_iam_role.task_monolito.arn }\n      Action    = \"sqs:SendMessage\"\n      Resource  = aws_sqs_queue.pedido_criado.arn\n    }]\n  })\n}\n\n# ── Papel de tarefa do MONOLITO: so pode ENVIAR para a fila, nada alem disso. ──\ndata \"aws_iam_policy_document\" \"monolito_publica_evento\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"sqs:SendMessage\"]\n    resources = [aws_sqs_queue.pedido_criado.arn] # restrito a UMA fila; sem \"*\"\n  }\n}\n\n# ── Papel de tarefa do servico de NOTIFICACOES: consome a fila e envia e-mail. ─\ndata \"aws_iam_policy_document\" \"notificacoes_consome_e_envia\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sqs:ReceiveMessage\", \"sqs:DeleteMessage\", \"sqs:GetQueueAttributes\"]\n    resources = [aws_sqs_queue.pedido_criado.arn] # restrito a mesma fila; sem \"*\"\n  }\n  statement {\n    effect  = \"Allow\"\n    actions = [\"ses:SendEmail\", \"ses:SendRawEmail\"]\n    # Restrito a IDENTIDADE verificada, nao a conta inteira: o servico so pode\n    # enviar EM NOME do dominio da Cadencia, nunca se passar por outro remetente.\n    resources = [aws_ses_domain_identity.cadencia.arn]\n  }\n}\n\nresource \"aws_ecs_service\" \"notificacoes\" {\n  name            = \"${var.projeto}-notificacoes\"\n  cluster         = aws_ecs_cluster.principal.id\n  task_definition = aws_ecs_task_definition.notificacoes.arn\n  desired_count   = 2\n  launch_type     = \"FARGATE\"\n\n  # Reusa o mesmo par mínimo/máximo do L03 — o rollout sem janela nao e\n  # exclusivo do monolito; e propriedade de QUALQUER servico ECS bem configurado.\n  deployment_minimum_healthy_percent = 100\n  deployment_maximum_percent         = 200\n  deployment_circuit_breaker { enable = true, rollback = true }\n\n  network_configuration {\n    subnets          = aws_subnet.privada[*].id\n    security_groups  = [aws_security_group.task_notificacoes.id]\n    assign_public_ip = false\n  }\n  # Sem load_balancer: este servico nao tem rota publica, so consome fila.\n}\n\noutput \"fila_pedido_criado\" {\n  value       = aws_sqs_queue.pedido_criado.url\n  description = \"URL da fila; o monolito publica aqui depois do commit\"\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que o `sqs:SendMessage` não leva \"*\"",
+            "content": "A ação aceita `Resource` específico, e a política restringe a UMA fila — diferente do `ecr:GetAuthorizationToken` do L03, que é operação de conta e não tem recurso para restringir. Aqui não há justificativa para largura: o monólito só publica num lugar, e a política diz exatamente isso."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o outbox no monólito restante"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O outbox não é a fila — é a garantia de que publicar não é um passo separado de gravar o pedido. A tabela vive no MESMO banco e na MESMA transação do EF Core."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "PedidoService.cs",
+            "code": "// OutboxMessage.cs — a linha que garante que publicar nao e um passo separado do commit\n\npublic class OutboxMessage\n{\n    public Guid Id { get; set; }\n    public string TipoEvento { get; set; } = \"PedidoCriado\";\n    public string PayloadJson { get; set; } = default!;\n    public DateTimeOffset CriadoEm { get; set; }\n    public DateTimeOffset? PublicadoEm { get; set; } // null = ainda nao publicado\n}\n\n// PedidoService.cs — o ponto em que a garantia nasce\npublic async Task<Pedido> CriarPedidoAsync(NovoPedidoDto dto, AppDb db)\n{\n    // A verificacao de estoque e o decremento acontecem AQUI, na mesma\n    // transacao do pedido — e e por isso que estoque NAO foi extraido.\n    var produto = await db.Produtos.FindAsync(dto.ProdutoId)\n        ?? throw new ProdutoNaoEncontradoException(dto.ProdutoId);\n    if (produto.QuantidadeDisponivel < dto.Quantidade)\n        throw new EstoqueInsuficienteException(dto.ProdutoId);\n    produto.QuantidadeDisponivel -= dto.Quantidade;\n\n    var pedido = new Pedido\n    {\n        Id = Guid.NewGuid(),\n        ProdutoId = produto.Id,\n        // Preco e nome SNAPSHOTADOS para dentro do pedido — e o que torna\n        // Catalogo um candidato valido a extrair depois, sem quebrar pedido antigo.\n        PrecoNoMomento = produto.Preco,\n        NomeProdutoNoMomento = produto.Nome,\n        Quantidade = dto.Quantidade,\n        CriadoEm = DateTimeOffset.UtcNow,\n    };\n    db.Pedidos.Add(pedido);\n\n    // A linha de outbox entra no MESMO SaveChanges do pedido. Ou as duas\n    // sao commitadas juntas, ou nenhuma e — isto e o que fecha o dual-write\n    // problem: nunca existe um pedido salvo sem a intencao de publicar salva.\n    db.OutboxMessages.Add(new OutboxMessage\n    {\n        Id = Guid.NewGuid(),\n        TipoEvento = \"PedidoCriado\",\n        PayloadJson = JsonSerializer.Serialize(new PedidoCriadoEvento(\n            pedido.Id, pedido.ProdutoId, pedido.NomeProdutoNoMomento, pedido.CriadoEm)),\n        CriadoEm = DateTimeOffset.UtcNow,\n    });\n\n    await db.SaveChangesAsync(); // UM commit; pedido e outbox nascem juntos ou nao nascem\n    return pedido;\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "csharp",
+            "filename": "OutboxPublisherWorker.cs",
+            "code": "// OutboxPublisherWorker.cs — o unico lugar que fala com a fila do lado do monolito\n\npublic class OutboxPublisherWorker(\n    IServiceScopeFactory scopeFactory, IAmazonSQS sqs, IConfiguration config,\n    ILogger<OutboxPublisherWorker> log) : BackgroundService\n{\n    protected override async Task ExecuteAsync(CancellationToken ct)\n    {\n        var filaUrl = config[\"Filas:PedidoCriado\"]!;\n\n        while (!ct.IsCancellationRequested)\n        {\n            using var escopo = scopeFactory.CreateScope();\n            var db = escopo.ServiceProvider.GetRequiredService<AppDb>();\n\n            // So le o que ainda nao foi publicado. A leitura NAO precisa de\n            // lock especial: se dois workers rodassem em paralelo (nao roda,\n            // desired_count controla isto por task), publicar duas vezes seria\n            // absorvido pela idempotencia do CONSUMIDOR, nao daqui.\n            var pendentes = await db.OutboxMessages\n                .Where(m => m.PublicadoEm == null)\n                .OrderBy(m => m.CriadoEm)\n                .Take(50)\n                .ToListAsync(ct);\n\n            foreach (var msg in pendentes)\n            {\n                try\n                {\n                    await sqs.SendMessageAsync(new SendMessageRequest\n                    {\n                        QueueUrl = filaUrl,\n                        MessageBody = msg.PayloadJson,\n                        MessageAttributes = new()\n                        {\n                            [\"TipoEvento\"] = new MessageAttributeValue\n                            { DataType = \"String\", StringValue = msg.TipoEvento },\n                        },\n                    }, ct);\n\n                    msg.PublicadoEm = DateTimeOffset.UtcNow;\n                }\n                catch (Exception ex)\n                {\n                    // Nao marca como publicado. Fica pendente e tenta de novo\n                    // no proximo ciclo — e a fila fora do ar NAO perde o pedido.\n                    log.LogWarning(ex, \"falha ao publicar outbox {Id}; tenta de novo no proximo ciclo\", msg.Id);\n                }\n            }\n            await db.SaveChangesAsync(ct);\n\n            // O intervalo domina o atraso percebido na confirmacao — ver a\n            // formula na secao de arquitetura de producao.\n            await Task.Delay(TimeSpan.FromSeconds(2), ct);\n        }\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b9_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "Pedido pago sem confirmação nenhuma, e nada acusa erro",
+            "content": "Sem a tabela outbox — publicando direto na fila dentro do mesmo método, antes do commit — existe uma janela em que o SQS aceitou a mensagem e o commit do pedido ainda pode falhar depois (violação de constraint, timeout de conexão). O cliente recebe um e-mail de um pedido que não existe, ou o inverso: o commit teve sucesso e a chamada à fila falhou depois, e ninguém jamais é notificado. As duas falhas são silenciosas, e é isso que o outbox fecha."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o consumidor idempotente do serviço de notificações"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Do outro lado da fila, a pergunta não é \"recebi a mensagem?\" — é \"já agi sobre este pedido antes?\". A diferença entre as duas é o que evita e-mail duplicado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "NotificacaoConsumerWorker.cs",
+            "code": "// NotificacaoConsumerWorker.cs — o lado que le a fila e decide se envia\n\npublic class NotificacaoConsumerWorker(\n    IAmazonSQS sqs, IAmazonSimpleEmailService ses, IServiceScopeFactory scopeFactory,\n    IConfiguration config, ILogger<NotificacaoConsumerWorker> log) : BackgroundService\n{\n    protected override async Task ExecuteAsync(CancellationToken ct)\n    {\n        var filaUrl = config[\"Filas:PedidoCriado\"]!;\n\n        while (!ct.IsCancellationRequested)\n        {\n            var resposta = await sqs.ReceiveMessageAsync(new ReceiveMessageRequest\n            {\n                QueueUrl = filaUrl,\n                MaxNumberOfMessages = 10,\n                WaitTimeSeconds = 20, // long polling: evita custo e latencia de sondar vazio\n            }, ct);\n\n            foreach (var msg in resposta.Messages)\n            {\n                var evento = JsonSerializer.Deserialize<PedidoCriadoEvento>(msg.Body)!;\n                using var escopo = scopeFactory.CreateScope();\n                var db = escopo.ServiceProvider.GetRequiredService<NotificacaoDb>();\n\n                // A CHECAGEM QUE IMPORTA. SQS padrao entrega PELO MENOS uma vez,\n                // entao esta mensagem pode ser a segunda entrega da mesma\n                // notificacao. E a linha abaixo, nao a fila, que impede o\n                // segundo e-mail.\n                var jaEnviado = await db.EnviosLog\n                    .AnyAsync(e => e.PedidoId == evento.PedidoId, ct);\n\n                if (!jaEnviado)\n                {\n                    await ses.SendEmailAsync(MontarEmailConfirmacao(evento), ct);\n                    db.EnviosLog.Add(new EnvioLog\n                    {\n                        PedidoId = evento.PedidoId,\n                        EnviadoEm = DateTimeOffset.UtcNow,\n                    });\n                    await db.SaveChangesAsync(ct);\n                }\n                else\n                {\n                    log.LogInformation(\"pedido {Id} ja tinha e-mail enviado; mensagem reentregue, ignorada\",\n                        evento.PedidoId);\n                }\n\n                // So apaga DEPOIS do envio (ou da checagem) ter sucesso. Se o\n                // processo cair entre enviar e apagar, a reentrega vai bater\n                // no log e nao reenviar — a mesma checagem cobre os dois casos.\n                await sqs.DeleteMessageAsync(filaUrl, msg.ReceiptHandle, ct);\n            }\n        }\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que a checagem vem ANTES do efeito colateral, não depois",
+            "content": "Enviar o e-mail e só então checar duplicidade não protege nada — o e-mail já saiu. A ordem certa é: checar, e só se a checagem disser \"não enviado ainda\", agir. É o mesmo princípio de \"prontidão antes de aceitar tráfego\" do L03, aplicado a mensagem em vez de requisição HTTP."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Implantar, e provar que o corte segura"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma aceita \"o e-mail chegou\" como resultado — cada uma tem um número ou um estado esperado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medicoes; nenhuma conclusao vem de \"parece que funcionou\"\n\nPROJETO=ffv-lab; REGIAO=us-east-1\nFILA=$(terraform output -raw fila_pedido_criado)\n\n# ── Prova 1: mudar so notificacao nao re-testa pedido ────────────────────────\n# Antes do corte: 2.400 asserções, ~40 min. Depois, so a suite do servico\n# extraido roda para uma mudanca de template.\ntime dotnet test src/Notificacoes.Tests --filter Categoria=Notificacao\n# Esperado: suite do servico de notificacoes sozinha, na ordem de segundos a\n# poucos minutos — nao os ~40 min da suite inteira do monolito.\n\n# ── Prova 2: pedido sobrevive ao servico de notificacoes fora do ar ──────────\naws ecs update-service --cluster $PROJETO --service ${PROJETO}-notificacoes --desired-count 0\ncurl -s -o /dev/null -w '%{http_code}\\n' -X POST \"$API/pedidos\" -d @exemplo-pedido.json\n# Esperado: 201. O pedido existe no banco do monolito mesmo com notificacoes a zero.\naws sqs get-queue-attributes --queue-url \"$FILA\" \\\n  --attribute-names ApproximateNumberOfMessages --query 'Attributes.ApproximateNumberOfMessages'\n# Esperado: >= 1 — a mensagem ficou retida esperando o consumidor voltar.\naws ecs update-service --cluster $PROJETO --service ${PROJETO}-notificacoes --desired-count 2\n\n# ── Prova 3: reentrega da fila nao duplica e-mail ─────────────────────────────\n# Forca reentrega: recebe sem apagar (simula falha do consumidor apos enviar).\nMSG=$(aws sqs receive-message --queue-url \"$FILA\" --visibility-timeout 1 \\\n  --query 'Messages[0].Body' --output text)\nsleep 2  # o timeout de 1s expira; a mensagem volta a ficar visivel\naws ses get-send-statistics --query 'SendDataPoints[-1].DeliveryAttempts'\n# Esperado: 1 envio real no SES, mesmo com 2 entregas da fila — a checagem por\n# pedido_id no consumidor absorveu a segunda.\n\n# ── Prova 4: o outbox nao perde o evento com a fila fora do ar ───────────────\naws sqs set-queue-attributes --queue-url \"$FILA\" --attributes Policy='{}'  # nega temporariamente\ncurl -s -X POST \"$API/pedidos\" -d @exemplo-pedido.json\npsql -c \"select count(*) from outbox_messages where publicado_em is null;\"\n# Esperado: >= 1 linha pendente — o pedido existe, o evento so nao foi publicado ainda.\n# restaure a policy da fila e rode de novo:\npsql -c \"select count(*) from outbox_messages where publicado_em is null;\"\n# Esperado: 0 — o worker publicou assim que a fila voltou a aceitar.\n\n# ── Prova 5: mensagem envenenada vai para a DLQ apos 5 tentativas ────────────\naws sqs send-message --queue-url \"$FILA\" --message-body '{\"pedidoId\":\"nao-existe\"}'\n# consumidor lanca excecao de desserializacao 5 vezes (maxReceiveCount)\nsleep 60\nDLQ=$(terraform output -raw fila_dlq 2>/dev/null || echo \"${PROJETO}-pedido-criado-dlq\")\naws sqs get-queue-attributes --queue-url \"$DLQ\" \\\n  --attribute-names ApproximateNumberOfMessages --query 'Attributes.ApproximateNumberOfMessages'\n# Esperado: 1 — a mensagem saiu da fila principal e nao voltou em laço.\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Mudança isolada não re-testa tudo",
+                "suíte filtrada do serviço de notificações",
+                "roda em segundos a poucos minutos, não ~40 min",
+                "se ainda roda a suíte inteira, o pipeline não foi realmente separado — só o runtime foi"
+              ],
+              [
+                "2 · Pedido sobrevive à queda da notificação",
+                "desired_count = 0 no serviço extraído + POST",
+                "201 no pedido; mensagem retida na fila",
+                "se o POST falhar, existe chamada síncrona no caminho — é o monólito distribuído"
+              ],
+              [
+                "3 · Reentrega não duplica e-mail",
+                "força mensagem visível de novo via visibility timeout",
+                "1 envio no SES apesar de 2 entregas",
+                "se houver 2 envios, o consumidor não está checando pedido_id antes de agir"
+              ],
+              [
+                "4 · Outbox não perde evento com fila fora do ar",
+                "nega a policy da fila temporariamente",
+                "linha permanece pendente e publica assim que a fila volta",
+                "se a linha some ou nunca publica, o worker não está tratando falha como \"tentar de novo\""
+              ],
+              [
+                "5 · Mensagem envenenada vai para a DLQ",
+                "mensagem malformada, aguarda 5 tentativas",
+                "1 mensagem na DLQ, fila principal drenada",
+                "se ficar reentregando para sempre, o `maxReceiveCount` não está configurado na redrive"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "A prova que mais importa é a segunda, não a primeira",
+            "content": "Um deploy mais rápido é conforto; um pedido que sobrevive ao serviço de notificações estar fora do ar é a garantia que este laboratório existe para entregar. Se a prova 2 falhar, as outras quatro não compensam — o corte não fez o que deveria."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três parecem o mesmo sintoma superficial — \"notificação não está funcionando direito\". O que as separa é a causa, e cada uma ensina uma parte diferente do corte."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Publicar antes do commit (sem outbox)",
+                "mova a chamada ao SQS para ANTES do `SaveChangesAsync` do pedido, e force uma falha de constraint no banco",
+                "e-mail de confirmação de um pedido que não existe no banco",
+                "log do consumidor mostra pedido_id sem correspondência no banco do monólito",
+                "outbox na mesma transação; publicar só depois de o commit ter sucesso"
+              ],
+              [
+                "Consumidor sem checagem de idempotência",
+                "remova a consulta a `EnviosLog` antes de chamar o SES",
+                "cliente recebe dois e-mails do mesmo pedido, de forma esporádica",
+                "log do consumidor mostra dois `ReceiveMessage` para o mesmo `pedidoId`",
+                "checar e gravar `pedido_id` antes do efeito colateral, não depois"
+              ],
+              [
+                "Estoque extraído com chamada síncrona, sem saga",
+                "simule dois `POST /pedidos` simultâneos para o último item em estoque",
+                "as duas requisições recebem 201; o estoque fica negativo",
+                "log de ambas as chamadas mostra \"1 disponível\" lido pelas duas ao mesmo tempo",
+                "manter estoque na mesma transação do pedido; ou implementar saga com reserva (L35)"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Segurança: o que a fronteira nova expõe"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Separar em dois serviços cria uma superfície que não existia: agora há uma fila e uma identidade de e-mail que alguém com a credencial errada pode abusar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Papel do monólito consegue LER da fila, não só publicar",
+                "média",
+                "médio",
+                "política da fila restringe `sqs:SendMessage` a um principal; nenhuma outra ação",
+                "CloudTrail em ações de SQS fora do principal esperado",
+                "revogar e restringir a política; auditar o que foi lido indevidamente"
+              ],
+              [
+                "Serviço de notificações envia e-mail em nome de domínio não verificado",
+                "baixa",
+                "alto",
+                "`ses:SendEmail` restrito ao ARN da identidade verificada, não à conta",
+                "métricas de rejeição do SES por identidade não reconhecida",
+                "revogar a permissão; verificar a identidade correta antes de reautorizar"
+              ],
+              [
+                "Mensagem malformada injetada diretamente na fila",
+                "baixa",
+                "médio",
+                "validação de schema no consumidor antes de desserializar; DLQ como rede",
+                "taxa de mensagens na DLQ acima do normal",
+                "inspecionar a DLQ; a ausência de efeito colateral (não enviou e-mail) já limitou o dano"
+              ],
+              [
+                "Credencial do banco de notificações vaza pela variável de ambiente",
+                "média",
+                "alto",
+                "segredo gerenciado pelo Secrets Manager, lido em tempo de execução — nunca em `environment`",
+                "busca por padrão de credencial no grupo de logs",
+                "rotacionar via Secrets Manager; a rotação não exige tocar no código"
+              ],
+              [
+                "Papel de execução com permissão além do necessário",
+                "média",
+                "médio",
+                "papel de execução só lê ECR e escreve log; papel de tarefa é o único com SQS e SES",
+                "IAM Access Analyzer sobre uso real",
+                "derivar a política do uso medido — é o L41"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Papel de tarefa comprometido pode enviar e-mail em nome da Cadência",
+            "content": "Se a política de `ses:SendEmail` não estiver restrita à identidade verificada do domínio, uma task comprometida pode enviar e-mail arbitrário usando a reputação de envio da conta — o que derruba a reputação do domínio inteiro nos provedores de e-mail, não só o dessa task. É exposição de segurança com efeito que sai da AWS: afeta a entregabilidade de TODO e-mail legítimo da empresa depois disso."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "O time da Cadência quer extrair o serviço de Estoque do monólito de pedidos para escalar a leitura de disponibilidade separadamente. Qual é o problema real com essa extração agora?",
+        "options": [
+          "Sem uma transação atômica entre pedido e estoque, duas requisições concorrentes podem vender a última unidade duas vezes",
+          "Estoque muda com mais frequência que pedidos, então merece um ciclo de deploy próprio",
+          "O ECS não permite que dois serviços diferentes acessem o mesmo RDS, então a extração falharia tecnicamente",
+          "Extrair estoque exigiria reescrever a aplicação numa linguagem diferente"
+        ],
+        "correctIndex": 0,
+        "explanation": "É exatamente o teste de fronteira transacional reprovando: decrementar estoque precisa ser atômico com a criação do pedido para impedir overselling, e uma chamada entre dois serviços separados não garante isso — a janela entre ler \"1 disponível\" e decrementar deixa de ser protegida por uma transação de banco única e passa a ser protegida por nada, até que exista saga com compensação (L35).\n\nA primeira alternativa confunde a coisa com frequência de mudança, que é um sinal sobre PRIORIDADE de extração, não sobre se ela é segura — um serviço pode mudar pouco e ainda assim reprovar o teste de fronteira. A terceira inventa uma restrição técnica que não existe: múltiplos serviços podem, tecnicamente, ler e escrever o mesmo RDS sem problema nenhum de infraestrutura — o problema aqui não é técnico, é a garantia que se perde. A quarta é irrelevante: a decisão de extrair é sobre onde a transação termina, não sobre a linguagem ou o stack usado para implementar o serviço."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel do corte tem de responder"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "list",
+          "position": 0,
+          "data": {
+            "ordered": false,
+            "items": [
+              "O pedido está sendo criado sem depender do serviço de notificações estar de pé?",
+              "Quantas linhas de outbox estão pendentes há mais tempo do que o esperado?",
+              "A fila está acumulando mais rápido do que o consumidor processa?",
+              "Quantas mensagens foram parar na DLQ, e desde quando?",
+              "O SES está rejeitando envio por reputação ou por limite de taxa?"
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "linhas de `outbox_messages` com `publicado_em IS NULL` há > 5 min",
+                "worker parado ou fila recusando publicação",
+                "> 0 por mais de 5 min"
+              ],
+              [
+                "`ApproximateNumberOfMessages` da fila principal",
+                "consumidor mais lento que a chegada de pedidos",
+                "crescendo por > 10 min sem estabilizar"
+              ],
+              [
+                "`ApproximateNumberOfMessagesVisible` da DLQ",
+                "mensagens envenenadas ou contrato quebrado",
+                "> 0"
+              ],
+              [
+                "taxa de rejeição do SES (`Reputation.BounceRate`)",
+                "lista suja ou identidade com problema",
+                "> 5%"
+              ],
+              [
+                "`RunningTaskCount` do serviço de notificações",
+                "capacidade de consumo abaixo do desenhado",
+                "< desired_count por > 2 min"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana logo depois do corte",
+            "content": "Latência de \"pedido para e-mail entregue\" NÃO é a mesma coisa que latência de resposta da API — a primeira inclui o intervalo do worker de outbox e a entrega da fila, por desenho. Alarmar sobre ela com o limiar de uma API síncrona gera ruído constante para um atraso que é esperado e aceito pelo requisito."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão de pedidos"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 pedidos/dia",
+                "outbox e fila praticamente ociosos",
+                "nada; é o cenário do laboratório",
+                "nada"
+              ],
+              [
+                "10 mil pedidos/dia",
+                "worker de outbox varre lotes de 50 várias vezes por minuto",
+                "o intervalo de 2 s do worker passa a ser a parcela dominante do atraso",
+                "reduzir o intervalo ou aumentar o tamanho do lote — os dois custam mais consulta ao banco"
+              ],
+              [
+                "1 milhão de pedidos/dia",
+                "a fila escala de forma transparente; o consumidor não",
+                "poucas tasks de notificação viram o gargalo, e a DLQ cresce por capacidade, não por bug",
+                "escalar `desired_count` do serviço de notificações por profundidade da fila (CloudWatch)"
+              ],
+              [
+                "Falha de AZ",
+                "a task de notificações numa AZ cai; o outbox continua acumulando no monólito",
+                "nada se perde — o outbox é o buffer durável enquanto a capacidade de consumo se recupera",
+                "confirmar que o serviço de notificações também está em 2 AZs, como o do L03"
+              ],
+              [
+                "Pico de campanha (10× por uma hora)",
+                "a fila absorve o pico sem que o consumidor precise acompanhar em tempo real",
+                "atraso na confirmação cresce temporariamente — é o requisito de \"minutos\" sendo usado",
+                "nenhuma ação se o atraso ficar dentro do combinado com o negócio"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O ganho que a extração já paga sozinho em pico",
+            "content": "No desenho do monólito, um pico de pedidos competia por CPU com o envio de e-mail no mesmo processo. Com a fila no meio, o pico de criação de pedido não disputa recurso nenhum com o envio — a fila é o amortecedor, e ele já existe antes de qualquer ajuste de escala."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Custo: o que este corte acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A peça nova mais visível na fatura é o segundo RDS. O resto — fila, e-mail, alarme — fica perto de gratuito no volume da Cadência."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "10 pedidos/dia",
+                "uma instância RDS pequena ligada 24h; fila e SES desprezíveis",
+                "linha fixa, baixa",
+                "considerar Aurora Serverless v2 se o padrão de uso for muito irregular (L15)"
+              ],
+              [
+                "Produção pequena",
+                "230 pedidos/dia (Cadência hoje)",
+                "RDS pequeno + volume baixo de mensagens e e-mails",
+                "previsível",
+                "nenhuma; é o cenário deste laboratório"
+              ],
+              [
+                "Alta escala",
+                "1 milhão de pedidos/dia",
+                "RDS maior para o serviço de notificações; volume de mensagens e e-mails vira linha visível",
+                "cresce com o número de pedidos, não com o número de serviços",
+                "lote de envio de e-mail onde o produto permitir; ver L95 para padrão de lote em outro contexto"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "RDS do serviço extraído",
+                "hora ligada + armazenamento, igual a qualquer RDS",
+                "é uma instância a mais na fatura, mesmo pequena — o database-per-service tem esse custo fixo"
+              ],
+              [
+                "SQS",
+                "por requisição (envio, recebimento, exclusão)",
+                "long polling reduz chamadas de recebimento vazias, que contam igual a uma chamada com mensagem"
+              ],
+              [
+                "SES",
+                "por e-mail enviado",
+                "monitore taxa de rejeição — endereço inválido cobra o envio igual e ainda machuca a reputação"
+              ],
+              [
+                "CloudWatch",
+                "por métrica e alarme",
+                "valor pequeno e fixo; não é onde se economiza"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O custo que este corte evita, e que não aparece na fatura da AWS",
+            "content": "Antes do corte, uma mudança de texto de e-mail custava 40 minutos de pipeline e o tempo de um dev esperando. Depois, a mesma mudança roda a suíte própria em minutos. Multiplicado pela frequência de mudanças de UX de e-mail — que não é rara — o tempo de time economizado supera o custo do RDS extra rapidamente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "pipeline e teste separados por serviço extraído",
+                "contrato de evento em JSON cru, sem schema versionado",
+                "schema registry via EventBridge (L24)",
+                "média"
+              ],
+              [
+                "Segurança",
+                "IAM restrito por ação e recurso; segredo por Secrets Manager",
+                "identidade SES verificada mas sem DKIM/SPF documentado no laboratório",
+                "configurar autenticação de domínio completa para o e-mail",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "pedido sobrevive à queda da notificação; DLQ evita perda silenciosa",
+                "estoque ainda decide em transação local — não sobrevive a uma extração futura sem saga",
+                "saga com compensação quando estoque for extraído (L35)",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "fila absorve pico sem competir por CPU com criação de pedido",
+                "intervalo do worker de outbox é fixo, não adaptativo à carga",
+                "ajustar intervalo dinamicamente pela profundidade do outbox pendente",
+                "baixa"
+              ],
+              [
+                "Otimização de custos",
+                "um RDS pequeno a mais, dimensionado ao volume real",
+                "dois RDS parados fora de horário de teste continuam cobrando",
+                "agendar desligamento em ambiente de não produção (fora do escopo aqui)",
+                "baixa"
+              ],
+              [
+                "Sustentabilidade",
+                "processamento assíncrono em lote reduz picos de CPU ociosa esperando",
+                "duas instâncias RDS pequenas podem ser menos eficientes que uma maior compartilhada",
+                "revisar consolidação quando o número de serviços extraídos crescer",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Evolução em níveis: quando o próximo corte se justifica"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO cortar de novo. Cada nível resolve um risco e compra outro — e a ordem não é arbitrária: cada um depende do anterior ter resolvido o que ele resolve."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do monólito único ao sistema distribuído com contrato — e o risco que cada nível troca",
+            "layers": [
+              {
+                "label": "Nível 1 — Monólito único (L03)",
+                "instruction": "Pedido, catálogo e notificação num processo, um banco, uma suíte. Onde a Cadência estava, e continua legítimo até o time crescer.",
+                "note": "Risco resolvido: nenhum ainda. Novo risco: qualquer mudança testa e reimplanta tudo. Custo: o mais baixo — uma task, um banco."
+              },
+              {
+                "label": "Nível 2 — Este laboratório: um corte",
+                "instruction": "Notificações extraída, com outbox, fila e banco próprios. Pedido e catálogo continuam juntos, porque nenhum dos dois quebra o teste sozinho.",
+                "note": "Risco resolvido: acoplamento de deploy e teste do domínio extraído. Novo risco: contrato de evento sem schema versionado pode quebrar em silêncio. Custo: um RDS pequeno a mais."
+              },
+              {
+                "label": "Nível 3 — Segundo corte: catálogo",
+                "instruction": "Quando o time crescer o suficiente para operar um terceiro serviço, catálogo sai também — já passou no teste desde este laboratório.",
+                "note": "Risco resolvido: mudança de regra de preço também para de re-testar pedido. Novo risco: três serviços chamando uns aos outros por IP fixo fica frágil. Custo: mais um RDS e mais um pipeline."
+              },
+              {
+                "label": "Nível 4 — Descoberta e malha (L33)",
+                "instruction": "Com vários serviços, nome lógico substitui IP fixo, e mTLS entra entre eles.",
+                "note": "Risco resolvido: reconfigurar endpoint manualmente a cada deploy. Novo risco: a malha em si é infraestrutura a operar. Custo: componente novo rodando 24h."
+              },
+              {
+                "label": "Nível 5 — Transação que cruza serviços (L35, L38)",
+                "instruction": "Estoque finalmente extraído, com saga e compensação; isolamento multi-tenant onde fizer sentido.",
+                "note": "Risco resolvido: a extração de estoque parar de ser um \"não fazer\" e virar segura. Novo risco: depurar uma saga que falhou no meio é mais difícil que depurar uma transação de banco. Custo: orquestração (Step Functions) rodando por fluxo."
+              },
+              {
+                "label": "Nível 6 — Plataforma, contrato e dados",
+                "instruction": "Dezenas de serviços, EventBridge como espinha dorsal (L24) com schema versionado, e o histórico de eventos de pedido virando dado para recomendação de produto e detecção de padrão de fraude.",
+                "note": "Risco resolvido: integração ponto a ponto formando teia sem contrato. Novo risco: a complexidade organizacional de coordenar times por serviço supera a técnica. Custo: barramento de evento e a camada de dados sobre ele."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Extrair estoque (nível 5) antes de o time ter operado UM serviço extraído (nível 2) é pular a parte em que se aprende a operar deploy, teste e observabilidade separados — e fazer isso pela primeira vez justo no candidato que reprova o teste de fronteira é a combinação mais cara possível de erro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não decide a fronteira, e forçá-la seria o antipadrão que a própria série critica. O teste \"este serviço termina a própria transação sozinho?\" é lógica determinística sobre onde uma escrita acontece e o que ela precisa garantir — não é um padrão estatístico que um modelo aprenderia melhor que a pergunta direta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um uso adjacente que parece atraente e não se justifica ainda: treinar um modelo sobre o histórico de commits para sugerir automaticamente onde cortar o próximo serviço, olhando quais tabelas mudam juntas com mais frequência (\"acoplamento de mudança\"). A técnica existe na literatura de engenharia de software, mas exige um volume de histórico que a Cadência não tem: poucos meses de commits de um monólito não são amostra suficiente para um modelo confiável, e a decisão errada aqui — a fronteira do sistema — é cara demais para delegar a um sinal fraco."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "sugerir onde cortar o próximo serviço, olhando acoplamento de mudança no histórico de commits"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "o teste de fronteira transacional já é a regra, e ela é suficiente — os três candidatos deste módulo foram decididos só com ela"
+              ],
+              [
+                "De onde viriam os dados?",
+                "histórico de commits, tabelas tocadas por transação, frequência de deploy por módulo"
+              ],
+              [
+                "Qual o risco?",
+                "poucos meses de histórico é amostra pequena demais; um sinal fraco sugerindo a fronteira errada custa uma extração inteira refeita"
+              ],
+              [
+                "Por que não agora?",
+                "a Cadência tem um corte no total. Não existe \"padrão de acoplamento\" a aprender com uma amostra de um"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b19_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"sugerir a próxima fronteira de microsserviço\" troca uma pergunta que tem resposta verificável — este serviço termina sozinho a própria transação? — por uma sugestão estatística sobre padrão de commit, que não carrega garantia nenhuma sobre atomicidade. Fronteira de serviço é decisão de design com consequência de dado incorreto; não é um problema de previsão."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Dividir por camada técnica (\"serviço de banco\", \"serviço de UI\")",
+                "parece organização lógica — é como pastas de código já costumam ser separadas",
+                "toda operação de negócio ainda cruza várias camadas técnicas; nada foi realmente desacoplado, só reorganizado",
+                "todo endpoint chama três \"serviços\" técnicos em sequência síncrona; nenhum deploy é de fato independente",
+                "dividir por capacidade de negócio com fronteira transacional própria",
+                "nunca como fronteira de SERVIÇO; pode ser organização de pastas dentro de um serviço"
+              ],
+              [
+                "Extrair e continuar chamando por HTTP síncrono no caminho crítico",
+                "parece mais simples que aprender fila/evento; o código migra quase igual — troca chamada de método por chamada HTTP",
+                "é o \"monólito distribuído\" nomeado: parece microsserviço porque tem deploy separado, e continua acoplado porque a indisponibilidade de um derruba o outro",
+                "timeout em cascata; um serviço fora do ar derruba outro que não deveria depender dele",
+                "assíncrono via fila/evento quando a consistência permitir",
+                "leitura síncrona que a UI precisa AGORA para decidir algo — não escrita cross-service"
+              ],
+              [
+                "Extrair serviço que precisa de atomicidade com o restante, sem saga",
+                "parece o próximo passo natural depois de o primeiro corte ter funcionado",
+                "quebra a garantia que existia: \"impossível vender 2× a última unidade\" vira \"possível, ocasionalmente\"",
+                "overselling sob concorrência, raro e difícil de reproduzir em teste manual",
+                "manter no mesmo banco/transação até ter saga com compensação (L35)",
+                "nunca sem saga ou 2PC — e 2PC tem custo próprio de disponibilidade"
+              ],
+              [
+                "Publicar evento antes do commit da transação, sem outbox",
+                "parece mais simples: publica e depois salva, numa linha só de código a menos",
+                "é o dual-write problem — se o commit falhar depois, notificou um pedido que não existe; se a publicação falhar depois de commitar, perde o evento em silêncio",
+                "e-mail de confirmação de pedido que não existe no banco, ou pedido sem confirmação nenhuma",
+                "outbox na mesma transação, worker que publica depois",
+                "quando perder ou duplicar o evento tem custo zero — ex.: log analítico não crítico"
+              ],
+              [
+                "Consumidor não idempotente",
+                "no dia 1 a fila entrega uma vez cada mensagem, e parece óbvio que sempre será assim",
+                "SQS Standard entrega PELO MENOS uma vez — reentrega por timeout de visibilidade e falha de rede é normal, não exceção",
+                "cliente recebe dois e-mails de confirmação do mesmo pedido, esporadicamente",
+                "checar chave de idempotência (pedido_id) antes de agir",
+                "nunca em efeito colateral externo (e-mail, cobrança); tolerável em leitura pura"
+              ],
+              [
+                "Dois bancos lendo a mesma tabela (\"banco compartilhado\" disfarçado de per-service)",
+                "parece atalho para não duplicar dado — os dois serviços leem a mesma tabela `produtos`",
+                "qualquer mudança de schema num serviço quebra o outro silenciosamente; não há fronteira real, só a ilusão dela",
+                "migration em um serviço derruba o outro em produção, sem nenhuma mudança de código nele",
+                "cada serviço só acessa o próprio banco; dado necessário é copiado (snapshot) ou pedido por API/evento",
+                "nunca como arquitetura permanente; tolerável como passo de transição, com prazo definido"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Pedido falha quando notificações está fora do ar",
+                "chamada síncrona no lugar de fila — regressão para monólito distribuído",
+                "ver se a criação do pedido depende de resposta do serviço de notificações",
+                "trace/log do endpoint de criação de pedido",
+                "publicar no outbox e retornar; nunca aguardar a notificação no caminho crítico"
+              ],
+              [
+                "Cliente recebe dois e-mails do mesmo pedido",
+                "consumidor não idempotente combinado com reentrega da fila",
+                "contar `ApproximateReceiveCount` da mensagem",
+                "log do consumidor + tabela de log de envio",
+                "checar `pedido_id` antes de acionar o SES"
+              ],
+              [
+                "Evento nunca chega à fila",
+                "worker de outbox parado, ou publicou antes do commit e falhou em silêncio",
+                "contar linhas não publicadas na tabela outbox",
+                "tabela `outbox_messages`, log do worker",
+                "reiniciar/corrigir o worker; garantir que só publica linha já commitada"
+              ],
+              [
+                "Mensagens acumulando na fila principal sem consumo",
+                "consumidor parado ou tasks insuficientes para o volume",
+                "observar `ApproximateNumberOfMessages` crescendo sem `RunningTaskCount` acompanhar",
+                "métrica da fila e do serviço ECS de notificações",
+                "escalar tasks ou investigar exceção que trava o laço de consumo"
+              ],
+              [
+                "Mensagens indo para a DLQ constantemente",
+                "exceção determinística no processamento — ex.: contrato do evento mudou",
+                "ler uma amostra da DLQ",
+                "conteúdo da mensagem na DLQ e o log de erro do consumidor",
+                "corrigir o consumidor ou o contrato do evento; reprocessar a DLQ manualmente depois"
+              ],
+              [
+                "Overselling esporádico do mesmo produto",
+                "estoque foi extraído (ou tratado) de forma não atômica com o pedido",
+                "reproduzir concorrência com duas requisições simultâneas para o mesmo item",
+                "onde o decremento de estoque acontece em relação ao commit do pedido",
+                "manter estoque na mesma transação, ou implementar saga com reserva"
+              ],
+              [
+                "Deploy do serviço de notificações continua re-testando pedido",
+                "repositório/pipeline não foi realmente separado, só o runtime",
+                "verificar se existe um pipeline único ainda rodando tudo",
+                "configuração de CI/CD",
+                "pipeline e suíte de testes próprios por serviço, não só serviço ECS separado em runtime"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em código, pergunte: a falha aconteceu ANTES ou DEPOIS do commit do pedido? Antes, o problema é síncrono demais — algo está bloqueando o caminho crítico. Depois, o problema é do lado assíncrono — outbox, fila ou consumidor — e o pedido, esse, está seguro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este corte acrescenta um RDS inteiro e uma fila com potencial de reter mensagem — os dois merecem atenção antes de destruir."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Antes de destruir, confira se ha mensagem retida — apagar a fila com\n#    mensagem dentro PERDE a confirmacao de pedidos que ainda nao foram notificados.\naws sqs get-queue-attributes --queue-url \"$(terraform output -raw fila_pedido_criado)\" \\\n  --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible\n# Se houver mensagem, espere o consumidor drenar ou copie o conteudo antes de seguir.\n\n# 2. Confira tambem a DLQ — mensagem la e exatamente o que faltou investigar.\naws sqs get-queue-attributes --queue-url \"$(terraform output -raw fila_dlq)\" \\\n  --attribute-names ApproximateNumberOfMessages\n\n# 3. Derrube o que o Terraform administra.\nterraform destroy -auto-approve\n\n# 4. SNAPSHOT FINAL DO RDS DE NOTIFICACOES: com skip_final_snapshot = false, o\n#    destroy cria um snapshot que SOBREVIVE e cobra armazenamento indefinidamente.\naws rds describe-db-snapshots \\\n  --db-instance-identifier ffv-lab-notificacoes \\\n  --query \"DBSnapshots[].DBSnapshotIdentifier\" --output table\n# apague o que nao precisar manter:\n# aws rds delete-db-snapshot --db-snapshot-identifier <id>\n\n# 5. IDENTIDADE VERIFICADA NO SES: nao cobra parada, mas fica registrada na conta.\naws ses list-identities --identity-type Domain\n\n# 6. Prova final: nada com o nome do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table"
+          }
+        },
+        {
+          "id": "b22_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Apagar a fila sem checar mensagem pendente perde confirmação de pedido real",
+            "content": "Uma mensagem na fila principal ou na DLQ representa um pedido que ainda não teve a confirmação processada. Destruir a fila sem antes drenar ou registrar esse conteúdo é perda IRREVERSÍVEL — diferente de um recurso que só cobra parado, aqui o dado em trânsito desaparece com o `terraform destroy`, sem aviso e sem chance de recuperação."
+          }
+        },
+        {
+          "id": "b22_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Serviço ECS de notificações",
+                "sim",
+                "não",
+                "a definição de task permanece registrada, sem custo"
+              ],
+              [
+                "RDS de notificações",
+                "sim, com snapshot final",
+                "sim, o snapshot",
+                "`skip_final_snapshot = false` cria um snapshot que sobrevive ao destroy"
+              ],
+              [
+                "Fila SQS e DLQ",
+                "sim",
+                "não, mas a MENSAGEM dentro se perde",
+                "não há custo de fila parada, mas o conteúdo não sobrevive ao destroy"
+              ],
+              [
+                "Identidade verificada no SES",
+                "não gerenciada pelo destroy do serviço",
+                "não, mas fica registrada",
+                "verificação de domínio não expira automaticamente"
+              ],
+              [
+                "Grupo de logs de notificações",
+                "depende de `skip_destroy`",
+                "sim, retenção",
+                "tem ciclo próprio; sobrevive ao serviço que o alimentava"
+              ],
+              [
+                "O que veio do L01/L03",
+                "não faz parte deste destroy",
+                "sim, por hora",
+                "ALB, RDS do monólito, endpoint de VPC, NAT Gateway — rode a limpeza deles separadamente"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Qualquer mudança re-testa e reimplanta tudo",
+                "repositório e pipeline próprios do serviço extraído",
+                "a suíte separada só cobre o que realmente pode ter quebrado"
+              ],
+              [
+                "Pedido não pode depender do e-mail para existir",
+                "fila entre os dois serviços",
+                "desacopla o relógio da criação do pedido do relógio do envio de e-mail"
+              ],
+              [
+                "Evento pode se perder entre gravar e publicar",
+                "tabela outbox na mesma transação",
+                "garante que publicar não é um passo que pode falhar sozinho, separado do commit"
+              ],
+              [
+                "Fila entrega mais de uma vez",
+                "checagem de idempotência por pedido_id",
+                "é a checagem, não a fila, que impede efeito colateral duplicado"
+              ],
+              [
+                "Estoque não pode vender 2× a última unidade",
+                "estoque continua na transação do pedido",
+                "reprovou o teste de fronteira transacional — extrair agora trocaria garantia por bug raro"
+              ],
+              [
+                "Um serviço extraído não pode derrubar o outro",
+                "comunicação assíncrona, sem HTTP síncrono no caminho crítico",
+                "é o que separa extração real de monólito distribuído"
+              ],
+              [
+                "Mensagem que nunca vai processar não pode travar a fila para sempre",
+                "DLQ com `maxReceiveCount`",
+                "isola o problema numa mensagem sem impedir as boas de seguir"
+              ],
+              [
+                "Dado de negócio do serviço extraído precisa ficar isolado",
+                "RDS próprio, não schema compartilhado",
+                "um ALTER TABLE de um lado não pode travar o outro"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Notificação fora do ar derrubar pedido",
+                "fila entre os dois serviços",
+                "chamada síncrona reintroduzida por engano em outro caminho"
+              ],
+              [
+                "Evento perdido entre gravar e publicar",
+                "outbox na mesma transação do pedido",
+                "contrato de evento que muda de formato sem versionamento — é o L24"
+              ],
+              [
+                "E-mail duplicado por reentrega",
+                "checagem de idempotência por pedido_id",
+                "duplicidade se a checagem for removida ou tiver bug"
+              ],
+              [
+                "Mensagem envenenada travando a fila",
+                "DLQ com `maxReceiveCount`",
+                "a causa raiz da mensagem malformada — é preciso investigar a DLQ, não só ela existir"
+              ],
+              [
+                "Overselling",
+                "estoque na transação do pedido, não extraído",
+                "concorrência se estoque for extraído sem saga no futuro"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Cliente envia POST /pedidos.",
+              "A API confere estoque e grava o pedido — na mesma transação que decrementa a quantidade.",
+              "A mesma transação grava uma linha de outbox com o evento PedidoCriado.",
+              "A API responde 201 imediatamente; o e-mail não está no caminho crítico.",
+              "O worker de outbox publica a linha pendente na fila SQS, e só então marca como publicada.",
+              "A fila entrega ao consumidor de notificações — pelo menos uma vez, não exatamente uma.",
+              "O consumidor checa se o pedido_id já está no log de envio antes de agir.",
+              "Se não estava, envia o e-mail via SES e grava o log; se já estava, ignora e apaga a mensagem.",
+              "Se falhar 5 vezes, a mensagem vai para a DLQ e o alarme de profundidade dispara.",
+              "O pedido, do início ao fim, nunca esperou nenhum desses passos para existir."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "lab-extr-des1",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Desafio — sem roteiro"
+      },
+      "children": [
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "O requisito",
+            "content": "Extraia um SEGUNDO contexto delimitado do que sobrou do monólito, respeitando a mesma regra de fronteira transacional que o primeiro extraído já seguiu — nenhuma transação de banco pode atravessar dois serviços."
+          },
+          "id": "lab-extr-des2",
+          "position": 0
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "Critério de aceite — executável, não \"verifique se funciona\"",
+            "content": "Uma operação que antes era uma única transação local agora é uma sequência de passos entre dois serviços, e o teste prova que uma falha no PASSO 2 não deixa o passo 1 \"pela metade\" sem que o sistema saiba — seja por compensação, seja por reprocessamento seguro."
+          },
+          "id": "lab-extr-des3",
+          "position": 1
+        },
+        {
+          "type": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "Dica 1: A primeira pergunta não é \"que código eu movo\", é \"que dado hoje mora numa tabela só e amanhã precisa morar em duas\" — aí a fronteira transacional aparece sozinha.",
+              "Dica 2: Se a operação precisa ser tudo-ou-nada entre os dois serviços novos, considere o padrão Saga (com compensação) em vez de tentar simular uma transação distribuída de baixo nível.",
+              "Dica 3: Teste isso derrubando o segundo serviço NO MEIO de uma operação (ex: matando o processo) e observando o estado do primeiro — se ele ficar \"pendente\" de forma visível e recuperável, o desenho está certo."
+            ]
+          },
+          "id": "lab-extr-des4",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "success",
+            "title": "Lembrete de limpeza",
+            "content": "Todo recurso que este desafio criar entra no mesmo `terraform destroy` do laboratório — nada fica para trás cobrando sozinho."
+          },
+          "id": "lab-extr-des5",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Como saber se um serviço está pronto para ser extraído de um monólito?",
+            "answer": "Ele está pronto quando consegue terminar a própria transação sem depender de nenhum outro serviço no mesmo commit. Aplique o teste diretamente: a escrita que este serviço faz precisa ser atômica com a escrita de outro domínio? Se a resposta é não — como notificações, que pode atrasar ou ser reenviada sem invalidar o pedido — a extração é segura. Se a resposta é sim — como estoque, onde vender a última unidade duas vezes é um bug real de negócio — extrair sem saga ou transação distribuída troca uma garantia que existia por um bug de concorrência raro, e isso não é progresso."
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Dividir um monólito por camada técnica é uma boa fronteira de serviço?",
+            "answer": "Não é, e é o erro mais comum de decomposição. Camada técnica não é capacidade de negócio: toda operação real — criar um pedido, por exemplo — ainda precisa atravessar várias dessas camadas técnicas em sequência, então nada foi de fato desacoplado, só reorganizado em pastas diferentes com rede no meio. A fronteira que funciona corta pela capacidade de negócio (pedidos, catálogo, notificações), cada uma com a própria razão de existir e a própria fronteira transacional — não pelo tipo de recurso técnico que ela usa por baixo."
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "O que é um monólito distribuído (distributed monolith)?",
+            "answer": "É um sistema com vários serviços implantados separadamente que continua tão acoplado quanto um monólito, porque a comunicação entre eles é síncrona no caminho crítico. Ele parece microsserviço porque tem deploy, repositório e até banco separados — mas se um serviço cai e o outro cai junto porque estava esperando uma resposta HTTP dele, a indisponibilidade continua acoplada, só que agora com latência de rede e mais um ponto de falha no meio. O termo é de Sam Newman, e o sintoma prático é: extrair não reduziu o raio de impacto de uma falha, só mudou onde ela aparece."
+          }
+        },
+        {
+          "id": "b24_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Por que extrair o estoque de um monólito de pedidos é arriscado sem saga?",
+            "answer": "Porque decrementar estoque precisa ser atômico com a criação do pedido para não vender além do disponível, e uma chamada de rede simples entre dois serviços não oferece essa garantia. Sem uma transação de banco única, duas requisições concorrentes conseguem as duas ler \"1 disponível\" antes de qualquer uma decrementar, e as duas vendem a mesma unidade. Corrigir isso sem voltar a um banco compartilhado exige um padrão de saga com compensação — reservar o estoque, confirmar ou desfazer a reserva conforme o resto do fluxo — que tem custo de implementação e de depuração maior do que simplesmente manter estoque e pedido na mesma transação até haver necessidade real de separá-los."
+          }
+        },
+        {
+          "id": "b24_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "O que é o dual-write problem e como o padrão outbox resolve isso?",
+            "answer": "O dual-write problem acontece quando uma operação precisa escrever em dois sistemas sem uma transação que cubra os dois ao mesmo tempo — um banco de dados e uma fila, por exemplo. Sem essa garantia, o banco pode ser escrito e a fila falhar depois, perdendo o evento em silêncio; ou a fila pode ser escrita antes e o banco falhar depois, publicando um evento para um pedido que nunca existiu. O padrão outbox resolve isso escrevendo a INTENÇÃO de publicar como uma linha numa tabela, na MESMA transação de banco que grava o dado principal — então ou as duas escritas acontecem juntas, ou nenhuma acontece. Um processo separado lê essa tabela depois e publica de fato na fila, tentando de novo se falhar, sem nunca arriscar perder o registro de que devia publicar."
+          }
+        },
+        {
+          "id": "b24_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "SQS Standard garante que cada mensagem é entregue só uma vez?",
+            "answer": "Não garante — SQS Standard entrega uma mensagem PELO MENOS uma vez, e reentrega é comportamento normal, não falha. Ela acontece quando o timeout de visibilidade expira antes de o consumidor apagar a mensagem, por lentidão de processamento, falha de rede ou o processo ter caído entre processar e apagar. A consequência prática é que qualquer efeito colateral externo — enviar e-mail, cobrar um cartão — precisa de uma checagem de idempotência própria no consumidor, verificando se aquela ação já foi feita antes de repeti-la. Confiar que a fila entrega exatamente uma vez é a causa mais comum de efeito duplicado nesse tipo de arquitetura."
+          }
+        },
+        {
+          "id": "b24_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Cada microsserviço precisa mesmo de seu próprio banco de dados?",
+            "answer": "Sim, se a extração for para valer — é o padrão conhecido como database per service, e ele existe porque dois serviços lendo e escrevendo na mesma tabela não têm fronteira real, só a aparência dela. Uma mudança de schema num serviço pode quebrar o outro em produção sem nenhuma alteração de código nele, e não há como um serviço garantir uma invariante sobre um dado que outro processo também escreve livremente. O custo é real — mais uma instância na fatura e a perda da conveniência de um JOIN entre domínios — mas é o preço de a fronteira valer alguma coisa; sem ele, a separação em serviços é só organizacional."
+          }
+        },
+        {
+          "id": "b24_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Como decidir entre chamada síncrona (HTTP) e assíncrona (fila) entre dois serviços?",
+            "answer": "A decisão vem de quanto o serviço que chama pode tolerar o outro estar indisponível ou lento. Se a operação PRECISA de uma resposta imediata para decidir algo — como uma consulta que a interface exibe na hora — síncrono é apropriado e a fila só adicionaria complexidade sem benefício. Se a operação pode acontecer com atraso aceitável, como enviar uma notificação depois de um pedido confirmado, colocar uma fila no meio desacopla os dois relógios: o serviço que chama não fica refém da disponibilidade do que é chamado. Usar HTTP síncrono no caminho crítico entre dois serviços que já foram extraídos é justamente o que recria o monólito distribuído."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b25_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Um time implementa \"salvar o pedido, depois enviar o evento para a fila\" sem tabela de outbox. O processo cai exatamente entre o commit do pedido e a chamada ao SQS. O que acontece?",
+            "options": [
+              "O evento nunca é publicado, e o pedido fica sem notificação, sem nenhum sinal de erro",
+              "O SQS detecta a falta de uma mensagem e a gera automaticamente a partir do conteúdo do RDS",
+              "A transação do banco é desfeita automaticamente, cancelando o pedido que tinha sido criado",
+              "O outbox reenvia automaticamente, porque ele já vem implementado por padrão no EF Core"
+            ],
+            "correctIndex": 0,
+            "explanation": "É exatamente o dual-write problem: o commit do pedido já aconteceu e não pode mais ser desfeito, mas a chamada que publicaria o evento nunca ocorreu porque o processo caiu antes dela. Sem uma tabela de outbox registrando a INTENÇÃO de publicar na mesma transação do pedido, não existe nenhum lugar de onde recuperar essa informação depois — o pedido existe, ninguém nunca soube que precisava notificá-lo.\n\nA segunda alternativa inventa uma capacidade que o SQS não tem: ele não tem nenhuma integração automática com o RDS, e só entrega o que alguém publicar explicitamente nele. A terceira confunde padrão de arquitetura com funcionalidade de framework — o EF Core não implementa outbox nativamente; é um padrão que a aplicação constrói, com uma tabela própria e um worker que a lê. A quarta erra a direção do tempo: o commit já aconteceu antes da falha; nada desfaz retroativamente uma transação que já foi confirmada só porque um passo POSTERIOR a ela falhou — é justamente essa lacuna que o outbox fecha."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Um time extrai o serviço de Notificações para um ECS, repositório e pipeline próprios. Mas o endpoint de criação de pedido continua chamando o serviço de notificações por HTTP e esperando 200 antes de responder ao cliente. Esse é um bom corte de microsserviço?",
+            "options": [
+              "Não — apesar do deploy separado, a chamada síncrona no caminho crítico recria o acoplamento do monólito, e é o padrão nomeado \"monólito distribuído\"",
+              "Sim, porque tem deploy, repositório e teste próprios — é exatamente a definição de microsserviço",
+              "Não, porque dois bancos RDS diferentes nunca podem se comunicar através de uma chamada HTTP entre os serviços que os usam",
+              "Sim, mas só funciona se os dois serviços estiverem na mesma sub-rede da VPC"
+            ],
+            "correctIndex": 0,
+            "explanation": "É o sintoma clássico de monólito distribuído: o deploy foi separado, mas o acoplamento não foi — se o serviço de notificações cair ou ficar lento, a criação do pedido cai ou fica lenta junto, porque está sincronamente esperando a resposta dele. A extração só entrega o benefício de independência quando a indisponibilidade de um lado não se propaga para o outro, e isso exige comunicação assíncrona (fila/evento) no lugar da chamada HTTP direta no caminho crítico.\n\nA primeira alternativa confunde separação de DEPLOY com desacoplamento real — ter repositório e pipeline próprios não impede que a chamada em tempo de execução recrie a mesma dependência rígida que existia dentro do processo único. A terceira inventa uma restrição técnica que não existe: bancos RDS diferentes não impedem, de forma nenhuma, que os serviços que os usam se comuniquem por HTTP — o problema não é de rede entre bancos. A quarta é irrelevante: sub-rede é sobre topologia e isolamento de rede, não sobre acoplamento temporal entre chamadas — os dois serviços podem estar na mesma sub-rede e ser bem desacoplados, ou em sub-redes diferentes e ser um monólito distribuído."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b26_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L03 no ar (ECR imutável, rolling update), EF Core básico, noção de transação de banco"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "o teste de fronteira transacional aplicado a candidatos reais; o antipadrão \"monólito distribuído\" nomeado e reconhecível; o padrão outbox contra o dual-write problem; por que consumidor de fila padrão precisa ser idempotente; database per service e o trade-off dele"
+              ],
+              [
+                "Limitação que fica",
+                "o contrato do evento é JSON cru sem schema versionado; catálogo passou no teste mas não foi extraído; estoque continua exigindo saga antes de poder sair do monólito"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L32 — síncrono ou assíncrono entre serviços, com disponibilidade composta calculada. Reusa os dois serviços deste laboratório para comparar as duas formas na mesma integração"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L38 (multi-tenant: linha, schema ou conta) usa o mesmo raciocínio de fronteira para decidir isolamento entre clientes; L35 (saga) é o caminho para finalmente extrair estoque"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b26_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Fontes consultadas: "
+              },
+              {
+                "text": "microservices.io",
+                "code": true
+              },
+              {
+                "text": " (Chris Richardson) — os padrões Database per service, Saga e Transactional outbox, que sustentam a arquitetura de produção deste módulo; Sam Newman, "
+              },
+              {
+                "text": "Building Microservices",
+                "code": true
+              },
+              {
+                "text": " — a definição de fronteira por capacidade de negócio e o antipadrão do monólito distribuído; e o guia do desenvolvedor do Amazon SQS, para o comportamento de entrega pelo menos uma vez e o funcionamento de redrive policy que sustenta a necessidade de consumidor idempotente. Os padrões de arquitetura vêm de literatura consolidada de engenharia de software, não de um único produto — a AWS entra como a implementação (SQS, SES, RDS), não como a origem da decisão de fronteira."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "O número de tentativas antes da DLQ (5) e o intervalo do worker de outbox (2 s) são os escolhidos para o volume de exemplo da Cadência, não uma recomendação universal — derive os dois do seu volume real e do custo de uma notificação atrasada no seu produto. A hipótese de que \"minutos de atraso na confirmação é aceitável\" também é do cenário de exemplo: em um produto onde a confirmação imediata é parte da experiência (retirada em loja em poucos minutos, por exemplo), essa hipótese não vale e muda a decisão entre síncrono e assíncrono."
+          }
+        }
+      ]
+    }
+  ]
+}

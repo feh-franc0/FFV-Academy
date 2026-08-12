@@ -1,0 +1,2451 @@
+{
+  "slug": "lab-identidade-workload-task-role-irsa",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência ("
+              },
+              {
+                "text": "L01",
+                "code": true
+              },
+              {
+                "text": ", "
+              },
+              {
+                "text": "L03",
+                "code": true
+              },
+              {
+                "text": ") abriu um segundo workload: um worker de conciliação, separado da API, que lê os arquivos de fechamento diário do dia no S3 e grava linhas de conciliação no DynamoDB. Depois que o time abriu o cluster EKS do "
+              },
+              {
+                "text": "L34",
+                "code": true
+              },
+              {
+                "text": " para o Operator do parceiro Aegis, um segundo pedaço da mesma conciliação passou a rodar lá também: um CronJob que consome a fila de pedidos pagos e lê uma chave de verificação do parceiro no Secrets Manager."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "A task role do worker ainda não tinha sido revisada quando o prazo apertou, e um dev criou um usuário IAM com uma chave de acesso para testar contra recursos reais da AWS naquela mesma tarde — \"só até a role ser aprovada\". A role foi aprovada, anexada à task definition, e a chave nunca foi removida. Ninguém percebeu: a aplicação continuou funcionando exatamente igual, porque a variável de ambiente vencia a task role toda vez, silenciosamente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Seis meses depois, numa revisão de segurança que também preparava o terreno para o "
+              },
+              {
+                "text": "L41",
+                "code": true
+              },
+              {
+                "text": ", alguém rodou um grep no Terraform state em busca de padrão de chave de acesso — e encontrou a chave, ainda válida, com permissão de leitura no bucket inteiro de fechamentos. O incidente que este laboratório evita já tinha meio ano de vida."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Básico — depende do L34 (cluster EKS) e do L41 (menor privilégio, em paralelo)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L01, L03 e L34 no ar; noção de IAM (trust policy vs. permissão)"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 40 min · implementação 1 h 30 a 2 h"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Zero direto: IAM, STS e OIDC não cobram por chamada nem por role"
+              },
+              {
+                "k": "Serviços",
+                "v": "IAM, STS, ECS (task role, execution role), EKS (IRSA, OIDC), EventBridge Scheduler, CloudTrail"
+              },
+              {
+                "k": "Volume atual",
+                "v": "2 workloads, 1 execução diária cada, ~9 mil objetos S3 por mês"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "nenhuma chave de acesso gravada em código, config, Secret ou variável de ambiente"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "o cluster EKS do L34 e o provedor OIDC dele já existem — este módulo os REFERENCIA, não os recria"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "os dois workloads sem nenhuma chave estática, e uma prova em runtime de qual credencial cada um usa"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "A chave que este laboratório corrige já era um incidente real",
+            "content": "Uma chave de acesso de longa duração com permissão de leitura sobre um bucket inteiro, válida por seis meses sem ninguém saber que existia, é exposição de dado — não é hipótese didática. O grep que a encontrou poderia ter sido um invasor em vez de um revisor de segurança, e o tempo entre a criação e a descoberta é exatamente o tempo em que ela ficou disponível para os dois."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação, não com a sensação de ter entendido a diferença entre os três mecanismos."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Distinguir execution role de task role no ECS, e dizer qual delas a sua aplicação usa.",
+              "Explicar por que a instância EC2 ou o nó do EKS não deveriam emprestar sua role a um workload específico.",
+              "Nomear a ordem da cadeia de credenciais do SDK e prever qual fonte vence quando há mais de uma presente.",
+              "Configurar uma task role sem nenhuma chave estática na definição, e provar isso por comando.",
+              "Configurar IRSA para uma ServiceAccount, restringindo a confiança a `sub` E `aud`, não só a `sub`.",
+              "Provar, pelo tipo de credencial resolvida em runtime, qual provedor respondeu em cada workload.",
+              "Diferenciar, no CloudTrail, uma sessão de usuário IAM de uma sessão de task role e de uma sessão de IRSA.",
+              "Diagnosticar uma role corretamente configurada e nunca usada, por causa de uma variável esquecida."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Execution role vs. task role",
+                "DVA-C02, SOA-C02, SAA-C03",
+                "a task de conciliação usa as duas, com escopos diferentes",
+                "execution role é do agente (ECR, logs, segredo referenciado); task role é da aplicação"
+              ],
+              [
+                "Cadeia de credenciais padrão do SDK",
+                "DVA-C02",
+                "a ordem que faz a chave estática vencer a task role em silêncio",
+                "variável de ambiente vem antes do provedor de credencial do contêiner"
+              ],
+              [
+                "STS AssumeRole / AssumeRoleWithWebIdentity",
+                "SAA-C03, SAP-C02",
+                "o mecanismo comum por trás de task role e de IRSA",
+                "a diferença entre quem CHAMA o AssumeRole (o agente vs. o próprio SDK)"
+              ],
+              [
+                "IAM roles for service accounts (IRSA)",
+                "SAP-C02, DVA-C02",
+                "ServiceAccount vinculada por OIDC a uma role",
+                "a condição de `sub` no trust policy, e por que `aud` também precisa estar lá"
+              ],
+              [
+                "Problema do \"confused deputy\"",
+                "SAP-C02",
+                "`aws:SourceArn`/`aws:SourceAccount` na trust policy da task role",
+                "por que uma trust policy sem essas condições autoriza mais do que deveria"
+              ],
+              [
+                "Credencial temporária vs. de longa duração",
+                "todas",
+                "o requisito central do módulo, provado por ausência de chave",
+                "temporária expira sozinha; estática só expira se alguém revogar"
+              ],
+              [
+                "Isolamento de identidade por workload",
+                "SAP-C02, DOP-C02",
+                "por que a role da instância/nó não serve para um workload específico",
+                "todo processo na mesma máquina herdaria a mesma permissão"
+              ],
+              [
+                "Auditabilidade via CloudTrail",
+                "SOA-C02, SAP-C02",
+                "`taskArn` e `sub` como contexto de sessão",
+                "sessão de role carrega contexto de origem; sessão de usuário IAM não"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica dá um contêiner com `AccessDenied` ao chamar S3, mostra que uma policy foi anexada a uma role, e pede a causa. Quem responde \"a policy está errada\" sem checar QUAL role recebeu a policy erra o alvo com frequência: a policy pode estar perfeita e anexada à execution role, que a aplicação nunca usa. A resposta certa é sempre conferir qual role a aplicação de fato assume antes de revisar o conteúdo dela."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não aparece numa linha de Terraform é intenção, não arquitetura. A coluna da direita é onde cada um deixou marca neste laboratório."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Zero chave estática gravável",
+                "obrigatório, em qualquer lugar",
+                "task role e IRSA como únicas fontes de credencial; guarda de partida que recusa iniciar se achar uma"
+              ],
+              [
+                "Identidade por workload, não por máquina",
+                "obrigatório",
+                "uma role para o worker ECS, outra para o CronJob EKS — nunca a role da instância ou do nó"
+              ],
+              [
+                "Rotação sem intervenção humana",
+                "obrigatório",
+                "credencial vem de STS com expiração curta; o SDK renova sozinho, sem job de rotação"
+              ],
+              [
+                "Reaproveitar o cluster e o OIDC do L34",
+                "restrição de custo e de risco operacional",
+                "o provedor OIDC é lido por `data`, nunca recriado — duplicar provedor confunde qual trust policy vale"
+              ],
+              [
+                "Auditoria por processo, não por pessoa",
+                "obrigatório para investigação de incidente",
+                "sessão de role carrega `taskArn` ou `sub`; nenhuma chamada aparece como um nome de usuário humano"
+              ],
+              [
+                "Proteção contra \"confused deputy\"",
+                "boa prática exigida na trust policy",
+                "`aws:SourceArn`/`aws:SourceAccount` na task role; `sub` E `aud` na role IRSA"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: a chave que ainda não foi removida"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tinha até a revisão de segurança encontrar a chave: funciona, publica valor, e o defeito não está visível em nenhum lugar óbvio. É exatamente por isso que ele serve de ponto de partida — o laboratório existe para tornar um risco invisível em algo que se prova por comando."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A chave que devia ser temporária e ainda não é",
+            "caption": "Este desenho funciona, e é exatamente por isso que ele sobrevive meses sem ninguém notar: nada aqui produz erro, alerta ou log diferente do desenho correto. Percorra os passos e repare que o defeito não está em nenhuma caixa — está numa variável que uma delas carrega.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "dev",
+                    "service": "ide",
+                    "label": "Dev, em prova de conceito",
+                    "note": "criou a chave para testar contra a AWS real antes de a task role ser revisada e aprovada"
+                  }
+                ]
+              },
+              {
+                "label": "Identidade estática",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "iamuser",
+                    "service": "iam",
+                    "label": "Usuário IAM + chave de acesso",
+                    "note": "não expira sozinha; fica válida até alguém revogar manualmente, e ninguém sabe que ela existe"
+                  }
+                ]
+              },
+              {
+                "label": "Disparo",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sched",
+                    "service": "eventbridge",
+                    "label": "EventBridge Scheduler",
+                    "note": "dispara a task uma vez por dia; a periodicidade não muda nada sobre o risco da chave"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "ecstask",
+                    "service": "fargate",
+                    "label": "Task de conciliação",
+                    "note": "tem uma task role anexada na definição, mas a variável de ambiente vence antes de ela ser consultada"
+                  }
+                ]
+              },
+              {
+                "label": "Dados",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3",
+                    "service": "s3",
+                    "label": "Exports do fechamento diário",
+                    "note": "lido com a sessão da chave estática do usuário IAM, não com a sessão da task"
+                  },
+                  {
+                    "id": "dynamo",
+                    "service": "dynamodb",
+                    "label": "Linhas de conciliação",
+                    "note": "gravado com a mesma chave estática; a permissão efetiva vem do usuário, não da role"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "trail",
+                    "service": "cloudtrail",
+                    "label": "CloudTrail",
+                    "note": "registra a identidade do usuário IAM na sessão, sem o contexto de taskArn que a role daria de graça"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "dev",
+                "to": "iamuser",
+                "label": "cria a chave para desbloquear o teste",
+                "style": "solid"
+              },
+              {
+                "from": "iamuser",
+                "to": "ecstask",
+                "label": "AWS_ACCESS_KEY_ID e AWS_SECRET_ACCESS_KEY na variável de ambiente",
+                "style": "dashed"
+              },
+              {
+                "from": "sched",
+                "to": "ecstask",
+                "label": "RunTask diário, sem tocar em nenhuma credencial",
+                "style": "solid"
+              },
+              {
+                "from": "ecstask",
+                "to": "s3",
+                "label": "lê exports com a sessão da chave estática",
+                "style": "solid"
+              },
+              {
+                "from": "ecstask",
+                "to": "dynamo",
+                "label": "grava conciliação com a sessão da chave estática",
+                "style": "solid"
+              },
+              {
+                "from": "ecstask",
+                "to": "trail",
+                "label": "sessão do usuário IAM, sem taskArn",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A chave nasce de um atalho com prazo",
+                "detail": "A task role certa ainda não tinha sido revisada, e o dev precisava testar contra recursos reais da AWS na mesma tarde. A chave era para durar uma sessão de trabalho e virou variável de ambiente na task definition — porque isso é o que \"resolve na hora\" sempre parece.",
+                "nodes": [
+                  "dev",
+                  "iamuser"
+                ],
+                "edges": [
+                  "dev>iamuser"
+                ]
+              },
+              {
+                "label": "A variável de ambiente vence antes de a role ser sequer consultada",
+                "detail": "A cadeia de credenciais padrão do SDK testa variável de ambiente ANTES do provedor de credencial do contêiner. Semanas depois, quando a task role foi corretamente configurada e anexada à definição, ela nunca chegou a ser usada — a chave, que continuava lá, sempre vencia primeiro.",
+                "nodes": [
+                  "iamuser",
+                  "ecstask"
+                ],
+                "edges": [
+                  "iamuser>ecstask"
+                ]
+              },
+              {
+                "label": "O disparo diário não muda nada sobre o risco",
+                "detail": "A periodicidade do EventBridge Scheduler é irrelevante para este defeito: ele mora na origem da credencial, não na frequência de execução. A task roda todo dia, e todo dia usa a chave errada, sem que isso apareça em nenhum lugar.",
+                "nodes": [
+                  "sched",
+                  "ecstask"
+                ],
+                "edges": [
+                  "sched>ecstask"
+                ]
+              },
+              {
+                "label": "A aplicação funciona idêntica com ou sem a task role — nada acusa a role morta",
+                "detail": "Leitura do S3 e escrita no DynamoDB funcionam do mesmo jeito, com o mesmo tempo de resposta, com o mesmo código HTTP. Não existe um \"modo degradado\" visível: a role configurada corretamente e nunca usada é indistinguível, do ponto de vista da aplicação, de uma role que nunca existiu.",
+                "nodes": [
+                  "ecstask",
+                  "s3",
+                  "dynamo"
+                ],
+                "edges": [
+                  "ecstask>s3",
+                  "ecstask>dynamo"
+                ]
+              },
+              {
+                "label": "A auditoria perde o contexto que a task role daria de graça",
+                "detail": "Uma sessão de task role carrega o `taskArn` automaticamente, e o CloudTrail mostra exatamente qual task fez qual chamada. Uma sessão de chave estática mostra o nome do usuário IAM — que não diz qual processo, qual deploy, qual dia. Rastrear a origem de uma chamada suspeita fica mais lento justamente onde mais importa ser rápido.",
+                "nodes": [
+                  "ecstask",
+                  "trail"
+                ],
+                "edges": [
+                  "ecstask>trail"
+                ]
+              },
+              {
+                "label": "Por que a chave nunca foi removida",
+                "detail": "Ninguém tem o hábito de reabrir uma task definition que já está funcionando para conferir uma variável que nunca deu erro. Remover exigiria coragem para mexer em produção sem motivo aparente — e \"sem motivo aparente\" é exatamente o estado de uma chave que está silenciosamente ativa.",
+                "nodes": [
+                  "dev",
+                  "iamuser"
+                ],
+                "edges": [
+                  "dev>iamuser"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "Uma chave estática com acesso de leitura a um bucket inteiro não é teórica",
+            "content": "O cenário de abertura não é hipérbole didática: chave de acesso em variável de ambiente de task definition, esquecida por meses, é um dos achados mais comuns em revisão de segurança de ambiente ECS real. Ela não aparece em nenhum alarme, porque do ponto de vista da AWS ela é uma credencial válida sendo usada normalmente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A diferença estrutural em relação ao desenho mínimo não é \"a mesma coisa com uma role a mais\": são DOIS mecanismos de atestação diferentes, um por ambiente, convergindo para o mesmo tipo de sessão temporária."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Duas atestações, uma credencial temporária",
+            "caption": "ECS e EKS respondem à mesma pergunta — quem está chamando a AWS? — de formas estruturalmente diferentes: uma é vendida pronta pelo agente, a outra é obtida pelo próprio SDK trocando um token. Percorra os passos: as duas terminam na mesma STS, e nenhuma delas grava um segredo em lugar nenhum.",
+            "groups": [
+              {
+                "label": "Disparo",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sched",
+                    "service": "eventbridge",
+                    "label": "EventBridge Scheduler",
+                    "note": "aciona a task ECS diariamente; não participa da resolução de credencial nenhuma"
+                  },
+                  {
+                    "id": "orq",
+                    "service": "orquestrador",
+                    "label": "CronJob (Kubernetes)",
+                    "note": "agenda o pod no cluster do L34, no namespace conciliação, todo dia no mesmo horário"
+                  }
+                ]
+              },
+              {
+                "label": "Identidade e federação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "taskrole",
+                    "service": "iam",
+                    "label": "Task role — Conciliação ECS",
+                    "note": "assumida pelo agente do ECS por trás da task, nunca pelo próprio código da aplicação"
+                  },
+                  {
+                    "id": "oidcsts",
+                    "service": "iam",
+                    "label": "Provedor OIDC do cluster + STS",
+                    "note": "valida o JWT projetado da ServiceAccount e autoriza a troca por sessão temporária"
+                  },
+                  {
+                    "id": "irsarole",
+                    "service": "iam",
+                    "label": "Role IRSA — CronJob conciliação",
+                    "note": "confia só na ServiceAccount conciliacao-sa, pelo sub do token — nenhum outro pod pode assumi-la"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — ECS",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "ecstask",
+                    "service": "fargate",
+                    "label": "Task de conciliação (ECS)",
+                    "note": "busca a sessão pronta no endpoint interno do agente, sem chamar STS diretamente"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — EKS",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "pod",
+                    "service": "eks",
+                    "label": "Pod do CronJob (EKS)",
+                    "note": "o próprio SDK, dentro do processo, troca o token da ServiceAccount por sessão via STS"
+                  }
+                ]
+              },
+              {
+                "label": "Dados",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3",
+                    "service": "s3",
+                    "label": "Exports do fechamento diário",
+                    "note": "lido só pela sessão da task role, escopada ao prefixo do dia"
+                  },
+                  {
+                    "id": "dynamo",
+                    "service": "dynamodb",
+                    "label": "Linhas de conciliação",
+                    "note": "gravado só pela sessão da task role, escopada à tabela e ao padrão de chave do item"
+                  },
+                  {
+                    "id": "sqs",
+                    "service": "sqs",
+                    "label": "Fila pedidos pagos",
+                    "note": "consumida só pela sessão do IRSA, escopada a esta fila e a três verbos, nada mais"
+                  },
+                  {
+                    "id": "secrets",
+                    "service": "secretsmanager",
+                    "label": "Chave de verificação do parceiro",
+                    "note": "lida só pela sessão do IRSA; nenhum outro workload do cluster tem essa permissão"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "trail",
+                    "service": "cloudtrail",
+                    "label": "CloudTrail",
+                    "note": "grava taskArn para uma sessão e o sub da ServiceAccount para a outra, nunca um nome de usuário"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "sched",
+                "to": "ecstask",
+                "label": "RunTask diário, sem credencial na definição",
+                "style": "solid"
+              },
+              {
+                "from": "orq",
+                "to": "pod",
+                "label": "agenda o CronJob no namespace conciliação",
+                "style": "solid"
+              },
+              {
+                "from": "ecstask",
+                "to": "taskrole",
+                "label": "busca a sessão no endpoint do agente ECS",
+                "style": "dashed"
+              },
+              {
+                "from": "taskrole",
+                "to": "ecstask",
+                "label": "devolve sessão com contexto de taskArn",
+                "style": "dashed"
+              },
+              {
+                "from": "ecstask",
+                "to": "s3",
+                "label": "lê exports com a sessão da task role",
+                "style": "solid"
+              },
+              {
+                "from": "ecstask",
+                "to": "dynamo",
+                "label": "grava conciliação com a sessão da task role",
+                "style": "solid"
+              },
+              {
+                "from": "pod",
+                "to": "oidcsts",
+                "label": "apresenta o token OIDC projetado da ServiceAccount",
+                "style": "dashed"
+              },
+              {
+                "from": "oidcsts",
+                "to": "irsarole",
+                "label": "AssumeRoleWithWebIdentity valida o token e autoriza",
+                "style": "dashed"
+              },
+              {
+                "from": "pod",
+                "to": "sqs",
+                "label": "consome pedidos pagos com a sessão do IRSA",
+                "style": "solid"
+              },
+              {
+                "from": "pod",
+                "to": "secrets",
+                "label": "lê a chave do parceiro com a sessão do IRSA",
+                "style": "solid"
+              },
+              {
+                "from": "taskrole",
+                "to": "trail",
+                "label": "log da sessão com taskArn",
+                "style": "dashed"
+              },
+              {
+                "from": "irsarole",
+                "to": "trail",
+                "label": "log da sessão com sub da ServiceAccount",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A definição da task não carrega nenhuma credencial",
+                "detail": "O disparo do EventBridge Scheduler não toca em segredo nenhum — ele só inicia a task, e a task definition não tem bloco `secrets` nem `environment` com chave. É a ausência que se prova, não uma presença.",
+                "nodes": [
+                  "sched",
+                  "ecstask"
+                ],
+                "edges": [
+                  "sched>ecstask"
+                ]
+              },
+              {
+                "label": "A sessão da task role é buscada pelo agente ECS, não pedida pelo código",
+                "detail": "O SDK não chama `sts:AssumeRole`: ele faz uma requisição HTTP simples a um endpoint interno (`169.254.170.2`, exposto pela variável `ECS_CONTAINER_CREDENTIALS_RELATIVE_URI`), e recebe de volta uma sessão que o agente do ECS já tinha assumido por trás da task.",
+                "nodes": [
+                  "ecstask",
+                  "taskrole"
+                ],
+                "edges": [
+                  "ecstask>taskrole",
+                  "taskrole>ecstask"
+                ]
+              },
+              {
+                "label": "A mesma sessão grava e lê, e carrega a identidade da TASK — não da máquina",
+                "detail": "Se duas tasks diferentes rodassem no mesmo host EC2 (fora do Fargate), cada uma ainda receberia sua própria sessão, escopada à SUA task role — nunca a role da instância. É a separação que o L34 já cobrou para pods; aqui é para tasks.",
+                "nodes": [
+                  "ecstask",
+                  "s3",
+                  "dynamo"
+                ],
+                "edges": [
+                  "ecstask>s3",
+                  "ecstask>dynamo"
+                ]
+              },
+              {
+                "label": "No EKS, quem pede a credencial é o próprio SDK, com o token da ServiceAccount",
+                "detail": "Aqui a mecânica é oposta à do ECS: não existe um agente vendendo sessão pronta. O SDK lê um arquivo de token JWT montado no pod, apresenta esse token à STS via `AssumeRoleWithWebIdentity`, e só então recebe a sessão temporária.",
+                "nodes": [
+                  "pod",
+                  "oidcsts",
+                  "irsarole"
+                ],
+                "edges": [
+                  "pod>oidcsts",
+                  "oidcsts>irsarole"
+                ]
+              },
+              {
+                "label": "O pod usa a sessão do IRSA para os dois destinos que o CronJob precisa",
+                "detail": "Fila e segredo do parceiro são acessados com a MESMA sessão, obtida uma vez e reaproveitada pelo SDK até perto da expiração. Nenhuma das duas chamadas carrega uma chave gravada em lugar nenhum — nem no manifesto, nem no Secret do Kubernetes.",
+                "nodes": [
+                  "pod",
+                  "sqs",
+                  "secrets"
+                ],
+                "edges": [
+                  "pod>sqs",
+                  "pod>secrets"
+                ]
+              },
+              {
+                "label": "A auditoria distingue os dois caminhos pelo mesmo serviço",
+                "detail": "O CloudTrail mostra `taskArn` para a sessão do ECS e o `sub` da ServiceAccount para a sessão do IRSA — nos dois casos, uma identidade de WORKLOAD, nunca um nome de usuário humano. É a prova de que a auditoria melhorou, não só a segurança.",
+                "nodes": [
+                  "taskrole",
+                  "irsarole",
+                  "trail"
+                ],
+                "edges": [
+                  "taskrole>trail",
+                  "irsarole>trail"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Repare no que NÃO mudou entre os dois ambientes: o binário .NET é o mesmo, sem branch de \"se EKS, faça X\". A diferença inteira mora na infraestrutura — quem injeta o quê no ambiente do processo antes dele começar a rodar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "Task role e IRSA não competem — cada um resolve o ambiente onde já está",
+            "content": "Não existe decisão de \"qual dos dois é melhor\" fora de contexto: task role só existe para ECS, IRSA só existe para EKS. A escolha real deste laboratório não foi entre os dois mecanismos — foi decidir que NENHUM dos dois workloads teria chave estática, e cada ambiente resolve isso com a ferramenta que já tem embutida."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Da instanciação do SDK à primeira chamada AWS"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A cadeia de credenciais do SDK para .NET é documentada e determinística — não é \"tentativa e erro\", é uma ordem fixa. O que este módulo prova é que essa ordem tem consequência de segurança, não só de conveniência."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Do início do processo à primeira chamada AWS — dois caminhos, um destino",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "O processo inicia, e o cliente do SDK é instanciado sem credencial no código",
+                "desc": "`new AmazonS3Client()`, sem argumento nenhum — em ECS e em EKS, o MESMO binário, sem branch de \"se eu estiver no cluster X\"."
+              },
+              {
+                "label": "A cadeia de credenciais padrão é testada, NA ORDEM",
+                "desc": "Variável de ambiente com chave estática é verificada primeiro. Se ela existir, a busca para ali — a role, se houver, nunca chega a ser consultada."
+              },
+              {
+                "label": "ECS: nada em variável de ambiente → endpoint interno do agente",
+                "desc": "O SDK lê `ECS_CONTAINER_CREDENTIALS_RELATIVE_URI`, injetada pelo próprio agente, e busca uma sessão JÁ ASSUMIDA — o agente fez o `AssumeRole` por trás da task."
+              },
+              {
+                "label": "EKS: nada em variável de ambiente → token de ServiceAccount",
+                "desc": "O SDK encontra `AWS_ROLE_ARN` e `AWS_WEB_IDENTITY_TOKEN_FILE`, injetadas pelo webhook de mutação do IRSA, e ELE MESMO chama `sts:AssumeRoleWithWebIdentity` com o token."
+              },
+              {
+                "label": "As duas terminam no mesmo formato de sessão",
+                "desc": "AccessKeyId, SecretAccessKey e SessionToken temporários, com um horário de expiração — a diferença de mecanismo desaparece a partir deste ponto."
+              },
+              {
+                "label": "O SDK guarda a sessão em cache e renova sozinho perto da expiração",
+                "desc": "A aplicação nunca vê esse relógio: não há retry manual, não há captura de erro de expiração — a renovação é transparente, feita pela mesma cadeia que resolveu a credencial."
+              },
+              {
+                "label": "Cada chamada carrega o contexto de identidade, visível no CloudTrail",
+                "desc": "`taskArn` para a sessão do ECS, `sub` do token para a sessão do IRSA. Nenhuma das duas aparece como um nome de usuário — porque nenhuma delas é uma pessoa."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A ordem exata, porque ela é o mecanismo inteiro",
+            "content": "A cadeia do SDK para .NET testa, nesta sequência: credenciais de sessão vindas de `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`; depois as mesmas duas primeiras variáveis sem a terceira; depois `AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN` (o mecanismo do IRSA, quando vem por variável); depois perfis nomeados; só then o provedor de credencial do contêiner (task role do ECS); e por último a metadata do EC2. Qualquer chave estática nas duas primeiras posições vence tudo o que vem depois."
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "json",
+            "filename": "sessao-vendida-pelo-agente.json",
+            "code": "// Formato que o endpoint interno do agente ECS devolve ao SDK, na porta\n// 169.254.170.2, quando ele busca a sessao da task role. O SDK nunca chama\n// STS diretamente neste caminho — o agente ja fez isso por tras da task.\n{\n  \"RoleArn\": \"arn:aws:iam::111122223333:role/ffv-lab-conciliacao-task\",\n  \"AccessKeyId\": \"ASIAEXEMPLO000000000000\",\n  \"SecretAccessKey\": \"***\",\n  \"Token\": \"***\",\n  \"Expiration\": \"2026-08-07T16:45:12Z\"\n}\n// A forma exata pode variar por versao do agente — confirme na sua conta com\n// um curl de dentro do conteiner antes de depender de um campo especifico."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Dois workloads da Cadência — um worker de conciliação em ECS Fargate e um CronJob no cluster EKS do L34 — precisam ler S3, escrever DynamoDB, consumir uma fila SQS e ler um segredo do Secrets Manager, sem nenhuma chave de acesso gravada em lugar nenhum.",
+            "winner": "Task role no ECS, IRSA no EKS — nenhuma chave estática, credencial sempre obtida via STS",
+            "why": "Os dois mecanismos custam zero na fatura — IAM e STS não cobram — e resolvem exatamente o requisito declarado: identidade por WORKLOAD, temporária, renovada sozinha. A alternativa de usar a role da instância EC2 ou do nó do EKS falha no requisito mais básico, que é isolamento: todo processo na mesma máquina herdaria a mesma permissão, e não há como dar ao worker de conciliação acesso ao DynamoDB sem dar o mesmo acesso a qualquer outro processo que um dia rode ali. A chave estática funciona tecnicamente, mas fere o requisito de rotação — ela não expira sozinha — e o de auditoria, porque a sessão não carrega contexto de qual processo a usou.",
+            "alternatives": [
+              {
+                "name": "Role da instância EC2 / role do nó do EKS",
+                "downside": "Concede a mesma permissão a TODOS os processos que rodam na máquina, não só ao worker de conciliação. Num ambiente multi-tenant de tasks ou pods, isso é o oposto de menor privilégio — é exatamente o problema que task role e IRSA existem para resolver."
+              },
+              {
+                "name": "Chave de acesso de longa duração, em Secrets Manager (não em variável de ambiente)",
+                "downside": "Move o problema, não resolve: a chave continua estática, continua sem expirar sozinha, e agora precisa de rotação manual ou de um Lambda de rotação adicional — trabalho de engenharia para reproduzir o que STS já entrega de graça."
+              },
+              {
+                "name": "EKS Pod Identity, em vez de IRSA",
+                "downside": "É mais simples de configurar (sem provedor OIDC, `sts:AssumeRole` em vez de `AssumeRoleWithWebIdentity`) e legítima em cluster novo. Não é a escolha aqui porque o cluster já existe do L34 com IRSA configurado, e migrar o mecanismo de identidade de um cluster em produção não é uma decisão deste laboratório."
+              },
+              {
+                "name": "Uma única role compartilhada entre os dois workloads",
+                "downside": "Simplifica a criação e destrói a auditoria: uma chamada suspeita na fila SQS não diria se veio do worker de conciliação ou de qualquer outro serviço que também usasse a mesma role. Role por workload é o que torna o CloudTrail respondível."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Mecanismo no ECS",
+                "task role, via provedor de credencial do contêiner",
+                "chave estática; role da instância EC2",
+                "sessão temporária, escopada à task, renovada sozinha, sem chamada explícita de STS",
+                "nada — é estritamente melhor para este caso, sem trade-off técnico real"
+              ],
+              [
+                "Mecanismo no EKS",
+                "IRSA, via OIDC federado",
+                "EKS Pod Identity; role do nó; Secret do Kubernetes com chave",
+                "reaproveita o provedor OIDC que o L34 já criou, sem recurso novo",
+                "configuração mais verbosa que Pod Identity — vale reconsiderar em cluster novo"
+              ],
+              [
+                "Condição na trust policy da task role",
+                "`SourceArn` + `SourceAccount`",
+                "nenhuma condição; só `SourceAccount`",
+                "impede que outra task da mesma conta, fora deste projeto, assuma a role",
+                "mais duas linhas de Terraform, sem custo operacional real"
+              ],
+              [
+                "Condição na trust policy do IRSA",
+                "`sub` + `aud`",
+                "só `sub`",
+                "token emitido para audiência diferente de `sts.amazonaws.com` também é recusado",
+                "nenhum — é a forma recomendada, sem trade-off"
+              ],
+              [
+                "Guarda de partida contra chave estática",
+                "sim, falha alto e cedo",
+                "nenhuma verificação; alerta só em auditoria periódica",
+                "transforma um incidente de meses em um erro de deploy, visível no primeiro minuto",
+                "uma linha de código a mais para manter, em cada serviço"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este módulo não paga",
+            "content": "A policy anexada às duas roles aqui é escopada ao recurso, mas não tem condição fina de tag, prefixo dinâmico por dia ou `dynamodb:LeadingKeys`. Isso é decisão do L41, que trata menor privilégio em profundidade. Este módulo resolve QUEM está chamando; o L41 resolve O QUANTO essa identidade pode fazer."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: a task role do ECS, sem chave nenhuma"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Duas condições na confiança, um escopo real na permissão. Nenhuma delas é opcional — remover qualquer uma reabre um caminho que a arquitetura já fechou."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "ecs-identidade.tf",
+            "code": "# ecs-identidade.tf — a task role, e nenhuma chave em lugar nenhum\n\n# Confianca: so o ECS pode assumir esta role, e so em nome de UMA task deste\n# projeto. As duas condicoes protegem contra o \"confused deputy\": sem elas,\n# uma task de OUTRO servico na mesma conta tambem poderia assumi-la.\ndata \"aws_iam_policy_document\" \"confianca_ecs_task\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sts:AssumeRole\"]\n    principals {\n      type        = \"Service\"\n      identifiers = [\"ecs-tasks.amazonaws.com\"]\n    }\n    condition {\n      test     = \"ArnLike\"\n      variable = \"aws:SourceArn\"\n      values   = [\"arn:aws:ecs:${var.regiao}:${var.conta}:*\"]\n    }\n    condition {\n      test     = \"StringEquals\"\n      variable = \"aws:SourceAccount\"\n      values   = [var.conta]\n    }\n  }\n}\n\nresource \"aws_iam_role\" \"conciliacao_task\" {\n  name               = \"${var.projeto}-conciliacao-task\"\n  assume_role_policy = data.aws_iam_policy_document.confianca_ecs_task.json\n}\n\n# Escopo real: um prefixo do bucket, uma tabela. A condicao por padrao de\n# chave/tag mais fina fica para o L41 — aqui o alvo e a IDENTIDADE, nao o\n# refinamento maximo da policy.\ndata \"aws_iam_policy_document\" \"conciliacao_task_permissoes\" {\n  statement {\n    sid       = \"LerExportsDoDia\"\n    effect    = \"Allow\"\n    actions   = [\"s3:GetObject\"]\n    resources = [\"${aws_s3_bucket.fechamentos.arn}/exports/*\"]\n  }\n  statement {\n    sid       = \"GravarConciliacao\"\n    effect    = \"Allow\"\n    actions   = [\"dynamodb:PutItem\", \"dynamodb:UpdateItem\"]\n    resources = [aws_dynamodb_table.conciliacao.arn]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"conciliacao_task\" {\n  role   = aws_iam_role.conciliacao_task.id\n  policy = data.aws_iam_policy_document.conciliacao_task_permissoes.json\n}\n\nresource \"aws_ecs_task_definition\" \"conciliacao\" {\n  family                   = \"${var.projeto}-conciliacao\"\n  requires_compatibilities = [\"FARGATE\"]\n  network_mode             = \"awsvpc\"\n  cpu                      = 256\n  memory                   = 512\n  execution_role_arn       = aws_iam_role.execucao.arn        # so ECR + logs\n  task_role_arn             = aws_iam_role.conciliacao_task.arn # so o que a APLICACAO usa\n\n  container_definitions = jsonencode([{\n    name      = \"conciliacao\"\n    image     = \"${aws_ecr_repository.conciliacao.repository_url}:${var.sha_da_imagem}\"\n    essential = true\n\n    # NENHUM bloco \"environment\" com AWS_ACCESS_KEY_ID ou AWS_SECRET_ACCESS_KEY.\n    # A ausencia e o ponto central deste arquivo — nao ha nada aqui para\n    # \"esconder melhor\". A credencial nunca existe em forma gravavel.\n    environment = [\n      { name = \"BUCKET_EXPORTS\", value = aws_s3_bucket.fechamentos.bucket },\n      { name = \"TABELA_CONCILIACAO\", value = aws_dynamodb_table.conciliacao.name },\n    ]\n\n    logConfiguration = {\n      logDriver = \"awslogs\"\n      options = {\n        \"awslogs-group\"         = aws_cloudwatch_log_group.conciliacao.name\n        \"awslogs-region\"        = var.regiao\n        \"awslogs-stream-prefix\" = \"conciliacao\"\n      }\n    }\n  }])\n}\n\n# Disparo diario. A periodicidade nao muda nada sobre a identidade — e por\n# isso que o defeito do desenho minimo nao aparece aqui: ele nunca dependeu\n# de QUANDO a task roda, so de COMO ela se autentica.\nresource \"aws_scheduler_schedule\" \"conciliacao_diaria\" {\n  name                = \"${var.projeto}-conciliacao-diaria\"\n  schedule_expression = \"cron(0 6 * * ? *)\"\n\n  flexible_time_window { mode = \"OFF\" }\n\n  target {\n    arn      = aws_ecs_cluster.principal.arn\n    role_arn = aws_iam_role.scheduler_ecs.arn\n\n    ecs_parameters {\n      task_definition_arn = aws_ecs_task_definition.conciliacao.arn\n      launch_type          = \"FARGATE\"\n      network_configuration {\n        subnets          = aws_subnet.privada[*].id\n        security_groups  = [aws_security_group.conciliacao.id]\n        assign_public_ip = false\n      }\n    }\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que a permissão de S3 mora na task role, não na execution role",
+            "content": "A execution role só serve ao AGENTE — puxar imagem do ECR, escrever log, ler segredo referenciado na definição. Ela nunca é herdada pelo contêiner, então anexar a policy de S3 e DynamoDB nela não muda nada para a aplicação: é a confusão mais comum desta banda, e o L34 já a nomeou para o caso análogo em EKS."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: IRSA para o CronJob do EKS, reaproveitando o cluster do L34"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença central em relação ao L34: aqui o provedor OIDC é LIDO com `data`, não criado de novo. O cluster e o provedor já existem — recriar duplicaria o provedor OIDC e deixaria duas fontes de verdade sobre o mesmo cluster."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "eks-identidade.tf",
+            "code": "# eks-identidade.tf — o CronJob, e a role que so a ServiceAccount dele assume\n\n# O provedor OIDC e um recurso POR CLUSTER, criado uma vez no L34. Recria-lo\n# aqui duplicaria o provedor — cada IAM OIDC Provider tem endpoint proprio, e\n# ter dois para o MESMO cluster confunde qual trust policy referencia qual.\n# Por isso: leitura, nao criacao.\ndata \"aws_iam_openid_connect_provider\" \"cluster\" {\n  url = \"https://${data.aws_eks_cluster.principal.identity[0].oidc[0].issuer}\"\n}\n\ndata \"aws_eks_cluster\" \"principal\" {\n  name = \"${var.projeto}-eks\" # o cluster ja existe, criado no L34\n}\n\n# A condicao dupla e o que faz esta role NAO ser assumivel por qualquer pod\n# do cluster. `sub` restringe a UMA ServiceAccount; `aud` confirma que o token\n# foi emitido para se apresentar ao STS — sem ela, um token emitido para OUTRA\n# audiencia tambem passaria na checagem de `sub`.\ndata \"aws_iam_policy_document\" \"confianca_irsa_conciliacao\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sts:AssumeRoleWithWebIdentity\"]\n    principals {\n      type        = \"Federated\"\n      identifiers = [data.aws_iam_openid_connect_provider.cluster.arn]\n    }\n    condition {\n      test     = \"StringEquals\"\n      variable = \"${replace(data.aws_iam_openid_connect_provider.cluster.url, \"https://\", \"\")}:sub\"\n      values   = [\"system:serviceaccount:conciliacao:conciliacao-sa\"]\n    }\n    condition {\n      test     = \"StringEquals\"\n      variable = \"${replace(data.aws_iam_openid_connect_provider.cluster.url, \"https://\", \"\")}:aud\"\n      values   = [\"sts.amazonaws.com\"]\n    }\n  }\n}\n\nresource \"aws_iam_role\" \"irsa_conciliacao\" {\n  name               = \"${var.projeto}-irsa-conciliacao\"\n  assume_role_policy = data.aws_iam_policy_document.confianca_irsa_conciliacao.json\n}\n\ndata \"aws_iam_policy_document\" \"irsa_conciliacao_permissoes\" {\n  statement {\n    sid       = \"ConsumirPedidosPagos\"\n    effect    = \"Allow\"\n    actions   = [\"sqs:ReceiveMessage\", \"sqs:DeleteMessage\", \"sqs:GetQueueAttributes\"]\n    resources = [data.aws_sqs_queue.pedidos_pagos.arn] # a fila do L03/L34\n  }\n  statement {\n    sid       = \"LerChaveDoParceiro\"\n    effect    = \"Allow\"\n    actions   = [\"secretsmanager:GetSecretValue\"]\n    resources = [aws_secretsmanager_secret.chave_parceiro.arn]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"irsa_conciliacao\" {\n  role   = aws_iam_role.irsa_conciliacao.id\n  policy = data.aws_iam_policy_document.irsa_conciliacao_permissoes.json\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Confiança sem `aud` autoriza mais do que parece",
+            "content": "Restringir só `sub` protege contra OUTRA ServiceAccount assumir a role. Não protege contra um token emitido para uma audiência diferente de `sts.amazonaws.com` — um caso raro, mas real em cluster com múltiplos consumidores de OIDC. As duas condições juntas fecham a lacuna; uma sozinha deixa a porta encostada."
+          }
+        },
+        {
+          "id": "b9_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "yaml",
+            "filename": "conciliacao-cronjob.yaml",
+            "code": "# conciliacao-cronjob.yaml — a linha que liga a ServiceAccount a role IRSA\n\napiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: conciliacao-sa\n  namespace: conciliacao\n  annotations:\n    # E esta linha, e so ela, que faz o pod receber AWS_ROLE_ARN e\n    # AWS_WEB_IDENTITY_TOKEN_FILE no ambiente. Sem ela, o pod sobe com a\n    # identidade fraca padrao do namespace — sem AccessDenied nenhum na hora\n    # de subir, so quando a primeira chamada AWS acontecer.\n    eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/ffv-lab-irsa-conciliacao\n---\napiVersion: batch/v1\nkind: CronJob\nmetadata:\n  name: conciliacao-diaria\n  namespace: conciliacao\nspec:\n  schedule: \"0 6 * * *\" # mesmo horario da task ECS, por decisao de produto — nao tecnica\n  jobTemplate:\n    spec:\n      template:\n        spec:\n          serviceAccountName: conciliacao-sa # sem isto, IRSA nao se aplica a este pod\n          restartPolicy: OnFailure\n          containers:\n            - name: conciliacao\n              image: 111122223333.dkr.ecr.us-east-1.amazonaws.com/ffv-lab-conciliacao-eks:SHA_DA_IMAGEM\n              env:\n                - name: FILA_URL\n                  value: https://sqs.us-east-1.amazonaws.com/111122223333/ffv-lab-pedidos-pagos\n                - name: SEGREDO_PARCEIRO_ARN\n                  value: arn:aws:secretsmanager:us-east-1:111122223333:secret:ffv-lab-chave-parceiro\n              # Nenhum \"envFrom\" apontando para Secret do Kubernetes com chave\n              # AWS dentro. Se voce ve isso num manifesto, e a chave estatica\n              # de novo, so que trocou de gaveta.\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o código, e a guarda que recusa iniciar com chave estática"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O desenho mínimo e o de produção rodam o MESMO binário — a diferença inteira está na infraestrutura em volta. A guarda abaixo é a única linha de aplicação que este módulo acrescenta, e ela existe para transformar silêncio em erro visível."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Program.cs — mínimo",
+            "code": "// Program.cs — o desenho minimo. O codigo parece limpo; o risco mora no Terraform.\n\nvar builder = Host.CreateApplicationBuilder(args);\n\nbuilder.Services.AddAWSService<IAmazonS3>();\nbuilder.Services.AddAWSService<IAmazonDynamoDB>();\n\n// Nenhuma credencial aqui. O construtor sem argumento deixa o SDK escolher\n// sozinho, pela cadeia padrao — e e exatamente essa escolha silenciosa que\n// torna a chave estatica da task definition perigosa: o codigo nao tem como\n// saber, e nao pergunta, qual fonte respondeu.\nvar app = builder.Build();\n\nvar s3 = app.Services.GetRequiredService<IAmazonS3>();\nvar dynamo = app.Services.GetRequiredService<IAmazonDynamoDB>();\n\nvar bucket = Environment.GetEnvironmentVariable(\"BUCKET_EXPORTS\")!;\nvar tabela = Environment.GetEnvironmentVariable(\"TABELA_CONCILIACAO\")!;\n\nvar exports = await s3.ListObjectsV2Async(new ListObjectsV2Request\n{\n    BucketName = bucket,\n    Prefix     = $\"exports/{DateOnly.FromDateTime(DateTime.UtcNow):yyyy-MM-dd}/\",\n});\n\nforeach (var obj in exports.S3Objects)\n{\n    // processamento do arquivo de fechamento, omitido — nao e o foco do laboratorio\n    await dynamo.PutItemAsync(tabela, new Dictionary<string, AttributeValue>\n    {\n        [\"pk\"] = new() { S = $\"CONCILIACAO#{obj.Key}\" },\n        [\"processadoEm\"] = new() { S = DateTimeOffset.UtcNow.ToString(\"O\") },\n    });\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "csharp",
+            "filename": "Program.cs — produção",
+            "code": "// Program.cs — o desenho de producao: recusa iniciar se achar chave estatica\n\nvar builder = Host.CreateApplicationBuilder(args);\nvar log = LoggerFactory.Create(b => b.AddConsole()).CreateLogger(\"Conciliacao\");\n\n// A GUARDA que o desenho minimo nao tem. Nao e defesa contra ataque: e defesa\n// contra o proprio time, seis meses depois, colando uma chave \"so para testar\"\n// e esquecendo de tirar. Falhar AQUI, alto e cedo, e mais barato que descobrir\n// num scan de Terraform state.\nvar chaveEstatica = Environment.GetEnvironmentVariable(\"AWS_ACCESS_KEY_ID\");\nif (!string.IsNullOrEmpty(chaveEstatica))\n{\n    log.LogCritical(\n        \"AWS_ACCESS_KEY_ID presente no ambiente — credencial estatica detectada. \" +\n        \"Encerrando antes de processar qualquer coisa. Remova a variavel da task \" +\n        \"definition ou do manifesto; a task role/IRSA ja resolve isto.\");\n    Environment.Exit(1);\n}\n\nbuilder.Services.AddAWSService<IAmazonS3>();\nbuilder.Services.AddAWSService<IAmazonDynamoDB>();\n\nvar app = builder.Build();\n\n// Prova em runtime de QUAL provedor respondeu — a mesma pergunta que a secao\n// de implantacao verifica de fora, aqui verificada de dentro do processo.\nvar credenciais = FallbackCredentialsFactory.GetCredentials();\nlog.LogInformation(\"credencial resolvida pela cadeia padrao: {Tipo}\", credenciais.GetType().Name);\n// Esperado em ECS: \"ECSTaskCredentials\" (ou equivalente do provedor de\n// contêiner). Esperado em EKS: \"AssumeRoleWithWebIdentityCredentials\".\n// Qualquer coisa contendo \"Environment\" ou \"Basic\" e a falha que este\n// laboratorio existe para impedir.\n\nvar s3 = app.Services.GetRequiredService<IAmazonS3>();\nvar dynamo = app.Services.GetRequiredService<IAmazonDynamoDB>();\n\nvar bucket = Environment.GetEnvironmentVariable(\"BUCKET_EXPORTS\")!;\nvar tabela = Environment.GetEnvironmentVariable(\"TABELA_CONCILIACAO\")!;\n\nvar exports = await s3.ListObjectsV2Async(new ListObjectsV2Request\n{\n    BucketName = bucket,\n    Prefix     = $\"exports/{DateOnly.FromDateTime(DateTime.UtcNow):yyyy-MM-dd}/\",\n});\n\nforeach (var obj in exports.S3Objects)\n{\n    await dynamo.PutItemAsync(tabela, new Dictionary<string, AttributeValue>\n    {\n        [\"pk\"] = new() { S = $\"CONCILIACAO#{obj.Key}\" },\n        [\"processadoEm\"] = new() { S = DateTimeOffset.UtcNow.ToString(\"O\") },\n    });\n}\n\nlog.LogInformation(\"conciliacao concluida: {Total} exports processados\", exports.S3Objects.Count);\n"
+          }
+        },
+        {
+          "id": "b10_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "Falhar cedo é a defesa, não a elegância",
+            "content": "A guarda não impede um ataque — impede que o PRÓPRIO TIME reintroduza o problema sem perceber. Um `AWS_ACCESS_KEY_ID` colado \"só para testar\" agora derruba o deploy em vez de ficar ativo por seis meses. É a mesma lógica do disjuntor de implantação do L03: transformar um risco silencioso em um evento que alguém precisa tratar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Implantar, e provar qual credencial cada workload realmente usa"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma aceita \"a aplicação está funcionando\" como resultado — funcionar é justamente o que a chave estática também fazia."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "achar-a-chave.sh",
+            "code": "# achar-a-chave.sh — a prova que abre o laboratorio: a chave estava exposta\n\n# Terraform state guarda o valor de toda variavel que passou por um recurso,\n# em TEXTO PLANO, a menos que voce marque como sensitive — e \"environment\"\n# de task definition raramente e marcado.\nterraform show -json terraform.tfstate \\\n  | jq -r '.. | objects | select(has(\"environment\")) | .environment[]? | select(.name==\"AWS_ACCESS_KEY_ID\")'\n# Esperado ANTES da correcao: uma linha com \"value\": \"AKIA...\".\n# Esperado DEPOIS: nenhuma saida — a variavel nao existe mais na definicao.\n\n# Segundo lugar onde ela aparece: log de aplicacao que imprime configuracao\n# na partida \"para depurar\". Aconteceu na Cadencia numa versao antiga.\naws logs filter-log-events \\\n  --log-group-name /ecs/ffv-lab-conciliacao \\\n  --filter-pattern \"AKIA\" \\\n  --query \"events[].message\" --output text\n# Qualquer resultado aqui e um incidente, nao um achado academico: a chave\n# apareceu em texto plano num grupo de logs que dezenas de pessoas podem ler.\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "prova-ordem-da-cadeia.sh",
+            "code": "# prova-ordem-da-cadeia.sh — confirma qual credencial o SDK realmente usou\n\n# ANTES da correcao: a task tem tanto a variavel de ambiente quanto a task\n# role anexada. O log de partida do CS_GUARDA (ou um log equivalente) mostra\n# qual delas venceu.\naws logs filter-log-events \\\n  --log-group-name /ecs/ffv-lab-conciliacao \\\n  --filter-pattern \"credencial resolvida\" \\\n  --query \"events[].message\" --output text\n# Esperado ANTES: \"... Tipo: EnvironmentVariablesAWSCredentials\" (ou Basic).\n# Isso PROVA que a task role, mesmo anexada e correta, nunca foi consultada.\n# Se o log mostrar o tipo do provedor de contêiner mesmo com a chave presente,\n# a ordem da cadeia documentada nao bate com o comportamento observado — pare\n# e releia a task definition, porque algo nao confere.\n"
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "filename": "prova-correcao.sh",
+            "code": "# prova-correcao.sh — depois de remover a variavel, a sessao muda de tipo\n\nterraform apply -auto-approve  # aplica ecs-identidade.tf sem environment de chave\naws ecs wait services-stable --cluster ffv-lab --services ffv-lab-conciliacao\n\naws logs filter-log-events \\\n  --log-group-name /ecs/ffv-lab-conciliacao \\\n  --filter-pattern \"credencial resolvida\" \\\n  --query \"events[-1:].message\" --output text\n# Esperado DEPOIS: o tipo do provedor de credencial do conteiner (nao mais\n# Environment nem Basic). Se ainda aparecer um tipo estatico, a variavel\n# continua presente em algum lugar — confira tambem o Dockerfile e a imagem\n# base, que podem ter um .env copiado por engano.\n"
+          }
+        },
+        {
+          "id": "b11_4",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "bash",
+            "filename": "prova-irsa.sh",
+            "code": "# prova-irsa.sh — dentro do pod, nenhuma chave; so token e role ARN\n\nkubectl exec -n conciliacao deploy/conciliacao-debug -- env | grep ^AWS_\n# Esperado: AWS_ROLE_ARN=arn:aws:iam::...:role/ffv-lab-irsa-conciliacao\n#           AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/secrets/eks.amazonaws.com/serviceaccount/token\n# NENHUMA linha com AWS_ACCESS_KEY_ID ou AWS_SECRET_ACCESS_KEY. Se aparecer\n# uma delas, alguem colocou um Secret do Kubernetes com chave estatica dentro\n# — a mesma falha do ECS, so que morando em outro objeto.\n\nkubectl exec -n conciliacao deploy/conciliacao-debug -- aws sts get-caller-identity\n# Esperado: \"Arn\" contendo \"assumed-role/ffv-lab-irsa-conciliacao/...\" — a\n# sessao carrega o NOME DA ROLE, nao um nome de usuario. E a prova de que a\n# troca do token por sessao realmente aconteceu.\n"
+          }
+        },
+        {
+          "id": "b11_5",
+          "type": "code_block",
+          "position": 5,
+          "data": {
+            "language": "bash",
+            "filename": "prova-cloudtrail.sh",
+            "code": "# prova-cloudtrail.sh — a auditoria diferencia os dois caminhos\n\naws cloudtrail lookup-events \\\n  --lookup-attributes AttributeKey=EventName,AttributeValue=GetObject \\\n  --query \"Events[?contains(CloudTrailEvent, 'ffv-lab-conciliacao-task')].CloudTrailEvent\" \\\n  --max-results 5 --output text | jq '.userIdentity.arn, .userIdentity.sessionContext.sessionIssuer.arn'\n# Esperado: um \"assumed-role\" com o taskArn no sessionContext — nao um \"user\".\n\naws cloudtrail lookup-events \\\n  --lookup-attributes AttributeKey=EventName,AttributeValue=ReceiveMessage \\\n  --query \"Events[?contains(CloudTrailEvent, 'irsa-conciliacao')].CloudTrailEvent\" \\\n  --max-results 5 --output text | jq '.userIdentity.arn'\n# Esperado: um \"assumed-role\" citando irsa-conciliacao, com o sub da\n# ServiceAccount visivel no token — nao um nome de usuario IAM em nenhum caso.\n"
+          }
+        },
+        {
+          "id": "b11_6",
+          "type": "comparison_table",
+          "position": 6,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · A chave estava exposta",
+                "grep no Terraform state e nos logs",
+                "nenhuma ocorrência de `AKIA` depois da correção",
+                "qualquer ocorrência antes da correção confirma o incidente do cenário de abertura"
+              ],
+              [
+                "2 · A ordem da cadeia decide",
+                "log de partida com o tipo de credencial resolvida",
+                "antes da correção: tipo estático, mesmo com a role anexada",
+                "se o tipo já vier do contêiner com a chave presente, a ordem documentada não bateu — investigue"
+              ],
+              [
+                "3 · A correção muda o tipo",
+                "mesmo log, depois de remover a variável",
+                "tipo do provedor de credencial do contêiner",
+                "tipo ainda estático indica que a variável sobrevive em outro lugar — confira o Dockerfile"
+              ],
+              [
+                "4 · IRSA não deixa chave no pod",
+                "`env | grep ^AWS_` dentro do pod",
+                "só `AWS_ROLE_ARN` e `AWS_WEB_IDENTITY_TOKEN_FILE`",
+                "qualquer `AWS_ACCESS_KEY_ID` indica um Secret do Kubernetes com chave estática dentro"
+              ],
+              [
+                "5 · A auditoria diferencia os caminhos",
+                "CloudTrail nas duas chamadas",
+                "`assumed-role` com `taskArn` ou com o `sub` da ServiceAccount, nunca um usuário",
+                "um `arn:aws:iam::...:user/` no `userIdentity` é a mesma falha do cenário de abertura"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b11_7",
+          "type": "callout",
+          "position": 7,
+          "data": {
+            "variant": "success",
+            "title": "As cinco provas, lidas juntas, contam uma história só",
+            "content": "Nenhuma prova isolada fecha o caso: a primeira mostra que a chave existiu, a segunda mostra que ela vencia a role, a terceira mostra a correção, a quarta mostra que o EKS nunca teve esse problema para começo de conversa, e a quinta mostra que a auditoria melhorou como consequência. É a diferença entre \"consertei\" e \"provei que consertei\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três acontecem de verdade, e as três parecem, de fora, \"está sem permissão\". O que as separa é onde mora o erro — na role errada, na condição errada, ou na variável que nunca saiu."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Policy colada na execution role",
+                "mova a permissão de S3/DynamoDB da task role para a execution role",
+                "contêiner recebe `AccessDenied`, mesmo com a policy existindo e anexada em algum lugar",
+                "confira QUAL role tem `taskRoleArn` vs. `executionRoleArn` na definição da task",
+                "permissão de negócio sempre na task role; execution role só para ECR/logs/segredo referenciado"
+              ],
+              [
+                "Chave estática sobrevive à task role correta",
+                "anexe a task role corretamente e deixe a variável de ambiente antiga no lugar",
+                "nada quebra — é o cenário de abertura reproduzido de propósito",
+                "log de credencial resolvida (guarda de partida) mostra tipo estático",
+                "remover a variável; a guarda de partida devia ter barrado isto antes do deploy"
+              ],
+              [
+                "`sub` do IRSA com curinga de namespace",
+                "troque a condição para `StringLike` com `system:serviceaccount:conciliacao:*`",
+                "QUALQUER pod do namespace consegue assumir a role, não só o CronJob pretendido",
+                "trust policy da role IRSA; teste criando uma ServiceAccount nova no mesmo namespace",
+                "condição exata, uma ServiceAccount por role — nunca curinga de namespace inteiro"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O sintoma mais enganoso desta lista",
+            "content": "A segunda falha não produz sintoma nenhum, e é por isso que ela é a mais perigosa das três: as outras duas quebram alto — `AccessDenied` visível, ou permissão vazando para quem não devia. Esta funciona silenciosamente errada, exatamente como no incidente real que abriu o módulo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25_0",
+      "type": "quiz",
+      "position": 13,
+      "data": {
+        "question": "Uma task ECS tem uma task role corretamente anexada, com a permissão certa de S3. A task definition também tem `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY` numa variável de ambiente, esquecidos de um teste antigo. O que a aplicação usa para chamar o S3?",
+        "options": [
+          "Nenhuma das duas: a presença simultânea das duas causa erro de configuração",
+          "Depende de qual delas foi configurada por último no processo de deploy",
+          "A task role, porque ela é a forma recomendada e o SDK prioriza role sobre chave",
+          "A chave estática da variável de ambiente, porque a cadeia de credenciais a testa antes da task role"
+        ],
+        "correctIndex": 3,
+        "explanation": "A cadeia de credenciais padrão do SDK segue uma ordem fixa, e variável de ambiente com chave estática vem ANTES do provedor de credencial do contêiner nessa ordem — não importa qual foi anexada por último ou qual \"deveria\" ser a preferida. A task role existir e estar correta não muda o resultado: a busca da cadeia para na primeira fonte que encontra, e a variável de ambiente é encontrada primeiro. É exatamente por isso que a aplicação continua funcionando sem nenhum sinal de erro — ela está funcionando, só que com a credencial errada.\n\nA primeira alternativa inverte a ordem real por assumir que \"recomendado\" significa \"testado primeiro\" — o SDK não sabe qual fonte é a intenção arquitetural do time, só segue a lista fixa. A terceira imagina uma validação que não existe: o SDK não checa conflito entre fontes, simplesmente usa a primeira que responde. A quarta troca ordem de PROVEDORES por ordem de CONFIGURAÇÃO no tempo — a cadeia de credenciais não sabe, e não pergunta, quando cada fonte foi configurada; ela só testa suas posições fixas, sempre na mesma sequência, a cada instanciação do cliente."
+      }
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 14,
+      "data": {
+        "title": "Segurança: o que muda quando a identidade é do workload"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Trocar chave estática por credencial temporária não elimina risco — desloca ele. O risco deixa de ser \"a chave vaza\" e passa a ser \"a trust policy autoriza mais do que deveria\", que é mais raro e mais silencioso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Chave de acesso de longa duração esquecida em variável de ambiente",
+                "alta",
+                "alto",
+                "guarda de partida que recusa iniciar; revisão de task definition antes do merge",
+                "grep periódico no Terraform state e nos logs por padrão de chave",
+                "revogar a chave imediatamente, remover a variável, redeployar"
+              ],
+              [
+                "Trust policy da task role sem `SourceArn`/`SourceAccount`",
+                "baixa",
+                "médio",
+                "condição obrigatória em toda trust policy de task role",
+                "IAM Access Analyzer sobre a role",
+                "adicionar as condições; nenhuma sessão ativa precisa ser revogada, a mudança é preventiva"
+              ],
+              [
+                "Trust policy do IRSA com `sub` em curinga de namespace",
+                "média",
+                "alto",
+                "condição exata por ServiceAccount, nunca `StringLike` com curinga amplo",
+                "listar ServiceAccounts do namespace e comparar com a condição da role",
+                "restringir a condição; auditar CloudTrail por chamadas fora do pod esperado"
+              ],
+              [
+                "Role compartilhada entre workloads diferentes",
+                "média",
+                "médio",
+                "uma role por workload, mesmo que a permissão pareça idêntica hoje",
+                "CloudTrail sem contexto suficiente para separar origem — é o próprio sintoma",
+                "dividir a role antes de investigar, senão a investigação fica cega"
+              ],
+              [
+                "Segredo do parceiro sem rotação, mesmo lido via IRSA",
+                "baixa",
+                "médio",
+                "este módulo resolve QUEM lê o segredo, não a rotação dele — é o L46",
+                "idade da versão do segredo no Secrets Manager",
+                "configurar rotação automática, fora do escopo deste laboratório"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O `*` que não aparece na policy deste módulo, e por quê",
+            "content": "Diferente do L03, aqui nenhuma ação usada — `s3:GetObject`, `dynamodb:PutItem`, `sqs:ReceiveMessage`, `secretsmanager:GetSecretValue` — exige recurso `*`: todas aceitam ARN específico. Se seu caso de uso precisar de uma ação de conta (como `ecr:GetAuthorizationToken` no L03), a regra continua a mesma: `*` só com a frase que explica por que o recurso não pode ser mais estreito."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Observabilidade: as perguntas que a auditoria de identidade responde"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um painel de identidade não mede performance — mede se a credencial em uso é a que você desenhou, e se alguém está tentando usar uma role fora do escopo pretendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "Qual tipo de credencial cada workload está usando agora?",
+                "log de partida da aplicação",
+                "tipo estático (Environment/Basic) é o incidente deste módulo",
+                "qualquer ocorrência"
+              ],
+              [
+                "Alguma chamada AWS veio de um usuário IAM em vez de uma role?",
+                "CloudTrail `userIdentity.type`",
+                "`IAMUser` num workload que deveria usar role",
+                "> 0 por dia"
+              ],
+              [
+                "Uma ServiceAccount inesperada assumiu a role IRSA?",
+                "CloudTrail `sub` no `sessionContext`",
+                "valor diferente de `system:serviceaccount:conciliacao:conciliacao-sa`",
+                "qualquer valor diferente"
+              ],
+              [
+                "Existe chave de acesso de usuário IAM ativa há mais de 90 dias?",
+                "IAM Credential Report",
+                "chave de longa duração sem rotação é dívida acumulando",
+                "> 0 chaves acima de 90 dias"
+              ],
+              [
+                "A task role está sendo assumida por task de outro serviço?",
+                "CloudTrail `taskArn` fora do esperado",
+                "trust policy sem `SourceArn` suficiente",
+                "qualquer taskArn fora do prefixo do projeto"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que não existe, e por que sua ausência é o ponto",
+            "content": "Não há um \"alarme de chave estática\" nativo da AWS que dispare sozinho quando alguém cola `AWS_ACCESS_KEY_ID` numa task definition. IAM Access Analyzer e Credential Report chegam perto, mas nenhum dos dois olha dentro de variável de ambiente de contêiner. A guarda de partida da seção de construção existe justamente porque este buraco de observabilidade é real."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão de chamadas"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece com a identidade",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 chamadas/dia, 2 workloads",
+                "2 roles, 2 confianças, nada disputa limite",
+                "nada; é o cenário do laboratório",
+                "nada"
+              ],
+              [
+                "1.000 chamadas/dia, 10 workloads",
+                "10 roles distintas para manter",
+                "role sprawl: dez trust policies quase idênticas, revisadas manualmente",
+                "módulo de Terraform reutilizável para \"role de workload\", parametrizado por permissão"
+              ],
+              [
+                "100 mil chamadas/dia, 50 workloads",
+                "STS não é gargalo — é serviço regional com alta cota",
+                "a cota de IAM roles POR CONTA (padrão baixo, ajustável) passa a importar",
+                "checar `Service Quotas` para roles por conta antes de escalar o número de workloads"
+              ],
+              [
+                "Renovação de sessão sob carga",
+                "o SDK renova perto da expiração, por processo",
+                "milhares de processos renovando quase ao mesmo tempo, se todos subiram juntos",
+                "não é problema em condição normal — STS é dimensionado para isto; medir se notar latência"
+              ],
+              [
+                "Falha de AZ",
+                "IAM e STS são serviços regionais, não por AZ",
+                "nada aqui; a identidade não é a camada afetada por perda de AZ",
+                "a falha de AZ afeta o workload que USA a credencial, não a credencial em si"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O verdadeiro limite não é técnico, é operacional",
+            "content": "IAM não vai ficar lento com mais roles, e STS não fica sobrecarregado com mais AssumeRole. O que escala mal é gente revisando cinquenta trust policies parecidas à mão. A resposta é o módulo de Terraform reutilizável citado acima, não uma otimização de infraestrutura."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Custo: por que este laboratório é honestamente de graça"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "É incomum dizer isso sem ressalva, mas aqui cabe: IAM, STS e o provedor OIDC não têm linha de cobrança direta. O custo real deste laboratório não está na fatura da AWS."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "O que a AWS cobra",
+              "O custo real",
+              "Onde ele aparece"
+            ],
+            "rows": [
+              [
+                "Protótipo — 2 workloads, 1 execução/dia",
+                "nada por IAM/STS/OIDC",
+                "tempo de engenharia para escrever as duas trust policies corretamente",
+                "horas de configuração, não linha de fatura"
+              ],
+              [
+                "Produção — 50 workloads, roles individuais",
+                "nada por IAM/STS/OIDC",
+                "tempo de revisão de cada trust policy nova, e o módulo reutilizável para reduzir isso",
+                "processo de engenharia, não infraestrutura"
+              ],
+              [
+                "O custo de NÃO fazer isto",
+                "nada, imediatamente",
+                "uma chave de longa duração exposta com acesso de leitura a um bucket inteiro, por tempo indeterminado",
+                "incidente de segurança — o cenário de abertura deste módulo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "O custo oculto é o único que importa aqui",
+            "content": "Nenhuma das três linhas acima tem valor em dólar por hora. O risco de uma chave estática exposta não aparece na fatura da AWS de jeito nenhum — aparece, se aparecer, na fatura de um incidente: dado lido por quem não deveria, tempo de resposta, confiança perdida. É o único módulo desta série em que \"quanto custa\" tem resposta zero e \"quanto custa não fazer\" não tem teto."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "guarda de partida transforma chave esquecida em erro de deploy, visível cedo",
+                "a revisão de trust policy ainda é manual, workload por workload",
+                "módulo de Terraform reutilizável para role de workload",
+                "média"
+              ],
+              [
+                "Segurança",
+                "zero chave estática, condições de `SourceArn`/`sub`+`aud` nas duas trust policies",
+                "policy de permissão ainda sem condição fina de tag/prefixo/chave",
+                "menor privilégio detalhado — L41",
+                "alta"
+              ],
+              [
+                "Confiabilidade",
+                "credencial renovada automaticamente pelo SDK, sem job de rotação manual",
+                "segredo do parceiro no Secrets Manager ainda sem rotação configurada",
+                "rotação automática de segredo — L46",
+                "média"
+              ],
+              [
+                "Eficiência de performance",
+                "nenhum overhead perceptível: STS responde na casa de dezenas de milissegundos",
+                "nenhum, para o volume atual",
+                "nenhuma ação necessária neste nível de escala",
+                "baixa"
+              ],
+              [
+                "Otimização de custos",
+                "zero custo direto de IAM/STS/OIDC",
+                "nenhum, tecnicamente — o risco de não fazer isto não é um risco de custo de nuvem",
+                "nenhuma",
+                "baixa"
+              ],
+              [
+                "Sustentabilidade",
+                "nenhum recurso físico adicional; identidade é metadado, não hardware",
+                "nenhum",
+                "nenhuma ação necessária",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO a identidade de workload precisa amadurecer além do que este laboratório entrega."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Da chave no ambiente à identidade auditada por anomalia",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Chave de acesso em variável de ambiente. Funciona, publica valor, e é onde a Cadência estava antes da revisão de segurança.",
+                "note": "Risco resolvido: nenhum. Novo risco: exposição indefinida, sem alarme nativo que a detecte. Custo: zero adicional — e é isso que a torna sedutora."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Task role no ECS, IRSA no EKS, guarda de partida contra chave estática, trust policy com condição de confused deputy.",
+                "note": "Risco resolvido: chave de longa duração e role compartilhada por máquina. Novo risco: policy de permissão ainda ampla no recurso, sem condição fina. Custo: zero — IAM e STS não cobram."
+              },
+              {
+                "label": "Nível 3 — Menor privilégio real",
+                "instruction": "Policy derivada do uso medido, condição por tag e por padrão de chave, Access Analyzer revisando continuamente (L41).",
+                "note": "Risco resolvido: role que funciona mas concede mais do que o workload usa. Novo risco: policy estreita demais quebra caso legítimo não previsto. Custo: tempo de engenharia de revisão, não infraestrutura."
+              },
+              {
+                "label": "Nível 4 — Multi-conta",
+                "instruction": "Ambientes em contas separadas, trust policy restrita por conta, SCP como teto que nenhuma role, por mais permissiva, ultrapassa (L43).",
+                "note": "Risco resolvido: identidade de dev alcançando recurso de produção. Novo risco: complexidade de gerenciar múltiplas contas e OUs. Custo: overhead operacional de Organizations/Control Tower."
+              },
+              {
+                "label": "Nível 5 — Federação também para quem publica",
+                "instruction": "O último humano com credencial de longa duração — quem faz deploy — passa a usar OIDC federado de pipeline, não chave pessoal (L54).",
+                "note": "Risco resolvido: chave pessoal de dev no laptop. Novo risco: o pipeline vira alvo de alto valor, porque comprometê-lo publica na conta. Custo: minutos de build, sem recurso permanente novo."
+              },
+              {
+                "label": "Nível 6 — Dados e IA sobre o uso da identidade",
+                "instruction": "Correlacionar CloudTrail de todas as roles com detecção de anomalia (GuardDuty) para achar uso fora do padrão histórico de cada workload.",
+                "note": "Risco resolvido: role comprometida usada DENTRO do escopo autorizado, mas fora do padrão normal — que nenhuma policy detecta, porque tecnicamente é permitido. Novo risco: falso positivo em pico legítimo de uso. Custo: GuardDuty cobra por evento analisado, e o dado já existe no CloudTrail."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que a ordem entre os níveis 2 e 3 não se inverte",
+            "content": "Menor privilégio detalhado (nível 3) exige saber QUEM está chamando antes de decidir O QUANTO essa identidade pode fazer. Tentar afinar a policy de uma role compartilhada entre workloads (nível 1) não tem alvo claro: refinar permissão de uma identidade que não é sua é adivinhação, não engenharia."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A pergunta central deste módulo — \"qual mecanismo de identidade uso, e como configuro a confiança certa\" — é determinística. Task role, execution role e IRSA seguem regras fixas e documentadas; um modelo não decide isso melhor que a leitura correta da documentação, e forçar IA aqui seria o antipadrão que a série inteira evita."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O lugar honesto onde IA acrescenta é o nível 6 da evolução: detecção de ANOMALIA sobre o uso de uma identidade já corretamente configurada. Uma role com permissão para ler um bucket que normalmente é acessado às 6h da manhã, uma vez por dia, e que de repente é chamada centenas de vezes às 3h — isso não quebra nenhuma regra de policy, e é exatamente o tipo de padrão que aprendizado não supervisionado detecta melhor que um limiar fixo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "detectar uso de uma role fora do padrão histórico do workload"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "um limiar fixo (\"mais de X chamadas por hora\") gera alarme em todo pico legítimo de fim de mês; o padrão normal muda por workload e por dia da semana"
+              ],
+              [
+                "De onde viriam os dados?",
+                "CloudTrail — já existe, já tem `sub` e `taskArn` por chamada"
+              ],
+              [
+                "Qual o risco?",
+                "falso positivo em pico legítimo; exige limiar de confiança e caminho de revisão humana antes de qualquer ação automática de revogação"
+              ],
+              [
+                "Por que não neste laboratório?",
+                "porque este módulo resolve a IDENTIDADE — o pré-requisito sem o qual a anomalia nem teria contexto de workload para comparar. É o L48"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b19_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"decidir se esta trust policy está segura\" troca uma checagem determinística — a condição existe ou não existe, o `sub` está restrito ou não está — por um julgamento probabilístico sobre algo que tem resposta certa. Revisão de IAM é exatamente o tipo de problema onde regra vence modelo, porque a regra está certa 100% das vezes que se aplica."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Chave estática \"só até a role ser aprovada\"",
+                "desbloqueia teste imediato, sem esperar revisão",
+                "a cadeia de credenciais faz a chave vencer a role para sempre, mesmo depois de aprovada",
+                "role configurada corretamente e nunca de fato usada",
+                "guarda de partida que recusa iniciar com chave presente",
+                "nunca em ambiente que chega perto de produção; em notebook local, com chave revogada ao fim do dia"
+              ],
+              [
+                "Policy de negócio na execution role",
+                "as duas roles parecem intercambiáveis quando se olha rápido",
+                "a execution role nunca é herdada pelo contêiner — a aplicação continua sem acesso",
+                "`AccessDenied` mesmo com a policy existindo e anexada em algum lugar",
+                "permissão de aplicação sempre na task role",
+                "nunca; são papéis estruturalmente diferentes"
+              ],
+              [
+                "`sub` do IRSA com curinga de namespace inteiro",
+                "evita reconfigurar a trust policy a cada ServiceAccount nova",
+                "qualquer pod do namespace assume a role, não só o pretendido",
+                "chamada AWS partindo de um pod que a equipe não esperava",
+                "uma condição exata por ServiceAccount, uma role por workload",
+                "nunca em produção; talvez em namespace de sandbox isolado, sem dado real"
+              ],
+              [
+                "Uma role só para todos os workloads do cluster",
+                "menos Terraform para escrever e manter",
+                "CloudTrail perde a capacidade de dizer QUAL workload fez a chamada",
+                "investigação de incidente travada porque a role não distingue origem",
+                "uma role por workload, mesmo com permissão parecida",
+                "protótipo pessoal, sem dado sensível envolvido"
+              ],
+              [
+                "Usar a role do nó do EKS em vez de IRSA",
+                "já existe, já funciona, parece \"menos uma coisa para configurar\"",
+                "TODO pod do nó herda a mesma permissão — inclusive um comprometido por outro motivo",
+                "pod sem ServiceAccount vinculada ainda consegue chamar AWS",
+                "IRSA (ou EKS Pod Identity) por ServiceAccount, e IMDS restrito no nó",
+                "cluster de uso único, sem multi-tenancy de workload nenhuma — raro em produção"
+              ],
+              [
+                "Copiar a chave estática para um Secret do Kubernetes",
+                "parece mais seguro que variável de ambiente pura",
+                "continua sendo a mesma chave estática, só que numa gaveta diferente — não expira, não rotaciona",
+                "a mesma exposição do cenário de abertura, só que mais difícil de encontrar num grep simples",
+                "IRSA elimina a necessidade de guardar a chave em QUALQUER lugar",
+                "nunca; Secret do Kubernetes não resolve o problema de fundo, só o esconde melhor"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "`AccessDenied` mesmo com a policy anexada",
+                "permissão foi anexada à execution role em vez da task role",
+                "confira `taskRoleArn` vs. `executionRoleArn` na definição, e onde a policy está anexada",
+                "task definition e `aws iam list-attached-role-policies` em cada role",
+                "mover a policy de negócio para a task role"
+              ],
+              [
+                "Aplicação funciona igual antes e depois de anexar a task role",
+                "variável de ambiente com chave estática ainda presente, vencendo a cadeia",
+                "log de credencial resolvida (guarda de partida), ou `env` dentro do contêiner",
+                "task definition → bloco `environment`",
+                "remover a variável; a role passa a ser efetivamente usada"
+              ],
+              [
+                "Pod não consegue chamar AWS, `env` mostra `AWS_ROLE_ARN` presente",
+                "ServiceAccount sem `serviceAccountName` referenciado no pod, ou anotação ausente",
+                "confira se o Deployment/CronJob referencia a ServiceAccount certa",
+                "manifesto do workload e da ServiceAccount",
+                "adicionar `serviceAccountName` e a anotação `eks.amazonaws.com/role-arn`"
+              ],
+              [
+                "`AccessDenied` na chamada `AssumeRoleWithWebIdentity`",
+                "condição de `sub` ou `aud` na trust policy não bate com o token do pod",
+                "decodifique o JWT do pod (`cat $AWS_WEB_IDENTITY_TOKEN_FILE`, base64) e compare com a condição",
+                "trust policy da role IRSA vs. claims do token",
+                "ajustar a condição para o `sub` exato: `system:serviceaccount:<ns>:<sa>`"
+              ],
+              [
+                "Chamada bem-sucedida, mas o CloudTrail mostra `IAMUser` em vez de `assumed-role`",
+                "ainda existe uma chave estática ativa sendo usada em algum caminho",
+                "busque no CloudTrail por `userIdentity.type == \"IAMUser\"` neste workload",
+                "CloudTrail, filtrando pelo nome do recurso ou da task",
+                "localizar e remover a origem da chave — repita a prova de \"achar a chave\""
+              ],
+              [
+                "Deploy novo falha na inicialização, log mostra \"credencial estática detectada\"",
+                "a guarda de partida está funcionando como projetado",
+                "não é bug — é a proteção pegando uma chave que alguém reintroduziu",
+                "log de partida da aplicação",
+                "remover a variável reintroduzida; não desative a guarda para contornar"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em policy, pergunte: esta é uma pergunta de CONFIANÇA (quem pode assumir a role) ou de PERMISSÃO (o que a role pode fazer)? `AssumeRole` negado é sempre confiança — a trust policy. `AccessDenied` numa chamada de negócio é sempre permissão — a policy anexada. Os dois erros se parecem no texto e apontam para arquivos diferentes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório cria pouco recurso cobrável — a maior parte é IAM, que não cobra — mas o que sobrevive ao destroy é justamente o que mantém uma porta aberta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Derrube o que o Terraform administra.\nterraform destroy -auto-approve\n\n# 2. USUARIO IAM E CHAVE DA PROVA DE CONCEITO: se voce recriou o cenario de\n#    abertura para testar, ele NAO esta no Terraform (foi criado a mao, e e\n#    esse o ponto). O destroy nao toca nele.\naws iam list-access-keys --user-name cadencia-conciliacao-poc\naws iam delete-access-key --user-name cadencia-conciliacao-poc \\\n  --access-key-id \"$(aws iam list-access-keys --user-name cadencia-conciliacao-poc \\\n                       --query 'AccessKeyMetadata[0].AccessKeyId' --output text)\"\naws iam delete-user --user-name cadencia-conciliacao-poc\n\n# 3. ROLE IRSA E O PROVEDOR OIDC: a role sai no destroy. O PROVEDOR OIDC nao\n#    sai, porque foi lido com `data`, nao criado aqui — ele pertence ao L34 e\n#    outros workloads do cluster podem depender dele.\naws iam get-open-id-connect-provider \\\n  --open-id-connect-provider-arn \"$(terraform output -raw oidc_provider_arn)\" \\\n  >/dev/null && echo \"provedor OIDC preservado, como esperado — pertence ao L34\"\n\n# 4. GRUPO DE LOGS da task de conciliacao: retencao propria, sobrevive ao servico.\naws logs delete-log-group --log-group-name /ecs/ffv-lab-conciliacao 2>/dev/null || true\n\n# 5. Prova final: nenhuma role, usuario ou chave com o nome do projeto de pe.\naws iam list-roles --query \"Roles[?contains(RoleName, 'ffv-lab')].RoleName\" --output table\naws iam list-users --query \"Users[?contains(UserName, 'ffv-lab')].UserName\" --output table"
+          }
+        },
+        {
+          "id": "b22_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Task role e execution role",
+                "sim",
+                "não",
+                "IAM não cobra por role existente"
+              ],
+              [
+                "Role IRSA",
+                "sim",
+                "não",
+                "IAM não cobra por role existente"
+              ],
+              [
+                "Provedor OIDC do cluster",
+                "não — foi lido, não criado",
+                "não",
+                "pertence ao L34; destruí-lo quebraria qualquer outra role IRSA do mesmo cluster"
+              ],
+              [
+                "Usuário IAM de prova de conceito",
+                "não, se criado fora do Terraform",
+                "não diretamente",
+                "é justamente o padrão do incidente: recurso criado à mão, fora do controle de estado"
+              ],
+              [
+                "Grupo de logs",
+                "depende de `skip_destroy`",
+                "sim, retenção",
+                "ciclo próprio, sobrevive ao serviço que o alimentava"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "O usuário IAM da prova de conceito é o item mais importante desta lista",
+            "content": "Se você recriou o cenário de abertura para acompanhar o laboratório, apagar o usuário e a chave dele não é opcional: é literalmente fechar o mesmo incidente que o módulo inteiro existe para evitar. Um `terraform destroy` limpo com essa chave ainda ativa reproduz o problema original, só que com um nome de laboratório em vez de produção."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Aplicação ECS precisa chamar S3 e DynamoDB",
+                "task role, via provedor de credencial do contêiner",
+                "sessão temporária, escopada à task, sem chamada explícita de STS pelo código"
+              ],
+              [
+                "Pod EKS precisa chamar SQS e Secrets Manager",
+                "IRSA, via OIDC federado",
+                "sessão temporária escopada à ServiceAccount, obtida pelo próprio SDK com o token do pod"
+              ],
+              [
+                "Puxar imagem do ECR e escrever log",
+                "execution role, separada da task role",
+                "papel do agente, nunca herdado pelo contêiner — confundir as duas é o erro mais comum"
+              ],
+              [
+                "Chave estática esquecida vencendo a role",
+                "guarda de partida no código",
+                "transforma um risco silencioso de meses num erro de deploy visível no primeiro minuto"
+              ],
+              [
+                "Confusão sobre quem pode assumir a role",
+                "condição de `SourceArn`/`sub`+`aud` na trust policy",
+                "fecha o caminho de \"confused deputy\" que uma trust policy genérica deixaria aberto"
+              ],
+              [
+                "Auditoria que não distingue processo de pessoa",
+                "sessão com `taskArn` ou `sub`, nunca usuário IAM",
+                "é o que torna uma investigação de incidente respondível em minutos, não em dias"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "O SDK é instanciado sem nenhuma credencial explícita no código, em ECS e em EKS.",
+              "A cadeia de credenciais padrão é testada, NA ORDEM — variável de ambiente primeiro.",
+              "Sem chave estática, o ECS busca uma sessão já assumida pelo agente, via endpoint interno.",
+              "Sem chave estática, o EKS/IRSA faz o próprio SDK trocar um token OIDC por sessão via STS.",
+              "As duas terminam no mesmo formato: credenciais temporárias, com expiração e renovação automática.",
+              "Cada chamada carrega o contexto de origem — taskArn ou sub — visível no CloudTrail.",
+              "Uma chave estática nas primeiras posições da cadeia vence tudo isso, em silêncio.",
+              "A guarda de partida transforma esse silêncio em erro de deploy, visível no primeiro minuto."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Preciso remover a chave de acesso se a task role já está configurada?",
+            "answer": "Sim, remover é obrigatório, não cosmético: a cadeia de credenciais padrão do SDK testa variável de ambiente ANTES do provedor de credencial do contêiner, então uma chave estática esquecida vence a task role sempre — mesmo que a role esteja perfeitamente configurada e anexada. A aplicação continua funcionando de forma idêntica nos dois casos, e é exatamente por isso que o problema passa despercebido: nada quebra, nada alerta, e a role fica decorativa até alguém procurar especificamente pela chave."
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Qual a diferença entre a execution role e a task role do ECS?",
+            "answer": "A execution role serve ao AGENTE do ECS — permissões para puxar a imagem do ECR, escrever log no CloudWatch e ler segredo referenciado na definição — e nunca é herdada pelo contêiner da aplicação. A task role é a identidade que o SEU CÓDIGO usa para chamar outras APIs da AWS, como S3 ou DynamoDB. Anexar uma policy de negócio à execution role é o erro mais comum desta área: a policy existe, está anexada, e a aplicação continua recebendo `AccessDenied`, porque ela nunca chega a usar aquela role."
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Por que o IRSA existe se o nó do EKS já tem uma role de instância?",
+            "answer": "Porque a role do nó seria herdada por TODOS os pods que rodam nele, não só pelo que precisa da permissão. Num cluster com múltiplos workloads no mesmo nó — o cenário normal, não a exceção — dar à role do nó acesso a uma fila SQS específica também daria esse acesso a qualquer outro pod que um dia seja agendado ali, inclusive um comprometido por outro motivo. IRSA resolve isolamento por identidade de workload, não por máquina."
+          }
+        },
+        {
+          "id": "b24_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "O que é o token de identidade web que o IRSA usa para autenticar?",
+            "answer": "É um JWT (JSON Web Token) projetado automaticamente na ServiceAccount do pod pelo Kubernetes, assinado pela chave privada do provedor OIDC do cluster — chave que a AWS rotaciona a cada sete dias. O SDK dentro do pod lê esse token de um arquivo montado no sistema de arquivos e o apresenta à STS via `AssumeRoleWithWebIdentity`, recebendo de volta uma sessão temporária. Nenhum segredo de longa duração participa dessa troca."
+          }
+        },
+        {
+          "id": "b24_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Preciso criar um provedor OIDC novo para cada role IRSA nova?",
+            "answer": "Não — o provedor OIDC é um recurso POR CLUSTER, criado uma única vez, e cada role IRSA nova apenas referencia o provedor já existente na condição da trust policy. Recriar o provedor para cada workload duplicaria um recurso que já existe, e ter dois provedores OIDC apontando para o mesmo endpoint do cluster deixa ambíguo qual trust policy realmente confia em qual emissor de token — é por isso que este módulo lê o provedor do L34 com um `data`, em vez de declarar um `resource` novo."
+          }
+        },
+        {
+          "id": "b24_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "A credencial da task role expira? Como a aplicação lida com isso?",
+            "answer": "Sim, e a renovação é automática e invisível para o código da aplicação. O SDK guarda a sessão em cache e a renova sozinho perto do horário de expiração — não existe captura de erro de \"credencial expirada\" nem chamada manual de renovação no seu código. É essa transparência que torna a credencial temporária estritamente melhor que a estática para workload: você ganha rotação automática sem escrever uma linha de rotação."
+          }
+        },
+        {
+          "id": "b24_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "O CloudTrail diferencia chamada de task role e de usuário IAM?",
+            "answer": "Sim, e é uma das provas centrais deste laboratório: uma sessão de task role aparece no CloudTrail como `assumed-role`, com o `taskArn` visível no contexto da sessão; uma chamada de usuário IAM com chave estática aparece como `IAMUser`, sem nenhum contexto de processo. A diferença não é só estética — é o que permite responder \"qual processo fez esta chamada\" em minutos durante uma investigação, em vez de adivinhar."
+          }
+        },
+        {
+          "id": "b24_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "IRSA e o EKS Pod Identity mais recente são a mesma coisa?",
+            "answer": "Não são idênticos, embora resolvam o mesmo problema de identidade por pod. IRSA depende de um provedor OIDC configurado no cluster e o SDK chama `sts:AssumeRoleWithWebIdentity` com um token projetado; o EKS Pod Identity, lançado depois como alternativa mais simples, dispensa o provedor OIDC e usa uma associação nativa entre ServiceAccount e role, com `sts:AssumeRole` em vez de `AssumeRoleWithWebIdentity`. Este laboratório usa IRSA porque o cluster do L34 já foi construído com ele — em um cluster novo, vale avaliar o Pod Identity antes de configurar OIDC."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b25_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Um time anexa a policy de leitura do S3 à execution role de uma task ECS, mas a aplicação continua recebendo `AccessDenied` ao chamar `GetObject`. A trust policy está correta e a task sobe normalmente. Qual é a causa mais provável?",
+            "options": [
+              "A execution role nunca é herdada pelo contêiner — a permissão precisa estar na task role",
+              "A policy tem uma condição de tag que o objeto no S3 não satisfaz",
+              "O bucket está numa região diferente da task, e é preciso replicação entre regiões",
+              "A execution role expira em uma hora e precisa ser renovada manualmente pelo time"
+            ],
+            "correctIndex": 0,
+            "explanation": "A execution role serve exclusivamente ao AGENTE do ECS — puxar imagem, escrever log, ler segredo referenciado — e por design nunca é repassada ao contêiner da aplicação. Anexar a policy de S3 nela não produz erro de sintaxe nem de deploy: a task sobe normal, porque a execution role continua fazendo o que sempre fez. O `AccessDenied` acontece porque o código da aplicação, ao chamar `GetObject`, está usando a sessão da task role — que nunca recebeu a permissão — e a execution role nem participa dessa chamada.\n\nA primeira alternativa presume uma condição que o enunciado não menciona, e ignora o sinal mais forte do caso: a task sobe normalmente, o que já indica que a role de infraestrutura está correta. A terceira inventa um problema de região sem nenhuma evidência no enunciado, e replicação entre regiões nem resolveria um erro de permissão. A quarta confunde a durabilidade da ROLE (que não expira) com a durabilidade da SESSÃO temporária vendida a partir dela (que expira e renova sozinha, sem intervenção humana) — nenhuma das duas exige renovação manual."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "A trust policy de uma role IRSA restringe a condição a `StringLike \"system:serviceaccount:conciliacao:*\"`. Qual é o risco concreto disso?",
+            "options": [
+              "A condição não tem efeito nenhum, porque `sub` sempre exige `StringEquals` por padrão do IAM",
+              "Qualquer ServiceAccount criada no namespace `conciliacao` pode assumir a role, não só a pretendida",
+              "A role expira mais rápido do que com `StringEquals`, exigindo renovação mais frequente",
+              "Nenhum: `StringLike` com curinga é a forma padrão recomendada pela AWS para IRSA"
+            ],
+            "correctIndex": 1,
+            "explanation": "O curinga no final da condição transforma a restrição de \"esta ServiceAccount específica\" para \"qualquer ServiceAccount deste namespace\" — presente ou futura. Um pod novo, criado com uma ServiceAccount diferente no mesmo namespace por qualquer outro motivo, herdaria automaticamente a permissão de assumir esta role, mesmo sem nenhuma intenção de dar a ele acesso à fila SQS ou ao segredo do parceiro. É o mesmo princípio do isolamento por workload que justifica o IRSA em primeiro lugar — só que violado dentro do próprio mecanismo que deveria garanti-lo.\n\nA primeira alternativa inverte a recomendação real: a boa prática é condição EXATA por ServiceAccount, e curinga amplo é precisamente o antipadrão que este módulo nomeia. A segunda confunde a CONDIÇÃO de confiança (quem pode assumir) com a EXPIRAÇÃO da sessão (quanto tempo a credencial dura depois de assumida) — são dois mecanismos independentes, e um curinga na condição não altera duração nenhuma. A quarta inventa uma restrição de sintaxe do IAM que não existe: `StringLike` é um operador de condição válido e suportado, exatamente como `StringEquals`, e a escolha entre eles é decisão de quem escreve a policy, não uma imposição do IAM."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b26_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L34 (cluster EKS e IRSA aplicado ao Load Balancer Controller) e noção geral de IAM (trust policy vs. policy de permissão)"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "a ordem exata da cadeia de credenciais do SDK e por que ela pode deixar uma role morta; a diferença estrutural entre task role (sessão vendida pelo agente) e IRSA (sessão obtida pelo próprio SDK via OIDC); execution role vs. task role; condições de confused deputy em trust policy"
+              ],
+              [
+                "Limitação que fica",
+                "a policy de permissão das duas roles ainda não tem condição fina de tag ou prefixo dinâmico — é menor privilégio em profundidade, não em identidade"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L46 — criptografia com KMS, envelope encryption e CMK. Reutiliza as duas roles deste módulo, e é onde o segredo do parceiro passa a ter chave própria e rotação"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L41 (menor privilégio) refina a permissão das roles construídas aqui; L54 (pipeline com OIDC) aplica o mesmo princípio de identidade federada a quem FAZ o deploy, não só a quem RODA"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b26_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Credential and profile resolution — AWS SDK for .NET (V3)",
+                "code": true
+              },
+              {
+                "text": " — a ordem exata da cadeia de credenciais, incluindo a posição de variável de ambiente antes do provedor de credencial do contêiner; "
+              },
+              {
+                "text": "Amazon ECS task IAM role",
+                "code": true
+              },
+              {
+                "text": " — que a task usa a credencial da task role exclusivamente, sem herdar nada da instância, e o contexto de `taskArn` na sessão; "
+              },
+              {
+                "text": "Amazon ECS task execution IAM role",
+                "code": true
+              },
+              {
+                "text": " — o escopo separado do papel do agente; e "
+              },
+              {
+                "text": "IAM roles for service accounts (IRSA) — Amazon EKS",
+                "code": true
+              },
+              {
+                "text": " — o mecanismo de OIDC, a rotação da chave de assinatura a cada sete dias e o isolamento de credencial por Pod. Valores de custo não aparecem neste módulo porque, neste caso específico, a resposta real é zero: IAM, STS e o provedor OIDC não têm cobrança direta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "O formato exato do JSON devolvido pelo endpoint interno do agente ECS (seção \"Como funciona ponta a ponta\") é ilustrativo, baseado na forma documentada do provedor de credencial de contêiner — confirme com um `curl` de dentro do seu próprio contêiner antes de escrever código que dependa de um campo específico dele. Da mesma forma, o nome exato da classe de credencial que aparece no log da guarda de partida (`FallbackCredentialsFactory.GetCredentials().GetType().Name`) pode variar por versão do SDK for .NET — trate o CONTEÚDO do nome (\"Environment\", \"Basic\", \"ECS\", \"WebIdentity\") como o sinal, não o nome exato da classe."
+          }
+        }
+      ]
+    }
+  ]
+}

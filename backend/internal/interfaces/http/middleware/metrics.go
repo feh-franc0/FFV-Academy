@@ -61,8 +61,15 @@ func (m *MetricsRegistry) Middleware() func(http.Handler) http.Handler {
 
 			next.ServeHTTP(rw, r)
 
+			// Rótulo de rota é sempre um valor de cardinalidade limitada — nunca
+			// o path cru (achado P-15, auditoria de 11/ago/2026). RoutePattern()
+			// vem vazio quando a rota não casa com nada declarado (404 real ou
+			// método não suportado numa rota existente); nesses casos o path cru
+			// tem cardinalidade ilimitada — qualquer sonda de 404 (bot varrendo
+			// `/wp-admin`, `/.env`, IDs aleatórios) vira uma série temporal nova
+			// no Prometheus.
 			routeCtx := chi.RouteContext(r.Context())
-			pathLabel := r.URL.Path
+			pathLabel := "unmatched"
 			if routeCtx != nil {
 				if pattern := routeCtx.RoutePattern(); pattern != "" {
 					pathLabel = pattern

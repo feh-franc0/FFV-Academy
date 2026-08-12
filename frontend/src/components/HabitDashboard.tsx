@@ -204,7 +204,7 @@ function HeatmapSection({ studyDays }: { studyDays: Array<{ date: string; minute
         </div>
       </div>
 
-      <div className="overflow-x-auto">
+      <div tabIndex={0} role="group" aria-label="Heatmap de hábitos, rolável na horizontal" className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ffv-blue)]">
         <div className="flex gap-[3px]" style={{ minWidth: 340 }}>
           {weeks.map((week, wi) => (
             <div key={wi} className="flex flex-col gap-[3px]">

@@ -168,16 +168,85 @@ func (r *UserRepo) ExistsByPhone(ctx context.Context, phone identity.Phone) (boo
 	return exists, err
 }
 
+// SoftDelete atende ao pedido de exclusão de conta (LGPD art. 18, V e VI).
+//
+// ─── Por que não é só `deleted_at = now()` ───
+//
+// Até ago/2026 este método fazia exatamente isso: marcava a data e nada mais. O
+// resultado é que "excluir a conta" apenas trancava a porta — e-mail, telefone e
+// nome continuavam na linha por tempo indeterminado, o estado de progresso
+// continuava inteiro, e o nome seguia listado no ranking público, porque a query
+// do ranking fazia JOIN em `users` sem filtrar `deleted_at` (corrigido junto).
+// Para quem pediu exclusão, o dado permanecia; só ficava invisível para o próprio
+// titular. É o inverso do que o pedido significa.
+//
+// O que este método faz agora, atomicamente:
+//
+//  1. Substitui os identificadores diretos por tombstone. O e-mail vira
+//     `deleted-<id>@deleted.invalid` (`.invalid` é TLD reservado pela RFC 2606,
+//     não roteável) porque a coluna é NOT NULL UNIQUE e não aceita NULL nem
+//     duplicata. Efeito colateral desejável: libera o e-mail original para um
+//     cadastro futuro, se a pessoa voltar.
+//  2. Apaga o snapshot de progresso — XP, streak, cartas de SRS, bookmarks,
+//     último artigo lido. É dado pessoal derivado, sem outra base legal.
+//  3. Apaga a participação no ranking e o opt-in que a autorizava.
+//  4. Desassocia os eventos de analytics em vez de apagá-los: o FK já era
+//     `ON DELETE SET NULL`, ou seja, o desenho original já tratava esses eventos
+//     como retíveis desde que anônimos. Agregado histórico sobrevive, o vínculo
+//     com a pessoa não.
+//
+// O que este método deliberadamente NÃO apaga, e por quê:
+//
+//   - `purchases` — registro fiscal, tem base legal própria (obrigação legal).
+//   - `certificates` — guardam `holder_name` e são verificáveis por terceiros
+//     (empregador conferindo um certificado). Apagar invalida um documento já
+//     emitido; anonimizar torna-o inútil. Decisão do titular do produto,
+//     rastreada como E-4 em PLANO_MESTRE_PENDENCIAS_2026-08.md.
+//   - `simulado_attempts` — sustentam a integridade dos certificados via FK.
+//   - `comments` — conteúdo público de autoria; remover fala alheia do fio é
+//     decisão de política, não de implementação. Também E-4.
+//
+// Enquanto E-4 não for decidida, a `/privacidade` não pode prometer eliminação
+// total: o texto precisa descrever exatamente este recorte.
 func (r *UserRepo) SoftDelete(ctx context.Context, id shared.UserID, now time.Time) error {
-	res, err := r.pool.Exec(ctx,
-		`UPDATE users SET deleted_at = $2, updated_at = $2 WHERE id = $1 AND deleted_at IS NULL`,
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("user repo: soft delete: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	res, err := tx.Exec(ctx, `
+		UPDATE users
+		   SET deleted_at = $2,
+		       updated_at = $2,
+		       email      = 'deleted-' || id || '@deleted.invalid',
+		       phone      = '',
+		       name       = ''
+		 WHERE id = $1 AND deleted_at IS NULL`,
 		id.String(), now,
 	)
 	if err != nil {
 		return fmt.Errorf("user repo: soft delete: %w", err)
 	}
 	if res.RowsAffected() == 0 {
+		// Idempotente pelo lado de fora: conta inexistente e conta já excluída são
+		// indistinguíveis para quem chama, e é a resposta certa nos dois casos.
 		return fmt.Errorf("%w: user", shared.ErrNotFound)
+	}
+
+	for _, stmt := range []string{
+		`DELETE FROM progress_snapshots WHERE user_id = $1`,
+		`DELETE FROM leaderboard WHERE user_id = $1`,
+		`DELETE FROM leaderboard_opt_ins WHERE user_id = $1`,
+		`UPDATE analytics_events SET user_id = NULL WHERE user_id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, stmt, id.String()); err != nil {
+			return fmt.Errorf("user repo: soft delete: purgar dados derivados: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("user repo: soft delete: commit: %w", err)
 	}
 	return nil
 }

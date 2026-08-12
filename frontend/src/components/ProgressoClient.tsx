@@ -1,12 +1,14 @@
 'use client';
 
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useRef, useState } from 'react';
 import { Share2 } from 'lucide-react';
 import { useGameState } from '@/hooks/useGameState';
+import { Breadcrumb } from '@/components/Breadcrumb';
 import { exportState, importState } from '@/lib/engine';
 import { ShareCard } from '@/components/ShareCard';
-import { Certificate, getCompletedTrailIds } from '@/components/Certificate';
+import { getTrilhasConcluidasLeve } from '@/lib/curriculum/queries-leves';
 import { MyRankCard } from '@/components/MyRankCard';
 import { QuestsCard } from '@/components/QuestsCard';
 import {
@@ -25,6 +27,11 @@ import {
 import { StudyHeatmap } from '@/components/StudyHeatmap';
 import { TrailStatsTable } from '@/components/TrailStatsTable';
 import { toast } from '@/lib/toast';
+
+// `next/dynamic`: o gerador de certificado (canvas + currículo completo, para
+// o texto de compartilhar) só é necessário quando o usuário abre um
+// certificado — não em toda visita a /progresso.
+const Certificate = dynamic(() => import('@/components/Certificate').then(m => ({ default: m.Certificate })), { ssr: false });
 
 export function ProgressoClient() {
   const { state, levelInfo, dueCards, refresh, weeklyStats, recommendations } = useGameState();
@@ -47,9 +54,9 @@ export function ProgressoClient() {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = ev => {
+    reader.onload = async ev => {
       const json = ev.target?.result as string;
-      const result = importState(json);
+      const result = await importState(json);
       if (result.ok) {
         refresh();
         toast.success('Dados importados com sucesso!');
@@ -64,6 +71,12 @@ export function ProgressoClient() {
   if (!state) {
     return (
       <section className="max-w-5xl mx-auto px-6 py-16">
+        {/* O título fica FORA da condição de carregamento: a varredura de rotas
+            de ago/2026 mostrou esta página respondendo 200 sem nenhum <h1> no
+            HTML servido. Rastreador e leitor de tela recebem a página sem
+            cabeçalho — o título só aparecia depois da hidratação. O nome da
+            página é verdade independentemente de o estado ter carregado. */}
+        <h1 className="text-2xl font-bold mb-6">Seu progresso</h1>
         <div
           className="rounded-2xl p-10 text-center"
           style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
@@ -76,6 +89,33 @@ export function ProgressoClient() {
   }
 
   const completed = state.completedModules;
+
+  // Primeira visita: `state` já carregou (não é mais o branch acima), mas o
+  // usuário não tem nenhum módulo concluído. Sem isto, o novato caía direto
+  // no dashboard completo — heatmap vazio, hub stats zeradas, tabela de
+  // trilha sem linha — sem nenhuma ação sugerida.
+  if (completed.length === 0) {
+    return (
+      <section className="max-w-4xl mx-auto px-6 py-24 text-center">
+        <div style={{ fontSize: 48, marginBottom: 16 }}>🌱</div>
+        <h1 style={{ fontSize: 'clamp(1.4rem, 3vw, 2rem)', fontWeight: 800, marginBottom: 8 }}>
+          Seu progresso está esperando por você
+        </h1>
+        <p style={{ color: 'var(--ffv-muted)', maxWidth: 420, margin: '0 auto 24px' }}>
+          Complete seu primeiro módulo para começar a ganhar XP, subir de nível e ver seu
+          progresso por trilha aqui.
+        </p>
+        <Link
+          href="/explorar"
+          className="inline-flex items-center gap-2 px-6 py-3 rounded-xl font-semibold text-sm"
+          style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)', textDecoration: 'none' }}
+        >
+          Escolher minha primeira trilha →
+        </Link>
+      </section>
+    );
+  }
+
   const totalModules = CURRICULUM.reduce((acc, t) => acc + t.modules.length, 0);
   const overallPct = totalModules === 0 ? 0 : Math.round((completed.length / totalModules) * 100);
   const totalXpPossible = CURRICULUM.reduce(
@@ -226,7 +266,7 @@ export function ProgressoClient() {
               <span className="font-bold text-sm">Ações rápidas</span>
             </div>
             <Link
-              href="/revisao"
+              href="/revisar/maratona"
               className="flex items-center justify-between px-4 py-3 rounded-xl text-sm font-medium transition-all hover:opacity-90"
               style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)', textDecoration: 'none' }}
             >
@@ -294,7 +334,7 @@ export function ProgressoClient() {
 
       {/* Certificados de trilhas concluídas */}
       {(() => {
-        const completedTrails = getCompletedTrailIds(completed);
+        const completedTrails = getTrilhasConcluidasLeve(completed);
         if (completedTrails.length === 0) return null;
         return (
           <section className="max-w-5xl mx-auto px-6 pb-20">
@@ -317,11 +357,11 @@ export function ProgressoClient() {
                 >
                   <div className="flex items-center gap-2 mb-2">
                     <span style={{ fontSize: 22 }}>{t.icon}</span>
-                    <span className="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full" style={{ background: `${t.color}20`, color: t.color, border: `1px solid ${t.color}40` }}>
+                    <span className="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full ffv-acento-texto" style={{ background: `${t.color}20`, '--ffv-acento': t.color, border: `1px solid ${t.color}40` } as React.CSSProperties}>
                       🎓 Certificado
                     </span>
                   </div>
-                  <p className="text-sm font-bold mb-1" style={{ color: t.color }}>{t.name}</p>
+                  <p className="text-sm font-bold mb-1 ffv-acento-texto" style={{ '--ffv-acento': t.color } as React.CSSProperties}>{t.name}</p>
                   <p className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
                     {t.modules.length} módulos · {t.modules.reduce((acc, m) => acc + m.xp, 0)} XP
                   </p>
@@ -357,8 +397,8 @@ export function ProgressoClient() {
                     <span style={{ fontSize: 18, flexShrink: 0 }}>{found.trail.icon}</span>
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-sm truncate">{found.title}</p>
-                      <p className="text-xs mt-0.5" style={{ color: 'var(--ffv-muted)' }}>
-                        {found.trail.name} · {found.readTime} min · <span style={{ color: found.trail.color }}>+{found.xp} XP</span>
+                      <p className="text-xs mt-0.5 ffv-acento-texto" style={{ color: 'var(--ffv-muted)' }}>
+                        {found.trail.name} · {found.readTime} min · <span style={{ '--ffv-acento': found.trail.color } as React.CSSProperties}>+{found.xp} XP</span>
                       </p>
                     </div>
                     {isDone && (
@@ -450,10 +490,19 @@ export function ProgressoClient() {
             >
               Importar backup
             </button>
+            {/*
+              O campo é acionado pelo botão acima e nunca recebe foco — mas
+              precisa de nome acessível assim mesmo. Ele depende de `display:
+              none` vindo de uma classe utilitária para sair da árvore de
+              acessibilidade; se a folha de estilo falhar ou for adiada, o
+              campo reaparece SEM rótulo nenhum. O atributo custa uma linha e
+              não depende de CSS carregar.
+            */}
             <input
               ref={fileInputRef}
               type="file"
               accept=".json"
+              aria-label="Selecionar arquivo de backup para importar"
               className="hidden"
               onChange={handleImport}
             />
@@ -488,6 +537,7 @@ function Hero({
         }}
       />
       <div className="relative max-w-5xl mx-auto">
+        <Breadcrumb items={[{ label: 'Início', href: '/' }, { label: 'Seu progresso' }]} className="mb-4" />
         <div className="flex items-center gap-2 mb-5">
           <SectionLabel color={levelInfo.color}>SEU DASHBOARD</SectionLabel>
         </div>
@@ -514,7 +564,7 @@ function Hero({
                 lineHeight: 1.1,
               }}
             >
-              Nível {state.level} · <span style={{ color: levelInfo.color }}>{levelInfo.name}</span>
+              Nível {state.level} · <span className="ffv-acento-texto" style={{ '--ffv-acento': levelInfo.color } as React.CSSProperties}>{levelInfo.name}</span>
             </h1>
             <p style={{ fontSize: 14, color: 'var(--ffv-muted)', marginTop: 6 }}>
               {state.xp.toLocaleString('pt-BR')} XP · {xpInLevel}/{xpNeeded} para o próximo nível
@@ -564,7 +614,7 @@ function HubProgressCard({ hub, completedSlugs }: { hub: Hub; completedSlugs: st
         </div>
         <div className="flex items-center justify-between mb-2">
           <span style={{ fontSize: 12, color: 'var(--ffv-muted)' }}>{stats.done}/{stats.moduleCount} artigos</span>
-          <span className="font-mono" style={{ fontSize: 11, color: hub.color, fontWeight: 700 }}>{stats.pct}%</span>
+          <span className="font-mono ffv-acento-texto" style={{ fontSize: 11, '--ffv-acento': hub.color, fontWeight: 700 } as React.CSSProperties}>{stats.pct}%</span>
         </div>
         <div style={{ height: 4, background: 'var(--ffv-bg3)', borderRadius: 999, overflow: 'hidden' }}>
           <div
@@ -582,14 +632,14 @@ function HubProgressCard({ hub, completedSlugs }: { hub: Hub; completedSlugs: st
             return (
               <span
                 key={t.id}
-                style={{
+                className="ffv-acento-texto" style={{
                   fontSize: 10,
                   padding: '2px 7px',
                   borderRadius: 999,
                   border: `1px solid color-mix(in srgb, ${t.color} 30%, transparent)`,
-                  color: t.color,
+                  '--ffv-acento': t.color,
                   fontWeight: 600,
-                }}
+                } as React.CSSProperties}
               >
                 {t.icon} {tp.done}/{tp.total}
               </span>
@@ -633,7 +683,7 @@ function TrailProgressRow({ trail, completedSlugs }: { trail: Trail; completedSl
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2 mb-1.5">
             <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--foreground)' }}>{trail.name}</span>
-            <span className="font-mono" style={{ fontSize: 11, color: trail.color, fontWeight: 700 }}>
+            <span className="font-mono ffv-acento-texto" style={{ fontSize: 11, '--ffv-acento': trail.color, fontWeight: 700 } as React.CSSProperties}>
               {tp.done}/{tp.total} · {tp.pct}%
             </span>
           </div>
@@ -799,7 +849,7 @@ function TrailPerformanceGrid({
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-2 mb-1">
                 <span className="font-semibold text-sm truncate">{trail.name}</span>
-                <span className="font-mono text-xs flex-shrink-0" style={{ color: trail.color }}>{tp.done}/{tp.total}</span>
+                <span className="font-mono text-xs flex-shrink-0 ffv-acento-texto" style={{ '--ffv-acento': trail.color } as React.CSSProperties}>{tp.done}/{tp.total}</span>
               </div>
               <div style={{ height: 3, background: 'var(--ffv-bg3)', borderRadius: 999, overflow: 'hidden', marginBottom: 6 }}>
                 <div style={{ width: `${tp.pct}%`, height: '100%', background: trail.color, transition: 'width 0.3s ease' }} />
@@ -815,7 +865,7 @@ function TrailPerformanceGrid({
                     ⭐ {perfects} perfeito{perfects !== 1 ? 's' : ''}
                   </span>
                 )}
-                <span className="text-xs font-mono" style={{ color: trail.color }}>
+                <span className="text-xs font-mono ffv-acento-texto" style={{ '--ffv-acento': trail.color } as React.CSSProperties}>
                   +{xpEarned.toLocaleString('pt-BR')} XP
                 </span>
               </div>

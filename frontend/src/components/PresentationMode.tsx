@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 
 interface Slide {
   title: string;
@@ -61,13 +62,18 @@ export function PresentationMode({ title, trailName, accent, onClose }: Props) {
     };
   }, [next, prev, total]);
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, total > 0);
+
   if (total === 0) return null;
   const slide = slides[idx];
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-label="Modo apresentação"
+      tabIndex={-1}
       className="fixed inset-0 z-[100] flex flex-col"
       style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}
     >
@@ -92,7 +98,7 @@ export function PresentationMode({ title, trailName, accent, onClose }: Props) {
         </button>
       </header>
 
-      <main className="flex-1 overflow-auto flex items-start justify-center py-10 px-8">
+      <div className="flex-1 overflow-auto flex items-start justify-center py-10 px-8">
         <article className="max-w-4xl w-full">
           {idx > 0 && (
             <h2 className="text-2xl font-bold mb-6" style={{ color: accent }}>
@@ -105,7 +111,7 @@ export function PresentationMode({ title, trailName, accent, onClose }: Props) {
             dangerouslySetInnerHTML={{ __html: slide.html }}
           />
         </article>
-      </main>
+      </div>
 
       <footer
         className="flex items-center justify-between px-6 py-3 border-t"

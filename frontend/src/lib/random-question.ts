@@ -3,7 +3,28 @@
  *
  * Constrói um pool unificado de perguntas a partir de:
  * - SRS reviewCards do usuário (deriva de quizzes de módulos já visitados)
- * - SIMULADOS_CATALOG: as 10 primeiras questões free de cada simulado
+ * - SIMULADOS_CATALOG: as 10 primeiras questões free de cada simulado (fallback,
+ *   só produz algo para um simulado que ainda guarda banco INLINE)
+ * - `simuladoSample`, opcional: questões pré-buscadas do banco no Postgres,
+ *   passadas por quem chama `buildPool` — ver a nota abaixo sobre por que isso
+ *   existe.
+ *
+ * ## O defeito que `simuladoSample` corrige (ago/2026)
+ *
+ * Todo simulado com banco real (CLF, DVA, AIF, SAA) guarda `questions: []` no
+ * catálogo — o banco vive no Postgres, não no bundle do cliente (ver
+ * `frontend/CLAUDE.md`, por que 65 questões inline levaram a suíte de 10s para
+ * 915s). Isso esvaziou silenciosamente a fonte 'simulado' deste pool: ela
+ * sobrevivia por acidente enquanto a SAA-C03 ainda era 5 questões de prévia
+ * inline. Ao ganhar banco real, o pool 'simulado' foi a ZERO para todo mundo —
+ * e para um usuário NOVO, sem nenhum `reviewCard` ainda, o pool inteiro ficava
+ * vazio e o card "Pergunta do Dia" desaparecia da tela sem nenhum erro.
+ *
+ * A correção não é reintroduzir banco inline (o problema que a migração para
+ * Postgres resolveu). É o CHAMADOR buscar uma amostra pequena via API — ver
+ * `DailyQuestionCard`, que faz isso com `fetchOneRandomQuestion` por
+ * certificação — e passar para `buildPool`. Sem a amostra, o pool volta a ter
+ * só a fonte 'module', o que é uma degradação aceitável (não um card sumido).
  *
  * Sorteio é determinístico por seed (userId + today), com pesos:
  * - 35% gap   — tópicos que o user errou (quizScore < 70%) ou nunca tocou
@@ -18,7 +39,12 @@ import type { GameState } from './engine';
 // NOTE: only type imports above to avoid runtime circular dep with engine.ts
 import { SIMULADOS_CATALOG } from './simulados-catalog';
 import { FREE_QUESTIONS_LIMIT, getExplanationText } from './simulados';
-import { CURRICULUM } from './curriculum';
+// Import ESTREITO de propósito — este arquivo é alcançado por `engine.ts`
+// (só por `hashString`), que roda em toda rota via GameHUD. `trailFromSlug`
+// só precisa de `.id` da trilha e `.slug` dos módulos: exatamente o que
+// `CURRICULO_LEVE` carrega, sem os ~92 KB gz de `desc`/`keywords`.
+import { CURRICULO_LEVE } from './curriculum/indice-leve';
+import { fetchOneRandomQuestion } from './clf-bank';
 
 export type PoolSource = 'module' | 'simulado' | 'pool';
 
@@ -52,7 +78,7 @@ export function hashString(s: string): number {
 }
 
 function trailFromSlug(slug: string): { trailId?: string } {
-  for (const t of CURRICULUM) {
+  for (const t of CURRICULO_LEVE) {
     if (t.modules.some(m => m.slug === slug)) return { trailId: t.id };
   }
   return {};
@@ -63,8 +89,15 @@ function trailFromSlug(slug: string): { trailId?: string } {
  *
  * `reviewCards` é opcional — quando provido, perguntas baseadas em quizzes
  * de módulos que o user já abriu entram no pool com source='module'.
+ *
+ * `simuladoSample` é opcional — questões JÁ NORMALIZADAS (buscadas via API,
+ * por quem chama esta função) para a fonte 'simulado'. Ver a nota no topo do
+ * arquivo sobre por que o catálogo estático não basta mais para isso.
  */
-export function buildPool(reviewCards?: GameState['reviewCards']): PoolQuestion[] {
+export function buildPool(
+  reviewCards?: GameState['reviewCards'],
+  simuladoSample?: PoolQuestion[],
+): PoolQuestion[] {
   const out: PoolQuestion[] = [];
 
   // Source: SRS cards (representam quizzes de módulos)
@@ -90,7 +123,10 @@ export function buildPool(reviewCards?: GameState['reviewCards']): PoolQuestion[
     }
   }
 
-  // Source: simulado free questions (FREE_QUESTIONS_LIMIT primeiras de cada)
+  // Source: simulado free questions (FREE_QUESTIONS_LIMIT primeiras de cada).
+  // Fallback histórico: só produz algo para um simulado que ainda guarde banco
+  // inline no catálogo. Nenhum dos atuais guarda — ver a nota de topo do
+  // arquivo — então esta fonte depende de `simuladoSample` para não ficar vazia.
   for (const sim of SIMULADOS_CATALOG) {
     const free = sim.questions.slice(0, FREE_QUESTIONS_LIMIT);
     for (const q of free) {
@@ -107,6 +143,9 @@ export function buildPool(reviewCards?: GameState['reviewCards']): PoolQuestion[
       });
     }
   }
+
+  // Source: amostra pré-buscada do banco no Postgres, passada pelo chamador.
+  if (simuladoSample) out.push(...simuladoSample);
 
   return out;
 }
@@ -185,4 +224,51 @@ export function pickDailyQuestion(
   const bucket = ordered.find(b => b.length > 0) ?? eff;
   const idx = hashString(seed + '|idx') % bucket.length;
   return bucket[idx];
+}
+
+/**
+ * Busca uma amostra pequena do banco no Postgres para alimentar a fonte
+ * 'simulado' do pool — uma questão por certificação com `dbBankId`, deduplicada
+ * pelo banco (a AIF, por exemplo, não tem `dbBankId` próprio duplicado de outra
+ * certificação, mas a checagem existe para nunca buscar o mesmo banco duas vezes
+ * se o catálogo crescer com dois produtos sobre a mesma certificação).
+ *
+ * Exige usuário autenticado — o endpoint `/study/random` requer JWT. Chame só
+ * quando `isLoggedIn` for verdadeiro; para visitante, `buildPool` sem amostra
+ * já degrada para só a fonte 'module', que é aceitável.
+ *
+ * Falha de rede em UM banco não derruba os demais — cada busca é isolada.
+ */
+export async function fetchSimuladoSample(): Promise<PoolQuestion[]> {
+  const bancos = Array.from(
+    new Set(SIMULADOS_CATALOG.map(s => s.dbBankId).filter((id): id is string => Boolean(id))),
+  );
+  const bySim = new Map(SIMULADOS_CATALOG.map(s => [s.dbBankId, s] as const));
+
+  const resultados = await Promise.all(
+    bancos.map(async (dbBankId): Promise<PoolQuestion | null> => {
+      try {
+        const picked = await fetchOneRandomQuestion({ simuladoId: dbBankId });
+        if (!picked) return null;
+        const sim = bySim.get(dbBankId);
+        return {
+          id: `sim_${dbBankId}_${picked.id}`,
+          source: 'simulado',
+          stem: picked.stem,
+          options: picked.options.map(o => ({ id: o.id, text: o.text })),
+          correctId: picked.correctId,
+          explanation: getExplanationText(picked.explanation),
+          topic: picked.topic,
+          difficulty: picked.difficulty,
+          relatedSlug: sim?.id,
+        };
+      } catch {
+        // Um banco fora do ar não deve derrubar a Pergunta do Dia inteira —
+        // os demais bancos e a fonte 'module' seguem valendo.
+        return null;
+      }
+    }),
+  );
+
+  return resultados.filter((q): q is PoolQuestion => q !== null);
 }

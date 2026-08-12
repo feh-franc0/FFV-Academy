@@ -1,17 +1,18 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { BASE, social } from '@/lib/metadata-social';
 
 export const metadata: Metadata = {
   title: 'Claude Code vs Cursor 2026 — Comparação técnica real',
   description: 'Comparação técnica detalhada entre Claude Code (Anthropic) e Cursor em 2026: arquitetura, agentic loop, modelo, contexto, custos, quando usar cada um. Sem hype, só engenharia.',
   keywords: 'claude code vs cursor, comparacao claude code cursor, claude code 2026, cursor 2026, melhor ferramenta ia codigo, anthropic cursor, agentic coding',
-  alternates: { canonical: 'https://fernandofrancovalle.com/claude-code-vs-cursor' },
-  openGraph: {
-    title: 'Claude Code vs Cursor 2026 — Comparação técnica real',
-    description: 'Arquitetura, agentic loop, contexto e custo. A diferença real entre Claude Code e Cursor em 2026.',
-    type: 'article',
-    url: 'https://fernandofrancovalle.com/claude-code-vs-cursor',
-  },
+  alternates: { canonical: `${BASE}/claude-code-vs-cursor` },
+  ...social({
+    titulo: 'Claude Code vs Cursor 2026 — Comparação técnica real',
+    descricao: 'Arquitetura, agentic loop, contexto e custo. A diferença real entre Claude Code e Cursor em 2026.',
+    caminho: '/claude-code-vs-cursor',
+    tipo: 'article',
+  }),
 };
 
 const rows: Array<{ label: string; cc: string; cursor: string }> = [
@@ -55,7 +56,7 @@ export default function ClaudeCodeVsCursorPage() {
 
       <section className="mb-10">
         <h2 className="text-xl font-bold mb-4">Comparação técnica</h2>
-        <div className="overflow-x-auto rounded-xl" style={{ border: '1px solid var(--ffv-border)' }}>
+        <div tabIndex={0} role="group" aria-label="Comparação técnica, rolável na horizontal" className="overflow-x-auto rounded-xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ffv-blue)]" style={{ border: '1px solid var(--ffv-border)' }}>
           <table className="w-full text-sm">
             <thead>
               <tr style={{ background: 'var(--ffv-bg2)' }}>
@@ -99,14 +100,14 @@ export default function ClaudeCodeVsCursorPage() {
       <section className="mb-10 p-6 rounded-xl" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
         <h2 className="text-xl font-bold mb-3">Quer aprender Claude Code a fundo?</h2>
         <p className="text-sm mb-4" style={{ color: 'var(--ffv-muted)' }}>
-          Temos uma trilha completa — hooks, skills, sub-agents, plugins, permissions em produção. Grátis, com quiz e XP.
+          Temos uma trilha completa sobre ferramentas de IA para código — o que cada uma resolve e onde cada uma custa caro. Grátis, com quiz e XP.
         </p>
         <Link
-          href="/claude-code-masterclass"
+          href="/ferramentas-ia-codigo"
           className="inline-block px-5 py-2.5 rounded-full font-semibold text-sm"
-          style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
+          style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
         >
-          Abrir trilha Claude Code →
+          Abrir trilha de ferramentas →
         </Link>
       </section>
     </article>

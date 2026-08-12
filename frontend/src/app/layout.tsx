@@ -5,7 +5,7 @@ import { GameHUD } from '@/components/GameHUD';
 import { CommandPalette } from '@/components/CommandPalette';
 import { MobileNav } from '@/components/MobileNav';
 import { SiteFooter } from '@/components/SiteFooter';
-import { OnboardingModal } from '@/components/OnboardingModal';
+import { OnboardingModalLazy } from '@/components/OnboardingModalLazy';
 import { SyncBanner } from '@/components/SyncBanner';
 import { PWAInstallBanner } from '@/components/PWAInstallBanner';
 import { KeyboardShortcuts } from '@/components/KeyboardShortcuts';
@@ -16,6 +16,8 @@ import { ReferralCapture } from '@/components/ReferralCapture';
 import { PWARegister } from '@/components/PWARegister';
 import { AuthProvider } from '@/components/auth/AuthProvider';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { safeJsonLd } from '@/lib/safe-json';
+import { SITE_GRAPH } from '@/lib/site-jsonld';
 
 // Inter — corpo do texto (máxima legibilidade)
 const inter = Inter({
@@ -31,46 +33,73 @@ const poppins = Poppins({
   weight: ['600', '700', '800'],
 });
 
-// Roboto Mono — blocos de código
+// Roboto Mono — blocos de código.
+//
+// Peso 500 removido em 11/ago/2026: nenhum uso de `font-mono`/`.sh-codeblock`
+// no código-fonte aplica `fontWeight: 500` — os poucos elementos mono com
+// peso mais forte usam 700 (que a família nem carrega; o navegador já
+// sintetiza a partir de 400, então declarar 500 não ajudava esses casos).
+// `code`/`pre`/`.font-mono` sempre foram 400 (herdado, sem override).
 const robotoMono = Roboto_Mono({
   variable: '--font-roboto-mono',
   subsets: ['latin'],
-  weight: ['400', '500'],
+  weight: ['400'],
 });
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://fernandofrancovalle.com'),
   title: {
-    default: 'FFV Academy — Escola de Engenharia para a Era da IA',
+    default: 'FFV Academy — Arquitetura de Soluções AWS e IA em Produção',
     template: '%s — FFV Academy',
   },
   description:
-    'Aprenda IA, engenharia de software, AWS e sistemas distribuídos como engenheiro — não como consumidor de hype. Trilhas gamificadas com XP, quiz e revisão espaçada. 100% gratuito, sem cadastro.',
+    'Arquitete soluções de IA na AWS como engenheiro: Bedrock, Knowledge Bases, agents e 100 laboratórios em Terraform. Trilhas gamificadas com XP, quiz e revisão espaçada. 100% gratuito, sem cadastro.',
   keywords: [
-    'escola engenharia software',
-    'aprender inteligencia artificial',
-    'trilha IA',
-    'engenharia era ia',
-    'LLM aprender',
-    'RAG embeddings',
-    'machine learning devs',
-    'aws cloud practitioner',
-    'sistemas distribuidos',
-    'context engineering',
-    'agentes LLM',
-    'fine-tuning',
+    // O eixo, na ordem em que a demanda de busca o expressa: primeiro a junção
+    // (IA + AWS), depois cada lado, depois a credencial. Ver
+    // PESQUISA_DEMANDA_BUSCA_2026-08.md para o corpus de 10.000 consultas.
+    'arquitetura de ia na aws',
+    'amazon bedrock',
+    'bedrock knowledge bases',
+    'rag na aws',
+    'agentes de ia aws',
+    'agentcore',
+    'arquitetura de solucoes aws',
+    'laboratorio aws terraform',
+    'well-architected',
+    'aws saa-c03',
+    'aws aif-c01',
+    'ia generativa em producao',
+    'llm em producao',
     'engenharia de software brasil',
   ],
   authors: [{ name: 'Fernando Franco Valle', url: 'https://fernandofrancovalle.com' }],
   creator: 'Fernando Franco Valle',
   publisher: 'FFV Academy',
   category: 'education',
+  /**
+   * O que o layout raiz declara aqui é HERDADO INTEIRO por toda página que não
+   * declara o próprio bloco — e é por isso que `title` e `url` saíram daqui.
+   *
+   * Auditoria de 06/ago/2026, medindo 77 rotas servidas: **58 páginas** emitiam
+   * `og:url` da HOME e `twitter:title` genérico do site. Ou seja, cada uma dizia
+   * ao rastreador e a cada rede social que ELA é a página inicial. Compartilhar
+   * qualquer uma delas produzia o mesmo cartão, apontando para o mesmo lugar.
+   *
+   * A herança que salvava essas páginas de perder o `og:image` era a mesma que as
+   * fazia mentir a URL. A saída é herdar só o que é verdade para TODA página:
+   *
+   *  - `siteName`, `locale`, `images` e `card` valem para o site inteiro → ficam;
+   *  - `title` e `description` saem: sem eles, o Next cai no `title`/`description`
+   *    da própria página, que é o correto em cada uma;
+   *  - `url` sai: URL errada é pior que URL ausente. Quem precisa de `og:url`
+   *    exato usa `social()` de `@/lib/metadata-social`, que o monta a partir do
+   *    caminho.
+   *
+   * A home declara o cartão dela em `app/page.tsx`, com `social()`.
+   */
   openGraph: {
-    title: 'FFV Academy — Escola de Engenharia para a Era da IA',
-    description:
-      'IA, AWS, DevOps e Engenharia de Software explicados por dentro. Zero hype, arquitetura real. 17 trilhas gamificadas, 100% gratuito.',
     type: 'website',
-    url: 'https://fernandofrancovalle.com',
     siteName: 'FFV Academy',
     locale: 'pt_BR',
     images: [
@@ -84,9 +113,6 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'FFV Academy — Escola de Engenharia para a Era da IA',
-    description:
-      'IA, AWS, DevOps e Engenharia de Software explicados por dentro. Zero hype, arquitetura real. 17 trilhas, 100% gratuito.',
     images: ['/opengraph-image'],
     creator: '@fernandofv',
     site: '@ffvacademy',
@@ -168,14 +194,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="pt-BR" className={`${inter.variable} ${poppins.variable} ${robotoMono.variable}`} suppressHydrationWarning>
       <head>
-        {/* Em dev o next.config.ts injeta o header CSP com unsafe-eval (necessário para React HMR/Turbopack).
-            Em prod (export estático na Hostinger) não há headers HTTP, então o <meta> é a única forma. */}
-        {process.env.NODE_ENV !== 'development' && (
-          <meta
-            httpEquiv="Content-Security-Policy"
-            content="default-src 'self'; script-src 'self' 'unsafe-inline' https://js.stripe.com https://plausible.io; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https://images.unsplash.com https://*.googleusercontent.com https://avatars.githubusercontent.com https://api.fernandofrancovalle.com; connect-src 'self' https://api.fernandofrancovalle.com https://api.stripe.com https://plausible.io https://cdn.jsdelivr.net https://esm.sh; frame-src https://js.stripe.com; object-src 'none'; base-uri 'self'; form-action 'self'"
-          />
-        )}
+        {/*
+          A política de segurança de conteúdo vive APENAS no header HTTP, em
+          next.config.ts. Havia aqui uma <meta> com a mesma política, herdada da
+          época do export estático — e ela não somava, INTERSECTAVA: a URL da API
+          estava fixa no código, bloqueando qualquer ambiente com outra URL, e o
+          script do Stripe ficava de fora por estar ausente do header. Não
+          recrie esta meta: `frame-ancestors` nem sequer funciona nela.
+        */}
         <meta httpEquiv="X-Content-Type-Options" content="nosniff" />
         <meta name="referrer" content="strict-origin-when-cross-origin" />
         <meta httpEquiv="Permissions-Policy" content="geolocation=(), microphone=(), camera=()" />
@@ -184,6 +210,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {/* <meta name="google-site-verification" content="SEU_TOKEN_GSC_AQUI" /> */}
         {/* Plausible Analytics — privacy-first, sem cookies, LGPD-ok, evento quiz-complete via JS */}
         <script defer data-domain="fernandofrancovalle.com" src="https://plausible.io/js/script.js" />
+        {/*
+          Grafo de entidades do site — emitido UMA vez, aqui.
+
+          Antes, a única identidade estruturada era um `publisher` inline
+          repetido em cada artigo, sem `@id`: para o buscador, 415 organizações
+          homônimas em vez de uma escola com 415 artigos. Com `@id` estável, as
+          páginas referenciam a entidade e a autoria acumula num nó só.
+        */}
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: safeJsonLd(SITE_GRAPH) }}
+        />
       </head>
       <body
         className="min-h-screen flex flex-col"
@@ -203,7 +241,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <CommandPalette />
               <KeyboardShortcuts />
               <WebVitalsInit />
-              <OnboardingModal />
+              <OnboardingModalLazy />
               <SyncBanner />
               <main
                 id="main-content"

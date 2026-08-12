@@ -4,6 +4,7 @@
 // Sem serviço externo (free tier): apenas console.error estruturado.
 
 import React from 'react';
+import Link from 'next/link';
 
 interface Props {
   children: React.ReactNode;
@@ -57,21 +58,49 @@ export class ErrorBoundary extends React.Component<Props, State> {
             Algo deu errado.
           </h1>
           <p style={{ maxWidth: 480, opacity: 0.8 }}>
-            Recarregue a página. Se o erro persistir, limpe o cache ou volte mais tarde.
+            Recarregue a página. Se o erro persistir, volte mais tarde.
           </p>
-          <button
-            type="button"
-            onClick={this.handleReload}
-            style={{
-              padding: '0.75rem 1.5rem',
-              borderRadius: 8,
-              border: '1px solid currentColor',
-              cursor: 'pointer',
-              fontWeight: 600,
-            }}
-          >
-            Recarregar
-          </button>
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+            <button
+              type="button"
+              onClick={this.handleReload}
+              style={{
+                padding: '0.75rem 1.5rem',
+                borderRadius: 8,
+                border: '1px solid currentColor',
+                cursor: 'pointer',
+                fontWeight: 600,
+              }}
+            >
+              Recarregar
+            </button>
+            <Link
+              href="/"
+              style={{
+                padding: '0.75rem 1.5rem',
+                borderRadius: 8,
+                border: '1px solid currentColor',
+                fontWeight: 600,
+                textDecoration: 'none',
+                color: 'inherit',
+              }}
+            >
+              Voltar para a home
+            </Link>
+            <Link
+              href="/explorar"
+              style={{
+                padding: '0.75rem 1.5rem',
+                borderRadius: 8,
+                border: '1px solid currentColor',
+                fontWeight: 600,
+                textDecoration: 'none',
+                color: 'inherit',
+              }}
+            >
+              Explorar conteúdo
+            </Link>
+          </div>
         </div>
       );
     }

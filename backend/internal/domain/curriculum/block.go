@@ -7,7 +7,15 @@ import (
 	"fmt"
 )
 
-// Block types válidos (deve bater com CHECK constraint na migration 029).
+// Block types válidos (deve bater com o CHECK constraint vigente — migration 044).
+//
+// HISTÓRICO DE DERIVA: esta lista ficou com os 15 tipos originais enquanto a
+// migration 037 adicionava 9 (qa_item, key_value, list, hierarchy_diagram,
+// comparison_flow, split_flow, layer_stack, mind_map, exam_domain_badge) e o
+// frontend criava mais 2 (arch_diagram e o alias aws_diagram). Ninguém chama
+// IsValidBlockType hoje — a validação efetiva é o CHECK do Postgres — mas uma
+// lista errada aqui vira bug no dia em que alguém passar a usá-la. Se você
+// alterar o CHECK, altere aqui na mesma mudança.
 const (
 	BlockTypeSection          = "section"
 	BlockTypeParagraph        = "paragraph"
@@ -24,6 +32,20 @@ const (
 	BlockTypeAnnotatedFormula = "annotated_formula"
 	BlockTypeQuiz             = "quiz"
 	BlockTypeImage            = "image"
+	// Sprint 2.5 (migration 037)
+	BlockTypeQAItem           = "qa_item"
+	BlockTypeKeyValue         = "key_value"
+	BlockTypeList             = "list"
+	BlockTypeHierarchyDiagram = "hierarchy_diagram"
+	BlockTypeComparisonFlow   = "comparison_flow"
+	BlockTypeSplitFlow        = "split_flow"
+	BlockTypeLayerStack       = "layer_stack"
+	BlockTypeMindMap          = "mind_map"
+	BlockTypeExamDomainBadge  = "exam_domain_badge"
+	// Diagrama de arquitetura (migration 044) — arch_diagram é o canônico,
+	// aws_diagram é alias legado aceito
+	BlockTypeArchDiagram = "arch_diagram"
+	BlockTypeAwsDiagram  = "aws_diagram"
 )
 
 // AllBlockTypes lista todos os tipos válidos. Útil para validação e admin UI.
@@ -33,6 +55,10 @@ var AllBlockTypes = []string{
 	BlockTypeArchFlow, BlockTypeMatrixDiagram, BlockTypeStackFlow,
 	BlockTypeTimeline, BlockTypeNodeGraph, BlockTypeAnnotatedFormula,
 	BlockTypeQuiz, BlockTypeImage,
+	BlockTypeQAItem, BlockTypeKeyValue, BlockTypeList,
+	BlockTypeHierarchyDiagram, BlockTypeComparisonFlow, BlockTypeSplitFlow,
+	BlockTypeLayerStack, BlockTypeMindMap, BlockTypeExamDomainBadge,
+	BlockTypeArchDiagram, BlockTypeAwsDiagram,
 }
 
 // Block representa um bloco estruturado dentro de um Article. Cada bloco

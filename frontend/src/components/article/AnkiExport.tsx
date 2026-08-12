@@ -1,58 +1,42 @@
 'use client';
 
 /**
- * AnkiExport — botão que extrai Q&As do artigo e baixa um TSV.
+ * AnkiExport — botão que baixa os Q&As do artigo como TSV.
  *
  * Anki importa arquivos `.tsv` (tab-separated) com 2 colunas (front, back)
- * nativamente — sem dependência de bibliotecas. Fonte dos cards:
- *   - blocks do tipo `qa_item` (pergunta + resposta)
+ * nativamente — sem dependência de bibliotecas. Fonte dos cards: blocks do
+ * tipo `qa_item` (pergunta + resposta), já extraídos pelo SERVER COMPONENT
+ * (`extractQA`, de `@/lib/article-extract`) — este componente recebia
+ * `blocks: Block[]` (a árvore INTEIRA do artigo) até 11/ago/2026, e por ser
+ * `'use client'` isso obrigava o RSC a serializar o conteúdo do módulo de
+ * novo no payload (ele já está no HTML via `<BlockTree>`), contribuindo pro
+ * payload RSC grande das páginas `lab-*`.
  *
  * Suficiente para 90% dos casos. Para algo mais elaborado (decks múltiplos,
  * tags, imagens), trocaríamos por geração de `.apkg` server-side.
  */
 import { useState } from 'react';
-import type { Block } from '@/components/article/blocks/schemas';
-
-function asText(v: unknown): string {
-  if (typeof v === 'string') return v;
-  if (typeof v === 'number') return String(v);
-  if (Array.isArray(v)) return v.map(asText).join(' ');
-  if (v && typeof v === 'object' && 'text' in (v as Record<string, unknown>)) {
-    return asText((v as { text: unknown }).text);
-  }
-  return '';
-}
-
-function extractQA(blocks: Block[]): Array<{ q: string; a: string }> {
-  const out: Array<{ q: string; a: string }> = [];
-  function walk(arr: Block[]) {
-    for (const b of arr) {
-      if (b.type === 'qa_item') {
-        const data = (b.data ?? {}) as Record<string, unknown>;
-        const q = asText(data.question).trim();
-        const a = asText(data.answer).trim();
-        if (q && a) out.push({ q, a });
-      }
-      if (b.children?.length) walk(b.children);
-    }
-  }
-  walk(blocks);
-  return out;
-}
 
 function escapeTsvCell(s: string): string {
   // Anki TSV: substitui tabs e quebras de linha por espaços.
   return s.replace(/\t/g, ' ').replace(/\r?\n/g, ' ').trim();
 }
 
-export function AnkiExport({ slug, title, blocks }: { slug: string; title: string; blocks: Block[] }) {
-  const [count, setCount] = useState(() => extractQA(blocks).length);
+export function AnkiExport({
+  slug,
+  title,
+  items,
+}: {
+  slug: string;
+  title: string;
+  /** Já extraído pelo Server Component — não `blocks` inteiro. */
+  items: Array<{ q: string; a: string }>;
+}) {
+  const [count] = useState(items.length);
 
   if (count === 0) return null;
 
   function handleDownload() {
-    const items = extractQA(blocks);
-    setCount(items.length);
     if (items.length === 0) {
       alert('Este módulo não tem itens Q&A exportáveis.');
       return;

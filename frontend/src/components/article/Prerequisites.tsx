@@ -1,22 +1,34 @@
 'use client';
 
 import Link from 'next/link';
-import { getModulePrerequisites } from '@/lib/curriculum';
+// Import type-only — apagado no runtime. `prereqs` chega pronto como prop: o
+// Server Component (`/aprenda/[slug]/page.tsx`) já chama `getModulePrerequisites`
+// no servidor, igual a `NextSteps`. Este componente ficou ÓRFÃO (nenhuma rota o
+// importava) desde a migração para o CMS-driven — achado da auditoria
+// pedagógica de 12/ago/2026: 364 de 490 módulos (74%) declaravam
+// `prerequisites`, mas o dado só chegava ao JSON-LD (`coursePrerequisites`) e a
+// um teste, nunca à tela. Religado com o mesmo padrão de `NextSteps` (que já
+// resolvia isso) em vez de voltar a chamar `getModulePrerequisites` no
+// cliente, o que arrastaria `CURRICULUM` completo (~92 KB gz) para o bundle
+// de toda página de artigo.
+import type { PrereqInfo } from '@/lib/curriculum';
 import { useGameState } from '@/hooks/useGameState';
 
 interface PrerequisitesProps {
-  slug: string;
+  prereqs: PrereqInfo[];
   accent?: string;
 }
 
-export function Prerequisites({ slug, accent = 'var(--ffv-blue)' }: PrerequisitesProps) {
+export function Prerequisites({ prereqs, accent = 'var(--ffv-blue)' }: PrerequisitesProps) {
   const { state } = useGameState();
-  const completed = state?.completedModules ?? [];
-  const prereqs = getModulePrerequisites(slug, completed);
+  const completedSlugs = state?.completedModules ?? [];
 
   if (prereqs.length === 0) return null;
 
-  const doneCount = prereqs.filter(p => p.completed).length;
+  // `completed` computado aqui, a partir do estado ATUAL do leitor — o
+  // `PrereqInfo.completed` vindo do servidor é sempre `false` (o servidor não
+  // tem acesso ao GameState, que vive em localStorage).
+  const doneCount = prereqs.filter(p => completedSlugs.includes(p.module.slug)).length;
   const allDone = doneCount === prereqs.length;
   const pct = Math.round((doneCount / prereqs.length) * 100);
 
@@ -44,21 +56,24 @@ export function Prerequisites({ slug, accent = 'var(--ffv-blue)' }: Prerequisite
       </div>
 
       <ul className="flex flex-col gap-1.5">
-        {prereqs.map(p => (
-          <li key={p.module.slug} className="flex items-center gap-2">
-            <span className="text-xs">{p.completed ? '✅' : '⬜'}</span>
-            <Link
-              href={`/aprenda/${p.module.slug}`}
-              className="text-xs transition-colors hover:underline"
-              style={{ color: p.completed ? 'var(--ffv-muted)' : accent, textDecoration: p.completed ? 'line-through' : 'none' }}
-            >
-              {p.module.icon} {p.module.title}
-            </Link>
-            <span className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
-              ({p.trail.name})
-            </span>
-          </li>
-        ))}
+        {prereqs.map(p => {
+          const done = completedSlugs.includes(p.module.slug);
+          return (
+            <li key={p.module.slug} className="flex items-center gap-2">
+              <span className="text-xs">{done ? '✅' : '⬜'}</span>
+              <Link
+                href={`/aprenda/${p.module.slug}`}
+                className="text-xs transition-colors hover:underline"
+                style={{ color: done ? 'var(--ffv-muted)' : accent, textDecoration: done ? 'line-through' : 'none' }}
+              >
+                {p.module.icon} {p.module.title}
+              </Link>
+              <span className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
+                ({p.trail.name})
+              </span>
+            </li>
+          );
+        })}
       </ul>
 
       {!allDone && (

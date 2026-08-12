@@ -1,0 +1,2437 @@
+{
+  "slug": "lab-eventbridge-scheduler-sem-ec2-cron",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência é a mesma equipe de duas pessoas dos laboratórios anteriores. Desde antes do "
+              },
+              {
+                "text": "L01",
+                "code": true
+              },
+              {
+                "text": ", uma "
+              },
+              {
+                "text": "t3.micro",
+                "code": true
+              },
+              {
+                "text": " roda vinte e quatro horas por dia com um só propósito: hospedar cinco entradas de crontab herdadas de um servidor on-premises que ninguém mais lembra de ter existido. Nenhum dos cinco jobs leva mais que alguns minutos; a instância que os hospeda nunca para."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Os cinco jobs são: emitir a fatura mensal das trinta lojas, gerar o relatório diário de vendas, sincronizar estoque com o fornecedor a cada seis horas, limpar sessões expiradas a cada quinze minutos, e checar a saúde da integração com o parceiro de pagamento a cada cinco. Individualmente, cada um é trivial. Juntos, viraram uma instância que ninguém quer tocar — mexer no cron dá medo de derrubar os outros quatro junto com o que precisa de ajuste."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O evento que expôs o problema: a fatura de julho não saiu no dia 1º. Ninguém recebeu erro nenhum, porque não existe erro nenhum registrado em lugar nenhum — a instância tinha caído por manutenção automática da AWS às 8h58, dois minutos antes do job, e voltou às 9h04. O crontab disparou o job apenas na execução seguinte, um mês depois. O time financeiro só notou quando um cliente perguntou pela fatura."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Básico — depende do L21 e não pressupõe nenhum laboratório de orquestração anterior"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L21 concluído (Lambda .NET 8 com EventBridge Scheduler básico), Terraform"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 30 min · implementação 1 h a 1 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo: elimina o custo fixo de 720 h/mês de instância; introduz custo variável pequeno, proporcional ao uso real de cada job"
+              },
+              {
+                "k": "Serviços",
+                "v": "EventBridge Scheduler, Lambda, SQS (DLQ), CloudWatch, SNS, DynamoDB (idempotência), IAM"
+              },
+              {
+                "k": "Volume atual",
+                "v": "5 jobs, de 15 em 15 minutos ao mensal, cada execução de segundos a poucos minutos"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "desligar a EC2 dedicada e tornar toda falha de execução um evento observável, não um sintoma descoberto por acaso"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "nenhum dos 5 jobs precisa de mais que alguns minutos de execução — é o que autoriza usar Lambda em vez de um alvo de longa duração"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "5 agendamentos publicados, a EC2 desligada, e uma falha provocada de propósito aparecendo numa fila e num alarme — não num CSV que não chegou"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "annotated_formula",
+          "position": 4,
+          "data": {
+            "title": "O tamanho do desperdício, sem precisar de preço para enxergá-lo",
+            "formula": "ociosidade_mensal ≈ horas_ligada − Σ(duração de cada execução dos 5 jobs)",
+            "parts": [
+              {
+                "symbol": "horas_ligada",
+                "name": "O que a instância cobra",
+                "description": "Cerca de 720 horas por mês, fixas, independentemente de quanto os jobs realmente trabalham dentro delas.",
+                "highlight": true
+              },
+              {
+                "symbol": "Σ(duração)",
+                "name": "O que os 5 jobs realmente usam",
+                "description": "Da ordem de minutos por dia somando os cinco — o ping de 5 em 5 minutos é o que mais soma em contagem de execuções, e ainda assim cada uma leva segundos."
+              },
+              {
+                "symbol": "ociosidade_mensal",
+                "name": "O que sobra: quase 720 horas",
+                "description": "É o mesmo formato de desperdício do Fargate ocioso no L21, uma ordem de grandeza maior, porque aqui a instância inteira existe só para isso — não é um passageiro num processo que já estava de pé por outro motivo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_5",
+          "type": "callout",
+          "position": 5,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é sobre orquestrar passos dependentes — nenhum dos 5 jobs espera o resultado de outro. Quando um job passa a depender do anterior (ex.: só gerar a fatura depois de a sincronização de estoque confirmar), a peça certa é Step Functions, não mais agendamentos soltos. Isso fica fora do escopo aqui de propósito."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que a EC2 do cron falha em silêncio, e o que muda quando o agendamento vira um recurso monitorado.",
+              "Escrever uma expressão cron e uma rate corretas para o EventBridge Scheduler, e justificar quando cada uma é mais clara que a outra.",
+              "Declarar o fuso horário certo por agendamento, e explicar o que acontece com ele no horário de verão.",
+              "Decidir quando uma janela de flexibilidade ajuda — porque espalha carga — e quando ela quebra um requisito de horário exato.",
+              "Configurar retentativa com teto de tentativas e de idade do evento, e uma fila de mensagens não entregues por agendamento.",
+              "Projetar uma chave de idempotência a partir do horário agendado, para que retentativa não duplique efeito.",
+              "Migrar 5 agendamentos da EC2 para o Scheduler e desligar a instância, com prova de que nenhum job se perdeu na troca.",
+              "Diagnosticar um agendamento que não dispara no horário esperado, distinguindo causa de fuso, de janela e de permissão."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Agendamento gerenciado vs. servidor dedicado",
+                "SOA-C02, SAA-C03",
+                "EventBridge Scheduler substitui a EC2 do cron",
+                "por que \"sempre ligado\" custa mesmo com carga baixa, e o que substitui isso"
+              ],
+              [
+                "Expressão cron vs. rate",
+                "SOA-C02, DVA-C02",
+                "5 jobs, cada expressão escolhida pelo motivo certo",
+                "cron quando o calendário importa; rate quando só o intervalo importa"
+              ],
+              [
+                "Fuso horário e horário de verão",
+                "SOA-C02",
+                "`ScheduleExpressionTimezone` declarado por agendamento",
+                "por que UTC fixo ou deslocamento calculado à mão quebra em algum cliente ou região"
+              ],
+              [
+                "Janela de flexibilidade",
+                "SOA-C02",
+                "`FlexibleTimeWindow` ligado só onde ajuda",
+                "o efeito colateral de ligar em todo agendamento, mesmo nos que exigem horário exato"
+              ],
+              [
+                "Retentativa e DLQ do próprio agendamento",
+                "SOA-C02, DVA-C02",
+                "`RetryPolicy` e `DeadLetterConfig` por alvo",
+                "que não é fire-and-forget, e como ler `EXHAUSTED_RETRY_CONDITION` para diagnosticar"
+              ],
+              [
+                "EventBridge Scheduler vs. Rules clássicas",
+                "SOA-C02, SAP-C02",
+                "migração de uma cota de 300 regras por bus para milhões de agendamentos",
+                "por que a Scheduler é o caminho recomendado hoje, e o que ela tem que a regra não tinha"
+              ],
+              [
+                "Idempotência sob retentativa",
+                "DVA-C02",
+                "chave derivada do horário agendado, gravada num ledger",
+                "por que retry sem idempotência duplica efeito, e onde a chave deve vir de fora do relógio local"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica dá uma expressão como `cron(0 9 1 * ? *)` sem fuso declarado e pede o comportamento em janeiro versus julho. Quem não sabe que a Scheduler aceita fuso IANA por agendamento assume UTC fixo e erra a resposta sobre \"9h\" — o padrão que este módulo trata como decisão explícita, não como suposição."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Zero servidor dedicado só para agendar",
+                "obrigatório",
+                "EventBridge Scheduler + Lambda, sem instância fixa — o item que fecha o laboratório"
+              ],
+              [
+                "Cada job dispara no horário de negócio correto",
+                "fuso America/Sao_Paulo para os 2 jobs com calendário",
+                "`ScheduleExpressionTimezone` IANA por agendamento, nunca deslocamento fixo calculado à mão"
+              ],
+              [
+                "Falha de execução vira evento observável",
+                "sem revisão manual de log",
+                "DLQ dedicada por agendamento + alarme de profundidade, não um alarme genérico compartilhado"
+              ],
+              [
+                "Jobs que consultam sistema de terceiro não podem bater todos no mesmo segundo",
+                "estoque e futuros jobs de integração",
+                "`FlexibleTimeWindow` habilitado só nos agendamentos que toleram atraso de minutos"
+              ],
+              [
+                "Ping de saúde precisa de cadência exata para medir SLA do parceiro",
+                "a cada 5 min, sem variação",
+                "`FlexibleTimeWindow` OFF nesse agendamento especificamente — o oposto do requisito anterior"
+              ],
+              [
+                "Retentativa não pode duplicar efeito",
+                "nenhuma fatura em duplicidade",
+                "ledger de idempotência com chave derivada do horário agendado, não do relógio da execução"
+              ],
+              [
+                "Escalar para dezenas de jobs no futuro sem reformular a arquitetura",
+                "não declarado por número, mas por intenção",
+                "um agendamento por recurso desde o início — o padrão da Scheduler, não das Rules clássicas"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: a EC2 que virou dona do relógio"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem hoje, e ele é legítimo como ponto de partida: roda de verdade, com uma instância e um arquivo de texto. O laboratório começa por nomear exatamente o que está ausente dele, porque é essa ausência — não uma configuração errada — que causa o incidente da fatura."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A EC2 que virou dona do relógio",
+            "caption": "Este desenho existe de verdade em toda empresa que \"só precisava rodar um script à noite\". Ele publica CSV e chama parceiro, e é por isso que sobrevive anos sem revisão. Percorra os passos e repare no que NÃO está desenhado: nenhuma seta sai daqui para observabilidade. É esse vazio que o resto do módulo resolve.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "partner",
+                    "service": "external",
+                    "label": "Parceiro de pagamento e fornecedor",
+                    "note": "só vê a chamada HTTP chegando, ou a ausência dela — nunca recebe um aviso do lado da Cadência"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "ec2",
+                    "service": "ec2",
+                    "label": "EC2 t3.micro, ligada 24 h",
+                    "note": "cinco entradas de crontab, cada uma chamando um script bash; nada aqui é observado de fora da instância"
+                  }
+                ]
+              },
+              {
+                "label": "Armazenamento",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3",
+                    "service": "s3",
+                    "label": "Bucket de exportações",
+                    "note": "recebe o CSV se o script terminar; se a instância cair antes, não recebe nada e ninguém é avisado"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "ec2",
+                "to": "s3",
+                "label": "grava CSV da fatura ou do relatório, sem confirmação de leitura",
+                "style": "solid"
+              },
+              {
+                "from": "ec2",
+                "to": "partner",
+                "label": "ping e sincronização periódicos, sem retentativa automática",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O crontab mora dentro da instância, invisível de fora",
+                "detail": "Cinco linhas de crontab não são um recurso da AWS: são texto dentro de um arquivo, dentro de um disco, dentro de uma instância. Nenhuma API externa sabe que esses cinco jobs existem, e é por isso que nada fora da instância pode alertar sobre eles.",
+                "nodes": [
+                  "ec2"
+                ],
+                "edges": []
+              },
+              {
+                "label": "A instância cobra pelas 24 horas; os jobs usam minutos",
+                "detail": "O mais longo dos cinco jobs leva poucos minutos. A instância que os hospeda cobra por hora ligada, 720 horas por mês, independentemente de quanto trabalho real acontece dentro dela — o mesmo desperdício estrutural do Fargate ocioso do L21, agora em escala de uma máquina inteira dedicada só a isso.",
+                "nodes": [
+                  "ec2"
+                ],
+                "edges": []
+              },
+              {
+                "label": "Se a instância cai na hora do job, o efeito simplesmente não acontece",
+                "detail": "Não há erro para ler, porque não há tentativa registrada em lugar nenhum. O único sintoma é o CSV que não apareceu no bucket — e alguém só nota isso quando o time financeiro pergunta pela fatura do mês.",
+                "nodes": [
+                  "ec2",
+                  "s3"
+                ],
+                "edges": [
+                  "ec2>s3"
+                ]
+              },
+              {
+                "label": "O parceiro só vê a chamada, ou a ausência dela",
+                "detail": "Do lado do parceiro de pagamento, um dia sem sincronização de estoque não parece diferente de um dia sem novidade — a ausência de chamada não distingue \"nada mudou\" de \"o job não rodou\". A Cadência descobre a diferença dias depois, quando o estoque exibido diverge do real.",
+                "nodes": [
+                  "ec2",
+                  "partner"
+                ],
+                "edges": [
+                  "ec2>partner"
+                ]
+              },
+              {
+                "label": "Nenhuma tentativa automática se o script falhar no meio",
+                "detail": "Um `curl` que expira, um `psql` que perde conexão: o script para onde parou, e o cron dispara a próxima execução na hora certa do dia seguinte, não agora. Não existe retentativa com espera crescente, porque não existe conceito de \"tentativa\" fora do que o próprio script decidir escrever no log local.",
+                "nodes": [
+                  "ec2"
+                ],
+                "edges": []
+              },
+              {
+                "label": "O fuso horário é o do sistema operacional, decidido por quem criou a instância",
+                "detail": "Cinco linhas de crontab escritas às pressas quase sempre assumem UTC ou o fuso que a AMI trouxe por padrão. Ninguém decide o fuso do job de fatura conscientemente — ele herda o que já estava configurado na instância, e mudar isso é reconfigurar a instância inteira, não uma linha de um agendamento.",
+                "nodes": [
+                  "ec2"
+                ],
+                "edges": []
+              },
+              {
+                "label": "Por que ninguém migrou isso ainda",
+                "detail": "Porque funciona, e porque \"mexer no cron\" dá medo de derrubar os outros quatro jobs junto com o que precisa de ajuste. A ausência de falha visível é lida como ausência de problema — e é exatamente o contrário: a falha existe, só não tem como aparecer.",
+                "nodes": [
+                  "ec2"
+                ],
+                "edges": []
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "O que está em jogo quando o job de fatura falha em silêncio",
+            "content": "Se o job de fatura não roda, a fatura não é emitida — dinheiro deixa de ser cobrado, e ninguém percebe até o cliente perguntar ou o fechamento do mês acusar a diferença. Não é um incidente técnico abstrato: é receita que já foi entregue e ainda não foi cobrada, silenciosamente, por um mês inteiro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. Se você não conseguir apontar o requisito, a peça é adorno — e este desenho não tem nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Cinco recursos de agendamento, não cinco linhas de texto",
+            "caption": "A troca central não é \"trocar EC2 por Lambda\": é que cada job vira um RECURSO com nome, fuso, janela, retentativa e fila de erro próprios. Este desenho mostra dois dos cinco — o de fatura (cron, fuso, sem janela) e o de estoque (rate, com janela flexível) — porque juntos cobrem as duas decisões que mais aparecem em prova. Percorra os passos: cada peça nova rastreia a um requisito da seção anterior.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "partner",
+                    "service": "external",
+                    "label": "Fornecedor de estoque",
+                    "note": "recebe chamada dentro de uma janela, não num instante fixo — é o que evita bater junto com outros clientes dele"
+                  }
+                ]
+              },
+              {
+                "label": "Agendamento gerenciado",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sched_fatura",
+                    "service": "eventbridge",
+                    "label": "Agendamento: fatura mensal",
+                    "note": "cron, fuso America/Sao_Paulo, sem janela flexível — o horário exato é o requisito, não um detalhe"
+                  },
+                  {
+                    "id": "sched_estoque",
+                    "service": "eventbridge",
+                    "label": "Agendamento: sincronização de estoque",
+                    "note": "rate a cada 6 horas, com janela de 15 min — não há calendário aqui, só intervalo"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada: execução",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "lambda_fatura",
+                    "service": "lambda",
+                    "label": "Função: gerar fatura",
+                    "note": "recebe o horário agendado como parte do evento; é o que torna a execução identificável"
+                  },
+                  {
+                    "id": "lambda_estoque",
+                    "service": "lambda",
+                    "label": "Função: sincronizar estoque",
+                    "note": "chama o parceiro e grava o resultado; a mesma função poderia servir aos outros três jobs, parametrizada"
+                  }
+                ]
+              },
+              {
+                "label": "Dados e idempotência",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3",
+                    "service": "s3",
+                    "label": "Bucket de exportações",
+                    "note": "recebe o CSV da fatura — o mesmo bucket do desenho anterior, reaproveitado do L01"
+                  },
+                  {
+                    "id": "ddb",
+                    "service": "dynamodb",
+                    "label": "Ledger de idempotência",
+                    "note": "chave = job + horário agendado; é o que impede uma retentativa de gerar duas faturas do mesmo mês"
+                  }
+                ]
+              },
+              {
+                "label": "Observação de falha",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "dlq_fatura",
+                    "service": "sqs",
+                    "label": "DLQ da fatura",
+                    "note": "só recebe mensagem depois de esgotadas as tentativas — é a prova de que o job realmente falhou, não de que está lento"
+                  },
+                  {
+                    "id": "dlq_estoque",
+                    "service": "sqs",
+                    "label": "DLQ do estoque",
+                    "note": "própria e separada da anterior — falha de um job não some misturada na causa de outro"
+                  },
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Alarme de profundidade da DLQ",
+                    "note": "mede a fila, não a aplicação: dispara quando existe mensagem, não quando existe erro isolado"
+                  },
+                  {
+                    "id": "sns",
+                    "service": "sns",
+                    "label": "Notificação ao plantão",
+                    "note": "é o que fecha o laço — sem isso, a fila cheia é tão silenciosa quanto o cron era"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "sched_fatura",
+                "to": "lambda_fatura",
+                "label": "invoca com o horário agendado no evento",
+                "style": "solid"
+              },
+              {
+                "from": "sched_estoque",
+                "to": "lambda_estoque",
+                "label": "invoca em algum instante dentro da janela de 15 min",
+                "style": "solid"
+              },
+              {
+                "from": "lambda_fatura",
+                "to": "s3",
+                "label": "grava o CSV do período faturado",
+                "style": "solid"
+              },
+              {
+                "from": "lambda_fatura",
+                "to": "ddb",
+                "label": "grava marca de idempotência antes de confirmar sucesso",
+                "style": "solid"
+              },
+              {
+                "from": "lambda_estoque",
+                "to": "partner",
+                "label": "consulta o estoque atual do fornecedor",
+                "style": "solid"
+              },
+              {
+                "from": "lambda_estoque",
+                "to": "ddb",
+                "label": "grava marca de idempotência",
+                "style": "solid"
+              },
+              {
+                "from": "lambda_fatura",
+                "to": "dlq_fatura",
+                "label": "evento não entregue após esgotar as tentativas",
+                "style": "dashed"
+              },
+              {
+                "from": "lambda_estoque",
+                "to": "dlq_estoque",
+                "label": "evento não entregue após esgotar as tentativas",
+                "style": "dashed"
+              },
+              {
+                "from": "dlq_fatura",
+                "to": "cw",
+                "label": "profundidade da fila maior que zero",
+                "style": "dashed"
+              },
+              {
+                "from": "dlq_estoque",
+                "to": "cw",
+                "label": "profundidade da fila maior que zero",
+                "style": "dashed"
+              },
+              {
+                "from": "cw",
+                "to": "sns",
+                "label": "alarme dispara notificação",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Cada job é um recurso com agendamento próprio",
+                "detail": "Não existe mais um arquivo de crontab com cinco linhas: existem cinco agendamentos, cada um com nome, ARN e histórico próprios, que aparecem numa chamada de API e não numa sessão SSH.",
+                "nodes": [
+                  "sched_fatura",
+                  "sched_estoque"
+                ],
+                "edges": []
+              },
+              {
+                "label": "O agendamento decide QUANDO; a função decide O QUÊ",
+                "detail": "Separar as duas coisas é o que permite trocar o horário de um job sem tocar no código dele, e trocar o código sem tocar no horário. No cron, as duas decisões moram na mesma linha de texto.",
+                "nodes": [
+                  "lambda_fatura",
+                  "lambda_estoque"
+                ],
+                "edges": [
+                  "sched_fatura>lambda_fatura",
+                  "sched_estoque>lambda_estoque"
+                ]
+              },
+              {
+                "label": "O fuso horário é propriedade do agendamento, não do sistema operacional",
+                "detail": "O agendamento da fatura declara `America/Sao_Paulo` explicitamente. Isso não muda o resultado hoje — o Brasil não observa horário de verão desde 2019 — mas declarar o fuso em vez de calcular um deslocamento fixo é o que impede o mesmo padrão de quebrar ao ser copiado para uma região que observa DST.",
+                "nodes": [
+                  "sched_fatura"
+                ],
+                "edges": []
+              },
+              {
+                "label": "A janela flexível espalha carga nos jobs que podem esperar",
+                "detail": "O agendamento de estoque não promete um instante exato — promete uma janela de 15 minutos, e a Scheduler escolhe quando dentro dela. Isso evita que a Cadência bata na API do fornecedor exatamente no mesmo segundo que dezenas de outros clientes dele, todos configurados \"a cada 6 horas, em ponto\".",
+                "nodes": [
+                  "sched_estoque",
+                  "partner"
+                ],
+                "edges": [
+                  "lambda_estoque>partner"
+                ]
+              },
+              {
+                "label": "O identificador do horário agendado é o que torna a retentativa segura",
+                "detail": "A função recebe o horário agendado como parte do evento e grava essa chave no ledger antes de confirmar sucesso. Uma segunda tentativa do MESMO agendamento reconhece o trabalho já feito e não duplica a fatura.",
+                "nodes": [
+                  "lambda_fatura",
+                  "ddb"
+                ],
+                "edges": [
+                  "lambda_fatura>ddb",
+                  "lambda_estoque>ddb"
+                ]
+              },
+              {
+                "label": "Falha deixa de ser silêncio: vira mensagem numa fila",
+                "detail": "Quando as tentativas se esgotam, o evento não desaparece — ele chega a uma DLQ com o motivo anexado. É a diferença entre \"o job não rodou, descubra você mesmo por quê\" e \"aqui está exatamente o que falhou, e quantas vezes tentamos\".",
+                "nodes": [
+                  "dlq_fatura",
+                  "dlq_estoque"
+                ],
+                "edges": [
+                  "lambda_fatura>dlq_fatura",
+                  "lambda_estoque>dlq_estoque"
+                ]
+              },
+              {
+                "label": "O alarme mede a fila, não a aplicação",
+                "detail": "Isso importa porque pega exatamente a falha que passaria despercebida na EC2: não é preciso vasculhar log nenhum, a existência de uma mensagem na DLQ já é o sinal completo. As outras três funções (relatório, limpeza, ping de saúde) seguem este mesmo padrão — agendamento, DLQ e alarme próprios.",
+                "nodes": [
+                  "cw",
+                  "sns"
+                ],
+                "edges": [
+                  "dlq_fatura>cw",
+                  "dlq_estoque>cw",
+                  "cw>sns"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação ao desenho anterior não é \"trocar EC2 por Lambda\": é que cada job passa a ser um RECURSO da AWS, com nome, ARN, fuso, janela, retentativa e fila de erro próprios — em vez de uma linha de texto dentro de um arquivo que só existe dentro de uma instância."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O achado que sustenta o módulo inteiro",
+            "content": "A Scheduler não elimina falha — jobs continuam podendo falhar. O que ela elimina é o SILÊNCIO ao redor da falha: toda execução tem um resultado registrado, e toda falha esgotada vira uma mensagem com o motivo anexado. É a diferença entre \"descubra você mesmo por quê\" e \"aqui está exatamente o que faltou\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de uma invocação, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os nomes dos campos não são jargão: eles são a diferença entre um agendamento correto e um que quebra em algum cliente, em alguma região, duas vezes por ano. "
+              },
+              {
+                "text": "ScheduleExpressionTimezone",
+                "code": true
+              },
+              {
+                "text": " é avaliado usando o banco de fusos horários da IANA, e a Scheduler ajusta automaticamente para horário de verão — quando o fuso declarado observa DST."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "O caminho de uma invocação, do horário previsto ao efeito",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "A expressão é avaliada no fuso declarado",
+                "desc": "A Scheduler calcula a próxima ocorrência usando `ScheduleExpressionTimezone`, não UTC fixo — a menos que UTC seja o fuso declarado explicitamente."
+              },
+              {
+                "label": "Se houver janela flexível, o instante exato é escolhido dentro dela",
+                "desc": "Com `Mode: FLEXIBLE`, a invocação acontece em algum ponto da janela declarada (1 a 1.440 minutos). Sem janela, a precisão é de 60 segundos ao redor do horário exato."
+              },
+              {
+                "label": "A Scheduler invoca o alvo usando o papel de execução do agendamento",
+                "desc": "O `RoleArn` do agendamento — não o do chamador nem o da função — é o que autoriza a chamada. É esse papel que precisa de permissão para invocar a Lambda e, se houver falha, para escrever na DLQ."
+              },
+              {
+                "label": "A função roda com o horário agendado disponível no evento",
+                "desc": "Atributos de contexto como `<aws.scheduler.scheduled-time>` e `<aws.scheduler.attempt-number>` podem ser embutidos no `Input` e chegam como texto literal substituído — é a base da chave de idempotência."
+              },
+              {
+                "label": "Em caso de erro, a Scheduler tenta de novo sozinha",
+                "desc": "Com backoff exponencial, até o menor entre `MaximumRetryAttempts` (até 185) e o tempo definido em `MaximumEventAgeInSeconds` (até 86.400 s, 24 h) — o que vencer primeiro."
+              },
+              {
+                "label": "Se as tentativas se esgotam, o evento vai para a DLQ",
+                "desc": "A mensagem carrega `ERROR_CODE`, `ERROR_MESSAGE` e `EXHAUSTED_RETRY_CONDITION`, dizendo se o motivo foi o número de tentativas ou a idade do evento — diagnóstico sem precisar reproduzir a falha."
+              },
+              {
+                "label": "O alarme de profundidade da fila dispara, e o plantão é notificado",
+                "desc": "Esta é a linha que a EC2 nunca teve: a ausência de execução bem-sucedida vira um evento que alguém recebe, em vez de um CSV que simplesmente não apareceu."
+              },
+              {
+                "label": "O agendamento recorrente continua valendo para a próxima ocorrência",
+                "desc": "Uma falha não cancela as futuras execuções de um agendamento recorrente — cada ocorrência é independente. Só agendamentos de execução única (`at`) somem da lista após rodar, e mesmo assim continuam contando na cota até serem apagados."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O achado sobre fuso horário, com precisão",
+            "content": "O Brasil aboliu o horário de verão em 2019. Calcular \"9h em São Paulo = 12h UTC\" à mão FUNCIONA hoje, para essa empresa, nessa região — e é exatamente por isso que o hábito é perigoso: ele não quebra aqui, então parece correto. O erro não está no número; está em calcular um deslocamento fixo em vez de declarar o fuso IANA. O mesmo hábito, copiado para um cliente nos EUA ou na Europa — regiões que observam DST —, produz um agendamento que roda uma hora adiantado ou atrasado duas vezes por ano, sem nenhum alerta."
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "A documentação oficial é explícita sobre os dois lados da transição: quando o relógio avança na primavera, uma execução que cairia num horário inexistente é simplesmente pulada; quando o relógio volta no outono, a execução acontece uma vez só, sem repetir. Nenhum dos dois comportamentos gera erro — e é por isso que testar um agendamento sensível a fuso só em agosto não prova nada sobre como ele se comporta em março."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_4",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "json",
+            "filename": "dead-letter-fatura.json",
+            "code": "// Mensagem de dead-letter na DLQ da fatura, depois de esgotar as tentativas.\n// E o que substitui \"ninguem percebeu\" por \"aqui esta exatamente o que faltou\".\n{\n  \"Body\": \"{\\\"job\\\":\\\"fatura-mensal\\\",\\\"scheduled_time\\\":\\\"2026-08-01T12:00:00Z\\\"}\",\n  \"MessageAttributes\": {\n    \"ERROR_CODE\": { \"StringValue\": \"Lambda.Unhandled\", \"DataType\": \"String\" },\n    \"ERROR_MESSAGE\": {\n      \"StringValue\": \"Task timed out after 60.03 seconds\",\n      \"DataType\": \"String\"\n    },\n    \"SCHEDULE_ARN\": {\n      \"StringValue\": \"arn:aws:scheduler:us-east-1:111122223333:schedule/ffv-lab/fatura-mensal\",\n      \"DataType\": \"String\"\n    },\n    \"TARGET_ARN\": {\n      \"StringValue\": \"arn:aws:lambda:us-east-1:111122223333:function:ffv-lab-agendador\",\n      \"DataType\": \"String\"\n    },\n    // Diz POR QUE a Scheduler desistiu: por numero de tentativas, ou por idade do evento.\n    // E o dado que faltava na EC2 — la, \"por que parou\" nunca tinha resposta.\n    \"EXHAUSTED_RETRY_CONDITION\": { \"StringValue\": \"MaximumRetryAttempts\", \"DataType\": \"String\" },\n    \"RETRY_ATTEMPTS\": { \"StringValue\": \"3\", \"DataType\": \"String\" },\n    \"SCHEDULED_TIME\": { \"StringValue\": \"2026-08-01T12:00:00Z\", \"DataType\": \"String\" }\n  }\n}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Migrar 5 jobs de manutenção — fatura mensal, relatório diário, sincronização de estoque, limpeza de sessões e ping de saúde de um parceiro de pagamento — para fora de uma EC2 dedicada, com equipe de duas pessoas e sem orçamento para plataforma nova.",
+            "winner": "Um agendamento por job no EventBridge Scheduler, cada um com Lambda, retentativa e DLQ próprios",
+            "why": "Cada job já é independente dos outros quatro — não compartilha estado nem ordem de execução — então um recurso por job é o desenho mais simples que ainda é correto: falha de um não contamina o diagnóstico dos outros, e a DLQ isola exatamente qual execução faltou. O custo acompanha o uso real em vez de uma instância fixa, e a migração não pede orquestrador novo para um problema que não tem passos dependentes entre si.",
+            "alternatives": [
+              {
+                "name": "Regra agendada do EventBridge clássico (Rules com schedule expression)",
+                "downside": "A própria AWS rotula como recurso legado e recomenda a Scheduler no lugar. Regras não têm fuso horário por regra — a expressão roda sempre em UTC —, não têm janela flexível nem retentativa/DLQ nativos por alvo, e competem pela mesma cota de 300 regras por bus de eventos que qualquer outra regra da conta usa."
+              },
+              {
+                "name": "Step Functions com estado de espera (`Wait`)",
+                "downside": "Resolve orquestração de PASSOS dependentes, que nenhum dos 5 jobs tem. Pagar por transição de estado para um job de uma etapa só é complexidade sem contrapartida — vale quando um job passa a depender do resultado do anterior."
+              },
+              {
+                "name": "AWS Batch com agendamento próprio",
+                "downside": "Pensado para trabalho que precisa de ambiente de execução maior que o teto do Lambda (15 minutos, memória até dezenas de GB) ou de fila de capacidade computacional. Nenhum dos 5 jobs chega perto desse teto."
+              },
+              {
+                "name": "Manter o agendador embutido no processo da API (padrão do L21, antes da correção)",
+                "downside": "Acopla o ciclo de vida do job ao da aplicação que hospeda — se a API reinicia, reimplanta ou escala, o relógio embutido vai junto, e cada instância da API rodando o mesmo temporizador dispara o job em duplicidade."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Um agendamento por job",
+                "5 recursos independentes",
+                "um script único disparado por um agendamento só",
+                "falha de um job não contamina o diagnóstico dos outros; DLQ isola causa por execução",
+                "mais recursos para nomear e versionar — mitigado com `for_each` sobre um mapa"
+              ],
+              [
+                "cron vs. rate",
+                "cron nos 2 jobs com calendário; rate nos 3 de intervalo puro",
+                "cron em tudo, simulando intervalo com `*/N`",
+                "rate expressa a intenção real (\"a cada 15 min\") sem fingir ser calendário",
+                "nada; a escolha certa por job não custa nada extra"
+              ],
+              [
+                "Fuso por agendamento",
+                "IANA (`America/Sao_Paulo`) nos jobs de calendário",
+                "UTC fixo; deslocamento calculado à mão",
+                "sobrevive a mudança de regra de DST sem precisar editar o agendamento",
+                "nenhuma perda real; é uma linha a mais na declaração"
+              ],
+              [
+                "Janela flexível seletiva",
+                "ligada em estoque e limpeza; desligada em fatura, relatório e ping",
+                "ligada ou desligada em todos igualmente",
+                "cada job tem uma resposta diferente para \"pode esperar alguns minutos?\"",
+                "mais uma decisão explícita por job, em vez de um padrão único para copiar"
+              ],
+              [
+                "DLQ e alarme por agendamento",
+                "5 filas, 5 alarmes",
+                "uma fila compartilhada para todos os jobs",
+                "a fila isola qual job falhou sem precisar ler o corpo de cada mensagem",
+                "mais recursos na fatura — centavos, e a tabela de custo mede isso"
+              ],
+              [
+                "Idempotência via ledger com chave = job + horário agendado",
+                "DynamoDB, TTL de 25 h",
+                "sem idempotência; confiar que o job nunca vai duplicar",
+                "retentativa automática da Scheduler deixa de ser um risco de efeito duplicado",
+                "uma tabela a mais para operar, mesmo que pequena e barata"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este módulo não paga",
+            "content": "Os cinco jobs continuam independentes entre si. No dia em que um deles passar a depender do resultado de outro — por exemplo, só sincronizar estoque depois de a fatura confirmar que não há reembolso pendente —, agendamentos soltos deixam de bastar. Aí o desenho certo é Step Functions orquestrando os passos, com a Scheduler disparando a máquina de estados em vez da função isolada."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: os cinco agendamentos, um mapa só"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O `for_each` sobre um mapa de jobs é o que torna cinco agendamentos administráveis sem cinco blocos de recurso copiados e colados — e sem cinco chances de esquecer o `flexible_time_window` obrigatório numa delas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "agendamentos.tf",
+            "code": "# agendamentos.tf — cinco jobs, um agendamento por job, DLQ e alarme proprios\n\n# Grupo dedicado: separa os agendamentos deste projeto dos agendamentos \"default\"\n# de qualquer outra coisa na conta, e limita o raio de uma politica IAM por prefixo.\nresource \"aws_scheduler_schedule_group\" \"cadencia\" {\n  name = \"ffv-lab-cadencia\"\n}\n\n# Os cinco jobs, com a decisao de cron/rate, fuso e janela ja tomada por cada um —\n# nao existe um valor \"certo\" unico; cada linha e uma decisao rastreavel a um\n# requisito (ver a tabela da secao anterior).\nlocals {\n  jobs = {\n    fatura-mensal = {\n      expressao      = \"cron(0 9 1 * ? *)\"     # dia 1 de cada mes, 9h no fuso abaixo\n      fuso           = \"America/Sao_Paulo\"\n      janela_minutos = 0                        # 0 = sem janela: o horario exato E o requisito\n      timeout        = 60\n    }\n    relatorio-diario-vendas = {\n      expressao      = \"cron(0 7 * * ? *)\"      # todo dia, 7h — antes do horario comercial\n      fuso           = \"America/Sao_Paulo\"\n      janela_minutos = 0                        # o time de vendas le isso antes da reuniao das 8h\n      timeout        = 60\n    }\n    sincronizacao-estoque = {\n      expressao      = \"rate(6 hours)\"          # nao ha semantica de calendario aqui, so intervalo\n      fuso           = \"UTC\"                    # rate nao tem fuso relevante; UTC evita ambiguidade\n      janela_minutos = 15                       # espalha a chamada para nao bater em ponto com outros clientes do parceiro\n      timeout        = 30\n    }\n    limpeza-sessoes-expiradas = {\n      expressao      = \"rate(15 minutes)\"\n      fuso           = \"UTC\"\n      janela_minutos = 5                        # espalha a carga de DELETE no RDS\n      timeout        = 30\n    }\n    ping-saude-parceiro-pagamento = {\n      expressao      = \"rate(5 minutes)\"\n      fuso           = \"UTC\"\n      janela_minutos = 0                        # cadencia exata: e o dado usado para medir SLA do parceiro\n      timeout        = 10\n    }\n  }\n}\n\nresource \"aws_dynamodb_table\" \"idempotencia\" {\n  name         = \"ffv-lab-agendamentos-idempotencia\"\n  billing_mode = \"PAY_PER_REQUEST\"\n  hash_key     = \"chave\" # formato: \"<job>#<scheduled_time>\"\n\n  attribute {\n    name = \"chave\"\n    type = \"S\"\n  }\n\n  # TTL: uma marca de idempotencia so precisa sobreviver ao maior MaximumEventAgeInSeconds\n  # em uso (24 h). Sem TTL, a tabela cresce para sempre com marca que ninguem mais consulta.\n  ttl {\n    attribute_name = \"expira_em\"\n    enabled        = true\n  }\n}\n\nresource \"aws_sqs_queue\" \"dlq\" {\n  for_each = local.jobs\n\n  name = \"ffv-lab-${each.key}-dlq\"\n  # Fila STANDARD: a Scheduler nao aceita FIFO como DLQ. Retencao generosa porque o\n  # objetivo da fila e dar tempo para investigar, nao para reprocessar automaticamente.\n  message_retention_seconds = 1209600 # 14 dias, o teto do SQS\n}\n\n# O papel que A FUNCAO assume para rodar — distinto do papel que a SCHEDULER\n# assume para CHAMAR a funcao (definido mais abaixo). Confundir os dois e o erro\n# mais comum desta secao: sao dois principals diferentes (lambda.amazonaws.com e\n# scheduler.amazonaws.com), com politicas de confianca que nao se substituem.\ndata \"aws_iam_policy_document\" \"confianca_lambda\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sts:AssumeRole\"]\n    principals {\n      type        = \"Service\"\n      identifiers = [\"lambda.amazonaws.com\"]\n    }\n  }\n}\n\nresource \"aws_iam_role\" \"execucao_lambda\" {\n  name               = \"ffv-lab-lambda-execucao\"\n  assume_role_policy = data.aws_iam_policy_document.confianca_lambda.json\n}\n\ndata \"aws_iam_policy_document\" \"lambda_le_e_grava\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"logs:CreateLogGroup\", \"logs:CreateLogStream\", \"logs:PutLogEvents\"]\n    resources = [\"arn:aws:logs:*:*:log-group:/aws/lambda/ffv-lab-*\"]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"dynamodb:GetItem\", \"dynamodb:PutItem\"]\n    resources = [aws_dynamodb_table.idempotencia.arn]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"lambda_le_e_grava\" {\n  role   = aws_iam_role.execucao_lambda.id\n  policy = data.aws_iam_policy_document.lambda_le_e_grava.json\n}\n\nresource \"aws_lambda_function\" \"agendador\" {\n  for_each = local.jobs\n\n  function_name = \"ffv-lab-${each.key}\"\n  runtime       = \"dotnet8\"\n  handler       = \"Agendador::Agendador.Handler::Executar\"\n  filename      = \"${path.module}/dist/agendador.zip\"\n  timeout       = each.value.timeout\n  memory_size   = 256\n  role          = aws_iam_role.execucao_lambda.arn\n\n  environment {\n    variables = {\n      JOB_NAME        = each.key\n      TABELA_IDEMPOT  = aws_dynamodb_table.idempotencia.name\n    }\n  }\n}\n\nresource \"aws_scheduler_schedule\" \"job\" {\n  for_each = local.jobs\n\n  name       = each.key\n  group_name = aws_scheduler_schedule_group.cadencia.name\n\n  schedule_expression          = each.value.expressao\n  schedule_expression_timezone = each.value.fuso\n\n  # Obrigatorio mesmo quando esta OFF — a API rejeita a chamada sem este bloco,\n  # e \"esqueci o flexible_time_window\" e o erro de validacao mais comum da secao.\n  flexible_time_window {\n    mode                      = each.value.janela_minutos > 0 ? \"FLEXIBLE\" : \"OFF\"\n    maximum_window_in_minutes = each.value.janela_minutos > 0 ? each.value.janela_minutos : null\n  }\n\n  target {\n    arn      = aws_lambda_function.agendador[each.key].arn\n    role_arn = aws_iam_role.execucao_scheduler.arn\n\n    # Atributos de contexto: viram texto literal substituido pela Scheduler na hora\n    # da chamada. E a base da chave de idempotencia gravada no handler.\n    input = jsonencode({\n      job            = each.key\n      scheduled_time = \"<aws.scheduler.scheduled-time>\"\n      attempt_number = \"<aws.scheduler.attempt-number>\"\n      execution_id   = \"<aws.scheduler.execution-id>\"\n    })\n\n    retry_policy {\n      maximum_retry_attempts       = 3     # nao os 185 do teto — 3 e o que faz sentido para um job de segundos\n      maximum_event_age_in_seconds = 900   # 15 min: se ainda falha depois disso, esperar mais nao ajuda\n    }\n\n    dead_letter_config {\n      arn = aws_sqs_queue.dlq[each.key].arn\n    }\n  }\n}\n\n# Um alarme por DLQ: a fila com mensagem E o sinal completo, nao precisa de\n# limiar sofisticado. \"> 0\" e a definicao exata de \"algo faltou\".\nresource \"aws_cloudwatch_metric_alarm\" \"dlq_com_mensagem\" {\n  for_each = local.jobs\n\n  alarm_name          = \"ffv-lab-${each.key}-dlq-com-mensagem\"\n  namespace           = \"AWS/SQS\"\n  metric_name         = \"ApproximateNumberOfMessagesVisible\"\n  statistic           = \"Maximum\"\n  period              = 300\n  evaluation_periods  = 1\n  threshold           = 0\n  comparison_operator = \"GreaterThanThreshold\"\n  treat_missing_data  = \"notBreaching\"\n\n  dimensions = {\n    QueueName = aws_sqs_queue.dlq[each.key].name\n  }\n\n  alarm_actions = [aws_sns_topic.plantao.arn]\n}\n\nresource \"aws_sns_topic\" \"plantao\" {\n  name = \"ffv-lab-agendamentos-plantao\"\n}\n\n# O papel que A SCHEDULER assume para invocar o alvo E escrever na DLQ em caso\n# de falha — distinto do papel de EXECUCAO da propria funcao (abaixo).\ndata \"aws_iam_policy_document\" \"confianca_scheduler\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sts:AssumeRole\"]\n    principals {\n      type        = \"Service\"\n      identifiers = [\"scheduler.amazonaws.com\"]\n    }\n  }\n}\n\nresource \"aws_iam_role\" \"execucao_scheduler\" {\n  name               = \"ffv-lab-scheduler-execucao\"\n  assume_role_policy = data.aws_iam_policy_document.confianca_scheduler.json\n}\n\ndata \"aws_iam_policy_document\" \"scheduler_invoca_e_avisa\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"lambda:InvokeFunction\"]\n    resources = [for f in aws_lambda_function.agendador : f.arn]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"sqs:SendMessage\"]\n    # Restrito as 5 DLQs deste projeto — o exemplo da documentacao da AWS usa\n    # Resource \"*\" porque cobre o caso generico; aqui sabemos exatamente quais\n    # 5 filas existem, entao restringir custa uma linha e nao um \"*\".\n    resources = [for q in aws_sqs_queue.dlq : q.arn]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"scheduler_invoca_e_avisa\" {\n  role   = aws_iam_role.execucao_scheduler.id\n  policy = data.aws_iam_policy_document.scheduler_invoca_e_avisa.json\n}\n\noutput \"agendamentos_criados\" {\n  value       = [for s in aws_scheduler_schedule.job : s.arn]\n  description = \"Os 5 ARNs — e a prova de que a EC2 pode ser desligada\"\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O `*` que aparece na política de confiança, e por que ele não é o problema",
+            "content": "A política de confiança do papel de execução da Scheduler usa `scheduler.amazonaws.com` como principal — isso não é um `Resource: \"*\"` de dado, é a identidade do próprio serviço assumindo o papel, e é assim que toda política de confiança de serviço da AWS funciona. O `*` que mereceria atenção seria em `sqs:SendMessage` ou `lambda:InvokeFunction` — e ali a política acima já restringe às 5 filas e às 5 funções deste projeto."
+          }
+        },
+        {
+          "id": "b8_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "Janela de flexibilidade não é \"sempre bom\"",
+            "content": "É tentador ligar `FlexibleTimeWindow` em tudo, como boa prática genérica de resiliência. Para o job de fatura e o de relatório, isso quebraria o requisito: o time financeiro precisa do CSV pronto ANTES de uma reunião às 9h, não \"em algum momento entre 9h e 9h15\". A janela ajuda quem pode esperar; para quem não pode, ela transforma um horário garantido num horário aproximado."
+          }
+        },
+        {
+          "id": "b8_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "Dois papéis, dois principals — não é o mesmo papel duas vezes",
+            "content": "O papel que a Scheduler assume para CHAMAR a função (`execucao_scheduler`, confiança em `scheduler.amazonaws.com`) e o papel que a própria FUNÇÃO assume para RODAR (`execucao_lambda`, confiança em `lambda.amazonaws.com`) são dois recursos IAM diferentes, com políticas de confiança que não se substituem. Apontar o `role` da função para o papel de execução da Scheduler falha na criação — os dois serviços não aceitam assumir o papel um do outro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o handler em .NET 8, com idempotência derivada do agendamento"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O runtime é o mesmo "
+              },
+              {
+                "text": "dotnet8",
+                "code": true
+              },
+              {
+                "text": " gerenciado do L21. A diferença aqui não é desempenho de partida — é que o evento recebido carrega o horário que a Scheduler PROMETEU executar, e é essa promessa, não o relógio local da execução, que vira a chave que impede duplicidade."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Handler.cs",
+            "code": "// Handler.cs — o mesmo runtime gerenciado dotnet8 do L21, agora recebendo o\n// horario agendado como parte do evento, e usando isso para nao duplicar efeito.\n\nusing Amazon.Lambda.Core;\nusing Amazon.DynamoDBv2;\nusing Amazon.DynamoDBv2.Model;\n\n[assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]\n\nnamespace Agendador;\n\npublic record EventoAgendamento(\n    string Job,\n    string ScheduledTime,\n    string AttemptNumber,\n    string ExecutionId);\n\npublic class Handler\n{\n    private static readonly AmazonDynamoDBClient _ddb = new();\n    private static readonly string _tabela =\n        Environment.GetEnvironmentVariable(\"TABELA_IDEMPOT\")!;\n\n    public async Task Executar(EventoAgendamento evento, ILambdaContext contexto)\n    {\n        // A chave nao usa DateTime.UtcNow: usa o horario que a Scheduler PROMETEU\n        // executar. E isso que torna duas tentativas do MESMO agendamento\n        // reconheciveis como o mesmo trabalho, mesmo que a segunda tentativa\n        // aconteca minutos depois da primeira.\n        var chave = $\"{evento.Job}#{evento.ScheduledTime}\";\n\n        var jaFeito = await _ddb.GetItemAsync(new GetItemRequest\n        {\n            TableName = _tabela,\n            Key = new() { [\"chave\"] = new AttributeValue { S = chave } },\n        });\n\n        if (jaFeito.Item.Count > 0)\n        {\n            // Nao e erro: e a retentativa fazendo exatamente o que deveria — nao\n            // repetir um trabalho que uma tentativa anterior ja completou.\n            contexto.Logger.LogInformation(\n                \"{Chave} ja foi processada (tentativa {Tentativa}); pulando efeito colateral\",\n                chave, evento.AttemptNumber);\n            return;\n        }\n\n        // O trabalho real do job. Cada valor de JOB_NAME executa uma rotina\n        // diferente — aqui simplificado para o caso da fatura, que e o que a\n        // secao de provas mede.\n        await RodarJob(evento.Job, contexto);\n\n        // Grava a marca DEPOIS do efeito ter sido concluido, com TTL de 25 h —\n        // maior que o teto de MaximumEventAgeInSeconds (24 h) de qualquer job\n        // desta locals.jobs, para nunca expirar antes de a Scheduler desistir.\n        await _ddb.PutItemAsync(new PutItemRequest\n        {\n            TableName = _tabela,\n            Item = new()\n            {\n                [\"chave\"] = new AttributeValue { S = chave },\n                [\"expira_em\"] = new AttributeValue\n                {\n                    N = DateTimeOffset.UtcNow.AddHours(25).ToUnixTimeSeconds().ToString(),\n                },\n            },\n        });\n    }\n\n    private static Task RodarJob(string job, ILambdaContext contexto)\n    {\n        contexto.Logger.LogInformation(\"executando {Job}\", job);\n        // Implementacao real por job fica fora do escopo deste laboratorio — o\n        // que ele ensina e o CONTORNO (idempotencia, DLQ, alarme), nao o corpo\n        // de cada rotina de negocio.\n        return Task.CompletedTask;\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Duplicar cobrança é o risco real de retentativa sem idempotência",
+            "content": "Sem a checagem contra o ledger, uma retentativa da Scheduler — que existe justamente para lidar com falha transitória — executaria o job de fatura pela segunda vez, gerando uma cobrança duplicada. O prejuízo de retentativa mal tratada não é técnico: é dinheiro saindo da conta do cliente duas vezes por um evento que deveria ser interno e invisível a ele."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Implantar e provar"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. A quarta é a que a EC2 nunca conseguiu fazer: provar que executar o mesmo trabalho duas vezes produz um efeito só, não dois."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medicoes; a quarta e a que a EC2 nunca conseguiu fazer\n\nPROJETO=ffv-lab\nGRUPO=ffv-lab-cadencia\n\n# ── Prova 1: os 5 agendamentos existem e a proxima execucao faz sentido ──────\naws scheduler list-schedules --group-name \"$GRUPO\" \\\n  --query 'Schedules[].{nome:Name,expressao:Target}' --output table\n\nfor job in fatura-mensal relatorio-diario-vendas sincronizacao-estoque \\\n           limpeza-sessoes-expiradas ping-saude-parceiro-pagamento; do\n  aws scheduler get-schedule --name \"$job\" --group-name \"$GRUPO\" \\\n    --query '{nome:Name,expressao:ScheduleExpression,fuso:ScheduleExpressionTimezone,janela:FlexibleTimeWindow}'\ndone\n# Esperado: cada job com o fuso e a janela que a tabela de decisoes declarou —\n# nao o padrao herdado de copiar e colar o ultimo agendamento criado.\n\n# ── Prova 2: uma falha provocada chega na DLQ com o motivo anexado ───────────\n# Aponte temporariamente o alvo do job de fatura para um ARN que nao existe,\n# aplique, e espere as retentativas se esgotarem (MaximumEventAgeInSeconds=900).\naws sqs receive-message \\\n  --queue-url \"$(aws sqs get-queue-url --queue-name ${PROJETO}-fatura-mensal-dlq --output text)\" \\\n  --message-attribute-names All --max-number-of-messages 1\n# Esperado: uma mensagem com EXHAUSTED_RETRY_CONDITION = MaximumRetryAttempts\n# ou MaximumEventAgeInSeconds. Fila vazia apos a janela de retentativa e FALHA\n# da prova: ou o job nao falhou de verdade, ou a DLQ nao esta ligada ao alvo.\n\n# ── Prova 3: o alarme dispara a partir da mensagem, sem intervencao manual ───\naws cloudwatch describe-alarms \\\n  --alarm-names \"${PROJETO}-fatura-mensal-dlq-com-mensagem\" \\\n  --query 'MetricAlarms[0].StateValue' --output text\n# Esperado: ALARM, poucos minutos depois da prova 2. Se continuar OK, confira\n# se o alarme aponta para o nome exato da fila (dimension QueueName).\n\n# ── Prova 4: retentativa nao duplica efeito (a prova que a EC2 nao tinha) ────\n# Invoque a funcao duas vezes manualmente com o MESMO scheduled_time.\naws lambda invoke --function-name ${PROJETO}-fatura-mensal \\\n  --payload '{\"job\":\"fatura-mensal\",\"scheduled_time\":\"2026-09-01T12:00:00Z\",\"attempt_number\":\"1\",\"execution_id\":\"prova-1\"}' \\\n  /tmp/saida1.json\naws lambda invoke --function-name ${PROJETO}-fatura-mensal \\\n  --payload '{\"job\":\"fatura-mensal\",\"scheduled_time\":\"2026-09-01T12:00:00Z\",\"attempt_number\":\"2\",\"execution_id\":\"prova-2\"}' \\\n  /tmp/saida2.json\naws dynamodb query --table-name ${PROJETO}-agendamentos-idempotencia \\\n  --key-condition-expression \"chave = :c\" \\\n  --expression-attribute-values '{\":c\":{\"S\":\"fatura-mensal#2026-09-01T12:00:00Z\"}}' \\\n  --select COUNT\n# Esperado: COUNT = 1, nao 2. Duas invocacoes, um efeito — a segunda leu o\n# ledger e retornou sem repetir o trabalho.\n\n# ── Prova 5: a EC2 esta desligada, e nada mais depende dela ──────────────────\naws ec2 describe-instances --filters \"Name=tag:Projeto,Values=${PROJETO}-cron-legado\" \\\n  --query 'Reservations[].Instances[].State.Name' --output text\n# Esperado: \"stopped\" ou \"terminated\". Se ainda \"running\", a migracao nao\n# terminou — ela so termina quando a EC2 para de custar, nao quando o Scheduler\n# comeca a funcionar em paralelo com ela.\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Os 5 agendamentos existem com a configuração certa",
+                "`get-schedule` em cada um",
+                "fuso e janela batem com a tabela de decisões",
+                "divergência indica cópia de um agendamento para outro sem ajustar o que muda entre eles"
+              ],
+              [
+                "2 · Falha provocada chega na DLQ com o motivo",
+                "apontar o alvo para um ARN inválido e esperar",
+                "mensagem com `EXHAUSTED_RETRY_CONDITION` preenchido",
+                "fila vazia depois da janela de retentativa: ou o job não falhou de fato, ou a DLQ não está ligada ao alvo"
+              ],
+              [
+                "3 · O alarme dispara sozinho a partir da fila",
+                "`describe-alarms` após a prova 2",
+                "`StateValue = ALARM` em poucos minutos",
+                "continuar `OK` indica dimensão errada no alarme — confira `QueueName`"
+              ],
+              [
+                "4 · Retentativa não duplica efeito",
+                "invocar a função 2× com o mesmo `scheduled_time`",
+                "uma linha só no ledger de idempotência",
+                "duas linhas significam que a checagem de idempotência não está lendo antes de escrever"
+              ],
+              [
+                "5 · A EC2 está desligada",
+                "`describe-instances` filtrando pela tag do projeto legado",
+                "`stopped` ou `terminated`",
+                "`running` significa que a migração não terminou — ela só termina quando o custo fixo para"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três acontecem de verdade, e as três parecem \"o agendamento não funciona\" à primeira vista. O que as separa é onde se olha."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Janela flexível num job que precisa de horário exato",
+                "ligue `FlexibleTimeWindow` de 15 min no agendamento de fatura",
+                "o CSV aparece em horários diferentes a cada mês, sempre dentro da janela",
+                "compare `SCHEDULED_TIME` (contexto do evento) com o instante real da invocação",
+                "`FlexibleTimeWindow.Mode = OFF` nos agendamentos com requisito de horário exato"
+              ],
+              [
+                "Função sem idempotência sob retentativa",
+                "remova a checagem do ledger e force uma falha transitória seguida de sucesso na retentativa",
+                "efeito duplicado — duas faturas para o mesmo período",
+                "contagem de linhas no ledger para a mesma chave, ou efeito duplicado no sistema de destino",
+                "chave derivada do horário agendado, checada antes de qualquer efeito colateral"
+              ],
+              [
+                "Papel de execução sem permissão de escrever na DLQ",
+                "remova `sqs:SendMessage` da política do papel de execução da Scheduler",
+                "a função falha, os `Errors` do Lambda sobem, mas a DLQ permanece vazia e o alarme nunca dispara",
+                "métricas do CloudWatch do Lambda (que mostram o erro) comparadas à DLQ (que não recebe nada)",
+                "incluir `sqs:SendMessage` restrito ao ARN da DLQ na política do papel de execução"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A falha que mais se parece com o problema original",
+            "content": "Não confirmado com precisão na documentação: o comportamento exato quando o papel de execução não tem permissão para escrever na DLQ. O esperado, e o que a prova acima verifica, é que a entrega ao DLQ falha do ponto de vista do seu monitoramento — a função errou, mas nada chega à fila, e o alarme nunca dispara. É a mesma falha em silêncio da EC2 original, só que agora escondida atrás de uma arquitetura que parece ter resolvido o problema. Teste isso explicitamente na sua conta antes de confiar na permissão que você configurou."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Segurança: o que muda quando cinco linhas de crontab viram cinco recursos"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A EC2 tinha um papel de instância provavelmente amplo, porque \"precisava fazer um pouco de tudo\". Separar em cinco recursos é também uma oportunidade de separar cinco papéis estreitos — e desperdiçá-la copiando a mesma política ampla para os cinco é o antipadrão que este laboratório existe para evitar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Segredo do parceiro de pagamento embutido em texto claro no `Input`",
+                "média",
+                "alto",
+                "referência ao Secrets Manager lida dentro do handler, nunca literal no `Input` do agendamento",
+                "`describe-schedule` mostrando segredo em texto claro no console ou na API",
+                "rotacionar o segredo; mover para referência por ARN"
+              ],
+              [
+                "Papel de execução do Scheduler com permissão de invocar qualquer Lambda da conta",
+                "média",
+                "alto",
+                "`Resource` restrito à lista dos 5 ARNs de função deste projeto",
+                "IAM Access Analyzer sobre uso real do papel",
+                "derivar a política do uso medido — é o L41"
+              ],
+              [
+                "Alteração de horário sem trilha de auditoria",
+                "média",
+                "médio",
+                "mudança de agendamento só via pipeline com aprovação, não console direto em produção",
+                "CloudTrail em `UpdateSchedule` fora da identidade do pipeline",
+                "reverter para o valor do estado do Terraform; investigar quem mudou e por quê"
+              ],
+              [
+                "DLQ acumulando payload sensível sem política restrita",
+                "baixa",
+                "médio",
+                "política da fila restrita à conta e ao papel de execução da Scheduler",
+                "CloudTrail em `ReceiveMessage` de identidade inesperada",
+                "restringir a política da fila; girar qualquer dado sensível exposto"
+              ],
+              [
+                "Retentativa duplicando efeito por falta de idempotência",
+                "média",
+                "alto",
+                "ledger de idempotência checado antes de qualquer efeito colateral",
+                "contagem de linhas do ledger por chave, maior que 1",
+                "reverter o efeito duplicado manualmente; corrigir a checagem antes de reprocessar"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O `*` que resta na política, e por que ele se justifica",
+            "content": "A política de confiança do papel de execução usa `scheduler.amazonaws.com` como principal — não é um recurso de dado, é a identidade do serviço. Nas ações que tocam recurso de fato (`lambda:InvokeFunction`, `sqs:SendMessage`), a política deste laboratório já restringe ao ARN de cada uma das 5 peças, porque elas são conhecidas de antemão. A regra não é \"nunca use `*`\" — é \"todo `*` tem de ter uma frase explicando por que não pode ser mais estreito\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24_0",
+      "type": "quiz",
+      "position": 13,
+      "data": {
+        "question": "Uma empresa em São Paulo agenda a emissão de fatura com `cron(0 12 1 * ? *)` e fuso UTC, calculando \"9h local = 12h UTC\" manualmente, em vez de declarar `America/Sao_Paulo`. O agendamento funciona corretamente há dois anos. Por que isso é considerado um antipadrão mesmo funcionando?",
+        "options": [
+          "Porque o Brasil vai voltar a observar horário de verão em breve, quebrando o cálculo",
+          "Porque expressões cron sempre devem declarar um fuso horário diferente de UTC",
+          "Porque o cálculo funciona hoje só porque o Brasil não observa DST desde 2019 — o hábito de calcular deslocamento fixo quebra em qualquer região ou cliente que observe DST",
+          "Porque UTC nunca pode ser usado em expressões cron do EventBridge Scheduler"
+        ],
+        "correctIndex": 2,
+        "explanation": "O antipadrão não está no resultado atual — está no HÁBITO. Calcular \"9h local = 12h UTC\" à mão funciona para São Paulo hoje porque o Brasil aboliu o horário de verão em 2019, então o deslocamento realmente é fixo o ano inteiro. O problema aparece quando esse mesmo hábito é copiado para uma região ou cliente que observa DST: ali, o deslocamento muda duas vezes por ano, e um valor fixo produz um agendamento uma hora adiantado ou atrasado sem nenhum alerta. Declarar `ScheduleExpressionTimezone` com o nome IANA do fuso deixa a Scheduler cuidar do ajuste automaticamente, em qualquer região.\n\nA primeira alternativa inventa um fato: não há indicação de que o Brasil vá reintroduzir horário de verão. A terceira erra ao generalizar: UTC é um fuso válido e correto quando é genuinamente essa a intenção — o problema é usá-lo como aproximação de um fuso local via cálculo manual, não usá-lo em si. A quarta simplesmente inverte o fato: UTC é o padrão quando nenhum fuso é declarado, e é uma escolha legítima para agendamentos que não dependem de horário local nenhum."
+      }
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 14,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um painel de agendamento tem uma função estreita: dizer se cada um dos 5 jobs fez o que deveria, sem exigir que alguém entre em cada log manualmente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "Algum job falhou de vez?",
+                "profundidade da DLQ de cada agendamento",
+                "a execução esgotou as tentativas e o efeito não aconteceu",
+                "qualquer valor > 0"
+              ],
+              [
+                "O agendamento está tentando com frequência incomum?",
+                "`RETRY_ATTEMPTS` nas mensagens da DLQ",
+                "falha persistente, não transitória isolada",
+                "tentativas no teto configurado (3, neste módulo)"
+              ],
+              [
+                "A latência entre horário previsto e execução real está normal?",
+                "diferença entre `SCHEDULED_TIME` e o timestamp do log",
+                "acima da janela flexível configurada indica atraso na própria Scheduler ou no alvo",
+                "> janela declarada + 60 s"
+              ],
+              [
+                "Algum job está sendo executado em duplicidade?",
+                "contagem de linhas do ledger por chave",
+                "mais de uma linha para a mesma chave é falha de idempotência",
+                "> 1 para qualquer chave"
+              ],
+              [
+                "Alguém mudou um agendamento fora do pipeline?",
+                "CloudTrail em `UpdateSchedule` e `DeleteSchedule`",
+                "mudança manual em produção",
+                "qualquer identidade fora da esperada"
+              ],
+              [
+                "A EC2 legada voltou a subir?",
+                "estado da instância marcada como legada",
+                "alguém reverteu a migração, ou um processo automatizado a reiniciou",
+                "estado diferente de `stopped`"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana logo depois da migração",
+            "content": "Nos primeiros dias, `Invocations` de cada Lambda vai parecer baixo comparado ao que se esperava — porque jobs de segundos, mesmo frequentes, não geram volume visível num painel dimensionado para tráfego de API. Não é sinal de que o agendamento não está disparando; é o formato normal de um job de manutenção. Confirme pela contagem de invocações, não pela impressão visual do gráfico."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Escala: 5, 50, 5 mil agendamentos"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "5 agendamentos, 1 grupo",
+                "nada muda; é o cenário deste laboratório",
+                "nada",
+                "nada"
+              ],
+              [
+                "50 agendamentos, times diferentes usando o mesmo grupo",
+                "ainda folgado na cota de 10 milhões de agendamentos por região da Scheduler",
+                "organização: sem grupos por time, fica difícil saber de quem é cada agendamento",
+                "um `schedule_group` por time ou por domínio, não um grupo único compartilhado"
+              ],
+              [
+                "5 mil agendamentos, todos com Lambda dedicada",
+                "ainda dentro da cota de agendamentos, mas a criação em lote pode esbarrar na taxa de `CreateSchedule`",
+                "5.000 requisições por segundo é o padrão em regiões primárias — criação em lote muito rápida pode ser limitada antes disso",
+                "criar em lotes espaçados ou usar backoff no script de importação"
+              ],
+              [
+                "Comparação com o limite das Rules clássicas",
+                "uma regra agendada por recurso esbarraria na cota de 300 regras por bus de eventos em poucas centenas de agendamentos",
+                "é exatamente por isso que a Scheduler existe: ela escala a um agendamento por recurso sem competir por uma cota de centenas",
+                "nenhuma ação — é o argumento a favor da escolha já feita neste módulo"
+              ],
+              [
+                "Falha de uma zona de disponibilidade",
+                "EventBridge Scheduler e Lambda são serviços regionais e multi-AZ por padrão, sem configuração adicional deste laboratório",
+                "nada específico deste módulo — a camada de agendamento não tem uma \"história de AZ\" própria para contar",
+                "nenhuma; inventar Multi-AZ aqui seria decoração sobre uma camada que já não tem esse risco"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O número que costuma decidir a questão de prova",
+            "content": "Regras clássicas do EventBridge competem por 300 regras por barramento de eventos na maioria das regiões (100 em algumas). A Scheduler tem cota separada de 10 milhões de agendamentos por região, ajustável a bilhões. Uma questão que pede \"qual serviço usar para agendar uma tarefa por CLIENTE, com potencial de milhares de clientes\" está testando exatamente essa diferença de ordem de grandeza, não uma preferência estilística."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Custo: o que este laboratório troca na fatura"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A troca central é de dimensão: de \"horas ligadas, fixo\" para \"execuções e mensagens, proporcional ao uso\". Use o AWS Pricing Calculator para o valor exato na sua região — aqui o que importa é a dimensão, não o número."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que muda",
+              "Tendência"
+            ],
+            "rows": [
+              [
+                "Antes (EC2 dedicada)",
+                "1 instância t3.micro, 24 h/dia",
+                "custo fixo de instância, independentemente de quantos jobs rodam dentro dela",
+                "constante, e cresce se alguém \"aproveitar\" a instância para mais um job"
+              ],
+              [
+                "Depois (Scheduler + Lambda)",
+                "5 jobs, de centenas a milhares de execuções por mês no total",
+                "custo por invocação de Lambda, por mensagem de SQS e por alarme — cada dimensão proporcional ao uso real",
+                "baixa e previsível; cresce linearmente se mais jobs forem adicionados"
+              ],
+              [
+                "Se um job passar a rodar por segundo (hipotético)",
+                "volume muito acima do atual",
+                "a cota de invocações da Scheduler (milhares de transações por segundo, ajustável) e o custo por invocação do Lambda passam a dominar",
+                "este módulo não cobre esse regime — nenhum dos 5 jobs reais chega perto dele"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "EventBridge Scheduler",
+                "invocação, além de uma faixa gratuita",
+                "volume dos 5 jobs somados é pequeno o bastante para não aparecer como linha relevante"
+              ],
+              [
+                "Lambda",
+                "GB-segundo e número de invocações",
+                "jobs de segundos e memória de 256 MB mantêm isso desprezível para este volume"
+              ],
+              [
+                "SQS (as 5 DLQs)",
+                "requisição e armazenamento retido",
+                "fila vazia na maior parte do tempo não custa quase nada — ela só acumula quando algo falha"
+              ],
+              [
+                "CloudWatch (5 alarmes)",
+                "por alarme-mês",
+                "valor pequeno e fixo; não é onde se otimiza"
+              ],
+              [
+                "DynamoDB (ledger)",
+                "sob demanda: leitura e escrita por requisição",
+                "TTL remove item expirado sem custo de escrita adicional — sem TTL, a tabela cresceria para sempre"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho que não aparece na fatura de infraestrutura",
+            "content": "A instância desligada é a linha visível. A invisível é o incidente da fatura de julho não se repetir: o custo real daquele silêncio não foi a EC2 — foi o dia gasto reconstruindo manualmente o que deveria ter sido automático, mais o cliente que esperou a fatura mais do que deveria."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "cada falha vira mensagem com motivo anexado, sem log manual para ler",
+                "ainda não há playbook escrito para quem recebe o alarme do plantão",
+                "runbook por tipo de `EXHAUSTED_RETRY_CONDITION`",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "papéis de execução separados e restritos por ARN, sem segredo literal no `Input`",
+                "mudança de agendamento ainda pode ser feita direto no console, sem aprovação",
+                "agendamento só via pipeline com revisão (aproxima do L54)",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "retentativa com backoff, DLQ e idempotência cobrindo falha transitória e duplicidade",
+                "os 5 jobs continuam sem coordenação entre si — nenhum sabe do estado do outro",
+                "Step Functions no dia em que um job passar a depender de outro",
+                "média"
+              ],
+              [
+                "Eficiência de performance",
+                "cada job usa só a memória e o tempo que precisa, medidos, não herdados de um padrão único",
+                "nenhuma; 5 jobs de segundos não têm gargalo de performance relevante",
+                "nenhuma ação necessária agora",
+                "baixa"
+              ],
+              [
+                "Otimização de custos",
+                "custo proporcional ao uso, substituindo custo fixo de instância",
+                "DLQ, alarme e ledger por job multiplicam recursos pequenos — ainda assim, ordens de grandeza abaixo do custo fixo anterior",
+                "revisar se algum job de baixíssimo risco realmente precisa de DLQ e alarme dedicados",
+                "baixa"
+              ],
+              [
+                "Sustentabilidade",
+                "instância desligada 24 h/dia deixa de consumir capacidade computacional ociosa",
+                "nenhum: é ganho líquido sem nova dívida",
+                "nenhuma ação necessária agora",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho de novo. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do crontab numa instância ao histórico de execuções virando dado",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "EC2 com crontab, todos os 5 jobs num script, sem monitoramento. É onde a Cadência estava, e continua legítimo para um script pessoal de desenvolvimento.",
+                "note": "Risco resolvido: nenhum. Novo risco: falha silenciosa e custo fixo, independente do uso. Custo: fixo, o mais alto dos seis níveis em relação ao trabalho real realizado."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "5 agendamentos no EventBridge Scheduler, cada um com Lambda, retentativa, DLQ e alarme próprios.",
+                "note": "Risco resolvido: falha silenciosa e custo fixo de servidor ocioso. Novo risco: retentativa sem idempotência duplica efeito — por isso o ledger. Custo: proporcional ao uso, quase desprezível neste volume."
+              },
+              {
+                "label": "Nível 3 — Produção com orquestração",
+                "instruction": "Jobs de múltiplos passos (ex.: fatura → validação → notificação) viram Step Functions, e a Scheduler dispara a máquina de estados em vez da função isolada.",
+                "note": "Risco resolvido: falha parcial de um job de vários passos sem saber onde parou. Novo risco: complexidade de orquestração para jobs que, na verdade, continuam simples — usar isso cedo demais é decoração. Custo: por transição de estado, ainda pequeno neste volume."
+              },
+              {
+                "label": "Nível 4 — Plataforma multi-time",
+                "instruction": "Grupos de agendamento por time, com cota e política por grupo.",
+                "note": "Risco resolvido: um time consumindo toda a taxa de criação ou invocação da conta. Novo risco: governança de quem pode criar agendamento em nome de quem. Custo: nenhum adicional relevante — grupos não têm custo próprio."
+              },
+              {
+                "label": "Nível 5 — Governança e auditoria",
+                "instruction": "Mudança de agendamento só via pipeline com aprovação e trilha no CloudTrail; segredo do `Input` sempre por referência.",
+                "note": "Risco resolvido: alguém mudar o horário da fatura pelo console sem ninguém saber. Novo risco: mudança de horário para um incidente urgente fica mais lenta, por passar pelo processo. Custo: tempo de processo, não de infraestrutura."
+              },
+              {
+                "label": "Nível 6 — Dados e IA",
+                "instruction": "O histórico de execuções (duração, sucesso, tentativas) vira dado para decidir quais jobs toleram sair do relógio de parede e migrar para processamento em lote — é o L95, classificando volume grande numa janela de horas em vez de tempo real.",
+                "note": "Risco resolvido: tratar todo job como se precisasse rodar num instante exato. Novo risco: lote exige tolerância a atraso que nem todo job tem — a fatura, por exemplo, não pode esperar uma janela de horas. Custo: lote custa menos por item, mas só compensa a orquestração acima de um certo volume."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Orquestrar passos no nível 3 sem a idempotência do nível 2 propaga o mesmo risco de duplicidade para dentro da máquina de estados. E decidir migrar um job para lote no nível 6 sem o histórico de execuções do nível 2 é decisão sem dado — exatamente a armadilha que a seção de IA deste módulo evita."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não resolve o problema central, e forçá-la seria o antipadrão que a própria série critica. \"Quando este job deve rodar\" tem resposta determinística: calendário ou intervalo, fuso declarado, janela sim ou não conforme o requisito. Nenhuma dessas quatro decisões melhora com um modelo — são configuração, não previsão."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar adjacente onde IA acrescentaria valor real, e ele não é neste laboratório: decidir QUAIS jobs, entre dezenas ou centenas, toleram sair do relógio de parede e migrar para processamento em lote. Isso é o L95, e mesmo lá a resposta certa começa por uma regra simples antes de qualquer modelo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "nenhum, diretamente aqui — quando rodar é decisão de requisito de negócio, não de padrão a ser aprendido"
+              ],
+              [
+                "Onde ela ajudaria, então?",
+                "a decisão adjacente de QUAIS jobs, entre muitos, são candidatos a sair do tempo real e ir para lote — é o L95"
+              ],
+              [
+                "Por que uma regra não bastaria ali?",
+                "uma regra simples bastaria para começar: \"job cujo resultado ninguém espera em tempo real e que processa volume grande\" cobre a maior parte dos candidatos"
+              ],
+              [
+                "De onde viriam os dados, se um dia justificasse modelo?",
+                "o histórico de execuções deste próprio laboratório — duração, sucesso, tentativas — é a base"
+              ],
+              [
+                "Por que não agora?",
+                "com 5 jobs, um modelo é superstição com aparência de estatística; a decisão certa aqui é olhar a tabela de requisitos e decidir manualmente"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b18_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"prever a melhor hora de rodar cada job e evitar pico no parceiro\" troca uma solução determinística e já correta — a janela de flexibilidade, declarada uma vez — por um sistema probabilístico que precisa ser treinado, avaliado e monitorado, para resolver um problema que uma linha de configuração já resolve."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Cron dentro de uma instância \"porque já existe\"",
+                "parece grátis, porque a instância já estava paga por outro motivo, ou já existia antes da conta atual",
+                "falha vira silêncio, e o custo fixo de 24 h ignora que o trabalho real usa minutos",
+                "fatura de EC2 sem relação nenhuma com o trabalho real que ela hospeda",
+                "EventBridge Scheduler + Lambda, um agendamento por job",
+                "nunca em produção; script pessoal de desenvolvimento, talvez"
+              ],
+              [
+                "Um agendamento único disparando um script que roda todos os jobs em sequência",
+                "menos peças para configurar — um agendamento em vez de cinco",
+                "falha de um job trava ou atrasa os outros, e a DLQ mistura causas diferentes numa mensagem só",
+                "\"o job de estoque não rodou\" quando na verdade quem travou foi a fatura, três jobs antes na fila",
+                "um agendamento por job, cada um independente",
+                "só quando os jobs realmente têm ordem de dependência — aí o certo é Step Functions, não um script sequencial"
+              ],
+              [
+                "Calcular deslocamento fixo de UTC à mão em vez de declarar fuso IANA",
+                "parece mais simples: \"é só somar 3 horas\"",
+                "quebra silenciosamente com a regra de DST em qualquer região ou cliente que a observe",
+                "agendamento correto na maior parte do ano e uma hora fora em duas janelas específicas",
+                "`ScheduleExpressionTimezone` com o nome IANA do fuso",
+                "só se o agendamento é permanentemente e comprovadamente em UTC, sem nenhuma interpretação de horário local"
+              ],
+              [
+                "Janela de flexibilidade ligada em todo agendamento \"para garantir robustez\"",
+                "parece sempre boa prática de resiliência, como retry com backoff",
+                "agendamento com requisito de horário exato perde exatamente a garantia que precisava",
+                "CSV da fatura chegando em horários diferentes a cada execução, dentro da janela",
+                "ligar só nos jobs que genuinamente toleram atraso de minutos",
+                "jobs de manutenção sem consumidor esperando um horário específico"
+              ],
+              [
+                "Copiar o teto de retentativa (185 tentativas, 24 h) sem pensar no job",
+                "parece \"mais seguro tentar de novo\" — usar o máximo permitido soa cauteloso",
+                "para um job não idempotente, mais tentativas é mais chance de duplicar o efeito",
+                "efeito repetido (fatura, notificação) muito depois da falha original, quando ninguém mais está olhando",
+                "teto pequeno (poucas tentativas, minutos de idade) para jobs de efeito único, coerente com idempotência",
+                "jobs genuinamente idempotentes e sem custo de tentativa repetida, como um ping de leitura"
+              ],
+              [
+                "Configurar a DLQ e o alarme e nunca escrever o que fazer quando ele dispara",
+                "\"configurei o alarme, terminei\" — o trabalho parece concluído com o recurso criado",
+                "a fila vira lixo esquecido: acumula mensagem, ninguém lê, o alarme perde credibilidade",
+                "alarme \"sempre em ALARM\" que o time aprendeu a ignorar",
+                "runbook curto por `EXHAUSTED_RETRY_CONDITION`, testado com a falha provocada deste módulo",
+                "nunca; alarme sem playbook é pior que não ter alarme, porque simula segurança"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Job não roda no horário esperado",
+                "fuso errado, ou expressão cron mal formada",
+                "compare a próxima execução calculada com a esperada",
+                "`get-schedule` → `ScheduleExpression` e `ScheduleExpressionTimezone`",
+                "validar a expressão e o fuso antes de confiar; nunca assumir UTC por padrão"
+              ],
+              [
+                "Job roda, mas em horário levemente diferente a cada execução",
+                "`FlexibleTimeWindow` ligado sem necessidade real",
+                "compare `SCHEDULED_TIME` do contexto com o instante real de invocação",
+                "`FlexibleTimeWindow.Mode` do agendamento",
+                "`Mode = OFF` para jobs sensíveis a horário exato"
+              ],
+              [
+                "DLQ cheia, alarme disparando",
+                "alvo falhando persistentemente",
+                "leia `ERROR_CODE` e `ERROR_MESSAGE` da mensagem na fila",
+                "atributos da mensagem na DLQ",
+                "corrigir a causa raiz no alvo; reprocessar manualmente depois"
+              ],
+              [
+                "Alarme nunca dispara mesmo com falha confirmada",
+                "papel sem `sqs:SendMessage` na DLQ, ou `MaximumEventAgeInSeconds` grande demais para o teste",
+                "confira a política do papel de execução e os valores da `RetryPolicy`",
+                "IAM do papel de execução da Scheduler; `RetryPolicy` do alvo",
+                "adicionar a permissão de escrita na fila; reduzir o teto se fizer sentido para o job"
+              ],
+              [
+                "Job executa duas vezes para o mesmo período",
+                "função não idempotente sob retentativa",
+                "consulte o ledger pela chave do job e do horário agendado",
+                "lógica do handler, antes do efeito colateral",
+                "checar e gravar no ledger com a chave derivada do horário agendado, não do relógio local"
+              ],
+              [
+                "`ValidationException` ao criar o agendamento",
+                "campo obrigatório ausente — `FlexibleTimeWindow` é exigido mesmo quando `OFF`",
+                "leia a mensagem de erro completa da API, não só o código",
+                "corpo da chamada `CreateSchedule`",
+                "sempre declarar `FlexibleTimeWindow` explicitamente, mesmo como `{\"Mode\": \"OFF\"}`"
+              ],
+              [
+                "Agendamento não aparece na lista esperada",
+                "caiu no grupo `default` em vez do grupo do projeto",
+                "liste agendamentos sem filtro de grupo e procure pelo nome",
+                "`GroupName` na criação",
+                "declarar `GroupName` explicitamente em todo `create-schedule`"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em qualquer parâmetro, pergunte: o agendamento disparou no horário certo, ou a função falhou depois de ser chamada? A primeira dúvida se resolve olhando `ScheduleExpression` e fuso; a segunda, olhando a DLQ e as métricas do Lambda. As duas investigações não se sobrepõem, e confundi-las faz alguém mexer no fuso quando o problema estava na permissão."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório troca um recurso caro-e-esquecido (a EC2) por vários recursos baratos-e-fáceis-de-esquecer. Nenhum deles cobra muito sozinho; a soma de recursos esquecidos em vários laboratórios é o que realmente pesa."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Derrube o que o Terraform administra: agendamentos, Lambdas, DLQs, alarmes,\n#    topico SNS, tabela DynamoDB e o grupo de agendamento.\nterraform destroy -auto-approve\n\n# 2. A EC2 legada e o ponto central deste laboratorio: ela precisa estar\n#    REALMENTE desligada, nao so parada temporariamente para o teste.\naws ec2 describe-instances --filters \"Name=tag:Projeto,Values=ffv-lab-cron-legado\" \\\n  --query \"Reservations[].Instances[].{id:InstanceId,estado:State.Name}\" --output table\n# Se ainda existir e nao for mais necessaria como referencia, termine-a:\n# aws ec2 terminate-instances --instance-ids <id>\n\n# 3. Volumes EBS orfaos da instancia terminada nao saem sozinhos se o\n#    \"delete on termination\" nao estava marcado na instancia original.\naws ec2 describe-volumes --filters \"Name=status,Values=available\" \\\n  --query \"Volumes[].{id:VolumeId,gb:Size}\" --output table\n\n# 4. Grupos de logs do Lambda tem retencao propria e sobrevivem ao destroy\n#    da funcao que os alimentava.\nfor job in fatura-mensal relatorio-diario-vendas sincronizacao-estoque \\\n           limpeza-sessoes-expiradas ping-saude-parceiro-pagamento; do\n  aws logs delete-log-group --log-group-name \"/aws/lambda/ffv-lab-$job\" 2>/dev/null || true\ndone\n\n# 5. Prova final: nada com o nome do projeto de pe, nem na Scheduler nem na EC2.\naws scheduler list-schedules --group-name ffv-lab-cadencia\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table"
+          }
+        },
+        {
+          "id": "b21_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O grupo de agendamento não some sozinho",
+            "content": "Apagar os 5 agendamentos com `terraform destroy` não apaga automaticamente o `schedule_group` se ele foi criado fora do mesmo `apply`, ou se algum agendamento foi criado manualmente dentro dele fora do estado do Terraform. Confira com `list-schedules` antes de considerar a limpeza concluída."
+          }
+        },
+        {
+          "id": "b21_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Os 5 agendamentos e o grupo",
+                "sim",
+                "não",
+                "Scheduler não cobra por agendamento parado, só por invocação"
+              ],
+              [
+                "As 5 funções Lambda",
+                "sim",
+                "não",
+                "sem cobrança por função parada, só por invocação e armazenamento de código"
+              ],
+              [
+                "As 5 DLQs (SQS)",
+                "sim",
+                "sim, centavos se houver mensagem retida",
+                "fila com mensagem não lida continua contando armazenamento"
+              ],
+              [
+                "Tabela DynamoDB de idempotência",
+                "sim",
+                "não em modo sob demanda",
+                "sem tráfego, sem cobrança de capacidade"
+              ],
+              [
+                "Alarmes e tópico SNS",
+                "sim se em Terraform",
+                "centavos",
+                "alarme criado à mão no console não aparece no estado"
+              ],
+              [
+                "EC2 legada",
+                "não — está fora do Terraform deste módulo",
+                "sim, por hora, é o item mais caro da lista",
+                "ela nunca foi gerenciada por este código; desligá-la é uma ação manual e é O objetivo do laboratório"
+              ],
+              [
+                "Volumes EBS órfãos da EC2",
+                "não",
+                "sim, por GB-mês",
+                "sobrevivem à instância se `delete on termination` não estava marcado"
+              ],
+              [
+                "Grupos de log do Lambda",
+                "depende de `skip_destroy`",
+                "sim, retenção",
+                "ciclo próprio, sobrevive à função que os alimentava"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Servidor ligado 24 h para rodar minutos de trabalho",
+                "EventBridge Scheduler + Lambda",
+                "custo passa a acompanhar o uso real, e nenhum recurso fica ocioso à espera do próximo job"
+              ],
+              [
+                "Falha sem log nenhum para ler",
+                "DLQ por agendamento com `EXHAUSTED_RETRY_CONDITION`",
+                "a mensagem carrega o motivo — não é preciso reproduzir a falha para diagnosticá-la"
+              ],
+              [
+                "\"9h\" que pode significar horas diferentes dependendo do calendário",
+                "`ScheduleExpressionTimezone` IANA",
+                "sobrevive a mudança de regra de horário de verão sem editar o agendamento"
+              ],
+              [
+                "Chamada simultânea no parceiro junto com outros clientes dele",
+                "`FlexibleTimeWindow` seletivo",
+                "espalha carga só nos jobs que genuinamente toleram atraso de minutos"
+              ],
+              [
+                "Retentativa automática podendo duplicar efeito",
+                "ledger de idempotência com chave = job + horário agendado",
+                "a segunda tentativa reconhece o trabalho já feito, em vez de repeti-lo"
+              ],
+              [
+                "Falha isolada de um job contaminando o diagnóstico dos outros",
+                "um agendamento por job, não um script único",
+                "cada job tem seu próprio histórico, sua própria DLQ e seu próprio alarme"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Job que falha por instabilidade transitória",
+                "retentativa com backoff",
+                "falha persistente na causa raiz — aí a DLQ é quem avisa, não a retentativa"
+              ],
+              [
+                "Falha esgotada e ninguém percebendo",
+                "alarme sobre profundidade da DLQ",
+                "alarme sem runbook — disparar não é o mesmo que ser resolvido"
+              ],
+              [
+                "Retentativa duplicando efeito",
+                "ledger de idempotência",
+                "efeito não idempotente que já foi gravado ANTES da checagem existir"
+              ],
+              [
+                "Agendamento com fuso ou expressão errada",
+                "validação manual na implantação",
+                "mudança futura feita fora do pipeline, sem revisão"
+              ],
+              [
+                "Segredo do parceiro exposto",
+                "referência ao Secrets Manager em vez de valor literal",
+                "segredo já vazado em execução anterior, antes da correção"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Cada um dos 5 agendamentos é avaliado no fuso horário que ele declara.",
+              "Se houver janela flexível, a Scheduler escolhe um instante dentro dela; senão, invoca com precisão de 60 s.",
+              "A Scheduler invoca o alvo usando o papel de execução do próprio agendamento.",
+              "A função recebe o horário agendado como parte do evento, e checa esse valor contra o ledger antes de agir.",
+              "Se o efeito já foi gravado para aquela chave, a execução retorna sem repetir o trabalho.",
+              "Se a função falha, a Scheduler tenta de novo sozinha, com backoff, até o teto configurado.",
+              "Se as tentativas se esgotam, o evento vai para a DLQ com o motivo anexado.",
+              "O alarme de profundidade da fila dispara, e o plantão é notificado — não o time financeiro, semanas depois.",
+              "A EC2 legada, sem mais nenhum job para hospedar, é desligada."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Qual a diferença entre cron e rate no EventBridge Scheduler?",
+            "answer": "Rate expressa um intervalo puro, como \"a cada 15 minutos\" ou \"a cada 6 horas\", e é a escolha mais clara quando não existe semântica de calendário envolvida. Cron expressa um horário específico dentro de um calendário, como \"às 9h do dia 1º de cada mês\" ou \"às 7h todo dia\" — ele usa seis campos (minutos, horas, dia do mês, mês, dia da semana e ano) e aceita caracteres especiais como `L` para o último dia e `#` para uma ocorrência específica de um dia da semana no mês, como a segunda terça-feira. A escolha errada mais comum é simular calendário com rate, ou forçar um intervalo simples dentro de um cron com `*/N` — ambos funcionam, mas escondem a intenção real de quem configurou."
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Como funciona o fuso horário no EventBridge Scheduler?",
+            "answer": "Cada agendamento cron-based ou one-time declara seu próprio fuso horário através do parâmetro `ScheduleExpressionTimezone`, usando o banco de dados de fusos da IANA — não um deslocamento fixo calculado à mão. A Scheduler ajusta automaticamente a próxima execução quando o fuso declarado observa horário de verão: no avanço da primavera, uma execução que cairia num horário inexistente é pulada; no retrocesso do outono, a execução acontece uma vez só, sem repetir. Agendamentos rate-based não têm essa noção de fuso da mesma forma, porque calculam a partir de um intervalo, não de um horário de parede — declarar UTC neles evita ambiguidade sem efeito prático nenhum."
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "O que é a janela de flexibilidade (flexible time window) e quando devo usar?",
+            "answer": "É um intervalo, de 1 a 1.440 minutos, dentro do qual a Scheduler escolhe livremente o instante exato da invocação, em vez de disparar num segundo fixo. Use-a nos jobs que genuinamente toleram atraso de alguns minutos e que se beneficiam de não bater no mesmo instante que outras cargas — por exemplo, uma sincronização com a API de um fornecedor que também recebe chamadas de outros clientes configurados \"em ponto\". Não use em jobs com requisito de horário exato, como um relatório que precisa estar pronto antes de uma reunião às 9h: ali, a janela transforma uma garantia de horário numa aproximação, e é exatamente o requisito que se perde."
+          }
+        },
+        {
+          "id": "b23_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "O que acontece se meu Lambda falhar num agendamento do EventBridge Scheduler?",
+            "answer": "A Scheduler tenta de novo sozinha, com backoff exponencial, até o menor entre o número máximo de tentativas configurado em `RetryPolicy.MaximumRetryAttempts` (até 185) e o tempo definido em `MaximumEventAgeInSeconds` (até 86.400 segundos, 24 horas) — o que for atingido primeiro encerra as tentativas. Se as retentativas se esgotam e uma fila de mensagens não entregues (DLQ) está configurada no alvo, o evento é entregue a ela com atributos como `ERROR_CODE`, `ERROR_MESSAGE` e `EXHAUSTED_RETRY_CONDITION`, que diz se o motivo foi o número de tentativas ou a idade do evento. Sem DLQ configurada, o evento falho simplesmente se perde depois de esgotadas as tentativas, sem deixar rastro — não é fire-and-forget por padrão, mas fica parecido com isso se ninguém configurar a fila."
+          }
+        },
+        {
+          "id": "b23_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "EventBridge Scheduler substitui as regras agendadas (Rules) do EventBridge clássico?",
+            "answer": "Sim, e a própria documentação da AWS rotula as regras agendadas como recurso legado, recomendando a Scheduler no lugar para todo caso novo. A diferença prática que mais pesa: regras clássicas competem pela cota de até 300 regras por barramento de eventos por conta (100 em algumas regiões), enquanto a Scheduler suporta até 10 milhões de agendamentos por região, o que viabiliza o padrão de um agendamento por recurso em vez de agrupar lógica dentro de poucas regras compartilhadas. A Scheduler também tem fuso horário por agendamento, janela de flexibilidade e retentativa com DLQ nativos — nenhum dos três existe do mesmo jeito nas regras clássicas."
+          }
+        },
+        {
+          "id": "b23_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Preciso pagar por uma instância EC2 rodando 24 horas só para agendar tarefas?",
+            "answer": "Não, e esse é exatamente o problema que este laboratório resolve. Uma instância dedicada só a hospedar um crontab cobra pelas horas ligadas independentemente de quanto trabalho real os jobs realizam dentro dela — cinco jobs de poucos minutos por dia não justificam 720 horas mensais de servidor. O EventBridge Scheduler dispara o alvo (tipicamente uma função Lambda) diretamente, sem nenhum servidor intermediário para manter no ar, e o custo passa a ser proporcional às execuções reais em vez de fixo pela disponibilidade da máquina."
+          }
+        },
+        {
+          "id": "b23_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Por que meu agendamento não roda exatamente no segundo configurado?",
+            "answer": "Todo agendamento no EventBridge Scheduler tem precisão de 60 segundos por padrão: configurado para \"13h\", a invocação acontece em algum ponto entre 13h00m00s e 13h00m59s. Essa variação aumenta ainda mais se uma janela de flexibilidade estiver habilitada, porque nesse caso a Scheduler escolhe deliberadamente um instante dentro da janela declarada para distribuir carga. Se seu job precisa de um instante determinístico, a correção não está em \"tentar configurar mais preciso\": é desligar a janela de flexibilidade (`Mode: OFF`) e aceitar a margem nativa de 60 segundos, que já costuma ser suficiente para a maioria dos casos de negócio."
+          }
+        },
+        {
+          "id": "b23_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Como reprocesso uma mensagem que caiu na fila de mensagens não entregues (DLQ)?",
+            "answer": "Leia a mensagem da fila SQS com `receive-message` e identifique a causa a partir dos atributos `ERROR_CODE` e `ERROR_MESSAGE`. Corrija o problema na origem — permissão, configuração do alvo ou bug no código — e só então reenvie o trabalho, de preferência invocando a função manualmente com o mesmo payload que gerou a falha, nunca devolvendo a mensagem para a fila original sem entender o motivo. Se a função tiver uma checagem de idempotência como a deste laboratório, reprocessar é seguro mesmo que o efeito já tenha sido parcialmente aplicado antes da falha — é exatamente para esse cenário que o ledger existe."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b24_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Um agendamento de sincronização com um fornecedor usa `rate(6 hours)` com `FlexibleTimeWindow` de 15 minutos. Um agendamento de relatório diário usa `cron(0 7 * * ? *)` sem janela flexível. Por que a mesma peça — janela flexível — é usada num e evitada no outro?",
+            "options": [
+              "Rate expressions sempre exigem janela flexível, e cron expressions nunca aceitam",
+              "A janela flexível só existe para reduzir custo, e o relatório é gratuito de qualquer forma",
+              "É inconsistência do time; o correto seria usar a mesma configuração nos dois",
+              "A janela flexível serve para espalhar carga em jobs que toleram atraso; o relatório tem requisito de horário exato, e a janela quebraria essa garantia"
+            ],
+            "correctIndex": 3,
+            "explanation": "A decisão certa depende do requisito de CADA job, não de um padrão único a ser aplicado em todos igualmente. O job de sincronização se beneficia da janela porque espalhar a chamada evita bater no mesmo segundo que outros clientes do fornecedor configurados \"em ponto\" — o requisito dele é \"eventualmente, a cada 6 horas\", não um instante exato. O relatório diário tem o requisito oposto: precisa estar pronto ANTES de um horário de negócio específico (a reunião das 8h), então uma janela de minutos comprometeria exatamente essa garantia. Usar a mesma configuração nos dois seria ignorar o requisito em pelo menos um deles.\n\nA primeira alternativa erra ao supor que consistência de configuração é uma virtude aqui — é o contrário: tratar requisitos diferentes da mesma forma é o erro. A terceira inventa uma regra que não existe: nem rate exige, nem cron proíbe janela flexível; a escolha é do requisito do job, independente do tipo de expressão. A quarta confunde a motivação: a janela existe para espalhar carga temporal, não para reduzir custo — o preço da Scheduler não muda com ou sem janela habilitada."
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Um agendamento invoca uma função duas vezes para o mesmo `scheduled_time`, porque a primeira tentativa expirou por timeout antes de confirmar sucesso e a Scheduler tentou de novo automaticamente. A função gerou o efeito colateral (uma fatura) nas duas execuções. Qual é a causa raiz, e não apenas o sintoma?",
+            "options": [
+              "A RetryPolicy deveria ter MaximumRetryAttempts = 0 para evitar qualquer retentativa",
+              "A DLQ deveria ter capturado a segunda tentativa antes que ela executasse",
+              "A função não verifica, antes de gerar o efeito, se aquele horário agendado já foi processado com sucesso",
+              "O timeout da função estava configurado baixo demais e deveria ser aumentado"
+            ],
+            "correctIndex": 2,
+            "explanation": "A causa raiz é a ausência de idempotência, não a existência da retentativa em si. A Scheduler tentar de novo depois de uma falha transitória é o comportamento CORRETO e desejado — é para isso que a RetryPolicy existe. O que falta é a função reconhecer, antes de gerar qualquer efeito colateral, que aquele `scheduled_time` específico já foi processado com sucesso — tipicamente checando um ledger de idempotência pela chave derivada do horário agendado. Sem essa checagem, toda retentativa bem-sucedida depois de uma falha parcial é uma duplicação em potencial.\n\nA primeira alternativa troca um problema por outro pior: zerar as tentativas elimina a proteção contra falha transitória genuína, que é exatamente o que a retentativa resolve quando a idempotência existe. A terceira inverte o papel da DLQ: ela só recebe evento DEPOIS de as tentativas se esgotarem, e neste cenário a segunda tentativa teve sucesso — não haveria evento nenhum indo para a fila. A quarta ataca um sintoma possível (timeout raso) sem resolver o problema estrutural: mesmo com timeout maior, qualquer falha transitória futura ainda duplicaria o efeito sem a checagem de idempotência."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L21 concluído (Lambda .NET 8, EventBridge Scheduler básico para um único job), Terraform básico"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "cron vs. rate e quando cada um é mais claro; fuso IANA por agendamento e o comportamento em DST; janela de flexibilidade como decisão por job, não padrão único; retentativa com backoff e DLQ do próprio agendamento; idempotência derivada do horário agendado; a diferença de escala entre Rules clássicas e Scheduler"
+              ],
+              [
+                "Limitação que fica",
+                "os 5 jobs continuam sem coordenação entre si — nenhum sabe do estado do outro; e a mudança de agendamento ainda pode ser feita direto no console, sem trilha de aprovação"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L22 — fila com DLQ e idempotência sob pico de eventos, para quando o gatilho deixa de ser um relógio e passa a ser volume que a API não aguenta receber de forma síncrona"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L95 (enriquecimento em lote do acervo) reaproveita o histórico de execuções deste laboratório para decidir quais jobs toleram sair do tempo real; L98 (plataforma multi-time) reaproveita o padrão de grupo de agendamento por time"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Schedule types on EventBridge Scheduler",
+                "code": true
+              },
+              {
+                "text": " — sintaxe de cron e rate, fuso horário e o comportamento exato em horário de verão, que é a fonte do achado central deste módulo; "
+              },
+              {
+                "text": "RetryPolicy",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "FlexibleTimeWindow",
+                "code": true
+              },
+              {
+                "text": " na referência da API — faixas exatas de `MaximumRetryAttempts` (0 a 185), `MaximumEventAgeInSeconds` (60 a 86.400 s) e `MaximumWindowInMinutes` (1 a 1.440); "
+              },
+              {
+                "text": "Configuring a schedule's dead-letter queue",
+                "code": true
+              },
+              {
+                "text": " — exigência de fila padrão (sem FIFO), permissão `sqs:SendMessage` e os atributos da mensagem morta, incluindo `EXHAUSTED_RETRY_CONDITION`; "
+              },
+              {
+                "text": "Adding context attributes",
+                "code": true
+              },
+              {
+                "text": " — os placeholders `<aws.scheduler.scheduled-time>` e `<aws.scheduler.attempt-number>` usados na chave de idempotência; e as páginas de cota da Scheduler e do EventBridge clássico, que sustentam a comparação de escala (10 milhões de agendamentos por região contra 300 regras por barramento de eventos). Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "O comportamento exato quando o papel de execução da Scheduler não tem permissão para escrever na DLQ não está documentado com precisão suficiente para afirmar aqui — a seção \"Quebrar de propósito\" trata isso como algo a testar explicitamente, não como fato garantido. Da mesma forma, o valor padrão aplicado quando `RetryPolicy` é omitida inteiramente não é itemizado na referência da API consultada; declare `MaximumRetryAttempts` e `MaximumEventAgeInSeconds` explicitamente em todo agendamento de produção, em vez de depender de um padrão implícito."
+          }
+        }
+      ]
+    }
+  ]
+}

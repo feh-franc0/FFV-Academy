@@ -3,7 +3,7 @@
   "title": null,
   "blocks": [
     {
-      "id": "9e4c5967-640d-4c66-a4eb-d744dd311976",
+      "id": "q337-0",
       "type": "section",
       "position": 0,
       "data": {
@@ -11,18 +11,211 @@
       },
       "children": [
         {
-          "id": "93cdbc60-6270-414f-8f90-1aab18b94200",
+          "id": "q337-1",
           "type": "code_block",
           "position": 0,
           "data": {
             "language": "bash",
             "code": "# 1. Enable logical replication no Postgres\n# postgresql.conf:\nwal_level = logical\nmax_replication_slots = 4\nmax_wal_senders = 4\n\n# 2. Create publication\nCREATE PUBLICATION debezium_pub FOR ALL TABLES;\n\n# 3. Criar replication slot (Debezium faz automático, ou manual)\nSELECT pg_create_logical_replication_slot('debezium_slot', 'pgoutput');\n\n# 4. Debezium config (Kafka Connect)\n{\n  \"name\": \"pg-connector\",\n  \"config\": {\n    \"connector.class\": \"io.debezium.connector.postgresql.PostgresConnector\",\n    \"database.hostname\": \"postgres\",\n    \"database.dbname\": \"mydb\",\n    \"plugin.name\": \"pgoutput\",\n    \"slot.name\": \"debezium_slot\",\n    \"publication.name\": \"debezium_pub\",\n    \"topic.prefix\": \"pg-prod\",\n    \"table.include.list\": \"public.orders,public.users\"\n  }\n}"
           }
+        },
+        {
+          "type": "arch_diagram",
+          "data": {
+            "title": "Captura de mudança lendo o log de replicação, não a tabela",
+            "groups": [
+              {
+                "label": "Banco de origem",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "tab",
+                    "service": "rds",
+                    "label": "Tabela",
+                    "note": "a aplicação escreve normalmente"
+                  },
+                  {
+                    "id": "wal",
+                    "service": "log_replicado",
+                    "label": "Log de escrita",
+                    "note": "toda mudança já passa por aqui"
+                  },
+                  {
+                    "id": "slot",
+                    "service": "coordenador",
+                    "label": "Slot de replicação",
+                    "note": "marca até onde o consumidor leu"
+                  }
+                ]
+              },
+              {
+                "label": "Captura",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "conector",
+                    "service": "cdc",
+                    "label": "Conector de CDC",
+                    "note": "finge ser uma réplica do banco"
+                  }
+                ]
+              },
+              {
+                "label": "Transporte",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "topico",
+                    "service": "kinesis",
+                    "label": "Tópico por tabela",
+                    "note": "antes, depois e tipo da operação"
+                  }
+                ]
+              },
+              {
+                "label": "Destinos",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "lake",
+                    "service": "bronze",
+                    "label": "Camada crua"
+                  },
+                  {
+                    "id": "busca",
+                    "service": "opensearch",
+                    "label": "Índice de busca"
+                  },
+                  {
+                    "id": "cache",
+                    "service": "elasticache",
+                    "label": "Cache"
+                  }
+                ]
+              },
+              {
+                "label": "A alternativa que se evita",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "poll",
+                    "service": "alerta",
+                    "label": "Varredura periódica",
+                    "note": "perde exclusões e mudanças intermediárias"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "tab",
+                "to": "wal"
+              },
+              {
+                "from": "wal",
+                "to": "conector",
+                "label": "lê o log"
+              },
+              {
+                "from": "slot",
+                "to": "conector",
+                "label": "posição",
+                "style": "dashed"
+              },
+              {
+                "from": "conector",
+                "to": "topico"
+              },
+              {
+                "from": "topico",
+                "to": "lake"
+              },
+              {
+                "from": "topico",
+                "to": "busca"
+              },
+              {
+                "from": "topico",
+                "to": "cache"
+              },
+              {
+                "from": "poll",
+                "to": "tab",
+                "label": "o que NÃO fazer",
+                "style": "dashed"
+              }
+            ],
+            "caption": "A seta pontilhada da varredura periódica aponta para a tabela; a da captura aponta para o log. Toda a diferença está aí: uma pergunta ao banco o que mudou e perde o que aconteceu entre duas perguntas; a outra lê o registro do que aconteceu, na ordem em que aconteceu.",
+            "steps": [
+              {
+                "label": "1 · O log já existe",
+                "detail": "O banco grava toda alteração num log antes de aplicá-la — é assim que ele sobrevive a queda de energia e alimenta réplicas. A captura apenas se apresenta como mais um leitor desse log.",
+                "nodes": [
+                  "tab",
+                  "wal"
+                ],
+                "edges": [
+                  "tab>wal"
+                ]
+              },
+              {
+                "label": "2 · Nenhuma carga extra de consulta",
+                "detail": "Varrer a tabela a cada minuto compete com a aplicação por E/S e trava linhas. Ler o log não toca na tabela: o custo no banco de origem é próximo de zero.",
+                "nodes": [
+                  "wal",
+                  "conector",
+                  "poll"
+                ],
+                "edges": [
+                  "wal>conector"
+                ]
+              },
+              {
+                "label": "3 · O slot guarda até onde já foi lido",
+                "detail": "É o que garante retomar sem perder eventos depois de uma queda. E é também a armadilha operacional: consumidor parado faz o banco reter log indefinidamente até o disco encher.",
+                "nodes": [
+                  "slot",
+                  "conector"
+                ],
+                "edges": [
+                  "slot>conector"
+                ]
+              },
+              {
+                "label": "4 · O evento carrega antes e depois",
+                "detail": "Não é só \"a linha mudou\": vêm o estado anterior, o novo e a operação. Isso é o que permite ao destino aplicar exclusão e reconstruir histórico — coisa que a varredura periódica jamais entrega.",
+                "nodes": [
+                  "conector",
+                  "topico"
+                ],
+                "edges": [
+                  "conector>topico"
+                ]
+              },
+              {
+                "label": "5 · Um evento, vários destinos",
+                "detail": "Índice de busca, camada crua e cache passam a se atualizar a partir da mesma fonte, sem que a aplicação escreva em cada um. É o que remove a escrita dupla e a inconsistência que ela sempre produz.",
+                "nodes": [
+                  "topico",
+                  "lake",
+                  "busca",
+                  "cache"
+                ],
+                "edges": [
+                  "topico>lake",
+                  "topico>busca",
+                  "topico>cache"
+                ]
+              }
+            ]
+          },
+          "id": "q337-2",
+          "position": 1
         }
       ]
     },
     {
-      "id": "c13246eb-55a9-414b-9c8f-4de1e86901ac",
+      "id": "q337-3",
       "type": "section",
       "position": 1,
       "data": {
@@ -30,7 +223,7 @@
       },
       "children": [
         {
-          "id": "c7f7c66f-5da4-41f6-b202-a1434e2e69fd",
+          "id": "q337-4",
           "type": "code_block",
           "position": 0,
           "data": {
@@ -39,13 +232,108 @@
           }
         },
         {
-          "id": "f7a7c6d7-a9ad-43c7-94ed-dddb91885cca",
+          "id": "q337-5",
           "type": "callout",
           "position": 1,
           "data": {
             "variant": "info",
             "title": "",
             "content": "Alternativas gerenciadas: AWS DMS (mais limitado), Fivetran (SaaS caro), Airbyte (open source, menos features que Debezium mas mais DX). Debezium é padrão-ouro pra auto-hosted serious."
+          }
+        }
+      ]
+    },
+    {
+      "id": "q337-11",
+      "type": "quiz",
+      "position": 2,
+      "data": {
+        "question": "Por que ler o log de transações é melhor que consultar periodicamente a tabela?",
+        "options": [
+          "Porque é mais fácil de configurar",
+          "Porque não exige permissões especiais",
+          "Porque captura TODAS as mudanças, inclusive remoções e alterações intermediárias entre duas consultas — e não impõe carga de leitura ao banco de produção",
+          "Porque funciona com qualquer banco"
+        ],
+        "correctIndex": 2,
+        "explanation": "Consulta periódica perde o que mudou e voltou entre duas passagens, não vê remoções sem marcação lógica e ainda pesa sobre a base. Ler o log captura a sequência real de eventos sem competir com a carga transacional. É mais difícil de configurar, exige permissões específicas e depende do suporte do banco."
+      }
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "O que captura de mudança resolve?",
+            "answer": "Levar alteração do banco operacional para outros sistemas sem consultar periodicamente e sem alterar a aplicação: ela lê o registro de transações e publica cada inserção, atualização e exclusão. É o que permite manter cópia analítica atualizada sem sobrecarregar o banco de origem."
+          },
+          "id": "q337-7",
+          "position": 0
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Captura de mudança ou consulta periódica por timestamp?",
+            "answer": "Captura quando exclusão importa, quando a latência precisa ser baixa ou quando a consulta periódica pesaria no banco. Consulta por timestamp é mais simples e perde exclusão e alteração intermediária. A perda de exclusão é o defeito que ninguém nota até o relatório contar registro que não existe."
+          },
+          "id": "q337-8",
+          "position": 1
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Qual o maior risco de operar captura de mudança?",
+            "answer": "A retenção do registro de transações: se o consumidor para por tempo suficiente, o registro necessário é descartado e a única saída é recarga completa. Monitorar a defasagem do consumidor é obrigatório, e é o que separa quem opera isso de quem só configurou."
+          },
+          "id": "q337-9",
+          "position": 2
+        }
+      ],
+      "id": "q337-6",
+      "position": 3
+    },
+    {
+      "id": "q337-10",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "q337-12",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Qual garantia de entrega esse tipo de captura normalmente oferece, e o que isso exige do consumidor?",
+            "options": [
+              "No máximo uma vez, com risco de perda",
+              "Ao menos uma vez — então o consumidor precisa ser idempotente, porque o mesmo evento pode chegar duas vezes após uma falha e reinício",
+              "Exatamente uma vez, sem esforço adicional",
+              "Nenhuma garantia"
+            ],
+            "correctIndex": 1,
+            "explanation": "Reinício após falha reprocessa a partir do último ponto confirmado, o que pode repetir eventos — a idempotência no consumidor é o que torna isso inofensivo. Exatamente uma vez exige coordenação adicional e não vem de graça. Perda seria inaceitável para o caso de uso, e ausência de garantia tornaria a técnica inútil."
+          }
+        },
+        {
+          "id": "q337-13",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Qual é o desafio ao iniciar a captura numa tabela que já tem dados?",
+            "options": [
+              "O log não contém o histórico anterior",
+              "A tabela precisa ser bloqueada",
+              "Os identificadores precisam ser sequenciais",
+              "É preciso combinar um instantâneo inicial com o fluxo de mudanças, sem perder nem duplicar o que ocorre durante a captura do instantâneo"
+            ],
+            "correctIndex": 3,
+            "explanation": "O log só tem o que aconteceu depois que ele começou a ser observado; o estado atual vem de um instantâneo, e a costura entre os dois é a parte delicada — mudanças ocorrendo durante a leitura inicial precisam ser tratadas. Bloquear a tabela é justamente o que as implementações modernas evitam, e o formato do identificador não importa."
           }
         }
       ]

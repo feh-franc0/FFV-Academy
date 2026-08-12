@@ -70,3 +70,23 @@ func Test_HealthHandler_Readiness_DBUnhealthy_Returns503(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 }
+
+// /readyz é público e sem rate-limit — o corpo não pode devolver o erro cru
+// de pgx/go-redis, que costuma embutir host, porta e às vezes a DSN inteira.
+func Test_HealthHandler_Readiness_DBUnhealthy_DoesNotLeakErrorDetail(t *testing.T) {
+	h := handlers.NewHealthHandler(&unhealthyPinger{}, &healthyPinger{})
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	h.Readiness(rec, req)
+
+	body := rec.Body.String()
+	assert.NotContains(t, body, assert.AnError.Error(), "corpo de /readyz vazou o erro interno")
+
+	var decoded map[string]interface{}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&decoded))
+	checks, ok := decoded["checks"].(map[string]interface{})
+	require.True(t, ok, "esperado campo 'checks'")
+	assert.Equal(t, "unhealthy", checks["postgres"], "checks.postgres deve ser só 'unhealthy', sem detalhe")
+}

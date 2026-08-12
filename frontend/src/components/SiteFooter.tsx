@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { BrainCircuit, Mail, ExternalLink } from 'lucide-react';
-import { HUBS } from '@/lib/curriculum';
+// Módulo estreito — ver a nota em GameHUD.tsx.
+import { HUBS } from '@/lib/curriculum/hubs';
 
 function GithubIcon({ size = 16 }: { size?: number }) {
   return (
@@ -65,19 +66,44 @@ export function SiteFooter() {
             ))}
           </FooterColumn>
 
-          <FooterColumn title="Conteúdo">
-            <FooterLink href="/news">News</FooterLink>
-            <FooterLink href="/simulados">Simulados</FooterLink>
-            <FooterLink href="/progresso">Progresso</FooterLink>
-            <FooterLink href="/revisar">Revisar (SRS)</FooterLink>
-            <FooterLink href="/glossario">Glossário</FooterLink>
-            <FooterLink href="/playlists">Playlists</FooterLink>
+          {/*
+            Colunas reorganizadas: /sobre, /newsletter e /cheatsheets existiam e
+            NENHUM link da plataforma apontava para elas — só eram alcançáveis
+            digitando a URL. /comunidade e /mapa só tinham entrada indireta.
+            Descoberta de página de produto não pode depender de sorte.
+          */}
+          <FooterColumn title="Estudar">
+            {/*
+              `/perguntas` e `/temas` entram aqui porque sem link no rodapé eles
+              são órfãos: alcançáveis só pelo sitemap. `/temas` também recebe link
+              dos 415 módulos pelos chips de tema; `/perguntas` não tinha nenhum
+              link de entrada quando foi criada.
+            */}
+            <FooterLink href="/perguntas">Perguntas respondidas</FooterLink>
+            <FooterLink href="/temas">Temas</FooterLink>
+            <FooterLink href="/explorar">Explorar trilhas</FooterLink>
+            <FooterLink href="/mapa">Mapa de trilhas</FooterLink>
             <FooterLink href="/roadmaps">Roadmaps</FooterLink>
+            <FooterLink href="/playlists">Playlists</FooterLink>
+            <FooterLink href="/cheatsheets">Cheatsheets</FooterLink>
+            <FooterLink href="/glossario">Glossário</FooterLink>
           </FooterColumn>
 
-          <FooterColumn title="Sobre">
-            <FooterLink href="/preferencias">Preferências</FooterLink>
+          <FooterColumn title="Seu progresso">
+            <FooterLink href="/progresso">Progresso</FooterLink>
+            <FooterLink href="/revisar">Revisar (SRS)</FooterLink>
+            <FooterLink href="/simulados">Simulados</FooterLink>
+            <FooterLink href="/ranking">Ranking</FooterLink>
             <FooterLink href="/verificar">Verificar certificado</FooterLink>
+            <FooterLink href="/preferencias">Preferências</FooterLink>
+          </FooterColumn>
+
+          <FooterColumn title="A escola">
+            <FooterLink href="/sobre">Sobre a FFV</FooterLink>
+            <FooterLink href="/comunidade">Comunidade</FooterLink>
+            <FooterLink href="/news">News</FooterLink>
+            <FooterLink href="/newsletter">Newsletter</FooterLink>
+            <FooterLink href="/privacidade">Privacidade</FooterLink>
             <FooterLink href={AUTHOR_SITE} external>Site do autor</FooterLink>
           </FooterColumn>
         </div>
@@ -108,9 +134,14 @@ export function SiteFooter() {
 }
 
 function FooterColumn({ title, children }: { title: string; children: React.ReactNode }) {
+  // Rótulo de agrupamento, não título de seção — o rodapé aparece em TODA
+  // página, e 4 `<h3>` por página (um por coluna) quebrava a ordem de
+  // heading sempre que a página não tinha `<h2>` entre o `<h1>` e o rodapé
+  // (h1 → h3 pula nível). `<p>` mantém a mesma aparência sem entrar na
+  // árvore de headings.
   return (
     <div>
-      <h3
+      <p
         className="font-mono uppercase mb-3"
         style={{
           fontSize: 11,
@@ -120,7 +151,7 @@ function FooterColumn({ title, children }: { title: string; children: React.Reac
         }}
       >
         {title}
-      </h3>
+      </p>
       <ul className="flex flex-col gap-2">{children}</ul>
     </div>
   );
@@ -136,6 +167,18 @@ function FooterLink({
   external?: boolean;
 }) {
   const isExternal = external ?? /^(https?:|mailto:)/.test(href);
+
+  /**
+   * `min-height: 24px` + padding vertical para cumprir WCAG 2.5.8 (Target Size
+   * mínimo). Antes era só `text-sm` sem padding: 17px de altura. Como o footer
+   * aparece em TODA página e tem ~18 links, era a maior fonte de alvo de toque
+   * subdimensionado da plataforma — 7 ocorrências por página, em todas elas.
+   *
+   * `inline-flex` em vez de inline para que a altura mínima valha; o <li> segue
+   * sendo o item de lista, então a semântica não muda.
+   */
+  const alvo = 'inline-flex items-center gap-1 py-1 text-sm transition-colors min-h-[24px]';
+
   if (isExternal) {
     return (
       <li>
@@ -143,11 +186,11 @@ function FooterLink({
           href={href}
           target={href.startsWith('mailto:') ? undefined : '_blank'}
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-sm transition-colors"
+          className={alvo}
           style={{ color: 'var(--ffv-muted)', textDecoration: 'none' }}
         >
           {children}
-          <ExternalLink size={11} strokeWidth={2} style={{ opacity: 0.6 }} />
+          <ExternalLink size={11} strokeWidth={2} style={{ opacity: 0.6 }} aria-hidden="true" />
         </a>
       </li>
     );
@@ -156,7 +199,7 @@ function FooterLink({
     <li>
       <Link
         href={href}
-        className="text-sm transition-colors"
+        className={alvo}
         style={{ color: 'var(--ffv-muted)', textDecoration: 'none' }}
       >
         {children}

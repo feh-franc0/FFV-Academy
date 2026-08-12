@@ -1,0 +1,2574 @@
+{
+  "slug": "lab-waf-shield-bloqueio-na-borda",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência publicou a API pública no "
+              },
+              {
+                "text": "L05",
+                "code": true
+              },
+              {
+                "text": ": domínio próprio, TLS na borda, estático em cache. Duas semanas depois, o time de finanças pergunta por que a conta de Fargate do mês passado é quase o dobro da anterior — sem que o número de pedidos tenha mudado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "A investigação encontra dois padrões no log do ALB: um script batendo em "
+              },
+              {
+                "text": "/api/catalogo",
+                "code": true
+              },
+              {
+                "text": " a cada poucos segundos, dia inteiro, coletando o catálogo inteiro repetidamente; e uma rajada de tentativas de login com senhas diferentes, contra o mesmo usuário, vinda de um punhado de endereços. Nenhum dos dois é sofisticado — nenhum usa payload malformado, nenhum tenta explorar uma vulnerabilidade conhecida. Os dois só mandam volume."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A primeira reação da equipe é escrever um limitador de taxa dentro da aplicação. Ele funciona — as tentativas de login em excesso passam a receber 429 — e a conta continua subindo. É esse o problema que este laboratório resolve: onde bloquear, não apenas se bloquear."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado — depende do L05 e pressupõe a origem já fechada contra bypass"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L05 concluído e no ar (CloudFront, ALB, cabeçalho secreto de origem)"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 40 min · implementação 1 h 30 a 2 h"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo: WebACL, regras e requisições inspecionadas — sem assinatura"
+              },
+              {
+                "k": "Serviços",
+                "v": "AWS WAF, AWS Shield (Standard, incluído), CloudFront"
+              },
+              {
+                "k": "Volume atual",
+                "v": "9 mil requisições legítimas por dia; a rajada do bot soma milhares por hora"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "reduzir a computação gasta com tráfego que não é cliente, sem orçamento novo"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "o bot não distribui globalmente por trás de um provedor de IP residencial — é o que autoriza uma regra de taxa por IP simples, sem Bot Control"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "uma rajada simulada bloqueada na borda, com a métrica de requisições evitadas medida"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é detecção de bot sofisticado com fingerprinting de navegador ou análise comportamental — isso é o AWS WAF Bot Control, um complemento pago por requisição inspecionada, que só se justifica quando o bot já rotaciona IP o suficiente para escapar de uma regra de taxa simples. Também não é resposta a incidente de segurança nem investigação de credencial vazada — isso é o L48 e o L50. Este laboratório resolve um problema mais estreito e mais comum: tráfego automatizado comum, não sofisticado, que custa computação antes de ser negado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com uma métrica ou um comando na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que bloquear na aplicação não evita o custo de computação já gasto.",
+              "Diferenciar regra gerenciada (por conteúdo) de regra baseada em taxa (por volume).",
+              "Configurar uma regra de taxa derivada do tráfego real medido, não copiada de um exemplo.",
+              "Testar uma regra nova em modo Count antes de arriscar bloquear cliente legítimo.",
+              "Explicar por que a ordem de prioridade decide qual regra roda, e o efeito disso numa exceção.",
+              "Diferenciar Shield Standard de Shield Advanced e justificar qual se aplica aqui.",
+              "Provar, com uma rajada simulada, que a requisição bloqueada nunca chega ao Fargate.",
+              "Medir custo evitado a partir da métrica de requisições bloqueadas do WebACL."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Regra gerenciada vs regra customizada",
+                "SAA-C03, SOA-C02",
+                "AWS Managed Rules (core + entradas inválidas) e regra de taxa própria",
+                "gerenciada pega padrão conhecido; taxa pega volume, independente do conteúdo"
+              ],
+              [
+                "Modo Count vs Block",
+                "SAA-C03",
+                "toda regra nova sobe em Count antes de virar Block",
+                "por que testar sem bloquear é a prática recomendada, não burocracia"
+              ],
+              [
+                "Ordem de avaliação por prioridade",
+                "SAA-C03, SOA-C02",
+                "regra geral de bloqueio antes de exceção nunca deixa a exceção rodar",
+                "prioridade menor = avaliada primeiro; ação de término encerra tudo"
+              ],
+              [
+                "Escopo REGIONAL vs CLOUDFRONT",
+                "SAA-C03",
+                "WebACL para CloudFront criado em us-east-1, mesmo alias do certificado do L05",
+                "por que o escopo determina a região do recurso de gestão, não da origem"
+              ],
+              [
+                "Shield Standard vs Advanced",
+                "SAA-C03, SOA-C02",
+                "Standard cobre rede/transporte de graça; Advanced adiciona DRT e reembolso",
+                "quando a assinatura paga se justifica, e quando não"
+              ],
+              [
+                "Rate-based rule: agregação e janela",
+                "SAA-C03",
+                "conta por IP numa janela deslizante de 5 min",
+                "não é limite exato — é estimativa que pesa requisições recentes"
+              ],
+              [
+                "Custo de computação vs custo de borda",
+                "SOA-C02",
+                "requisição bloqueada nunca vira vCPU-segundo",
+                "onde no caminho da requisição o bloqueio é mais barato"
+              ],
+              [
+                "Destino de log do WAF",
+                "SOA-C02",
+                "bucket S3 com prefixo obrigatório e redação de campo sensível",
+                "a convenção de nome que a AWS exige, e por que redigir Authorization"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica dá um WebACL com uma regra de bloqueio geográfico de baixa prioridade e uma regra de exceção específica de prioridade alta, e pergunta por que a exceção \"não funciona\". A resposta não é sobre a exceção estar mal escrita — é sobre ordem: a regra de prioridade menor é avaliada primeiro, encontra correspondência, bloqueia e termina ali. A exceção nunca é alcançada."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito não funcional que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Reduzir computação gasta com tráfego que não é cliente",
+                "declarado pelo enunciado",
+                "bloqueio acontece na borda (WAF), não na aplicação — é a decisão central do módulo"
+              ],
+              [
+                "Erro visível ao cliente legítimo",
+                "zero",
+                "toda regra nova sobe em Count e só vira Block depois de revisar a amostra"
+              ],
+              [
+                "Orçamento para segurança",
+                "sem assinatura nova",
+                "fica em Shield Standard (grátis) + WAF pago por uso; Shield Advanced fica de fora"
+              ],
+              [
+                "Padrão do tráfego malicioso",
+                "volume alto de requisições bem formadas",
+                "regra baseada em taxa por IP, não só assinatura de padrão conhecido"
+              ],
+              [
+                "Auditoria do que foi bloqueado",
+                "obrigatória",
+                "logging do WebACL para bucket S3, com nome no padrão exigido e campo sensível redigido"
+              ],
+              [
+                "Origem já fechada contra bypass",
+                "herdado do L05",
+                "pré-condição: sem isso, o bot contorna a distribuição e o WAF fica decorativo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b3_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que a tabela tem duas linhas de tipo de ameaça, não uma",
+            "content": "Regra gerenciada e regra de taxa resolvem os dois padrões que a Cadência mediu, e são requisitos DIFERENTES: um fala de conteúdo conhecido, o outro de volume. Tratar \"regra de segurança\" como uma coisa só é o que leva a subir apenas uma das duas e deixar metade do problema — scraping bem formado ou tentativa de exploração conhecida — completamente aberta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: tudo o que chega, é computado"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem hoje, herdado direto do L05. Ele é legítimo como ponto de partida — a origem já está fechada contra acesso direto — e o laboratório começa por medir o custo que ele deixa passar, porque um número torna o defeito discutível."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A distribuição do L05 sem WebACL: tudo o que chega, é computado",
+            "caption": "Este é o desenho da Cadência hoje: CloudFront e ALB do L05, sem nenhuma camada de decisão entre o cliente e a task. Ele publica, e a origem já está fechada contra acesso direto — mas nada aqui distingue um bot de um cliente. Percorra os passos e repare onde exatamente o custo é gerado: não na resposta, no processamento que a antecede.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "bot",
+                    "service": "user",
+                    "label": "Bot (scraping + tentativa de login)",
+                    "note": "gera rajadas de requisição bem formadas; nenhuma delas é malformada o bastante para um firewall de rede notar"
+                  },
+                  {
+                    "id": "cliente",
+                    "service": "user",
+                    "label": "Cliente legítimo",
+                    "note": "indistinguível do bot neste desenho: os dois chegam pelo mesmo caminho, sem nenhuma triagem"
+                  }
+                ]
+              },
+              {
+                "label": "Borda, sem filtro de aplicação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cf",
+                    "service": "cloudfront",
+                    "label": "Distribuição do L05",
+                    "note": "decide cache hit ou miss e encaminha o resto; sem WebACL associado, não tem noção de taxa nem de padrão de ataque"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública, 2 AZs",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB do L05",
+                    "note": "já recusa quem não vem da CloudFront (cabeçalho secreto do L05); não recusa por volume nem por padrão de ataque"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada, 2 AZs",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "task",
+                    "service": "fargate",
+                    "label": "Task .NET 8 do L01",
+                    "note": "roda o pipeline inteiro — parse, middleware, tentativa de autenticação — antes de decidir 200, 401 ou 404"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Métricas de CPU e contagem",
+                    "note": "mostra CPU alta e contagem de requisição alta, mas nada aqui rotula qual parte é bot"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "bot",
+                "to": "cf",
+                "label": "rajada de requisição, sem limite algum aplicado",
+                "style": "solid"
+              },
+              {
+                "from": "cliente",
+                "to": "cf",
+                "label": "tráfego legítimo, pelo mesmo caminho do bot",
+                "style": "solid"
+              },
+              {
+                "from": "cf",
+                "to": "alb",
+                "label": "encaminha tudo que não está em cache",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "task",
+                "label": "todo request chega à task, inclusive o do bot",
+                "style": "solid"
+              },
+              {
+                "from": "task",
+                "to": "cw",
+                "label": "cada requisição computada vira métrica de CPU e contagem",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A distribuição não filtra, só serve",
+                "detail": "Sem WebACL associado, o CloudFront decide apenas cache hit ou miss e encaminha o resto para a origem. Ele não tem nenhuma noção de \"esta requisição parece um bot\" — essa decisão simplesmente não existe neste desenho.",
+                "nodes": [
+                  "cf"
+                ],
+                "edges": [
+                  "bot>cf"
+                ]
+              },
+              {
+                "label": "O ALB roteia para alvo saudável, não para requisição legítima",
+                "detail": "O ALB do L05 já recusa quem não passa pela CloudFront — isso resolve o bypass, não o volume. Ele não inspeciona payload nem conta taxa por IP: só decide se há alvo saudável para encaminhar, e sempre há.",
+                "nodes": [
+                  "alb",
+                  "task"
+                ],
+                "edges": [
+                  "cf>alb",
+                  "alb>task"
+                ]
+              },
+              {
+                "label": "Cada requisição do bot é computada antes de ser negada",
+                "detail": "Mesmo que a API devolva 401 por falta de credencial válida, a task já rodou o pipeline de middleware, tentou validar o token e formou a resposta. O 401 é rápido, mas não é grátis: ele já é o resultado de trabalho feito.",
+                "nodes": [
+                  "task"
+                ],
+                "edges": [
+                  "alb>task"
+                ]
+              },
+              {
+                "label": "A escala automática reage ao volume errado",
+                "detail": "Se o serviço tem escala automática por CPU (L06), o volume do bot conta como carga real e dispara novas tasks — o excedente que deveria existir só durante deploy passa a existir também para atender tráfego que nunca deveria ter chegado.",
+                "nodes": [
+                  "task",
+                  "cw"
+                ],
+                "edges": [
+                  "task>cw"
+                ]
+              },
+              {
+                "label": "O sintoma mora na fatura, não no log de erro",
+                "detail": "CPU alta e uma contagem de 401 dentro do que parece normal escondem o bot dentro do tráfego \"saudável\". Ninguém vê um erro gritante — vê uma conta de Fargate maior do que o volume de VENDA justificaria.",
+                "nodes": [
+                  "cw"
+                ],
+                "edges": [
+                  "task>cw"
+                ]
+              },
+              {
+                "label": "Por que alguém publica assim",
+                "detail": "Porque olhar para WAF parece tarefa de segurança, não de custo, e a fatura só chega trinta dias depois — tarde demais para ligar o pico ao evento que o causou. O L05 já resolveu \"alguém acessa direto\"; ninguém percebeu que \"alguém acessa demais\" era um problema diferente e ainda aberto.",
+                "nodes": [
+                  "bot",
+                  "cliente"
+                ],
+                "edges": [
+                  "bot>cf",
+                  "cliente>cf"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Os dois problemas não são o mesmo, e resolver um não resolve o outro",
+            "content": "O L05 resolveu \"alguém acessa a origem sem passar pela CloudFront\" — isso é bypass, e está fechado. Este laboratório resolve \"alguém acessa demais, pela CloudFront mesmo\" — isso é volume, e continua aberto até este ponto. Confundir os dois leva a achar que o L05 já cobre o problema deste módulo, e ele não cobre: são camadas diferentes de defesa, para ameaças diferentes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. Se você não conseguir apontar o requisito, a peça é adorno — e este desenho não tem nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "WebACL na borda: a decisão acontece antes da origem existir para o bot",
+            "caption": "A diferença estrutural não é uma caixa a mais no meio do caminho de sempre: é uma camada de DECISÃO inteiramente nova entre o cliente e a distribuição, com seu próprio destino de registro. Requisição bloqueada não aparece mais como linha na fatura do Fargate — aparece como linha no log do WAF. Percorra os passos: cada peça nova rastreia a um requisito da seção anterior.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "bot",
+                    "service": "user",
+                    "label": "Bot (scraping + tentativa de login)",
+                    "note": "agora encontra uma camada de decisão antes de qualquer coisa cara ser executada"
+                  },
+                  {
+                    "id": "cliente",
+                    "service": "user",
+                    "label": "Cliente legítimo",
+                    "note": "atravessa a mesma camada sem atrito perceptível, porque não corresponde a nenhuma regra de bloqueio"
+                  }
+                ]
+              },
+              {
+                "label": "Borda protegida — WebACL criado em us-east-1",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cf",
+                    "service": "cloudfront",
+                    "label": "Distribuição do L05",
+                    "note": "invoca a avaliação do WebACL associado antes de decidir o que fazer com a requisição"
+                  },
+                  {
+                    "id": "waf",
+                    "service": "waf",
+                    "label": "WebACL: regras gerenciadas + taxa",
+                    "note": "avalia por prioridade crescente e para na primeira correspondência com Allow ou Block"
+                  }
+                ]
+              },
+              {
+                "label": "Proteção de rede automática",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "shield",
+                    "service": "shield",
+                    "label": "Shield Standard (incluído)",
+                    "note": "cobre ataques volumétricos de rede e transporte na CloudFront sem nenhuma configuração deste laboratório"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública, 2 AZs",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB do L05",
+                    "note": "só recebe o que o WebACL já permitiu; continua recusando quem tenta pular a distribuição"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada, 2 AZs",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "task",
+                    "service": "fargate",
+                    "label": "Task .NET 8 do L01",
+                    "note": "só roda para a requisição que já passou pela decisão da borda — é o que muda o custo"
+                  }
+                ]
+              },
+              {
+                "label": "Registro e decisão",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "logs",
+                    "service": "s3",
+                    "label": "Bucket aws-waf-logs-*",
+                    "note": "guarda cada decisão do WebACL, bloqueada ou permitida, com a regra que decidiu — é a auditoria do bloqueio"
+                  },
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Requisições bloqueadas x permitidas",
+                    "note": "métrica por regra; é o número que vira custo evitado na seção de custo deste módulo"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "bot",
+                "to": "cf",
+                "label": "rajada de requisição chega ao ponto de presença",
+                "style": "solid"
+              },
+              {
+                "from": "cliente",
+                "to": "cf",
+                "label": "tráfego legítimo, sem atrito perceptível",
+                "style": "solid"
+              },
+              {
+                "from": "cf",
+                "to": "waf",
+                "label": "avaliação do WebACL antes de decidir o próximo passo",
+                "style": "solid"
+              },
+              {
+                "from": "waf",
+                "to": "alb",
+                "label": "só a requisição permitida segue até a origem",
+                "style": "solid"
+              },
+              {
+                "from": "waf",
+                "to": "logs",
+                "label": "toda decisão vira registro: bloqueada ou permitida",
+                "style": "dashed"
+              },
+              {
+                "from": "waf",
+                "to": "cw",
+                "label": "contagem de BlockedRequests e AllowedRequests por regra",
+                "style": "dashed"
+              },
+              {
+                "from": "shield",
+                "to": "cf",
+                "label": "proteção de camada 3/4, sempre ativa, sem regra para configurar",
+                "style": "dashed"
+              },
+              {
+                "from": "alb",
+                "to": "task",
+                "label": "apenas o que passou pelo WebACL chega à task",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O WebACL avalia antes de a origem ser escolhida",
+                "detail": "A associação do WebACL à distribuição faz o CloudFront invocar a avaliação do WAF como parte do tratamento da requisição, antes de decidir buscar na origem. É a diferença estrutural em relação ao desenho mínimo: existe agora um ponto de decisão que não existia.",
+                "nodes": [
+                  "cf",
+                  "waf"
+                ],
+                "edges": [
+                  "cf>waf"
+                ]
+              },
+              {
+                "label": "A ordem das regras decide, não só o conteúdo delas",
+                "detail": "O WAF avalia por prioridade numérica crescente e para na primeira correspondência com ação de término — Allow ou Block. Uma regra geral de bloqueio com prioridade menor que uma regra de exceção específica faz a exceção nunca ser alcançada: a avaliação já terminou antes de chegar nela.",
+                "nodes": [
+                  "waf"
+                ],
+                "edges": [
+                  "waf>alb"
+                ]
+              },
+              {
+                "label": "Duas regras, dois motivos de bloqueio",
+                "detail": "O grupo de regras gerenciadas reconhece PADRÃO conhecido de ataque — assinatura de injeção, entrada inválida — mantido pela AWS. A regra de taxa reconhece VOLUME — quantas requisições um mesmo IP mandou numa janela de tempo —, independente de o conteúdo parecer bem formado. O bot deste módulo é pego principalmente pela segunda.",
+                "nodes": [
+                  "waf"
+                ],
+                "edges": [
+                  "waf>alb"
+                ]
+              },
+              {
+                "label": "Bloqueado nunca vira vCPU-segundo",
+                "detail": "Requisição barrada pelo WebACL termina ali: ela não atravessa o ALB, não chega à task, não abre conexão com dependência nenhuma. É o oposto exato do desenho mínimo, onde tudo era computado antes de ser negado.",
+                "nodes": [
+                  "waf",
+                  "alb",
+                  "task"
+                ],
+                "edges": [
+                  "waf>alb",
+                  "alb>task"
+                ]
+              },
+              {
+                "label": "Shield Standard já cobre a camada de rede, de graça",
+                "detail": "Sem nenhuma configuração deste laboratório, a CloudFront já tem proteção automática contra os padrões mais comuns de ataque volumétrico de rede e transporte. Ele não substitui o WAF: opera numa camada diferente da que o bot deste módulo ataca.",
+                "nodes": [
+                  "shield",
+                  "cf"
+                ],
+                "edges": [
+                  "shield>cf"
+                ]
+              },
+              {
+                "label": "Toda decisão fica registrada, por regra",
+                "detail": "Bloqueado e permitido são igualmente registrados no bucket de log, com o identificador da regra que decidiu — é o que permite auditar sem reprocessar nada, e o que alimenta a métrica de custo evitado.",
+                "nodes": [
+                  "waf",
+                  "logs",
+                  "cw"
+                ],
+                "edges": [
+                  "waf>logs",
+                  "waf>cw"
+                ]
+              },
+              {
+                "label": "Por que isso custa menos, e não só é mais seguro",
+                "detail": "O ganho não é abstrato: cada requisição barrada na borda é uma requisição que o Fargate nunca rodou. O número de bloqueadas na métrica do WebACL é o mesmo número que, no desenho mínimo, teria virado vCPU-segundo cobrado.",
+                "nodes": [
+                  "waf",
+                  "task"
+                ],
+                "edges": [
+                  "waf>alb",
+                  "alb>task"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação ao desenho anterior não é uma caixa a mais no meio do caminho de sempre: é uma camada de DECISÃO inteiramente nova, com destino de registro próprio. Tudo o mais — regra gerenciada, regra de taxa, log — existe para que essa decisão seja auditável e testável antes de virar bloqueio real."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "annotated_formula",
+          "position": 3,
+          "data": {
+            "title": "O custo evitado, e de onde cada parcela vem",
+            "formula": "custo_evitado ≈ requisições_bloqueadas × (computação_por_req + dependência_por_req)",
+            "parts": [
+              {
+                "symbol": "requisições_bloqueadas",
+                "name": "A métrica BlockedRequests do WebACL",
+                "description": "Contagem exposta pelo CloudWatch, por regra e no total. É medida, não estimada — é o único número desta fórmula que vem direto da AWS."
+              },
+              {
+                "symbol": "computação_por_req",
+                "name": "vCPU-segundo e memória que a task teria gasto",
+                "description": "Parse da requisição, execução de middleware, roteamento — o trabalho mínimo que qualquer requisição HTTP força o Fargate a fazer, mesmo para responder erro.",
+                "highlight": true
+              },
+              {
+                "symbol": "dependência_por_req",
+                "name": "O que a requisição teria tocado depois",
+                "description": "Se a rota consulta o banco ou o cache antes de negar acesso, esse custo também é evitado — e costuma ser maior que o da própria computação da task."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de uma requisição, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A mecânica que decide se uma requisição vira computação ou vira linha de log é explícita e determinística — não há heurística nem aprendizado envolvido nesta regra, só ordem e correspondência."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "O que acontece a uma requisição entre chegar à borda e ser computada, ou não",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "Requisição chega ao ponto de presença",
+                "desc": "A CloudFront recebe a requisição. Como há um WebACL associado à distribuição, ela invoca a avaliação do WAF como parte do tratamento — antes de decidir o que fazer com a requisição."
+              },
+              {
+                "label": "AWS WAF percorre as regras em ordem de prioridade",
+                "desc": "Da menor prioridade numérica para a maior, até encontrar uma correspondência com ação de término (Allow ou Block) ou esgotar as regras do WebACL."
+              },
+              {
+                "label": "Regra em modo Count nunca termina a avaliação",
+                "desc": "Count só registra que a requisição bateu naquela regra e deixa a avaliação seguir para a próxima — é o modo de testar uma regra nova sem risco de bloquear tráfego legítimo."
+              },
+              {
+                "label": "Uma correspondência com Block encerra ali",
+                "desc": "Nenhuma regra posterior é avaliada — inclusive uma exceção específica escrita com prioridade numérica maior nunca é alcançada, porque a avaliação já terminou."
+              },
+              {
+                "label": "Sem correspondência de término, vale a ação padrão do WebACL",
+                "desc": "Normalmente Allow — é a rede de segurança para tráfego que nenhuma regra reconheceu, nem para bloquear nem para contar de propósito."
+              },
+              {
+                "label": "A decisão é registrada, com a regra responsável",
+                "desc": "Entregue ao destino de log configurado — aqui, um bucket S3 —, com o identificador da regra que terminou a avaliação, bloqueada ou permitida."
+              },
+              {
+                "label": "Só a requisição permitida gera custo de computação",
+                "desc": "A que foi bloqueada nunca chega ao ALB, então nunca chega à task: o Fargate não rodou nada por ela. É o mecanismo inteiro deste módulo, resumido num passo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A consequência que mais gente erra ao adicionar uma regra",
+            "content": "Quando um WebACL já está em produção e alguém adiciona uma regra de exceção — \"libere o IP do parceiro X\" —, o instinto é dar a ela uma prioridade alta (número grande), pensando em organização: \"as regras gerais vêm primeiro, as específicas depois\". Isso é exatamente o oposto do que o WAF precisa: como ele avalia da menor prioridade para a maior e para na primeira correspondência terminante, a exceção só funciona se tiver prioridade NUMERICAMENTE MENOR que a regra geral que ela deveria driblar."
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O que aparece no log do WAF para cada requisicao avaliada. E este registro que prova qual regra decidiu, sem precisar reprocessar nada."
+              }
+            ]
+          },
+          "position": 3
+        },
+        {
+          "id": "b6_3",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "json",
+            "filename": "amostra-de-decisao.json",
+            "code": "{\n  \"timestamp\": 1754582431618,\n  \"webaclId\": \"arn:aws:wafv2:us-east-1:111122223333:global/webacl/ffv-lab-borda/...\",\n  \"action\": \"BLOCK\",\n  \"terminatingRuleId\": \"limite-por-ip\",\n  \"terminatingRuleType\": \"RATE_BASED\",\n  \"httpRequest\": {\n    \"clientIp\": \"203.0.113.44\",\n    \"uri\": \"/api/login\",\n    \"httpMethod\": \"POST\"\n  },\n  \"rateBasedRuleList\": [\n    { \"rateBasedRuleId\": \"limite-por-ip\", \"limitValue\": 2000 }\n  ]\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "A Cadência tem uma API pública (L01, na borda desde o L05) sofrendo scraping de catálogo e tentativas repetidas de login por script. A equipe é pequena, não tem orçamento para assinatura de segurança e precisa de uma correção que não exija reescrever a aplicação.",
+            "winner": "WebACL da AWS WAF associado à distribuição CloudFront, com AWS Managed Rules (core rule set + known bad inputs) e uma regra baseada em taxa por IP — mais Shield Standard, que já vem incluído sem nenhuma configuração adicional.",
+            "why": "Resolve o problema no ponto onde ele é mais barato de resolver — a borda, antes de qualquer computação — sem exigir mudança na aplicação nem assinatura paga. O custo é só o do WebACL, das regras e das requisições inspecionadas, e a proteção de rede que a equipe já tinha de graça (Shield Standard) continua cobrindo a camada que o WAF não cobre. Nenhuma peça deste desenho pede aprovação de orçamento maior do que uma linha nova de Terraform.",
+            "alternatives": [
+              {
+                "name": "Rate limiting dentro da aplicação (middleware ASP.NET Core)",
+                "downside": "Continua tendo valor como SEGUNDA camada — protege o banco de abuso de um endpoint específico —, mas a requisição já foi computada até chegar ao middleware. Não resolve o problema de custo declarado no enunciado, só o de carga no banco."
+              },
+              {
+                "name": "Shield Advanced",
+                "downside": "Adiciona resposta dedicada (DRT) e reembolso de pico de custo durante ataque volumétrico confirmado, mas é assinatura mensal com compromisso — e o problema aqui é scraping e credential stuffing na camada de aplicação, não um ataque volumétrico de rede que justifique o custo da assinatura."
+              },
+              {
+                "name": "Bloquear IP manualmente no security group do ALB",
+                "downside": "Não escala: um bot minimamente sofisticado rotaciona endereço, e o ALB não inspeciona payload nem conta taxa — cada bloqueio manual é reativo e some na próxima rotação de IP do atacante."
+              },
+              {
+                "name": "Restrição geográfica só na CloudFront",
+                "downside": "Resolve apenas se o tráfego malicioso vier de geografia previsível; bot moderno usa proxy e infraestrutura distribuída globalmente, e a Cadência tem clientes legítimos em várias geografias — a restrição bloquearia os dois."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Onde bloquear",
+                "na borda (WebACL na CloudFront)",
+                "middleware na aplicação; security group do ALB",
+                "requisição bloqueada nunca é computada pelo Fargate",
+                "nenhuma visibilidade de negócio sobre o payload específico que foi barrado"
+              ],
+              [
+                "Tipo de regra contra o scraping/login",
+                "gerenciada + taxa, as duas",
+                "só gerenciada; só taxa; Bot Control",
+                "gerenciada pega padrão de ataque; taxa pega volume — cobrem ameaças diferentes",
+                "nenhuma das duas identifica bot sofisticado que imita comportamento humano"
+              ],
+              [
+                "Ativação da regra de taxa",
+                "Count primeiro, Block depois de validar",
+                "Block direto",
+                "evita bloquear cliente legítimo sem aviso",
+                "janela de dias em que o bot continua passando enquanto se observa a amostra"
+              ],
+              [
+                "Agregação da regra de taxa",
+                "por endereço IP",
+                "por cabeçalho customizado; por cookie de sessão",
+                "é o que a documentação oferece sem exigir que a aplicação já tenha identificador",
+                "usuário legítimo atrás de proxy corporativo compartilha contagem com outros"
+              ],
+              [
+                "Proteção de rede",
+                "Shield Standard (nenhuma ação)",
+                "Shield Advanced",
+                "já incluído, cobre o padrão de ataque volumétrico mais comum",
+                "sem DRT dedicado e sem reembolso de pico de custo em ataque confirmado"
+              ],
+              [
+                "Destino do log do WAF",
+                "bucket S3 dedicado",
+                "CloudWatch Logs; Kinesis Data Firehose",
+                "suficiente para auditoria e consulta posterior, sem peça adicional",
+                "menos prático para análise em tempo real do que um stream"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este módulo não paga",
+            "content": "Uma regra de taxa por IP trata todo IP como um usuário. Um cliente corporativo grande atrás de um único proxy pode estourar o limite sem ter feito nada de errado — é o anti-padrão tratado mais adiante. Resolver isso de verdade exige uma chave de agregação melhor (cookie de sessão, cabeçalho de API key), que pressupõe a aplicação já emitir esse identificador. Enquanto isso, o limite tem de ser calibrado com folga para o maior cliente legítimo conhecido."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: o WebACL, no mesmo alias de região do L05"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O escopo "
+              },
+              {
+                "text": "CLOUDFRONT",
+                "code": true
+              },
+              {
+                "text": " exige que o WebACL e tudo que ele referencia sejam criados em "
+              },
+              {
+                "text": "us-east-1",
+                "code": true
+              },
+              {
+                "text": " — a mesma exigência que o certificado do L05 tem, e pela mesma razão: CloudFront é global, mas parte da API de gestão dos recursos que ele consome fica fixada numa região."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "waf.tf",
+            "code": "# waf.tf — o WebACL, e por que ele vive na mesma regiao que o certificado do L05\n\n# O escopo CLOUDFRONT exige que o WebACL e tudo que ele referencia — grupo de\n# regra, conjunto de IP — sejam criados em us-east-1, independente de onde os\n# visitantes estao ou de onde a origem roda. E a MESMA exigencia que o\n# certificado ACM do L05 tem, e reaproveitamos o mesmo alias de provider.\nresource \"aws_wafv2_web_acl\" \"borda\" {\n  provider    = aws.borda # o alias us-east-1 que o L05 ja declara\n  name        = \"${var.projeto}-borda\"\n  description = \"Regras gerenciadas + taxa por IP, na frente da distribuicao do L05\"\n  scope       = \"CLOUDFRONT\"\n\n  # Sem correspondencia terminante em nenhuma regra, a requisicao passa. E a\n  # rede de seguranca para trafego que nenhuma regra reconhece.\n  default_action {\n    allow {}\n  }\n\n  # ── Regra 1: padroes conhecidos de ataque, mantidos pela AWS ───────────────\n  # Bloqueia por CONTEUDO da requisicao, independente de volume. Prioridade\n  # menor = avaliada primeiro.\n  rule {\n    name     = \"regras-gerenciadas-core\"\n    priority = 0\n\n    override_action {\n      none {} # usa a acao que cada regra do grupo ja define\n    }\n\n    statement {\n      managed_rule_group_statement {\n        name        = \"AWSManagedRulesCommonRuleSet\"\n        vendor_name = \"AWS\"\n      }\n    }\n\n    visibility_config {\n      cloudwatch_metrics_enabled = true\n      metric_name                = \"regrasGerenciadasCore\"\n      sampled_requests_enabled   = true\n    }\n  }\n\n  rule {\n    name     = \"regras-gerenciadas-entradas-invalidas\"\n    priority = 1\n\n    override_action {\n      none {}\n    }\n\n    statement {\n      managed_rule_group_statement {\n        name        = \"AWSManagedRulesKnownBadInputsRuleSet\"\n        vendor_name = \"AWS\"\n      }\n    }\n\n    visibility_config {\n      cloudwatch_metrics_enabled = true\n      metric_name                = \"regrasGerenciadasEntradasInvalidas\"\n      sampled_requests_enabled   = true\n    }\n  }\n\n  # ── Regra 2: volume, nao conteudo ───────────────────────────────────────────\n  # Bloqueia por CONTAGEM por IP numa janela deslizante. E a que pega o\n  # scraping devagar e bem formado que passa pelas duas de cima.\n  #\n  # O limite abaixo NAO veio de benchmark de terceiro: veio da medicao de\n  # trafego legitimo da Cadencia (secao de implantacao). Comece sempre em modo\n  # COUNT (abaixo) e so troque para BLOCK depois de revisar a amostra.\n  rule {\n    name     = \"limite-por-ip\"\n    priority = 10\n\n    action {\n      count {} # troque para `block {}` depois de validar a amostra — ver provas.sh\n    }\n\n    statement {\n      rate_based_statement {\n        limit              = 2000 # requisicoes por IP na janela abaixo; NAO e preco, e configuracao\n        evaluation_window_sec = 300 # 5 min — o padrao; valido tambem 60, 120, 600\n        aggregate_key_type = \"IP\"\n      }\n    }\n\n    visibility_config {\n      cloudwatch_metrics_enabled = true\n      metric_name                = \"limitePorIp\"\n      sampled_requests_enabled   = true\n    }\n  }\n\n  visibility_config {\n    cloudwatch_metrics_enabled = true\n    metric_name                = \"${var.projeto}-borda\"\n    sampled_requests_enabled   = true\n  }\n\n  tags = local.tags\n}\n\noutput \"web_acl_arn\" {\n  value       = aws_wafv2_web_acl.borda.arn\n  description = \"ARN do WebACL; e o que a distribuicao referencia em web_acl_id\"\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Subir a regra de taxa direto em Block é o erro mais caro deste módulo",
+            "content": "Um limite calibrado errado em modo Block bloqueia cliente real sem nenhum aviso — e o primeiro sinal costuma ser queda de conversão, não um erro visível. Toda regra nova sobe em Count, e só depois de revisar a amostra de requisições que ela capturaria (inclusive as legítimas, se houver) é que a ação muda para Block. Não existe atalho seguro para pular essa etapa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: a distribuição do L05 aponta para o WebACL"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A associação para o escopo CLOUDFRONT não usa um recurso de associação separado — isso só existe para alvo regional, como ALB ou API Gateway. Aqui, o próprio recurso da distribuição referencia o ARN do WebACL."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "borda.tf (alteração)",
+            "code": "# borda.tf — a MESMA distribuicao do L05, com uma linha nova\n\n# Para o escopo CLOUDFRONT nao existe `aws_wafv2_web_acl_association` — esse\n# recurso e so para alvo REGIONAL (ALB, API Gateway). A associacao acontece\n# apontando `web_acl_id` direto na distribuicao, para o ARN do WebACL.\nresource \"aws_cloudfront_distribution\" \"borda\" {\n  # ... todos os argumentos que o L05 ja declara (origins, comportamentos,\n  # certificado, aliases) continuam aqui, sem mudanca nenhuma ...\n\n  web_acl_id = aws_wafv2_web_acl.borda.arn # a unica linha nova neste recurso\n\n  # Nao ha dependencia explicita necessaria: o Terraform já infere a ordem\n  # pela referencia ao ARN do WebACL no atributo acima.\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A distribuição inteira é recriada quando você muda o WebACL?",
+            "content": "Não: `web_acl_id` é um atributo mutável da distribuição, e o Terraform aplica isso como atualização, não substituição. Trocar de WebACL, ou remover a associação, não derruba a distribuição nem invalida o cache existente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: para onde vai cada decisão"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Bloqueado e permitido são igualmente registrados, com a regra responsável — é o que permite auditar sem reprocessar nada, e o que alimenta a métrica de custo evitado da seção seguinte."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "log-waf.tf",
+            "code": "# log-waf.tf — para onde vai cada decisao, bloqueada ou permitida\n\n# O nome do bucket de destino de log do WAF E OBRIGADO a comecar com\n# \"aws-waf-logs-\" — e uma exigencia documentada, nao uma convencao de estilo.\n# Sem o prefixo certo, a configuracao de log falha na hora de aplicar.\nresource \"aws_s3_bucket\" \"log_waf\" {\n  bucket        = \"aws-waf-logs-${var.projeto}-${data.aws_caller_identity.atual.account_id}\"\n  force_destroy = var.ambiente != \"prod\"\n  tags          = local.tags\n}\n\nresource \"aws_s3_bucket_public_access_block\" \"log_waf\" {\n  bucket                  = aws_s3_bucket.log_waf.id\n  block_public_acls       = true\n  block_public_policy     = true\n  ignore_public_acls      = true\n  restrict_public_buckets = true\n}\n\nresource \"aws_wafv2_web_acl_logging_configuration\" \"borda\" {\n  provider                = aws.borda # o log de um WebACL CLOUDFRONT tambem se configura em us-east-1\n  resource_arn             = aws_wafv2_web_acl.borda.arn\n  log_destination_configs = [aws_s3_bucket.log_waf.arn]\n\n  # O cabecalho Authorization nunca vai para o log em texto claro. Redaction\n  # e por campo — aqui, um unico cabecalho — nao existe \"redija tudo\".\n  redacted_fields {\n    single_header {\n      name = \"authorization\"\n    }\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O nome do bucket não é estético",
+            "content": "O destino de log do WAF é obrigado a começar com `aws-waf-logs-`. Não é convenção da casa: é exigência documentada, e a configuração de logging falha ao aplicar se o nome não seguir o padrão. É um dos poucos casos desta série em que um nome de recurso tem efeito funcional, não só organizacional."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: a segunda camada, dentro da aplicação"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O WAF resolve o custo de computação. Ele não resolve tudo: um limitador dentro da aplicação continua tendo valor como segunda camada, protegendo uma dependência específica — aqui, o pool de conexão do banco no endpoint de login."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Program.cs",
+            "code": "// Program.cs — a segunda camada, e por que ela NAO substitui o WAF\n\nvar builder = WebApplication.CreateBuilder(args);\n\n// O limitador embutido do ASP.NET Core protege uma dependencia especifica —\n// aqui, o pool de conexao do banco no endpoint de login — de ser esgotada por\n// tentativa repetida. Ele NAO evita o custo de computacao da requisicao: no\n// momento em que este middleware decide negar, o Fargate ja recebeu a\n// requisicao, ja passou pelo pipeline ate aqui, e ja foi cobrado por isso.\nbuilder.Services.AddRateLimiter(o =>\n{\n    o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;\n\n    o.AddFixedWindowLimiter(\"login\", opcoes =>\n    {\n        // Por USUARIO ANONIMO nao existe particionamento identificavel antes\n        // do login — a janela abaixo e por conexao, o que e mais grosseiro\n        // que a regra de taxa por IP do WAF. E complementar, nao substituto.\n        opcoes.PermitLimit = 5;\n        opcoes.Window = TimeSpan.FromMinutes(1);\n        opcoes.QueueLimit = 0; // sem fila: negar rapido custa menos que enfileirar\n    });\n});\n\nvar app = builder.Build();\napp.UseRateLimiter();\n\napp.MapPost(\"/api/login\", async (CredenciaisDto c, IServicoDeLogin login) =>\n    await login.AutenticarAsync(c) is { } sessao\n        ? Results.Ok(sessao)\n        : Results.Unauthorized())\n    .RequireRateLimiting(\"login\");\n\napp.Run();\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "Por que as duas camadas convivem, e não competem",
+            "content": "A regra de taxa do WAF pensa em IP e em volume geral, sem saber qual endpoint está sendo chamado nem o que ele custa internamente. O limitador da aplicação sabe exatamente disso — pode ser mais generoso num endpoint barato e mais rígido num que consulta o banco. Nenhum dos dois substitui o outro: o WAF evita o custo de chegar até aqui; o limitador evita que quem chegou esgote uma dependência específica."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar com uma rajada simulada"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "simular-bot.sh",
+            "code": "#!/usr/bin/env bash\n# simular-bot.sh — a mesma rajada, contra os dois desenhos\nset -euo pipefail\n\nURL=\"https://$(terraform output -raw dominio)/api/login\"\nTOTAL=\"${1:-5000}\"\n\n# Rajada de POST invalido, paralela, imitando um bot de credential stuffing.\n# Contra o desenho MINIMO, cada uma destas chega a task.\nseq 1 \"$TOTAL\" | xargs -P 50 -I{} \\\n  curl -s -o /dev/null -w '%{http_code}\\n' \\\n    -X POST \"$URL\" -H 'Content-Type: application/json' \\\n    -d '{\"usuario\":\"teste\",\"senha\":\"errada\"}' \\\n  > /tmp/codigos-rajada.txt\n\necho \"total de requisicoes: $(wc -l < /tmp/codigos-rajada.txt)\"\necho \"por codigo:\"\nsort /tmp/codigos-rajada.txt | uniq -c\n# Contra o desenho MINIMO: quase tudo em 401 — cada uma computada.\n# Contra o desenho de PRODUCAO: uma fatia crescente em 403 — bloqueada na borda.\n"
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma aceita \"parece bloqueado\" como resultado — cada uma compara um número contra o total enviado, antes e depois de a regra virar Block."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medições; nenhuma conclusão vem de \"parece bloqueado\"\n\nWEBACL=$(aws wafv2 list-web-acls --scope CLOUDFRONT --region us-east-1 \\\n  --query \"WebACLs[?Name=='ffv-lab-borda'].Id\" --output text)\n\n# ── Prova 1: com o desenho MINIMO, a rajada chega inteira à task ────────────\n# Rode antes de associar o WebACL. O CPUUtilization da task sobe junto com o\n# volume, e a contagem de 401 no ALB bate com o total enviado.\n./simular-bot.sh 5000\naws cloudwatch get-metric-statistics \\\n  --namespace AWS/ECS --metric-name CPUUtilization \\\n  --dimensions Name=ServiceName,Value=ffv-lab-api Name=ClusterName,Value=ffv-lab \\\n  --start-time \"$(date -u -d '-10 min' +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --period 60 --statistics Maximum --output table\n# Esperado: pico visível de CPU coincidindo com a janela da rajada.\n\n# ── Prova 2: com o WebACL em Count, nada é bloqueado ainda ──────────────────\n# A métrica de contaria acumula, mas AllowedRequests continua igual ao total.\naws cloudwatch get-metric-statistics --region us-east-1 \\\n  --namespace AWS/WAFV2 --metric-name CountedRequests \\\n  --dimensions Name=WebACL,Value=ffv-lab-borda Name=Region,Value=CloudFront Name=Rule,Value=limitePorIp \\\n  --start-time \"$(date -u -d '-10 min' +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --period 60 --statistics Sum --output table\n# Esperado: CountedRequests > 0. Nenhuma requisição foi de fato barrada ainda.\n\n# ── Prova 3: depois de trocar para Block, a rajada é interrompida na borda ──\n./simular-bot.sh 5000\naws cloudwatch get-metric-statistics --region us-east-1 \\\n  --namespace AWS/WAFV2 --metric-name BlockedRequests \\\n  --dimensions Name=WebACL,Value=ffv-lab-borda Name=Region,Value=CloudFront Name=Rule,Value=limitePorIp \\\n  --start-time \"$(date -u -d '-10 min' +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --period 60 --statistics Sum --output table\n# Esperado: BlockedRequests próximo do total enviado, acima do limite de 2.000.\n\n# ── Prova 4: a task não viu a parte bloqueada da rajada ─────────────────────\n# Compare a contagem de requisições no log do ALB com o total enviado.\naws logs filter-log-events --log-group-name /ecs/ffv-lab-api \\\n  --start-time \"$(date -d '-10 min' +%s000)\" \\\n  --filter-pattern \"/api/login\" --query 'length(events)' --output text\n# Esperado: bem menor que o total de 5.000 — a diferença é o que a borda reteve.\n\n# ── Prova 5: o cliente legítimo não percebeu nada ───────────────────────────\nfor i in $(seq 1 20); do\n  curl -s -o /dev/null -w '%{http_code} ' \\\n    \"https://$(terraform output -raw dominio)/api/pedidos/00000000-0000-0000-0000-000000000000\"\ndone\necho\n# Esperado: fileira de 200/404 normais, sem nenhum 403 — o cliente não usa o\n# endpoint de login em rajada e não se parece com o padrão da regra de taxa.\n"
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · A rajada custa CPU no desenho mínimo",
+                "métrica de CPUUtilization da task",
+                "pico visível coincidindo com a janela da rajada",
+                "sem pico: a rajada não gerou carga real, ou a métrica está com dimensão errada"
+              ],
+              [
+                "2 · Count registra sem bloquear",
+                "métrica CountedRequests da regra de taxa",
+                "contagem maior que zero, tráfego continua chegando à task",
+                "contagem zero: a regra não está correspondendo — confira o `aggregate_key_type`"
+              ],
+              [
+                "3 · Block interrompe na borda",
+                "métrica BlockedRequests após trocar a ação",
+                "contagem próxima do volume que excedeu o limite configurado",
+                "contagem baixa: o limite pode estar alto demais para o volume simulado"
+              ],
+              [
+                "4 · A task não viu a parte bloqueada",
+                "contagem de eventos no log da aplicação",
+                "bem menor que o total enviado na rajada",
+                "igual ao total: o WebACL não está associado, ou está em Count, não Block"
+              ],
+              [
+                "5 · Cliente legítimo não percebeu nada",
+                "fileira de curl em endpoint normal",
+                "códigos normais (200/404), nenhum 403",
+                "um 403 aqui é falso positivo: revise o limite ou a chave de agregação"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "success",
+            "title": "A prova que fecha o argumento do módulo inteiro",
+            "content": "A prova 4 — contagem de requisições que de fato chegaram à task — é a que sustenta o núcleo pedagógico deste laboratório. As provas 1 a 3 mostram que o WAF funciona; a prova 4 mostra que ele funciona onde importa para o problema declarado: no número que aparece na fatura de Fargate, não só na métrica de segurança."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três acontecem de verdade, e as três parecem, à primeira vista, \"o WAF não está funcionando\". O que as separa é onde exatamente a decisão saiu errada."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Regra esquecida em Count",
+                "ative a regra de taxa e nunca troque a ação para Block",
+                "a fatura de Fargate continua alta mesmo com o WAF \"ativo\"",
+                "campo Action da regra no console ou no Terraform",
+                "trocar para Block depois de validar a amostra — Count não bloqueia nada"
+              ],
+              [
+                "Exceção com prioridade maior que o bloqueio geral",
+                "crie uma regra de bloqueio amplo com prioridade 5 e uma exceção específica com prioridade 20",
+                "cliente com IP fixo recebe 403 mesmo com a regra de exceção presente",
+                "ordem numérica das regras no WebACL",
+                "dar à exceção prioridade NUMERICAMENTE MENOR que a do bloqueio geral"
+              ],
+              [
+                "Bot distribuído por trás de muitos IPs",
+                "simule a rajada de vários IPs diferentes, cada um abaixo do limite individual",
+                "a métrica de bloqueio fica baixa e o volume total continua alto",
+                "contagem de requisições por IP nas amostras do WAF",
+                "considerar Bot Control, ou agregar por outra chave se a aplicação tiver identificador"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A falha que nenhuma métrica do WAF pega sozinha",
+            "content": "Se o security group do ALB aceitar qualquer coisa além do prefixo gerenciado da CloudFront, um atacante que descobre o nome de origem contorna o WAF inteiro — a métrica de bloqueio do WebACL fica ótima, e a fatura continua subindo, porque o tráfego nunca passou pela distribuição. Isso não é falha do WAF: é o pré-requisito do L05 não estando de fato garantido. Confira o security group do ALB sempre que a conta não bater com a métrica de bloqueio."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Uma API recebe um bot que faz login inválido repetidamente. A aplicação responde 401 rapidamente, e a equipe conclui que o custo está sob controle porque nenhuma requisição do bot chega a autenticar. Por que essa conclusão está incompleta?",
+        "options": [
+          "Porque 401 é um erro do cliente e por isso não aparece nas métricas de CloudWatch, escondendo o problema",
+          "Porque o Fargate já processou a requisição inteira — parse, middleware, verificação de credencial — antes de decidir responder 401, e esse processamento já foi cobrado",
+          "Porque toda requisição HTTP recebida gera automaticamente uma cobrança fixa da AWS, independente do que a aplicação faz com ela",
+          "Porque o 401 deveria ser 403, e o código de status errado é que gera custo extra"
+        ],
+        "correctIndex": 1,
+        "explanation": "A resposta certa é a segunda alternativa: o custo de computação já foi gasto no momento em que o Fargate decide responder 401 — a task recebeu a requisição, rodou o pipeline de middleware, tentou validar a credencial e só então formou a resposta de erro. Bloquear na aplicação impede o login indevido, mas não impede a computação que aconteceu para chegar a essa decisão; é exatamente por isso que barrar na borda, antes do ALB, é mais barato.\n\nA primeira alternativa confunde o problema: o código de status HTTP não determina o custo — 401, 403 ou 200 custam o mesmo vCPU-segundo se passaram pelo mesmo processamento; trocar o código não muda nada na fatura. A terceira inventa uma cobrança que não existe: a AWS não cobra por requisição HTTP recebida como evento isolado — cobra pelos recursos computacionais que ela efetivamente consome, e é justamente esse consumo que o enunciado descreve. A quarta erra o fato observável: requisições com status 401 aparecem normalmente nas métricas do ALB e do CloudWatch — a ausência de visibilidade não é o motivo do custo, e é fácil configurar um painel que mostre exatamente isso."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o que este laboratório protege, e o que continua exposto"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "WAF na borda muda o RISCO, não o elimina. A superfície que sobra depois deste módulo é menor, e vale nomear exatamente o que ainda não está coberto."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Bot consumindo capacidade computacional",
+                "alta",
+                "médio",
+                "regras gerenciadas + regra de taxa na borda",
+                "métrica BlockedRequests/AllowedRequests, anomalia de fatura",
+                "ajustar limite; se persistir, avaliar AWS WAF Bot Control"
+              ],
+              [
+                "Regra bloqueando cliente legítimo (falso positivo)",
+                "média",
+                "alto",
+                "testar toda regra em Count antes de Block; revisar amostra",
+                "queda de conversão, ou 403 relatado por cliente real",
+                "mover a regra de volta para Count, ajustar critério, reativar Block"
+              ],
+              [
+                "Bypass da origem, ignorando a borda inteira",
+                "baixa se o L05 está íntegro",
+                "alto",
+                "cabeçalho secreto de origem + security group restrito ao prefixo do CloudFront",
+                "CloudTrail e log de acesso direto ao ALB, fora do padrão da CloudFront",
+                "rotacionar o cabeçalho secreto (Secrets Manager)"
+              ],
+              [
+                "Ataque volumétrico além do que o Shield Standard cobre",
+                "baixa",
+                "alto",
+                "este laboratório NÃO resolve — é decisão de contratar Shield Advanced",
+                "métricas de rede da CloudFront, disponibilidade do serviço",
+                "acionar o time de resposta da AWS (DRT), se assinante do Advanced"
+              ],
+              [
+                "Dado sensível no log do WAF",
+                "média",
+                "alto",
+                "`redacted_fields` no cabeçalho `Authorization`",
+                "auditoria de amostra do bucket de log",
+                "purgar objeto exposto; ampliar a lista de campos redigidos"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O que o WAF não faz, e por que isso não é uma falha dele",
+            "content": "AWS WAF opera na camada de aplicação (7): conteúdo e taxa da requisição HTTP. Ele não substitui autenticação, não substitui autorização por recurso, e não decide se um usuário AUTENTICADO deveria ver um dado específico — isso é o L41 e o L90. Tratar o WAF como controle de acesso é confundir \"quem pode bater na porta\" com \"o que quem entrou pode fazer\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um painel de borda tem uma função estreita: dizer, em qualquer momento, o que está sendo barrado e se isso continua fazendo sentido. Métrica que não ajuda nessa decisão pertence a outro painel."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "Quanto tráfego está sendo bloqueado?",
+                "`BlockedRequests` por regra",
+                "volume de ataque, ou regra calibrada errada demais",
+                "variação abrupta > 3x a linha de base"
+              ],
+              [
+                "O bloqueio está pegando cliente legítimo?",
+                "`AllowedRequests` vs. conversão de negócio",
+                "queda de conversão sem queda de tráfego total é sinal de falso positivo",
+                "qualquer queda de conversão correlacionada com mudança de regra"
+              ],
+              [
+                "Alguma regra específica está disparando demais?",
+                "`CountedRequests`/`BlockedRequests` por `metric_name`",
+                "aponta qual das regras (gerenciada ou taxa) está reagindo ao tráfego atual",
+                "regra individual acima de 50% do total bloqueado"
+              ],
+              [
+                "O custo de computação caiu de fato?",
+                "`CPUUtilization`/`RunningTaskCount` do ECS antes e depois",
+                "confirma que o bloqueio na borda reduziu carga real, não só métrica de segurança",
+                "redução visível coincidindo com a ativação da regra em Block"
+              ],
+              [
+                "Existe tráfego chegando fora da CloudFront?",
+                "CloudTrail/logs de acesso direto ao ALB",
+                "indicaria bypass — o WAF inteiro estaria sendo contornado",
+                "qualquer ocorrência é investigável"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana logo depois de ativar Block",
+            "content": "Nos primeiros minutos depois de mudar uma regra de Count para Block, `BlockedRequests` sobe de zero para um número alto de uma vez — e isso é o comportamento ESPERADO, não um alarme de ataque em andamento. O alarme certo compara o volume bloqueado contra a contagem que a mesma regra já vinha registrando em Count; um salto ali, sim, é sinal de mudança real no tráfego."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão, e falha de AZ"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece com o bloqueio",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 req/s (linha de base da Cadência)",
+                "bot é ruído pequeno frente ao tráfego normal",
+                "a regra de taxa dificilmente dispara sozinha",
+                "regras gerenciadas já cobrem a maior parte; taxa fica como rede extra"
+              ],
+              [
+                "10 mil req/s",
+                "a regra de taxa passa a ser essencial, não opcional",
+                "um bot minimamente distribuído entre poucos IPs escapa do limite individual",
+                "calibrar o limite pelo p99 do tráfego legítimo medido, revisar semanalmente"
+              ],
+              [
+                "1 milhão req/s",
+                "CloudFront e WAF escalam pela própria natureza de rede de borda global",
+                "orçamento de unidades de capacidade do WebACL (WCU) por conta é um limite real",
+                "consultar Service Quotas antes de adicionar regra nova; considerar Bot Control"
+              ],
+              [
+                "Falha de AZ na origem",
+                "a decisão do WAF não muda em nada",
+                "a disponibilidade da origem (ALB/Fargate) é problema do L01/L02, não deste módulo",
+                "nada aqui: CloudFront e WAF são serviços de borda, desacoplados da AZ da origem"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O motivo estrutural por que falha de AZ não aparece nesta tabela como risco",
+            "content": "WAF e CloudFront não vivem numa AZ: são serviços de borda, distribuídos globalmente pela própria arquitetura da AWS. A decisão de bloquear ou permitir uma requisição não depende, em nenhum momento, de qual AZ da sua origem está de pé. É uma das poucas peças desta série cuja disponibilidade você não projeta — ela já vem assim."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta, e o que evita"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "É o primeiro laboratório da série em que uma seção de custo fala tanto do que se gasta quanto do que se deixa de gastar — e a segunda parte é o motivo do módulo existir."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "tráfego baixo, sem ataque ativo",
+                "WebACL base + duas regras gerenciadas + uma de taxa, poucas requisições inspecionadas",
+                "desprezível frente ao custo de computação que já existia",
+                "nenhuma; regras gerenciadas já cobrem a maior parte sem ajuste"
+              ],
+              [
+                "Produção pequena",
+                "volume da Cadência + rajadas ocasionais de bot",
+                "requisições inspecionadas crescem com TODO o tráfego, bloqueado ou não",
+                "previsível, cresce linear com o tráfego total",
+                "nenhuma regra adicional além das três; monitorar se WCU se aproxima do teto"
+              ],
+              [
+                "Alta escala",
+                "ataque sustentado ou tráfego legítimo muito maior",
+                "possível necessidade de Bot Control (cobrança adicional por requisição) ou mais regras",
+                "a linha do WAF cresce, mas a do Fargate CAI — é a troca que o módulo defende",
+                "escopar regras caras (Bot Control) só nas rotas que precisam, não no site inteiro"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "WebACL (protection pack)",
+                "taxa mensal fixa por WebACL",
+                "independe de volume; é o custo de existir, não de usar"
+              ],
+              [
+                "Regra no WebACL",
+                "taxa mensal por regra ativa",
+                "grupo de regras gerenciadas conta como conjunto, não uma taxa por regra individual dentro dele"
+              ],
+              [
+                "Requisição inspecionada",
+                "por milhão de requisições, bloqueadas ou permitidas",
+                "cresce com TODO o tráfego que passa pela CloudFront, não só com o que é barrado"
+              ],
+              [
+                "Armazenamento do log do WAF",
+                "GB armazenado no S3",
+                "log de 100% do tráfego em alto volume pode custar mais que o problema original — considere retenção curta"
+              ],
+              [
+                "Bot Control (opcional, não usado neste módulo)",
+                "por requisição inspecionada, adicional",
+                "só se justifica quando a regra de taxa simples já não segura o bot"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho de custo que aparece na fatura errada de procurar",
+            "content": "A economia deste laboratório não aparece na linha \"AWS WAF\" — aparece na linha \"Fargate\" ficando menor do que estaria sem o bloqueio na borda. É por isso que a prova 4 da seção de implantação compara requisições na task, não no WAF: o número que importa para o problema declarado é o que NÃO chegou lá."
+          }
+        },
+        {
+          "id": "b17_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O teto de WCU é quota, não preço — e vale conferir antes de crescer",
+            "content": "Cada regra consome unidades de capacidade do WebACL (WCU), e a conta tem um teto de WCU por WebACL. Regras gerenciadas costumam consumir mais WCU que uma regra de taxa simples como a deste módulo. Antes de adicionar uma quarta ou quinta regra, confira o consumo atual em Service Quotas — descobrir o teto no meio de um incidente é o pior momento possível para descobrir isso."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "regra testada em Count antes de Block, com registro completo da decisão",
+                "ninguém revisita o limite quando o padrão de tráfego legítimo muda",
+                "revisão periódica agendada da amostra e do limite (L08, observabilidade)",
+                "média"
+              ],
+              [
+                "Segurança",
+                "origem inalcançável fora da CloudFront, borda com regra gerenciada e de taxa, Shield Standard automático",
+                "cabeçalho secreto do L05 pode vazar ou ser versionado sem querer",
+                "rotação do cabeçalho via Secrets Manager (L04)",
+                "alta"
+              ],
+              [
+                "Confiabilidade",
+                "regra nova sempre validada em Count antes de Block",
+                "nenhum teste automatizado detecta regressão de regra no CI",
+                "requisição de smoke test no pipeline confirmando 200 depois de mudança de regra",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "avaliação ocorre no ponto de presença, sem round-trip perceptível",
+                "nenhum crítico identificado",
+                "nenhuma necessária agora",
+                "baixa"
+              ],
+              [
+                "Otimização de custos",
+                "bloqueio na borda evita computação; é o objetivo central do módulo",
+                "log de 100% do tráfego pode custar mais que o problema em volume muito alto",
+                "filtrar log só do que é bloqueado, ou reduzir retenção do bucket",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "menos computação desperdiçada em resposta a tráfego que não é cliente",
+                "nenhum novo",
+                "nenhuma necessária agora",
+                "baixa"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O padrão que se repete nos seis pilares",
+            "content": "Em quase toda linha desta tabela, a melhoria seguinte já está numerada em outro laboratório da série. Não é acaso: cada módulo resolve um risco específico e declara, explicitamente, qual risco continua aberto — é assim que a série evita a sensação de \"pronto\" que nenhum sistema de produção de fato alcança."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO a defesa de borda simples deixa de bastar. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do sem-filtro ao WAF orientado por dado — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Sem WAF, origem já fechada pelo L05. É onde a Cadência estava antes deste módulo, e continua legítimo enquanto não há tráfego malicioso mensurável.",
+                "note": "Risco resolvido: nenhum. Novo risco: todo tráfego, legítimo ou não, é computado igualmente. Custo: o mais baixo em infraestrutura de borda — e o mais alto em computação desperdiçada."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "WebACL com regras gerenciadas e regra de taxa por IP, Shield Standard automático, log de decisão.",
+                "note": "Risco resolvido: computação gasta com bot comum. Novo risco: falso positivo por regra mal calibrada, e bot distribuído por IP escapando da regra de taxa. Custo: WebACL, regras, requisição inspecionada — sem assinatura."
+              },
+              {
+                "label": "Nível 3 — Bot sofisticado",
+                "instruction": "AWS WAF Bot Control para fingerprinting e análise comportamental, escopado só nas rotas que o justificam (L86 trata guardrail e o limite do que um filtro protege).",
+                "note": "Risco resolvido: bot que rotaciona IP e imita comportamento humano. Novo risco: custo adicional por requisição inspecionada em toda rota coberta. Custo: cresce com volume total, não só com o bloqueado."
+              },
+              {
+                "label": "Nível 4 — Exposição financeira maior",
+                "instruction": "Shield Advanced: DRT dedicado, reembolso de pico de custo em ataque volumétrico confirmado, cobertura ampliada de camada 7.",
+                "note": "Risco resolvido: exposição financeira de um ataque volumétrico grande demais para o Shield Standard mitigar sozinho. Novo risco: assinatura mensal com compromisso, independente de haver ataque. Custo: fixo, mensal, mais o que a assinatura já cobre de WAF nos recursos protegidos."
+              },
+              {
+                "label": "Nível 5 — Plataforma e governança",
+                "instruction": "Firewall Manager centralizando WebACLs por várias contas, política obrigatória de regra mínima em toda distribuição nova.",
+                "note": "Risco resolvido: equipe nova esquecer de associar WAF a uma distribuição nova. Novo risco: política central bloqueando um caso legítimo que ninguém previu ao escrevê-la. Custo: cresce com o número de contas cobertas."
+              },
+              {
+                "label": "Nível 6 — Dados e IA sobre o padrão de tráfego",
+                "instruction": "Correlacionar amostras do WAF, métricas de negócio e histórico de incidente para sugerir ajuste de limite antes de a fatura subir (é a extensão tratada na seção seguinte).",
+                "note": "Risco resolvido: calibração de regra sempre reativa, depois do fato. Novo risco: modelo que ajusta limite automaticamente pode abrir demais numa janela de ataque real. Custo: baixo — o dado já existe no log do WAF."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não resolve o problema central. A decisão de bloquear por padrão conhecido (regra gerenciada) e por volume (regra de taxa) é determinística e cobre a maioria dos casos reais — um modelo não melhora \"esta requisição excedeu 2.000 num IP\" nem \"este payload casa com uma assinatura conhecida\"; isso já é aritmética e correspondência de padrão."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar em que IA acrescentaria valor real, e ele é o mesmo do L03: decidir QUANDO revisar e ajustar uma regra, não decidir se bloquear uma requisição específica. O AWS WAF Bot Control, mencionado na evolução em níveis, já usa técnicas de fingerprinting e heurística — mas isso é um produto gerenciado da AWS, não algo que este laboratório constrói."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "sugerir ajuste de limite antes de o tráfego legítimo crescer o bastante para começar a bater na regra de taxa"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "uma regra com revisão periódica agendada resolve a maior parte disso; IA só se justificaria se o padrão de tráfego legítimo mudasse com frequência maior do que uma revisão manual consegue acompanhar"
+              ],
+              [
+                "De onde viriam os dados?",
+                "log do WAF no S3, métricas de CloudWatch e histórico de conversão de negócio — tudo já existe depois deste laboratório"
+              ],
+              [
+                "Qual o risco?",
+                "ajustar automaticamente o limite numa janela em que o \"tráfego legítimo crescendo\" é, na verdade, um ataque mais lento e distribuído"
+              ],
+              [
+                "Por que não agora?",
+                "a Cadência tem semanas de dado, não meses; calibrar limite com pouco histórico é decisão com aparência de dado e corpo de palpite"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"olhar o tráfego e decidir se é bot\" no lugar da regra de taxa troca um critério auditável — 2.000 requisições por IP em 5 minutos, número que qualquer pessoa da equipe consegue verificar — por um probabilístico e opaco. Quando existe um sinal determinístico direto (volume por IP), um modelo só acrescenta latência e a chance de bloquear errado com confiança."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Regra de bloqueio geral com prioridade menor que a exceção",
+                "parece mais simples escrever a regra ampla primeiro, na ordem \"natural\" de leitura",
+                "a exceção nunca é avaliada, porque a regra ampla já terminou a avaliação antes",
+                "cliente com IP fixo bloqueado mesmo com a regra de exceção presente no WebACL",
+                "dar à exceção prioridade NUMERICAMENTE MENOR que a da regra geral",
+                "nunca é aceitável; é sempre defeito, não escolha de design"
+              ],
+              [
+                "Subir regra nova direto em Block",
+                "parece \"mais seguro\" ativar a proteção imediatamente, sem esperar",
+                "falso positivo bloqueia cliente real sem nenhum aviso prévio",
+                "queda de conversão sem nenhum erro visível na aplicação",
+                "Count primeiro, revisar a amostra, só então Block",
+                "nunca em produção; aceitável em ambiente isolado de teste sem tráfego real"
+              ],
+              [
+                "Rate limit só na aplicação, sem WAF na borda",
+                "não exige tocar infraestrutura nova, só código que o time já sabe escrever",
+                "a requisição já foi computada antes de o middleware decidir negar",
+                "fatura de Fargate sobe junto com o volume de respostas 429",
+                "bloquear na borda primeiro; middleware fica como segunda camada, para dependência específica",
+                "quando não há CDN nem edge na frente — não é o caso aqui, por causa do L05"
+              ],
+              [
+                "Confiar só no Shield contra bot de aplicação",
+                "\"Shield\" soa como a resposta completa para qualquer tipo de ataque",
+                "Shield Standard cobre rede e transporte (L3/4); scraping e credential stuffing são L7",
+                "ataque de aplicação continua passando mesmo com Shield \"ativo\" e sem alerta nenhum",
+                "WAF trata L7; Shield Advanced complementa com DRT e reembolso, não substitui o WAF",
+                "nunca; são camadas diferentes, sempre complementares"
+              ],
+              [
+                "Bot Control ligado em todas as rotas sem escopo",
+                "parece a proteção \"mais completa\" do catálogo de regras gerenciadas",
+                "cobra por requisição inspecionada, e rota estática (imagem, JS) não precisa dessa análise",
+                "fatura do WAF cresce mais que o problema original que se tentava resolver",
+                "escopar a regra por rota que de fato precisa da análise, não aplicar globalmente",
+                "quando o risco de bot sofisticado é uniforme em todo o site — raro"
+              ],
+              [
+                "Log de 100% do tráfego sem redação nem filtro",
+                "é o padrão que aparece primeiro ao configurar logging pelo console",
+                "guarda dado sensível (Authorization) e cresce sem necessidade real",
+                "bucket de log maior que o bucket de dado de produção da aplicação",
+                "`redacted_fields` no cabeçalho sensível; considerar retenção curta",
+                "ambiente de baixíssimo volume, onde o custo de armazenamento é irrelevante"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "O anti-padrão mais caro da lista, e por que ele passa despercebido",
+            "content": "Bot Control ligado sem escopo é o único item desta tabela que gera fatura crescente mesmo fazendo exatamente o que promete: bloquear bot melhor. O problema não é eficácia — é abrangência. Inspecionar uma rota estática que nenhum bot sofisticado ataca custa por requisição, o tempo todo, para um benefício que só existe nas rotas que de fato precisam dessa análise."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Fatura de Fargate continua alta com WAF \"ativo\"",
+                "a regra de taxa está em Count, nunca bloqueia de fato",
+                "confira a ação configurada na regra",
+                "campo Action da regra, no console ou no Terraform",
+                "mudar para Block depois de validar a amostra"
+              ],
+              [
+                "Cliente com IP fixo bloqueado mesmo com regra de exceção",
+                "prioridade da regra de bloqueio geral é menor (avaliada antes) que a da exceção",
+                "compare a ordem numérica das regras no WebACL",
+                "lista de regras por prioridade",
+                "dar prioridade menor à exceção"
+              ],
+              [
+                "Bot continua passando apesar da regra de taxa",
+                "bot distribui requisições entre muitos IPs, cada um abaixo do limite individual",
+                "conte requisições por IP nas amostras do WAF",
+                "campo de IP de origem nas sampled requests",
+                "considerar Bot Control, ou agregar por chave diferente se disponível"
+              ],
+              [
+                "Usuários legítimos atrás do mesmo proxy corporativo bloqueados em massa",
+                "a regra de taxa agrega por IP, e o proxy concentra muitos usuários num único IP",
+                "compare quantos usuários distintos correspondem ao IP bloqueado",
+                "log de acesso da aplicação vs. amostra do WAF",
+                "elevar o limite para aquele intervalo, ou agregar por outra chave"
+              ],
+              [
+                "Métrica de bloqueio sobe, mas a fatura de Fargate não cai",
+                "existe caminho direto até o ALB, fora da CloudFront",
+                "confira se o security group do ALB aceita algo além do prefixo do CloudFront",
+                "regras do security group do ALB, CloudTrail de acesso à origem",
+                "revisar o cabeçalho secreto e a lista de prefixo gerenciada do L05"
+              ],
+              [
+                "WebACL não aparece como opção ao associar a distribuição",
+                "o WebACL foi criado fora de us-east-1",
+                "confira a região em que o recurso foi criado",
+                "console ou CLI com `--region us-east-1 --scope CLOUDFRONT`",
+                "recriar em us-east-1; não há como mover um WebACL de região"
+              ],
+              [
+                "Log do WAF não aparece no bucket configurado",
+                "nome do bucket não começa com `aws-waf-logs-`",
+                "confira o nome exato do destino configurado",
+                "atributo `log_destination_configs` no Terraform",
+                "renomear o bucket seguindo a convenção obrigatória"
+              ],
+              [
+                "Alarme de bloqueio dispara para tráfego que parece legítimo",
+                "regra gerenciada com falso positivo para um padrão específico do seu produto",
+                "identifique qual regra específica do grupo gerenciado correspondeu",
+                "campo `terminatingRuleId` nas sampled requests",
+                "excluir a regra específica via override, ou adicionar uma condição de escopo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em regra, pergunte: a métrica do WAF e a fatura do Fargate contam a mesma história? Se o WAF mostra bloqueio alto e a fatura não cai, o problema é bypass — o tráfego não está passando pela borda. Se a fatura cai mas cliente real reclama, o problema é falso positivo — a regra está bloqueando demais."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório acrescenta poucos recursos novos sobre o L05, e a maioria deles não cobra parado. O que sobra depois do `terraform destroy` é pequeno, mas vale a prova."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Derrube o que o Terraform administra.\nterraform destroy -auto-approve\n\n# 2. BUCKET DE LOG DO WAF: se `force_destroy` estiver desligado, o destroy falha\n#    com o bucket cheio, e ele fica de pe cobrando GB armazenado.\naws s3 ls | grep aws-waf-logs\naws s3 rm \"s3://aws-waf-logs-ffv-lab-<conta>\" --recursive 2>/dev/null || true\naws s3api delete-bucket --bucket \"aws-waf-logs-ffv-lab-<conta>\" 2>/dev/null || true\n\n# 3. Confirme que o WebACL, criado em us-east-1, realmente saiu — regiao errada\n#    na consulta e o motivo mais comum de \"esqueci de apagar\".\naws wafv2 list-web-acls --scope CLOUDFRONT --region us-east-1 \\\n  --query \"WebACLs[?Name=='ffv-lab-borda']\" --output table\n\n# 4. O que veio do L05 e do L01 continua cobrando por hora se voce nao for\n#    seguir para outro laboratorio: CloudFront, ALB, RDS, NAT Gateway.\n#    Rode a limpeza deles tambem.\n\n# 5. Prova final: nada com o nome do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "WebACL e regras",
+                "sim",
+                "não",
+                "nenhum estado residual sobrevive à remoção do recurso"
+              ],
+              [
+                "Bucket de log do WAF",
+                "só com `force_destroy`",
+                "sim, GB-mês",
+                "o destroy falha se houver objeto dentro; log acumulado em alto volume não é pequeno"
+              ],
+              [
+                "Configuração de logging do WebACL",
+                "sim",
+                "não",
+                "é configuração associada ao WebACL, não recurso independente"
+              ],
+              [
+                "Shield Standard",
+                "não se aplica",
+                "não",
+                "não é um recurso que se cria nem se destrói — é proteção automática da conta"
+              ],
+              [
+                "O que vem do L05 (CloudFront, ALB) e do L01 (RDS, NAT)",
+                "depende do módulo",
+                "sim, por hora ou por GB",
+                "este laboratório não os recria; confira a limpeza deles separadamente"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Fatura de Fargate sobe sem venda correspondente",
+                "WebACL na borda",
+                "requisição bloqueada nunca vira vCPU-segundo — o custo evitado é o objetivo direto"
+              ],
+              [
+                "Scraping com requisição bem formada",
+                "regra baseada em taxa por IP",
+                "não depende de conteúdo malicioso, só de volume — pega o que a regra gerenciada não pega"
+              ],
+              [
+                "Tentativa de exploração de vulnerabilidade conhecida",
+                "AWS Managed Rules",
+                "mantidas e atualizadas pela AWS; cobre padrão de ataque sem escrever regra própria"
+              ],
+              [
+                "Risco de bloquear cliente legítimo sem aviso",
+                "Count antes de Block",
+                "testar sem risco é o que separa uma regra confiável de uma aposta"
+              ],
+              [
+                "Exceção que nunca é avaliada",
+                "prioridade numérica correta",
+                "ordem de avaliação decide, não a intenção de quem escreveu a regra"
+              ],
+              [
+                "Ataque volumétrico de rede",
+                "Shield Standard",
+                "já incluído, cobre a camada que o WAF não cobre, sem custo adicional"
+              ],
+              [
+                "Auditoria do que foi bloqueado",
+                "log do WebACL em S3",
+                "registro por regra, sem precisar reprocessar nada para saber o que aconteceu"
+              ],
+              [
+                "Dado sensível em log de tráfego",
+                "`redacted_fields`",
+                "redação por campo específico, não a escolha entre logar tudo ou nada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Requisição computada antes de ser negada",
+                "bloqueio na borda (WebACL)",
+                "bot que já contornou a origem por bypass — depende do L05 estar íntegro"
+              ],
+              [
+                "Padrão conhecido de ataque",
+                "AWS Managed Rules",
+                "volume alto de requisição bem formada"
+              ],
+              [
+                "Volume alto de um mesmo IP",
+                "regra baseada em taxa",
+                "bot distribuído por muitos IPs"
+              ],
+              [
+                "Ataque volumétrico de rede/transporte",
+                "Shield Standard",
+                "ataque de aplicação (camada 7)"
+              ],
+              [
+                "Cliente legítimo bloqueado sem aviso",
+                "validação em Count antes de Block",
+                "regra recalibrada errado depois de meses sem revisão"
+              ],
+              [
+                "Bypass da distribuição",
+                "cabeçalho secreto + prefix list do L05",
+                "security group do ALB alterado manualmente fora do Terraform"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "A requisição chega ao ponto de presença da CloudFront.",
+              "Como há WebACL associado, o WAF avalia as regras por prioridade crescente.",
+              "A regra gerenciada corresponde a padrão conhecido de ataque, ou não corresponde a nada.",
+              "A regra de taxa conta o IP na janela de 5 minutos e compara com o limite.",
+              "Se alguma regra tem ação de término (Allow ou Block) e corresponde, a avaliação para ali.",
+              "Bloqueada: a decisão é registrada no log e a requisição nunca chega ao ALB.",
+              "Permitida: segue para o ALB, que já recusa quem não veio da CloudFront (L05).",
+              "Só então a task processa a requisição — e só então existe custo de computação.",
+              "A métrica de BlockedRequests do WebACL é o número que devolve o custo evitado."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Preciso do Shield Advanced para me proteger de bot que consome computação?",
+            "answer": "Não é necessário na maioria dos casos: Shield Standard já vem incluído sem custo adicional e cobre ataques de rede e transporte (camadas 3 e 4) para CloudFront, Route 53 e Global Accelerator. O bot que consome capacidade de computação — scraping, credential stuffing, abuso de endpoint — opera na camada de aplicação (7), e quem trata isso é o AWS WAF, não o Shield. Shield Advanced adiciona resposta dedicada (DRT) e reembolso de picos de custo durante ataque volumétrico confirmado, o que só se justifica quando a exposição financeira de um ataque grande supera o valor da assinatura mensal."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Por que bloquear na aplicação não resolve o problema de custo do bot?",
+            "answer": "Porque, no momento em que a aplicação decide bloquear, ela já rodou: o Fargate já processou a requisição, passou pelo pipeline de middleware e, às vezes, tentou validar credencial — tudo isso consumindo vCPU-segundo, mesmo que a resposta final seja 401 ou 429. Um middleware de rate limiting dentro do ASP.NET Core continua tendo valor como segunda camada — protege o banco de abuso de um endpoint específico, por exemplo —, mas não evita o custo de computação já gasto para chegar até ali. Bloquear na borda, antes de a requisição alcançar o Application Load Balancer, é o que de fato impede o gasto."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Qual a diferença entre regra gerenciada e regra baseada em taxa no AWS WAF?",
+            "answer": "A regra gerenciada (AWS Managed Rules) reconhece padrões conhecidos de ataque — assinatura de injeção, entrada inválida associada a exploração — mantidos e atualizados pela AWS, e bloqueia por CONTEÚDO da requisição, independente de volume. A regra baseada em taxa bloqueia por VOLUME — quantas requisições um mesmo IP enviou numa janela de tempo —, independente de o conteúdo parecer bem formado. Um bot que faz scraping devagar com requisições legítimas em formato passa pelas regras gerenciadas e é pego pela de taxa; um ataque de injeção isolado passa pela de taxa e é pego pelas gerenciadas. As duas são complementares, não alternativas."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Por que a ordem das regras no WebACL importa tanto?",
+            "answer": "Porque o AWS WAF avalia as regras em ordem crescente de prioridade numérica e para na primeira que tiver uma ação de término — Allow ou Block —, sem avaliar as regras seguintes. Se uma regra geral de bloqueio tem prioridade menor (é avaliada antes) que uma regra de exceção específica, a exceção nunca roda: o bloqueio geral já encerrou a decisão ali mesmo. É o erro mais comum ao adicionar uma exceção depois que o WebACL já está em produção — a regra nova entra com prioridade alta demais para ser alcançada, e quem escreveu conclui, errado, que a exceção \"não funciona\"."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "O que o modo Count faz, e quando devo usar?",
+            "answer": "Count registra que a requisição bateu naquela regra e deixa a avaliação continuar para as regras seguintes, sem bloquear nada — é o modo de testar uma regra nova sem risco de derrubar tráfego legítimo. A prática recomendada é subir toda regra nova em Count, observar a amostra de requisições que ela capturaria por um período representativo do seu tráfego real, e só então mudar a ação para Block. Pular essa etapa é a causa mais comum de cliente real bloqueado sem aviso, porque o efeito colateral só aparece quando a regra já está bloqueando de verdade."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Um WebACL para o CloudFront tem que ser criado numa região específica?",
+            "answer": "Sim: para o escopo CLOUDFRONT, o WebACL e todos os recursos associados a ele — grupos de regra, conjuntos de IP — têm de ser criados na região Leste dos EUA (Norte da Virgínia), us-east-1, independentemente de onde os visitantes da distribuição estejam. É a mesma exigência que o certificado do ACM tem no L05: CloudFront é um serviço global, mas a API de gestão de parte dos recursos que ele consome fica fixada em us-east-1. Esquecer isso faz o WebACL simplesmente não aparecer como opção ao associar a distribuição."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Uma regra de taxa bloqueia o IP para sempre depois que ele estoura o limite?",
+            "answer": "Não permanentemente: a regra reavalia a contagem numa janela deslizante — 1, 2, 5 ou 10 minutos, conforme o valor configurado — olhando sempre para trás a partir do momento atual. Assim que o volume de requisições daquele IP cai abaixo do limite dentro da janela, o bloqueio deixa de se aplicar automaticamente, sem intervenção manual. Vale registrar que o AWS WAF estima a taxa com um algoritmo que dá mais peso a requisições recentes, então o limite configurado é aproximado, não uma contagem exata e instantânea — não espere que o bloqueio ocorra na milésima requisição cravada."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Habilitar o WAF adiciona latência perceptível à resposta?",
+            "answer": "Não de forma perceptível para o usuário: a avaliação acontece no próprio ponto de presença da CloudFront por onde a requisição já passa, sem round-trip adicional a outro serviço ou região. O custo real de adicionar uma regra não é latência — é o orçamento de unidades de capacidade do WebACL, que tem um teto por conta, e a taxa cobrada por milhão de requisições inspecionadas, que cresce com o volume total de tráfego, bloqueado ou não. A documentação consultada para este módulo não cita um número de latência específico, e por isso este módulo também não afirma um: meça no seu ambiente comparando o tempo de resposta com e sem o WebACL associado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Um WebACL tem duas regras: uma bloqueia todo tráfego de fora do Brasil (prioridade 5) e outra permite explicitamente o IP fixo de um parceiro internacional (prioridade 20). O parceiro reporta que continua recebendo 403. Qual é a causa mais provável?",
+            "options": [
+              "O parceiro está usando HTTP em vez de HTTPS, e o WAF só avalia requisições seguras",
+              "A regra de bloqueio geográfico tem prioridade numérica menor, então é avaliada primeiro e encerra a avaliação antes de a regra de exceção do parceiro ser alcançada",
+              "A regra de exceção só funciona se estiver em modo Count, não em modo Block",
+              "O parceiro precisa estar numa lista de IP separada, porque regras Allow e Block não podem coexistir no mesmo WebACL"
+            ],
+            "correctIndex": 1,
+            "explanation": "A causa é a ordem de avaliação: o AWS WAF processa as regras da menor para a maior prioridade numérica e para na primeira que tiver ação de término — Allow ou Block. Com a regra de bloqueio geográfico em prioridade 5 e a exceção do parceiro em prioridade 20, a regra de bloqueio é avaliada primeiro, encontra correspondência (tráfego de fora do Brasil), bloqueia e termina ali — a exceção, com prioridade mais alta e por isso avaliada depois, nunca chega a rodar. A correção é atribuir à exceção uma prioridade numericamente MENOR que a do bloqueio geral.\n\nA primeira alternativa inventa uma restrição que não existe: o WAF avalia requisições HTTP e HTTPS igualmente, sem tratamento especial por protocolo nessa decisão. A terceira também é falsa: Allow e Block convivem livremente no mesmo WebACL — é a estrutura normal de qualquer conjunto de regras com exceções, e listas de IP separadas não são exigidas para isso. A quarta inverte a lógica do Count: uma regra em Count nunca bloqueia nem permite de forma terminante — ela só registra e deixa a avaliação continuar —, então colocar a exceção em Count faria o oposto do que o parceiro precisa, que é uma decisão terminante de Allow."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "A equipe da Cadência configura uma regra de taxa agregando por endereço IP, com limite de 2.000 requisições em 5 minutos. Depois de ativar, vários funcionários de um grande cliente corporativo — todos atrás do mesmo proxy da empresa — começam a receber 403. O que está acontecendo, e qual é a correção mais direta?",
+            "options": [
+              "A regra de taxa conta requisições por IP, e o proxy corporativo concentra o tráfego de muitos usuários legítimos num único IP, que soma volume suficiente para estourar o limite pensado para um usuário só",
+              "O Shield Standard está classificando o proxy corporativo como origem de DDoS; é preciso contratar o Shield Advanced",
+              "O grupo de regras gerenciadas está bloqueando o proxy por reputação de IP, e isso não tem relação com a regra de taxa",
+              "O limite de 2.000 requisições está definido em bytes, não em contagem, e o proxy excede o volume de dados permitido"
+            ],
+            "correctIndex": 0,
+            "explanation": "A explicação correta é a segunda: a regra de taxa agrega e conta por endereço IP, e um proxy corporativo é, do ponto de vista da regra, um único IP — todo o tráfego de dezenas ou centenas de funcionários se soma nessa mesma contagem. Um limite pensado para o comportamento de um usuário estoura rápido quando na verdade representa muitos usuários atrás do mesmo ponto de saída. A correção mais direta é elevar o limite para acomodar a faixa esperada daquele cliente, ou trocar a chave de agregação para algo que distinga usuários dentro do mesmo IP, quando a aplicação tiver esse identificador.\n\nA primeira alternativa erra o serviço responsável: Shield Standard atua nas camadas de rede e transporte (3 e 4) e não tem noção de contagem de requisição por IP na camada de aplicação — quem faz isso é o WAF, e contratar o Shield Advanced não muda nada neste cenário. A terceira confunde dois mecanismos distintos: regra de taxa e regra gerenciada por reputação são configurações independentes, e o enunciado não menciona nenhuma regra de reputação ativa. A quarta inventa uma unidade errada: o limite de uma regra baseada em taxa é sempre expresso em CONTAGEM de requisições dentro da janela de avaliação, nunca em bytes transferidos."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L05 no ar (CloudFront, ALB, origem fechada por cabeçalho secreto e prefix list); noções básicas de HTTP, Terraform e ASP.NET Core"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "por que bloquear na aplicação não evita custo de computação já gasto; a diferença entre regra gerenciada e regra de taxa; ordem de avaliação por prioridade e o efeito numa exceção mal posicionada; Count como teste seguro antes de Block; Shield Standard vs Advanced"
+              ],
+              [
+                "Limitação que fica",
+                "a regra de taxa por IP trata proxy corporativo como um usuário só, e bot distribuído por muitos IPs escapa do limite individual — os dois exigem ajuste manual ou Bot Control"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L90 — prompt injection e vazamento entre inquilinos. Reutiliza a camada de borda construída aqui e trata a fronteira seguinte: uma requisição que passa pelo WAF mas carrega intenção maliciosa dentro do conteúdo que um sistema de IA processa"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L86 (guardrails: o que protege e o que não protege) usa a mesma distinção entre filtro de borda e controle de aplicação; L48 (detecção com GuardDuty/Security Hub) consome o log deste WebACL como uma das fontes de achado"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Using rate-based rule statements in AWS WAF",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "Rate-based rule high-level settings",
+                "code": true
+              },
+              {
+                "text": " — a janela de avaliação (60 a 600 s, padrão de 5 min) e o algoritmo de estimativa que pesa requisições recentes; "
+              },
+              {
+                "text": "Setting rule priority",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "How AWS WAF handles rule and rule group actions",
+                "code": true
+              },
+              {
+                "text": " — a ordem de avaliação por prioridade crescente e a diferença entre ação terminante (Allow/Block) e não terminante (Count); "
+              },
+              {
+                "text": "AWS Shield Standard overview",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "AWS Shield Advanced overview",
+                "code": true
+              },
+              {
+                "text": " — o que cada nível cobre e o reembolso de custo do Advanced; "
+              },
+              {
+                "text": "Resources that you can protect with AWS WAF",
+                "code": true
+              },
+              {
+                "text": " — a exigência de us-east-1 para o escopo CLOUDFRONT; e "
+              },
+              {
+                "text": "Logging destinations for AWS WAF",
+                "code": true
+              },
+              {
+                "text": " — a convenção obrigatória de nome do bucket e o mecanismo de redação de campo. Valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "O limite de 2.000 requisições por IP em 5 minutos usado nos exemplos deste módulo é derivado do volume fictício da Cadência, não de uma recomendação oficial de valor — ele deve ser calibrado a partir do PRÓPRIO tráfego legítimo medido, com folga para o maior cliente conhecido atrás de IP compartilhado. A documentação também não deixa explícito, nas páginas consultadas, se a avaliação do WAF ocorre de forma idêntica em cache hit e cache miss da CloudFront para todo tipo de comportamento de cache; trate isso como não confirmado e, se depender dessa distinção, valide diretamente no seu ambiente."
+          }
+        }
+      ]
+    }
+  ]
+}

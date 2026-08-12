@@ -1,0 +1,2479 @@
+{
+  "slug": "lab-blue-green-canario-codedeploy-ecs",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência, do "
+              },
+              {
+                "text": "L03",
+                "code": true
+              },
+              {
+                "text": ", cresceu: de trinta para trezentas lojas, e o rolling update com tag imutável e disjuntor de implantação virou rotina — várias publicações por dia, sem drama. Um deploy recente introduziu uma consulta extra por item de um pedido, um N+1 disfarçado de refatoração pequena."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "A rota "
+              },
+              {
+                "text": "/health/ready",
+                "code": true
+              },
+              {
+                "text": " aprovou a task normalmente: uma conexão ao banco é barata, e o disjuntor de implantação não interveio, porque o rollout ESTABILIZOU — exatamente o limite do disjuntor que o L03 já havia nomeado. O problema só apareceu na hora de pico, quando trinta e poucas requisições simultâneas esgotaram o pool de conexões do banco e o p99 disparou para segundos. Àquela altura, o excedente do rolling update já tinha deslocado a maior parte do tráfego para a versão nova."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O defeito não é o N+1 em si — é que nada no L03 tinha COMO pegá-lo antes de expor a maioria dos clientes. Prontidão testa uma conexão; o rolling update desloca tráfego assim que os primeiros alvos passam nela. \"Deploy ruim só aparece com 100% do tráfego dentro\" é o resumo exato do que a Cadência viveu."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado — depende do L03 (tag imutável, disjuntor) e do L18 (migration aditiva)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L03 concluído e no ar; noção de listener e grupo de destino de ALB"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 50 min · implementação 2 h a 2 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Médio: a frota verde inteira convive com a azul por minutos a cada deploy — mais que o excedente parcial do L03"
+              },
+              {
+                "k": "Serviços",
+                "v": "CodeDeploy, ECS Fargate, ALB (dois grupos de destino, dois listeners), CloudWatch, Lambda"
+              },
+              {
+                "k": "Volume atual",
+                "v": "300 lojas, cerca de 90 mil requisições/dia, pico de hora cheia em torno de 60-70 req/min"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "um defeito de concorrência não pode atingir a maioria dos clientes antes de ser detectado"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "as migrations continuam aditivas (herdado do L18) — este módulo não resolve schema incompatível"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "um deploy canário com CodeDeploy que reverte sozinho ao injetar uma falha de concorrência na frota verde, com a prova gravada"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é uma reescrita do L03 com nomes diferentes. O rolling update continua sendo a resposta certa para a maioria dos deploys da Cadência — este módulo resolve um problema específico que ele não resolve: limitar a exposição de um defeito que só aparece sob carga real. E não é blue/green \"porque é mais robusto\": blue/green direto (all-at-once) tem o MESMO problema de exposição total que o rolling update, só que mais rápido — quem resolve o problema declarado é o canário."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que um defeito de concorrência passa no health check do L03 sem ser notado.",
+              "Distinguir estruturalmente rolling update (L03) de blue/green: uma frota substituída aos poucos contra duas frotas completas convivendo.",
+              "Nomear o que o listener de teste valida que o health check não valida.",
+              "Configurar um deployment canário e explicar por que ele resolve o problema declarado e o blue/green direto não.",
+              "Escopar um alarme de CloudWatch no grupo de destino verde, e explicar por que escopá-lo errado faz o alarme nunca disparar.",
+              "Diferenciar o alarme do CodeDeploy do disjuntor de implantação do L03, incluindo por que eles não coexistem no mesmo serviço.",
+              "Provar, com falha injetada, que a reversão automática limita a exposição a uma fatia e a uma janela.",
+              "Explicar por que `deployment_controller = CODE_DEPLOY` exige `ignore_changes` no Terraform do serviço ECS."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Blue/green vs rolling update",
+                "DVA-C02, SAP-C02",
+                "duas frotas completas convivendo, contra substituição gradual",
+                "blue/green cria a frota nova INTEIRA antes de expor qualquer tráfego"
+              ],
+              [
+                "Deployment configurations do CodeDeploy",
+                "DVA-C02, DOP-C02",
+                "canário 10%/5min escolhido sobre linear e all-at-once",
+                "canário = 2 incrementos; linear = incrementos iguais; all-at-once = tudo de uma vez"
+              ],
+              [
+                "Listener de produção vs listener de teste",
+                "DVA-C02, SOA-C02",
+                "o de teste valida a frota verde antes de expor cliente real",
+                "os dois moram no mesmo balanceador; só o de produção é obrigatório"
+              ],
+              [
+                "Restrição de NLB para canário",
+                "SAA-C03, DVA-C02",
+                "a decisão de usar ALB em vez de NLB neste desenho",
+                "Network Load Balancer só suporta CodeDeployDefault.ECSAllAtOnce"
+              ],
+              [
+                "Alarme do CodeDeploy vs disjuntor de implantação",
+                "DOP-C02, SAP-C02",
+                "dois mecanismos de reversão, para dois tipos de controlador de serviço",
+                "deployment_controller CODE_DEPLOY e ECS (rolling) não coexistem no mesmo serviço"
+              ],
+              [
+                "Hooks do AppSpec para ECS",
+                "DVA-C02",
+                "AfterAllowTestTraffic valida a frota verde com tráfego real",
+                "a ordem dos cinco hooks, e que só um deles foi usado aqui de propósito"
+              ],
+              [
+                "Termination wait time da frota azul",
+                "DVA-C02, SAP-C02",
+                "janela de retenção depois do deploy bem-sucedido",
+                "teto de 2880 minutos; sem padrão documentado, decisão explícita"
+              ],
+              [
+                "Rollback: reapontar listener vs reconstruir",
+                "SAP-C02",
+                "a reversão automática troca uma regra de listener, não reimplanta imagem",
+                "por que isso é mais rápido que o rollback por revisão anterior do L03"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve um serviço com Network Load Balancer configurado com um deployment configuration de canário, e pergunta por que a implantação falha ao ser criada. A resposta não é sobre alarme nem sobre IAM: NLB só suporta CodeDeployDefault.ECSAllAtOnce. Canário e linear exigem Application Load Balancer, porque dependem de regras de listener por peso que o NLB (camada 4) não modela."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito não funcional que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Defeito de concorrência detectado antes de atingir a maioria",
+                "exposição inicial ≤ 10%, por janela observável",
+                "canário (2 incrementos) em vez de linear ou all-at-once"
+              ],
+              [
+                "Rollback mais rápido que reconstruir",
+                "segundos, não minutos",
+                "duas frotas completas convivendo; reversão = trocar listener, não recriar task"
+              ],
+              [
+                "Validar a frota verde com tráfego real sem expor cliente",
+                "obrigatório",
+                "listener de teste, com origem restrita por security group ao hook de validação"
+              ],
+              [
+                "Reversão sem intervenção humana",
+                "durante toda a janela de canário",
+                "alarme do alvo verde + auto_rollback_configuration com DEPLOYMENT_STOP_ON_ALARM"
+              ],
+              [
+                "Migration continua aditiva (herdado do L18)",
+                "compatibilidade por MAIS tempo que o L03",
+                "a janela de canário (5-15 min) supera em muito a drenagem em segundos do L03 — a restrição fica mais severa, não desaparece"
+              ],
+              [
+                "Escala atual: 300 lojas, ~90 mil req/dia",
+                "pico concentrado em hora cheia",
+                "período do alarme em 60 s, para não perder o sinal dentro dos 5 min do primeiro incremento"
+              ],
+              [
+                "Orçamento: capacidade extra só durante o deploy",
+                "sim",
+                "termination_wait_time curto (30 min) — a frota azul dobra o custo enquanto existe"
+              ],
+              [
+                "Rastreável: qual revisão estava em cada fatia de tráfego",
+                "auditável",
+                "AppSpec registra o ARN exato da task definition; CloudTrail registra quem chamou CreateDeployment"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b3_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A restrição do L18 não desaparece — ela fica mais cara de ignorar",
+            "content": "No L03, duas versões conviviam por segundos, o tempo da drenagem. Aqui elas convivem pelos 5 a 15 minutos da janela de canário, ou até 48 horas se a frota azul for mantida por retenção longa. Uma migration destrutiva que \"quase não dava problema\" com a janela curta do L03 tem muito mais tempo para colidir com a versão antiga aqui."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o que a Cadência já tem, e por que não basta"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O "
+              },
+              {
+                "text": "L03",
+                "code": true
+              },
+              {
+                "text": " já cobriu o rolling update em profundidade — os três relógios, a ordem entre drenagem e SIGTERM, a prova de zero erro de cliente. O desenho abaixo é o mesmo resumido ao que ESTE módulo precisa contrastar: uma frota, um grupo de destino, sem segunda frota nem listener de teste."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Uma frota só, um grupo de destino, substituição gradual",
+            "caption": "É o desenho do L03, resumido ao que este módulo precisa contrastar: existe UMA frota e UM grupo de destino, e a task nova nasce dentro dele, ao lado da velha, sem uma segunda frota para testar antes. Percorra os passos: nenhum deles impõe um teto de quanto tráfego real a versão nova recebe.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "dev",
+                    "service": "ide",
+                    "label": "update-service --force-new-deployment",
+                    "note": "chama a API do próprio ECS — não existe orquestrador externo decidindo o ritmo"
+                  },
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente",
+                    "note": "qualquer requisição pode cair na versão nova assim que ela passa no health check"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — pública: um ALB, um grupo de destino",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB, um único listener",
+                    "note": "não existe listener de teste — todo tráfego que o alvo recebe é tráfego real de cliente"
+                  },
+                  {
+                    "id": "tg",
+                    "service": "targetgroup",
+                    "label": "Grupo de destino único",
+                    "note": "velha e nova convivem AQUI DENTRO durante a troca — não há um segundo grupo"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada: uma frota, duas versões convivendo",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "svc",
+                    "service": "ecs",
+                    "label": "Serviço ECS, rolling update nativo",
+                    "note": "controla o próprio ritmo de substituição; disjuntor de implantação disponível aqui"
+                  },
+                  {
+                    "id": "velha",
+                    "service": "fargate",
+                    "label": "Tasks da versão velha",
+                    "note": "perdem tasks conforme a nova sobe — nunca existem como frota separada e completa"
+                  },
+                  {
+                    "id": "nova",
+                    "service": "fargate",
+                    "label": "Tasks da versão nova",
+                    "note": "entra em produção assim que passa no health check — sem etapa de validação isolada antes"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "dev",
+                "to": "svc",
+                "label": "dispara nova revisão da task definition",
+                "style": "solid"
+              },
+              {
+                "from": "svc",
+                "to": "nova",
+                "label": "sobe a nova sem parar a velha",
+                "style": "solid"
+              },
+              {
+                "from": "svc",
+                "to": "velha",
+                "label": "reduz conforme a nova fica saudável",
+                "style": "solid"
+              },
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "HTTPS 443, sem saber qual versão vai responder",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "tg",
+                "label": "encaminha para qualquer alvo saudável do grupo único",
+                "style": "solid"
+              },
+              {
+                "from": "tg",
+                "to": "velha",
+                "label": "ainda recebe, até sair do grupo",
+                "style": "dashed"
+              },
+              {
+                "from": "tg",
+                "to": "nova",
+                "label": "passa a receber assim que o health check aprova",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Um comando, sem orquestrador externo",
+                "detail": "O próprio ECS decide o ritmo de substituição, dentro do par mínimo/máximo já configurado — não existe uma ferramenta separada decidindo quando avançar, testar ou reverter.",
+                "nodes": [
+                  "dev",
+                  "svc"
+                ],
+                "edges": [
+                  "dev>svc"
+                ]
+              },
+              {
+                "label": "As duas versões dividem o MESMO grupo de destino",
+                "detail": "Não há um segundo grupo esperando para receber a versão nova depois de validada — ela entra no grupo que já está recebendo tráfego real, junto com a velha.",
+                "nodes": [
+                  "svc",
+                  "nova",
+                  "velha"
+                ],
+                "edges": [
+                  "svc>nova",
+                  "svc>velha"
+                ]
+              },
+              {
+                "label": "Passou no health check, já é tráfego de cliente de verdade",
+                "detail": "Não existe listener de teste nem fatia controlada: a partir do momento em que a task nova responde à sondagem do grupo de destino, ela concorre pelo mesmo tráfego que a velha, sem teto de exposição.",
+                "nodes": [
+                  "tg",
+                  "nova"
+                ],
+                "edges": [
+                  "tg>nova"
+                ]
+              },
+              {
+                "label": "Reverter é reconstruir, não reapontar",
+                "detail": "Como a frota velha vai encolhendo conforme a nova sobe, não existe \"a frota de antes\" inteira e à espera. Reverter exige subir a versão anterior de novo — é o gap que o desenho de produção fecha.",
+                "nodes": [
+                  "user",
+                  "alb",
+                  "tg"
+                ],
+                "edges": [
+                  "user>alb",
+                  "alb>tg"
+                ]
+              },
+              {
+                "label": "Nenhuma peça aqui impõe um teto de exposição",
+                "detail": "O disjuntor de implantação e o alarme de 5xx do L03 decidem se o rollout ESTABILIZA — nenhum dos dois limita QUANTO tráfego real a versão nova recebe antes dessa decisão. Com duas tasks e máximo de 200%, a versão nova pode chegar perto de metade do tráfego já no primeiro ciclo. É esta ausência, e não a arquitetura em si, que motiva o desenho de produção.",
+                "nodes": [
+                  "svc",
+                  "nova",
+                  "tg"
+                ],
+                "edges": [
+                  "svc>nova",
+                  "tg>nova"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O que falta no desenho do L03, e é isso que motiva este módulo: nenhuma peça dele limita QUANTO tráfego real chega à versão nova antes de alguém — humano ou alarme — perceber um problema. O disjuntor mede se o rollout estabiliza; o alarme de 5xx mede o alvo; nenhum dos dois impõe um teto de exposição. Assim que os primeiros alvos passam no health check, o excedente do rolling update os expõe, e a proporção cresce rápido — com duas tasks e máximo de 200%, a versão nova pode chegar perto de metade do tráfego já no primeiro ciclo de substituição."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "O disjuntor de implantação não existe mais depois deste módulo",
+            "content": "Ao mudar o `deployment_controller` do serviço ECS de rolling (padrão) para `CODE_DEPLOY`, o campo `deployment_circuit_breaker` deixa de se aplicar — não é que ele fique desligado, é que a opção não existe para este tipo de controlador. Quem migra para blue/green assumindo que o disjuntor do L03 continua ativo por baixo publica sem NENHUMA rede de segurança automática até configurar o alarme e o `auto_rollback_configuration` deste módulo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção: duas frotas completas, um listener que troca"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A diferença estrutural em relação ao L03 não é uma caixa a mais — é a existência de uma SEGUNDA frota completa e de um SEGUNDO grupo de destino, coisa que o rolling update nunca tem."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Duas frotas completas, um listener que troca, um alarme que reverte",
+            "caption": "A frota verde nasce INTEIRA antes de qualquer cliente vê-la — não é uma task de cada vez, como no L03. O listener de teste prova a verde com tráfego real e sem plateia; o canário limita a exposição pública a uma fatia; e quando o alarme dispara, a reversão é reapontar o listener para a azul, que nunca parou de existir. Percorra os passos: cada um explica uma peça que o rolling update do L03 não tem.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "dev",
+                    "service": "ide",
+                    "label": "Commit + CreateDeployment",
+                    "note": "dispara o deploy chamando a API do CodeDeploy, não `update-service` do ECS"
+                  },
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente",
+                    "note": "só uma fatia dele vê a versão nova durante a janela do canário — nunca todos de uma vez"
+                  }
+                ]
+              },
+              {
+                "label": "Registro e orquestração",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ecr",
+                    "service": "ecr",
+                    "label": "ECR, tag imutável",
+                    "note": "a mesma disciplina do L03: identidade de imagem é o que o AppSpec referencia"
+                  },
+                  {
+                    "id": "codedeploy",
+                    "service": "codepipeline",
+                    "label": "CodeDeploy",
+                    "note": "orquestra a criação da frota verde, o teste, o deslocamento gradual e a reversão — o ECS sozinho não faz nada disso"
+                  },
+                  {
+                    "id": "hook",
+                    "service": "lambda",
+                    "label": "Hook AfterAllowTestTraffic",
+                    "note": "gera concorrência real contra a frota verde; é o que o health check do L03 nunca reproduziu"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — pública: um ALB, dois grupos de destino",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB: listener de produção + de teste",
+                    "note": "os dois listeners moram no MESMO balanceador; só o de produção é obrigatório"
+                  },
+                  {
+                    "id": "tg_blue",
+                    "service": "targetgroup",
+                    "label": "Grupo azul (atual)",
+                    "note": "recebe 100% até o deploy começar, e volta a receber 100% se o alarme disparar"
+                  },
+                  {
+                    "id": "tg_green",
+                    "service": "targetgroup",
+                    "label": "Grupo verde (novo)",
+                    "note": "existe vazio até o CodeDeploy criar o conjunto de tarefas verde e registrá-lo aqui"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada: as duas frotas completas, ao mesmo tempo",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "svc",
+                    "service": "ecs",
+                    "label": "Serviço ECS, deployment_controller=CODE_DEPLOY",
+                    "note": "delega a substituição de tasks ao CodeDeploy — o disjuntor de implantação do L03 não é opção neste tipo de serviço"
+                  },
+                  {
+                    "id": "azul",
+                    "service": "fargate",
+                    "label": "Frota azul (2 tasks)",
+                    "note": "intacta durante toda a janela: ninguém drena nem envia SIGTERM para ela até a decisão estar tomada"
+                  },
+                  {
+                    "id": "verde",
+                    "service": "fargate",
+                    "label": "Frota verde (2 tasks)",
+                    "note": "sobe ao tamanho total ANTES do primeiro cliente real, diferente do excedente parcial do L03"
+                  }
+                ]
+              },
+              {
+                "label": "Observação e reversão",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Alarme de 5xx do alvo VERDE",
+                    "note": "escopado ao grupo de destino verde — misturar com o azul faz o alarme nunca disparar"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "dev",
+                "to": "ecr",
+                "label": "push com tag = SHA do commit",
+                "style": "solid"
+              },
+              {
+                "from": "dev",
+                "to": "codedeploy",
+                "label": "CreateDeployment com a revisão (AppSpec)",
+                "style": "solid"
+              },
+              {
+                "from": "codedeploy",
+                "to": "svc",
+                "label": "CreateTaskSet: cria a frota verde inteira",
+                "style": "solid"
+              },
+              {
+                "from": "ecr",
+                "to": "verde",
+                "label": "pull por tag imutável",
+                "style": "dashed"
+              },
+              {
+                "from": "codedeploy",
+                "to": "hook",
+                "label": "invoca AfterAllowTestTraffic",
+                "style": "solid"
+              },
+              {
+                "from": "hook",
+                "to": "alb",
+                "label": "concorrência real pelo listener de TESTE",
+                "style": "dashed"
+              },
+              {
+                "from": "alb",
+                "to": "tg_green",
+                "label": "encaminha: teste, depois 10%, depois 100%",
+                "style": "dashed"
+              },
+              {
+                "from": "alb",
+                "to": "tg_blue",
+                "label": "listener de produção, o que ainda não migrou",
+                "style": "solid"
+              },
+              {
+                "from": "tg_blue",
+                "to": "azul",
+                "label": "tráfego de produção, sem interrupção",
+                "style": "solid"
+              },
+              {
+                "from": "tg_green",
+                "to": "verde",
+                "label": "tráfego de teste e depois de canário",
+                "style": "solid"
+              },
+              {
+                "from": "cw",
+                "to": "codedeploy",
+                "label": "DEPLOYMENT_STOP_ON_ALARM",
+                "style": "solid"
+              },
+              {
+                "from": "codedeploy",
+                "to": "tg_blue",
+                "label": "reversão: listener volta 100% para a azul",
+                "style": "dashed"
+              },
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "HTTPS 443",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A frota verde nasce inteira, antes de qualquer clique real",
+                "detail": "CreateTaskSet sobe o conjunto de tarefas verde ao tamanho TOTAL do serviço, num segundo grupo de destino vazio. Não há \"primeira task nova recebendo tráfego assim que passa no health check\", como no rolling update do L03 — a frota inteira existe antes de qualquer decisão de expor.",
+                "nodes": [
+                  "codedeploy",
+                  "svc",
+                  "verde"
+                ],
+                "edges": [
+                  "codedeploy>svc"
+                ]
+              },
+              {
+                "label": "O listener de teste valida com carga real, sem cliente exposto",
+                "detail": "O hook `AfterAllowTestTraffic` chama o listener de TESTE — o mesmo balanceador, uma porta diferente — com concorrência simulada. É o ponto que resolve o que o `/health/ready` do L03 nunca resolveu: confirmar não só que o processo responde, mas que ele aguenta carga concorrente sem esgotar o pool do banco.",
+                "nodes": [
+                  "hook",
+                  "alb",
+                  "tg_green",
+                  "verde"
+                ],
+                "edges": [
+                  "hook>alb",
+                  "alb>tg_green"
+                ]
+              },
+              {
+                "label": "O canário limita a exposição a uma fatia, não ao total",
+                "detail": "Com `CodeDeployDefault.ECSCanary10Percent5Minutes`, o listener de produção desloca 10% do tráfego para a verde e observa por 5 minutos antes de decidir o resto. É a peça que resolve \"deploy ruim só aparece com 100% do tráfego dentro\" — blue/green direto (all-at-once) não resolveria isto, só a velocidade da reversão.",
+                "nodes": [
+                  "alb",
+                  "tg_green"
+                ],
+                "edges": [
+                  "alb>tg_green"
+                ]
+              },
+              {
+                "label": "A frota azul não é drenada — ela fica de pé como plano B",
+                "detail": "Ao contrário da task velha do L03, que entra em `DEACTIVATING` assim que a nova é aprovada, a frota azul continua recebendo os 90% (ou o que sobrar) do tráfego durante toda a janela, e segue viva pelo período de retenção depois do deploy — é o que torna o rollback uma troca de rota, não uma reconstrução.",
+                "nodes": [
+                  "tg_blue",
+                  "azul"
+                ],
+                "edges": [
+                  "tg_blue>azul"
+                ]
+              },
+              {
+                "label": "O alarme mede o alvo VERDE, e dispara a reversão — não um novo deploy",
+                "detail": "O alarme de `HTTPCode_Target_5XX_Count`, escopado ao grupo de destino verde, aciona `DEPLOYMENT_STOP_ON_ALARM`. O CodeDeploy reage reapontando a regra do listener de produção 100% de volta para o grupo azul. Não há reconstrução de imagem nem revisão de task definition envolvida — é a mesma diferença entre \"apontar\" e \"reconstruir\" que o L03 ensinou sobre a tag imutável.",
+                "nodes": [
+                  "cw",
+                  "codedeploy",
+                  "tg_blue"
+                ],
+                "edges": [
+                  "cw>codedeploy",
+                  "codedeploy>tg_blue"
+                ]
+              },
+              {
+                "label": "Por que alguém pula o canário e vai direto para all-at-once",
+                "detail": "Porque é uma linha a menos de configuração e o deploy termina em segundos, não em cinco minutos. Funciona bem para migração de schema incompatível, onde as duas versões não podem conviver de qualquer jeito — e falha silenciosamente para o problema deste laboratório, porque 100% do tráfego ainda chega de uma vez, só que mais rápido.",
+                "nodes": [
+                  "dev",
+                  "codedeploy"
+                ],
+                "edges": [
+                  "dev>codedeploy"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O canário não é uma \"opção mais cautelosa\" do blue/green — é a peça que resolve o problema declarado. Blue/green direto (all-at-once) já resolve velocidade de rollback, porque a reversão continua sendo reapontar o listener; ele não resolve exposição, porque desloca 100% do tráfego de uma vez, só que instantaneamente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "annotated_formula",
+          "position": 3,
+          "data": {
+            "title": "Quantos clientes reais veem a versão ruim antes da reversão",
+            "formula": "clientes_afetados ≈ tráfego_por_minuto × percentual_canário × tempo_até_o_alarme",
+            "parts": [
+              {
+                "symbol": "percentual_canário",
+                "name": "A fatia inicial exposta",
+                "description": "10% no `CodeDeployDefault.ECSCanary10Percent5Minutes` escolhido aqui. É o TETO da exposição durante o primeiro incremento, não a média — com ~90 mil requisições/dia, o pico de hora cheia gira em torno de 60 a 70 por minuto, e 10% disso são 6 a 7 por minuto."
+              },
+              {
+                "symbol": "tempo_até_o_alarme",
+                "name": "Quanto o alarme demora a reagir",
+                "description": "`period` × `evaluation_periods` do CloudWatch: 60 s × 2 = 2 min no mínimo. Encurtar o período reduz a exposição, mas aumenta o risco de o alarme disparar por ruído estatístico em vez de defeito real.",
+                "highlight": true
+              },
+              {
+                "symbol": "janela_de_incremento",
+                "name": "Duração do primeiro incremento",
+                "description": "5 minutos, no deployment configuration escolhido. Mesmo que o alarme dispare em 2 min, o CodeDeploy já interrompeu o deslocamento — os 90% restantes nunca chegam à frota verde."
+              },
+              {
+                "symbol": "clientes_afetados",
+                "name": "O número que este desenho troca por segurança",
+                "description": "Não é zero — é MENOR e por MENOS tempo do que no rolling update do L03, onde a exposição cresce até perto de 100% assim que os alvos passam no health check, sem teto explícito nenhum."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "success",
+            "title": "O que muda de fato em relação ao L03",
+            "content": "Não é o alarme (o L03 já tinha um) nem a tag imutável (idem). É que agora existem DUAS frotas completas ao mesmo tempo, em DOIS grupos de destino, com um listener de teste no meio. O rollback deixa de ser \"aplicar a revisão anterior da task definition\" e passa a ser \"reapontar uma regra de listener\" — mais rápido porque a frota de destino nunca parou de existir."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Como funciona ponta a ponta: a ordem dos cinco hooks"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A ordem dos hooks do AppSpec não é jargão — é a prova de quando cada validação pode acontecer, e de quando uma reversão ainda é possível. "
+              },
+              {
+                "text": "Start",
+                "code": true
+              },
+              {
+                "text": ", "
+              },
+              {
+                "text": "Install",
+                "code": true
+              },
+              {
+                "text": ", "
+              },
+              {
+                "text": "AllowTestTraffic",
+                "code": true
+              },
+              {
+                "text": ", "
+              },
+              {
+                "text": "AllowTraffic",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "End",
+                "code": true
+              },
+              {
+                "text": " não são roteirizáveis: são o CodeDeploy operando ECS e ELB por conta própria."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Os cinco hooks de um deployment ECS do CodeDeploy, em ordem",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "BeforeInstall",
+                "desc": "Roda antes de a frota verde ser criada. Um rollback ainda NÃO é possível neste ponto — não há nada para onde reverter, porque só a frota azul existe."
+              },
+              {
+                "label": "Install (não roteirizável) — CreateTaskSet",
+                "desc": "O CodeDeploy cria a frota verde no tamanho TOTAL do serviço, associada ao grupo de destino verde. Ninguém decide expor nada ainda."
+              },
+              {
+                "label": "AfterInstall",
+                "desc": "A frota verde existe e está associada a um grupo de destino, mas o listener de teste (se houver) ainda encaminha para a azul. Um resultado de falha aqui já pode disparar rollback."
+              },
+              {
+                "label": "AllowTestTraffic (não roteirizável)",
+                "desc": "O CodeDeploy associa o listener de teste à frota verde. É o momento em que tráfego dirigido, mas não público, passa a alcançá-la."
+              },
+              {
+                "label": "AfterAllowTestTraffic — o hook usado neste laboratório",
+                "desc": "A Lambda de validação chama o listener de teste com concorrência real. É aqui que o defeito de pool esgotado, que o health check nunca viu, aparece — e um resultado Failed reverte o deploy antes de qualquer cliente real ser afetado."
+              },
+              {
+                "label": "BeforeAllowTraffic",
+                "desc": "O segundo grupo de destino já está associado à frota verde, mas o tráfego de PRODUÇÃO ainda não foi deslocado. Última chance de reverter antes de qualquer cliente real ver a versão nova."
+              },
+              {
+                "label": "AllowTraffic (não roteirizável) — aqui mora o canário",
+                "desc": "O listener de produção passa a deslocar tráfego real conforme o `deployment_config_name`: 10% por 5 minutos, depois o restante, se o alarme continuar quieto."
+              },
+              {
+                "label": "AfterAllowTraffic, e o fim: termination wait time",
+                "desc": "Um resultado de falha aqui ainda reverte, apontando o listener de volta para a azul. Se tudo ficou estável, a frota azul é mantida pelo tempo configurado — a rede de segurança humana — e só então é removida."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O payload que confirma uma reversão por alarme, para quem assina notificações do CodeDeploy em vez de olhar o console a cada deploy:"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "json",
+            "filename": "evento-codedeploy-rollback.json",
+            "code": "// O que o EventBridge entrega quando o CodeDeploy reverte por alarme. Repare\n// que a mensagem nomeia a CAUSA — o alarme, nao \"falha generica\".\n{\n  \"source\": \"aws.codedeploy\",\n  \"detail-type\": \"CodeDeploy Deployment State-Change Notification\",\n  \"resources\": [\"arn:aws:codedeploy:us-east-1:111122223333:deploymentgroup:ffv-lab-api/ffv-lab-api\"],\n  \"detail\": {\n    \"deploymentId\": \"d-ABC123XYZ\",\n    \"state\": \"STOP\",\n    // O motivo distingue de um DEPLOYMENT_FAILURE comum: o alarme do alvo\n    // verde disparou DURANTE a janela do canario, nao antes nem depois dela.\n    \"deploymentTrigger\": \"DEPLOYMENT_STOP_ON_ALARM\",\n    \"instanceGroupId\": null\n  }\n}"
+          }
+        },
+        {
+          "id": "b6_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "Confundir o alarme do CodeDeploy com o disjuntor de implantação do L03",
+            "content": "São mecanismos de reversão automática, mas de sistemas diferentes por baixo: o disjuntor (`deployment_circuit_breaker`) pertence ao controlador ECS nativo e observa se o rollout estabiliza. O alarme deste módulo pertence à deployment group do CodeDeploy e observa uma métrica do CloudWatch. Um serviço com `deployment_controller = CODE_DEPLOY` não tem acesso ao primeiro — só ao segundo, e só se o `alarm_configuration` e o `auto_rollback_configuration` estiverem os dois habilitados."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "A Cadência cresceu de 30 para 300 lojas (~90 mil requisições/dia) e publica várias vezes ao dia com o rolling update do L03. Um deploy recente introduziu uma consulta extra por item de pedido (um N+1 disfarçado). O `/health/ready` aprovou a task — uma conexão ao banco é barata — e o disjuntor de implantação não interveio, porque o rollout ESTABILIZOU. O problema só apareceu sob concorrência real de hora de pico, quando o pool de conexões esgotou: por essa altura, o rolling update já tinha deslocado a maior parte do tráfego.",
+            "winner": "Blue/green com CodeDeploy, canário de 10% por 5 minutos, listener de teste e reversão automática por alarme do CloudWatch no alvo verde",
+            "why": "O canário limita o alcance de um defeito de concorrência a uma fatia pequena, por uma janela observável, sem exigir reconstrução nenhuma se algo der errado: a reversão é apontar o listener de produção de volta para uma frota azul que nunca parou de existir. O listener de teste ainda cobre o que o health check do L03 não cobre — carga concorrente real, não uma conexão isolada.",
+            "alternatives": [
+              {
+                "name": "Blue/green direto (all-at-once)",
+                "downside": "Resolve velocidade de rollback — a reversão continua sendo reapontar o listener —, mas NÃO resolve o problema declarado: 100% do tráfego ainda chega de uma vez, só que instantaneamente em vez de aos poucos. É a escolha certa quando a migração de schema é incompatível e as duas versões não podem conviver por minuto nenhum — não quando o risco é concorrência."
+              },
+              {
+                "name": "Continuar com o rolling update do L03",
+                "downside": "Já está em produção e continua correto para a maioria dos deploys. Falha exatamente no cenário deste laboratório: expõe o defeito assim que os primeiros alvos passam no health check, sem teto de exposição."
+              },
+              {
+                "name": "Aumentar o rigor do health check para simular carga",
+                "downside": "Tentador porque não pede recurso novo, mas não reproduz concorrência: um health check síncrono de uma requisição não estressa um pool de conexões do jeito que 60 requisições simultâneas estressam. É configuração tentando resolver um problema de desenho."
+              },
+              {
+                "name": "Feature flag por usuário na aplicação",
+                "downside": "Granularidade mais fina que porcentagem de infraestrutura — dá para liberar por conta específica, não por fatia aleatória —, mas exige mudar a aplicação para ler a flag, e é uma camada acima desta arquitetura, não uma substituta dela."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Estratégia de tráfego",
+                "canário 10%/5min",
+                "linear 10%/1min; linear 10%/3min; all-at-once; rolling update do L03",
+                "fatia pequena e janela que cobre um platô de tráfego, não só um instante",
+                "o deploy leva no mínimo 5-6 min, mesmo quando a versão é boa"
+              ],
+              [
+                "Listener de teste",
+                "presente",
+                "omitir e confiar só no health check da task",
+                "o hook gera carga concorrente real antes de qualquer cliente ver a versão",
+                "mais uma regra de listener/porta e um grupo de segurança para manter"
+              ],
+              [
+                "Escopo do alarme",
+                "alvo do grupo VERDE, especificamente",
+                "5xx do serviço inteiro; 5xx do ALB",
+                "sinal misturado com a frota azul saudável nunca aponta para o deploy",
+                "um alarme por deployment group, não um fixo reaproveitado de outro módulo"
+              ],
+              [
+                "Rollback automático",
+                "disjuntor equivalente (`auto_rollback_configuration`) + alarme",
+                "só `DEPLOYMENT_FAILURE`; só alarme; rollback manual",
+                "cobrem falhas diferentes: uma pega frota que não sobe, a outra pega frota saudável respondendo errado",
+                "mais um evento e mais um alarme para coordenar e testar"
+              ],
+              [
+                "Retenção da frota azul",
+                "30 min",
+                "0 (imediato); padrão do provedor; 2880 min (teto)",
+                "cobre o tempo humano de notar um problema sutil sem dobrar custo por muito tempo",
+                "capacidade dobrada por meia hora a cada deploy, mesmo quando tudo corre bem"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: dois grupos de destino, dois listeners"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O grupo azul continua sendo, conceitualmente, o mesmo do L03 — só ganha um nome que reflete que agora é metade de um par. O grupo verde nasce vazio: quem o povoa, a cada deploy, é o CodeDeploy, não o Terraform."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "blue-green.tf",
+            "code": "# blue-green.tf — dois grupos de destino completos, e o listener de teste\n#\n# O grupo AZUL e o mesmo conceito do L03 (aws_lb_target_group.api), agora com\n# um segundo nome porque passa a ser metade de um par, nao mais o unico. O\n# grupo VERDE nasce vazio: quem o povoa, a cada deploy, e o CodeDeploy.\n\nresource \"aws_lb_target_group\" \"blue\" {\n  name        = \"${var.projeto}-api-blue\"\n  port        = 8080\n  protocol    = \"HTTP\"\n  vpc_id      = aws_vpc.principal.id\n  target_type = \"ip\"\n\n  health_check {\n    path                = \"/health/ready\"\n    interval            = 5\n    timeout             = 4\n    healthy_threshold   = 2\n    unhealthy_threshold = 2\n    matcher             = \"200\"\n  }\n\n  # A drenagem continua existindo aqui - e atributo do GRUPO, nao do par\n  # blue/green. O valor derivado do p99 no L03 nao muda: a pergunta que ele\n  # responde (quanto esperar a conexao do cliente fechar) e a mesma.\n  deregistration_delay = 30\n}\n\nresource \"aws_lb_target_group\" \"green\" {\n  name        = \"${var.projeto}-api-green\"\n  port        = 8080\n  protocol    = \"HTTP\"\n  vpc_id      = aws_vpc.principal.id\n  target_type = \"ip\"\n\n  health_check {\n    path                = \"/health/ready\"\n    interval            = 5\n    timeout             = 4\n    healthy_threshold   = 2\n    unhealthy_threshold = 2\n    matcher             = \"200\"\n  }\n\n  deregistration_delay = 30\n}\n\n# Listener de PRODUCAO: obrigatorio no schema, e o unico caminho do cliente\n# real. Aponta para o grupo azul ate o primeiro deploy - depois disso, quem\n# move a regra e o CodeDeploy, nao mais o Terraform.\nresource \"aws_lb_listener\" \"producao\" {\n  load_balancer_arn = aws_lb.principal.arn\n  port              = 443\n  protocol          = \"HTTPS\"\n  ssl_policy        = \"ELBSecurityPolicy-TLS13-1-2-2021-06\"\n  certificate_arn   = aws_acm_certificate.api.arn\n\n  default_action {\n    type             = \"forward\"\n    target_group_arn = aws_lb_target_group.blue.arn\n  }\n}\n\n# Listener de TESTE: opcional no schema da AWS, obrigatorio na pratica deste\n# laboratorio - e o unico caminho pelo qual o hook AfterAllowTestTraffic\n# alcanca a frota verde pelo MESMO balanceador do cliente, sem expor a frota\n# ao publico. Porta separada; origem restrita ao grupo de seguranca do hook.\nresource \"aws_lb_listener\" \"teste\" {\n  load_balancer_arn = aws_lb.principal.arn\n  port              = 8443\n  protocol          = \"HTTPS\"\n  ssl_policy        = \"ELBSecurityPolicy-TLS13-1-2-2021-06\"\n  certificate_arn   = aws_acm_certificate.api.arn\n\n  default_action {\n    type             = \"forward\"\n    target_group_arn = aws_lb_target_group.blue.arn # o CodeDeploy troca para green durante o teste\n  }\n}\n\nresource \"aws_security_group_rule\" \"listener_teste_so_da_validacao\" {\n  type                     = \"ingress\"\n  from_port                = 8443\n  to_port                  = 8443\n  protocol                 = \"tcp\"\n  security_group_id        = aws_security_group.alb.id\n  source_security_group_id = aws_security_group.hook_validacao.id\n  description              = \"so o hook de validacao alcanca o listener de teste; nunca a internet\"\n}\n\nresource \"aws_ecs_service\" \"api\" {\n  name            = \"${var.projeto}-api\"\n  cluster         = aws_ecs_cluster.principal.id\n  task_definition = aws_ecs_task_definition.api.arn\n  desired_count   = 2\n  launch_type     = \"FARGATE\"\n\n  # A troca central deste laboratorio: quem decide substituir tasks deixa de\n  # ser o proprio ECS (rolling update do L03) e passa a ser o CodeDeploy. Os\n  # dois controladores sao mutuamente exclusivos - e e por isso que o\n  # disjuntor de implantacao do L03 (deployment_circuit_breaker) NAO EXISTE\n  # como opcao valida neste bloco.\n  deployment_controller {\n    type = \"CODE_DEPLOY\"\n  }\n\n  network_configuration {\n    subnets          = aws_subnet.privada[*].id\n    security_groups  = [aws_security_group.task.id]\n    assign_public_ip = false\n  }\n\n  load_balancer {\n    target_group_arn = aws_lb_target_group.blue.arn # so a associacao INICIAL\n    container_name   = \"api\"\n    container_port   = 8080\n  }\n\n  # A partir do primeiro deploy pelo CodeDeploy, estes tres campos deixam de\n  # refletir a realidade no Terraform: o CodeDeploy cria revisoes de task\n  # definition e troca o grupo de destino por fora do state. Sem\n  # ignore_changes, o PROXIMO `terraform apply` tenta devolver o servico ao\n  # que o state ainda acha que e verdade - a guerra entre ferramentas que o\n  # antipadrao desta secao nomeia.\n  lifecycle {\n    ignore_changes = [task_definition, load_balancer, desired_count]\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "Sem `ignore_changes`, o Terraform briga com o CodeDeploy",
+            "content": "Depois do primeiro deploy pelo CodeDeploy, `task_definition`, `load_balancer` e `desired_count` do serviço ECS deixam de refletir o que o Terraform acha que é verdade — porque o CodeDeploy os modifica por fora do state. Sem `ignore_changes`, o próximo `terraform apply` tenta devolver o serviço à revisão antiga: uma guerra entre as duas ferramentas que parece, à primeira vista, um bug do provedor."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o CodeDeploy, o alarme e a reversão automática"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A aplicação e o grupo de implantação do CodeDeploy, o alarme escopado ao alvo verde, e o papel que a AWS já documenta como menor privilégio para este uso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "codedeploy.tf",
+            "code": "# codedeploy.tf — quem orquestra a troca, o alarme e a reversao automatica\n\nresource \"aws_codedeploy_app\" \"api\" {\n  name             = \"${var.projeto}-api\"\n  compute_platform = \"ECS\"\n}\n\nresource \"aws_codedeploy_deployment_group\" \"api\" {\n  app_name              = aws_codedeploy_app.api.name\n  deployment_group_name = \"${var.projeto}-api\"\n  service_role_arn      = aws_iam_role.codedeploy.arn\n\n  # Canario, nao linear e nao all-at-once: desloca 10% por 5 minutos antes de\n  # decidir o resto. E o parametro que responde ao problema declarado -\n  # limita a exposicao a uma fatia pequena, por uma janela observavel. Um\n  # Network Load Balancer so aceita CodeDeployDefault.ECSAllAtOnce; canario e\n  # linear exigem Application Load Balancer, que e o que este laboratorio usa.\n  deployment_config_name = \"CodeDeployDefault.ECSCanary10Percent5Minutes\"\n\n  deployment_style {\n    deployment_type   = \"BLUE_GREEN\"\n    deployment_option = \"WITH_TRAFFIC_CONTROL\"\n  }\n\n  ecs_service {\n    cluster_name = aws_ecs_cluster.principal.name\n    service_name = aws_ecs_service.api.name\n  }\n\n  load_balancer_info {\n    target_group_pair_info {\n      prod_traffic_route {\n        listener_arns = [aws_lb_listener.producao.arn]\n      }\n      target_group {\n        name = aws_lb_target_group.blue.name\n      }\n      target_group {\n        name = aws_lb_target_group.green.name\n      }\n      test_traffic_route {\n        listener_arns = [aws_lb_listener.teste.arn]\n      }\n    }\n  }\n\n  blue_green_deployment_config {\n    deployment_ready_option {\n      action_on_timeout = \"CONTINUE_DEPLOYMENT\" # nao trava esperando aprovacao manual\n    }\n\n    terminate_blue_instances_on_deployment_success {\n      action = \"TERMINATE\"\n      # Sem padrao documentado pela AWS: declare explicitamente. 30 min cobre\n      # o tempo humano de perceber um problema sutil que nem o alarme nem o\n      # canario pegaram, sem manter a frota azul dobrada por muito tempo. O\n      # teto do campo e 2880 minutos (48 h) - meca o SEU cenario antes de\n      # copiar este numero.\n      termination_wait_time_in_minutes = 30\n    }\n  }\n\n  # Duas reversoes independentes, cobrindo gatilhos diferentes - mesma logica\n  # de \"duas redes de seguranca\" do disjuntor + alarme do L03, com um\n  # mecanismo diferente por baixo:\n  #   DEPLOYMENT_FAILURE       -> o proprio CodeDeploy detectou falha (ex.: um\n  #                               hook respondeu Failed, ou a frota verde\n  #                               nunca ficou saudavel)\n  #   DEPLOYMENT_STOP_ON_ALARM -> um alarme do CloudWatch associado disparou\n  #                               DURANTE a janela de teste ou de canario\n  auto_rollback_configuration {\n    enabled = true\n    events  = [\"DEPLOYMENT_FAILURE\", \"DEPLOYMENT_STOP_ON_ALARM\"]\n  }\n\n  alarm_configuration {\n    alarms  = [aws_cloudwatch_metric_alarm.erro_5xx_do_alvo_verde.alarm_name]\n    enabled = true\n  }\n}\n\n# Mede o alvo VERDE, especificamente - nao \"o servico\" e nao o alvo azul, que\n# continua saudavel e nao tem relacao com o deploy em curso. Escopar no grupo\n# errado e o jeito mais comum de este alarme nunca disparar.\nresource \"aws_cloudwatch_metric_alarm\" \"erro_5xx_do_alvo_verde\" {\n  alarm_name          = \"${var.projeto}-api-5xx-alvo-verde\"\n  namespace           = \"AWS/ApplicationELB\"\n  metric_name         = \"HTTPCode_Target_5XX_Count\"\n  statistic           = \"Sum\"\n  period              = 60 # curto de proposito: o primeiro incremento do canario dura so 5 min\n  evaluation_periods  = 2\n  threshold           = 5\n  comparison_operator = \"GreaterThanThreshold\"\n  treat_missing_data  = \"notBreaching\"\n\n  dimensions = {\n    LoadBalancer = aws_lb.principal.arn_suffix\n    TargetGroup  = aws_lb_target_group.green.arn_suffix\n  }\n\n  alarm_actions = [aws_sns_topic.alertas.arn]\n}\n\n# O papel do CodeDeploy: descreve alarmes, chama a Lambda dos hooks, e\n# modifica ECS e ELB em nome do deploy. Managed policy oficial - nao\n# reescrever a mao: ja e o menor privilegio documentado para este uso.\nresource \"aws_iam_role\" \"codedeploy\" {\n  name = \"${var.projeto}-codedeploy-ecs\"\n\n  assume_role_policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect    = \"Allow\"\n      Principal = { Service = \"codedeploy.amazonaws.com\" }\n      Action    = \"sts:AssumeRole\"\n    }]\n  })\n}\n\nresource \"aws_iam_role_policy_attachment\" \"codedeploy_ecs\" {\n  role       = aws_iam_role.codedeploy.name\n  policy_arn = \"arn:aws:iam::aws:policy/AWSCodeDeployRoleForECS\"\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que ECSCanary e não ECSLinear",
+            "content": "Linear desloca em incrementos iguais até o fim — 10% a cada minuto, por exemplo — e não tem um \"platô de observação\" claro: o tráfego nunca para de crescer enquanto o alarme decide. Canário desloca uma fatia, PARA, e observa por uma janela fixa antes do resto. Para um defeito que só aparece sob concorrência sustentada — não na primeira rajada —, a pausa do canário é o que dá tempo ao alarme de reagir antes de mais tráfego chegar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o AppSpec, e o hook que testa concorrência de verdade"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O AppSpec é a revisão que o `CreateDeployment` consome — aponta para a task definition nova e declara qual hook validar. O hook, em .NET 8, é o que faz o trabalho que o `/health/ready` do L03 nunca fez: gerar carga concorrente real."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "yaml",
+            "filename": "appspec.yaml.tpl",
+            "code": "# appspec.yaml.tpl — a revisao que CreateDeployment registra\n#\n# TaskDefinition e o ARN completo, COM revisao - e o unico lugar que aponta\n# para a imagem nova. ContainerName/ContainerPort tem de bater com o\n# load_balancer da definicao de servico original. So um hook esta em uso\n# aqui, de proposito - os outros quatro (BeforeInstall, AfterInstall,\n# BeforeAllowTraffic, AfterAllowTraffic) existem e aceitam Lambda, mas\n# adicionar validacao em todos sem necessidade so alonga o deploy sem\n# alongar a cobertura: o teste de concorrencia so faz sentido depois que a\n# frota verde existe e antes de qualquer trafego de producao chegar nela -\n# que e exatamente o AfterAllowTestTraffic.\nversion: 0.0\nResources:\n  - TargetService:\n      Type: AWS::ECS::Service\n      Properties:\n        TaskDefinition: \"${NOVA_TASK_DEFINITION_ARN}\"\n        LoadBalancerInfo:\n          ContainerName: \"api\"\n          ContainerPort: 8080\nHooks:\n  - AfterAllowTestTraffic: \"ffv-lab-validar-frota-verde\"\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "csharp",
+            "filename": "ValidarFrotaVerde/Function.cs",
+            "code": "// ValidarFrotaVerde/Function.cs — hook AfterAllowTestTraffic, em .NET 8\n//\n// O que o health check do L03 nao pode provar: que a frota aguenta\n// CONCORRENCIA real, nao so uma conexao. Este hook dispara requisicoes\n// SIMULTANEAS pelo listener de TESTE — o mesmo caminho do balanceador que o\n// cliente usa, so que sem cliente nenhum — e so devolve Succeeded se a taxa\n// de erro e a latencia ficarem dentro do que a versao anterior ja provou\n// suportar. E o achado deste laboratorio: prontidao confirma que o PROCESSO\n// responde; isto confirma que ele responde BEM sob carga real.\n\nusing Amazon.Lambda.Core;\nusing Amazon.CodeDeploy;\nusing Amazon.CodeDeploy.Model;\n\n[assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]\n\npublic class Function\n{\n    // Um socket por requisicao simultanea reproduz concorrencia real; reusar\n    // uma unica conexao mascararia exatamente o defeito que este hook existe\n    // para achar (pool de conexao do banco esgotando sob carga).\n    private static readonly HttpClient _http = new(new SocketsHttpHandler\n    {\n        MaxConnectionsPerServer = 50\n    });\n\n    private const string ListenerTeste = \"https://interno.ffv-lab.local:8443/api/pedidos/existente\";\n    private const int Concorrencia = 30;      // ~metade do pico medido em hora cheia\n    private const double LimiteErro = 0.02;   // 2%: acima disso, a versao anterior nunca chegou\n    private const int LimiteP99Ms = 800;      // 2x o p99 historico de 400 ms medido no L03\n\n    public async Task FunctionHandler(HookEvent evt, ILambdaContext ctx)\n    {\n        using var codedeploy = new AmazonCodeDeployClient();\n\n        var tarefas = Enumerable.Range(0, Concorrencia).Select(_ => MedirUmaRequisicao());\n        var resultados = await Task.WhenAll(tarefas);\n\n        var taxaErro = resultados.Count(r => !r.Ok) / (double)Concorrencia;\n        var amostrasOrdenadas = resultados.Select(r => r.Ms).OrderBy(x => x).ToArray();\n        var p99 = Percentil(amostrasOrdenadas, 0.99);\n\n        var status = (taxaErro <= LimiteErro && p99 <= LimiteP99Ms)\n            ? LifecycleEventStatus.Succeeded\n            : LifecycleEventStatus.Failed;\n\n        ctx.Logger.LogInformation(\n            $\"validacao da frota verde: erro={taxaErro:P1} p99={p99}ms -> {status}\");\n\n        // O CodeDeploy so segue (ou reverte) depois desta chamada. Sem ela\n        // dentro de 1 hora, a implantacao inteira e marcada como falha.\n        await codedeploy.PutLifecycleEventHookExecutionStatusAsync(\n            new PutLifecycleEventHookExecutionStatusRequest\n            {\n                DeploymentId = evt.DeploymentId,\n                LifecycleEventHookExecutionId = evt.LifecycleEventHookExecutionId,\n                Status = status\n            });\n    }\n\n    private static async Task<(bool Ok, long Ms)> MedirUmaRequisicao()\n    {\n        var relogio = System.Diagnostics.Stopwatch.StartNew();\n        try\n        {\n            var resp = await _http.GetAsync(ListenerTeste);\n            return (resp.IsSuccessStatusCode, relogio.ElapsedMilliseconds);\n        }\n        catch\n        {\n            return (false, relogio.ElapsedMilliseconds);\n        }\n    }\n\n    private static long Percentil(long[] amostrasOrdenadas, double p)\n    {\n        var indice = (int)Math.Ceiling(p * amostrasOrdenadas.Length) - 1;\n        return amostrasOrdenadas[Math.Clamp(indice, 0, amostrasOrdenadas.Length - 1)];\n    }\n}\n\npublic class HookEvent\n{\n    public string DeploymentId { get; set; } = \"\";\n    public string LifecycleEventHookExecutionId { get; set; } = \"\";\n}\n"
+          }
+        },
+        {
+          "id": "b10_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O hook tem uma hora para responder",
+            "content": "Se `PutLifecycleEventHookExecutionStatus` não for chamado dentro de 1 hora, o CodeDeploy marca a implantação inteira como falha — mesmo que a Lambda ainda esteja rodando. Um `try/finally` que garanta a chamada mesmo em exceção não tratada evita que um bug no hook produza um deploy travado em vez de revertido."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Implantar, e provar que a exposição fica contida"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "implantar-canario.sh",
+            "code": "#!/usr/bin/env bash\n# implantar-canario.sh — registra a revisao nova e pede ao CodeDeploy para\n# desloca-la aos poucos; nao ao ECS para substituir tudo de uma vez.\nset -euo pipefail\n\nPROJETO=\"${PROJETO:?defina PROJETO}\"\nSHA=\"$(git describe --always --dirty --abbrev=12)\"\n[[ \"$SHA\" == *-dirty ]] && { echo \"arvore suja, comite antes\" >&2; exit 1; }\n\n# 1. Mesma disciplina do L03: imagem por SHA, registro imutavel.\nREPO=\"$(terraform output -raw repositorio_api)\"\ndocker build --platform linux/amd64 -t \"${REPO}:${SHA}\" .\ndocker push \"${REPO}:${SHA}\"\n\n# 2. Task definition em REVISAO NOVA - nao toca no servico ainda. Quem faz o\n#    servico apontar para ela e o CodeDeploy, nao um `update-service`.\nNOVA=$(aws ecs register-task-definition \\\n  --cli-input-json \"$(envsubst < task-definition.json)\" \\\n  --query 'taskDefinition.taskDefinitionArn' --output text)\necho \"revisao registrada: ${NOVA}\"\n\n# 3. O AppSpec e a revisao que o CodeDeploy consome - referencia a task\n#    definition do passo 2.\nNOVA_TASK_DEFINITION_ARN=\"$NOVA\" envsubst < appspec.yaml.tpl > /tmp/appspec.yaml\n\nDEPLOY_ID=$(aws deploy create-deployment \\\n  --application-name \"${PROJETO}-api\" \\\n  --deployment-group-name \"${PROJETO}-api\" \\\n  --revision \"revisionType=AppSpecContent,appSpecContent={content=$(cat /tmp/appspec.yaml)}\" \\\n  --query 'deploymentId' --output text)\necho \"$DEPLOY_ID\" > /tmp/deploy-id.txt\n\necho \"deployment ${DEPLOY_ID}: canario de 10% por 5 min, depois 100% se o alarme ficar quieto\"\naws deploy wait deployment-successful --deployment-id \"$DEPLOY_ID\"\necho \"no ar: ${SHA}\"\n"
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. A primeira muda em relação ao L03: aqui o critério de aceite não é \"zero erro\" — é \"erro contido a uma fatia pequena, por uma janela curta\". O canário existe para limitar exposição, não para eliminar risco de versão ruim."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medicoes; a primeira e a que MUDA em relacao ao L03: aqui\n# o criterio de aceite nao e \"zero erro\", e \"erro contido a uma fatia pequena\n# e por uma janela curta\" — porque o canario existe para limitar exposicao,\n# nao para eliminar risco de deploy ruim.\n\nPROJETO=ffv-lab\nTG_VERDE=$(aws elbv2 describe-target-groups --names \"${PROJETO}-api-green\" \\\n  --query 'TargetGroups[0].TargetGroupArn' --output text)\n\n# ── Prova 1: a exposicao fica contida no percentual do canario ──────────────\nURL=\"https://$(terraform output -raw dominio)/api/health/ready\"\n( while true; do\n    curl -s -o /dev/null -w '%{http_code} ' \"$URL\"; sleep 0.2\n  done ) & LACO=$!\n./quebrar-de-proposito.sh\nkill $LACO\n# Esperado: uma fatia pequena e finita de erros durante a janela do primeiro\n# incremento (nunca mais que ~10-15% no total, mesmo somando 5 minutos), e\n# ZERO erro depois da reversao. Erro crescendo sem teto indica que o alarme\n# nao disparou ou o auto_rollback_configuration nao inclui DEPLOYMENT_STOP_ON_ALARM.\n\n# ── Prova 2: a frota verde existe inteira antes do primeiro cliente ─────────\naws ecs describe-task-sets --cluster $PROJETO --service ${PROJETO}-api \\\n  --query 'taskSets[].{grupo:targetGroupInfo.targetGroupArn,status:status,estavel:computedDesiredCount}' \\\n  --output table\n# Esperado: dois conjuntos de tarefas durante o deploy, os dois com o\n# computedDesiredCount total do servico — nao um crescendo aos poucos.\n\n# ── Prova 3: o alarme mede o alvo verde, e so ele ────────────────────────────\naws cloudwatch describe-alarms --alarm-names \"${PROJETO}-api-5xx-alvo-verde\" \\\n  --query 'MetricAlarms[0].{estado:StateValue,dimensoes:Dimensions}'\n# Esperado: StateValue em ALARM durante a falha injetada, com a dimensao\n# TargetGroup apontando para o grupo VERDE — se apontar para o azul ou para o\n# ALB inteiro, o alarme nunca vai medir o que importa.\n\n# ── Prova 4: a reversao e reapontar o listener, nao reconstruir nada ────────\naws elbv2 describe-listeners --load-balancer-arn \"$(terraform output -raw alb_arn)\" \\\n  --query \"Listeners[?Port==\\`443\\`].DefaultActions[0].TargetGroupArn\" --output text\n# Esperado, apos a reversao: o ARN do grupo AZUL. Nenhum build, nenhum push,\n# nenhuma nova revisao de task definition foi criada para reverter.\n\n# ── Prova 5: a frota azul continua viva depois da reversao ──────────────────\naws ecs describe-task-sets --cluster $PROJETO --service ${PROJETO}-api \\\n  --query 'taskSets[?status==`PRIMARY`].{status:status,estavel:stabilityStatus}'\n# Esperado: PRIMARY com STEADY_STATE. Se a azul tivesse sido derrubada, nao\n# haveria para onde reverter — e o rollback deste laboratorio depende dela\n# estar de pe.\n"
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Exposição contida",
+                "laço de `curl` durante o deploy com falha injetada",
+                "fatia pequena e finita de erros, zero depois da reversão",
+                "erro crescendo sem teto indica alarme que não disparou ou evento ausente no auto_rollback_configuration"
+              ],
+              [
+                "2 · A verde nasce inteira",
+                "`describe-task-sets` durante o deploy",
+                "dois conjuntos, os dois no tamanho TOTAL do serviço",
+                "um conjunto menor que o outro sugere que você está olhando um rolling update, não um blue/green"
+              ],
+              [
+                "3 · O alarme mede o alvo certo",
+                "`describe-alarms` no alarme do alvo verde",
+                "ALARM durante a falha, com dimensão TargetGroup = verde",
+                "dimensão apontando para o azul ou para o ALB inteiro explica um alarme que nunca dispara"
+              ],
+              [
+                "4 · Reversão é reapontar, não reconstruir",
+                "`describe-listeners` no listener de produção",
+                "default action aponta para o grupo AZUL depois da reversão",
+                "se apontar para o verde, a reversão não ocorreu — confira o auto_rollback_configuration"
+              ],
+              [
+                "5 · A azul sobrevive à reversão",
+                "`describe-task-sets` filtrando PRIMARY",
+                "PRIMARY em STEADY_STATE",
+                "azul derrubada = não havia para onde reverter; confira o termination_wait_time"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Quebrar de propósito: reproduzir o incidente real"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A falha que motivou este laboratório, reproduzida sob controle: uma variável que força a mesma consulta lenta sob concorrência, sem alterar o health check."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "quebrar-de-proposito.sh",
+            "code": "# quebrar-de-proposito.sh — injeta o MESMO defeito do incidente real: uma\n# variavel que forca uma consulta lenta sob concorrencia, sem mexer no\n# health check (que continua respondendo 200, exatamente como no incidente\n# que motivou este laboratorio).\n\n# Ver Program.cs: sob 30+ chamadas simultaneas, cada uma prende o pool por\n# 2 s a mais. Uma requisicao isolada nao mostra nada — e por isso o defeito\n# passa no health check e so aparece sob carga real.\nexport SIMULAR_REGRESSAO_CONCORRENCIA=true\nPROJETO=ffv-lab ./implantar-canario.sh &\nIMPLANTAR_PID=$!\n\n# Esperado: perto dos 5 minutos do primeiro incremento, o alarme de 5xx do\n# alvo VERDE dispara, o CodeDeploy para o deslocamento e devolve o listener\n# de producao 100% para a azul — sem voce tocar em nada.\nsleep 360\naws deploy get-deployment --deployment-id \"$(cat /tmp/deploy-id.txt)\" \\\n  --query 'deploymentInfo.{estado:status,motivo:errorInformation.message}'\n\nwait $IMPLANTAR_PID || echo \"implantacao terminou com reversao — e o resultado esperado deste teste\"\n"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Regressão de concorrência (o incidente original)",
+                "variável que prende o pool por 2 s extras sob 30+ chamadas simultâneas",
+                "health check e disjuntor aprovam; 5xx do alvo verde sobe só sob carga",
+                "alarme do alvo verde durante o canário; log do hook de validação",
+                "listener de teste com concorrência real pega ANTES de expor cliente"
+              ],
+              [
+                "Alarme escopado no grupo errado",
+                "aponte o `dimensions.TargetGroup` do alarme para o grupo azul",
+                "a falha acontece, mas o alarme nunca sai de OK",
+                "`describe-alarms` mostra StateValue=OK durante 5xx real no verde",
+                "dimensão do alarme tem de ser o ARN do grupo VERDE, não um fixo"
+              ],
+              [
+                "Evento de rollback ausente na configuração",
+                "remova `DEPLOYMENT_STOP_ON_ALARM` de `auto_rollback_configuration.events`",
+                "o alarme dispara, mas o deploy segue e conclui com 100% na versão ruim",
+                "`get-deployment` mostra status Succeeded apesar do alarme em ALARM",
+                "o evento do alarme tem de estar explicitamente na lista, não é implícito"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "O que o hook pega, e o que ele não pega",
+            "content": "O hook prova capacidade sob concorrência simulada — não substitui o alarme de produção, que mede tráfego real. Uma regressão que só aparece com o VOLUME real de pico (não a concorrência, mas a quantidade sustentada por horas) pode passar no hook e só aparecer depois, durante o canário — é por isso que as duas proteções existem juntas, e nenhuma substitui a outra."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25_0",
+      "type": "quiz",
+      "position": 13,
+      "data": {
+        "question": "Um serviço ECS foi migrado do rolling update do L03 para `deployment_controller = CODE_DEPLOY`. O time mantém o Terraform como estava, esperando que o disjuntor de implantação (`deployment_circuit_breaker`) continue protegendo contra rollout que não estabiliza. O que realmente acontece?",
+        "options": [
+          "O campo deixa de se aplicar a este tipo de controlador, e o serviço fica sem essa proteção até o alarme e o auto_rollback_configuration do CodeDeploy serem configurados",
+          "O Terraform rejeita o `apply` com um erro explícito sobre a incompatibilidade",
+          "O disjuntor continua funcionando normalmente, porque é uma propriedade do serviço, não do controlador",
+          "O disjuntor é substituído automaticamente pelo listener de teste do CodeDeploy"
+        ],
+        "correctIndex": 0,
+        "explanation": "O disjuntor de implantação é uma opção exclusiva do controlador nativo do ECS (rolling update). Ao trocar para `CODE_DEPLOY`, esse campo simplesmente deixa de se aplicar — não gera erro, não é substituído por nada automaticamente, e o serviço fica sem proteção automática nenhuma até que `alarm_configuration` e `auto_rollback_configuration` sejam configurados explicitamente na deployment group do CodeDeploy.\n\nA primeira alternativa é o erro central deste quiz: presumir que uma proteção do L03 \"sobrevive\" à troca de controlador, quando na verdade os dois mecanismos pertencem a sistemas diferentes e não coexistem no mesmo serviço. A terceira superestima o Terraform: ele aplica o que você declarar, e um campo simplesmente ignorado por um tipo de controlador não gera erro de validação — o `apply` conclui normalmente, e é isso que torna o engano perigoso. A quarta confunde duas peças com propósitos diferentes: o listener de teste VALIDA a frota verde antes de expor tráfego; ele não observa estabilidade do rollout depois disso, que é o que o disjuntor fazia."
+      }
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 14,
+      "data": {
+        "title": "Segurança: o que muda com uma segunda frota e um listener novo"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Listener de teste exposto sem restrição de origem",
+                "baixa",
+                "alto",
+                "regra de security group restrita ao security group do hook de validação, nunca 0.0.0.0/0",
+                "CloudTrail em `ModifySecurityGroupRules`; varredura periódica de regras do ALB",
+                "remover a regra ampla, reduzir ao SG do hook, invalidar credencial se houve acesso"
+              ],
+              [
+                "Papel de serviço do CodeDeploy com permissão ampla sobre ELB/ECS/Lambda",
+                "média",
+                "alto",
+                "usar o managed policy `AWSCodeDeployRoleForECS`; restringir a trust policy ao princípio `codedeploy.amazonaws.com`",
+                "IAM Access Analyzer sobre uso real do papel",
+                "revisar quem pode assumir o papel; nunca anexar permissão extra \"só por garantia\""
+              ],
+              [
+                "Hook Lambda que sempre responde Succeeded (falso positivo)",
+                "média",
+                "alto",
+                "revisão de código do hook; teste do hook isolado antes de usá-lo em produção",
+                "taxa de reversão automática permanentemente em zero é sinal de alerta, não de sucesso",
+                "corrigir a lógica de validação; auditar deploys aprovados no período afetado"
+              ],
+              [
+                "`alarm_configuration.enabled = false` por engano",
+                "média",
+                "alto",
+                "gate de revisão que confere `enabled = true` no plano do Terraform antes do apply",
+                "nenhuma reversão automática registrada apesar de incidentes conhecidos",
+                "religar o alarme; auditar deploys feitos com a proteção desligada"
+              ],
+              [
+                "Frota azul retida além do necessário",
+                "baixa",
+                "médio",
+                "revisar `termination_wait_time_in_minutes` periodicamente, mantendo-o curto",
+                "custo de Fargate consistentemente acima do esperado entre deploys",
+                "reduzir o tempo de retenção; investigar por que a decisão de reverter demora"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O papel do CodeDeploy precisa de `cloudwatch:DescribeAlarms`",
+            "content": "É a permissão que permite ao CodeDeploy CONSULTAR o estado do alarme durante a janela de canário — sem ela, `alarm_configuration` fica declarado mas nunca é verificado. Ela já está incluída no managed policy `AWSCodeDeployRoleForECS`, junto com `lambda:InvokeFunction` (para os hooks) e as ações de ECS e ELB necessárias para criar o conjunto de tarefas e trocar o listener."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Observabilidade: as perguntas que este painel acrescenta ao do L03"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "A frota verde passou na validação de concorrência?",
+                "log do hook AfterAllowTestTraffic",
+                "Failed aqui impede qualquer tráfego real de chegar à verde",
+                "qualquer Failed"
+              ],
+              [
+                "O canário atingiu o limiar de erro?",
+                "`HTTPCode_Target_5XX_Count` do alvo VERDE",
+                "defeito que passou no hook mas aparece sob volume real",
+                "> 5 em 2 períodos de 1 min"
+              ],
+              [
+                "A reversão automática disparou?",
+                "evento `DeploymentStateChangeNotification` com `deploymentTrigger`",
+                "distingue reversão por alarme de reversão por falha simples do CodeDeploy",
+                "qualquer DEPLOYMENT_STOP_ON_ALARM"
+              ],
+              [
+                "A frota azul ainda está de pé?",
+                "`describe-task-sets` → status PRIMARY",
+                "ausência dela significa que não há para onde reverter",
+                "sempre respondível durante a janela de retenção"
+              ],
+              [
+                "Quanto do tráfego já migrou?",
+                "peso da regra do listener de produção",
+                "acompanha o progresso do canário/linear em tempo real",
+                "informativo"
+              ],
+              [
+                "Alguém disparou um deploy fora do pipeline?",
+                "CloudTrail em `CreateDeployment`",
+                "deploy manual sem passar pelas mesmas checagens",
+                "qualquer identidade fora da esperada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "O alarme do alvo azul não serve para nada durante o canário",
+            "content": "A frota azul continua saudável e recebendo tráfego normal — monitorá-la durante o deploy só confirma o óbvio. O painel de deploy tem uma função estreita, herdada do L03: dizer se ESTE rollout deve continuar. Isso exige olhar o alvo verde, sempre."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece com o canário",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 req/s, 2 tasks por frota",
+                "canário de 10% é ~1 requisição a cada poucos segundos",
+                "amostra pequena demais para o alarme distinguir sinal de ruído",
+                "considerar all-at-once com termination wait time maior, se o risco de concorrência for baixo"
+              ],
+              [
+                "500 req/s, 8 tasks por frota",
+                "canário de 10% já é uma amostra estatisticamente útil",
+                "a frota verde inteira (8 tasks) convive com a azul — 16 tasks por alguns minutos",
+                "confirmar cota de tasks da conta e endereços de sub-rede para o dobro da frota"
+              ],
+              [
+                "5 mil req/s, 60 tasks por frota",
+                "10% ainda são centenas de requisições — sinal forte",
+                "120 tasks simultâneas exigem sub-rede dimensionada e cota revisada",
+                "dimensionar sub-rede pelo DOBRO da frota, igual ao gargalo já visto no L03"
+              ],
+              [
+                "Pico durante o deploy",
+                "o canário compete com a escala automática do serviço",
+                "a frota verde nasce no tamanho ATUAL, que pode já estar desatualizado no fim da janela",
+                "travar a escala automática durante o deploy, ou aceitar reconciliar depois"
+              ],
+              [
+                "Falha de AZ durante a janela de canário",
+                "a frota que perde capacidade pode ser a azul OU a verde",
+                "com duas frotas pequenas, uma falha de AZ pode deixar as duas abaixo do mínimo saudável ao mesmo tempo",
+                "dimensionar cada frota para sobreviver a uma AZ, não só o par combinado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "Escolher NLB por latência trava a estratégia de tráfego mais tarde",
+            "content": "A decisão de balanceador costuma ser tomada pensando em protocolo e latência, não em deploy — mas escolher Network Load Balancer aqui fecha a porta para canário e linear de uma vez: só `CodeDeployDefault.ECSAllAtOnce` fica disponível. Se exposição limitada for requisito, o balanceador tem de ser decidido com o deploy em mente, não só com o tráfego em regime permanente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta ao L03"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Diferente do excedente breve do L03, aqui a frota INTEIRA dobra por toda a janela de canário mais o tempo de retenção — é o preço estrutural de ter as duas frotas completas convivendo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "1 deploy/semana, 2 tasks por frota",
+                "a frota inteira dobrada por ~35 min (5 do canário + 30 de retenção)",
+                "baixa, mas visível — bem mais que o excedente parcial do L03",
+                "termination_wait_time curto; considerar all-at-once em ambiente sem risco real"
+              ],
+              [
+                "Produção pequena",
+                "5 deploys/dia, 2 tasks por frota",
+                "até 5 × 35 min de capacidade dobrada por dia",
+                "linha visível na fatura de Fargate",
+                "reduzir a retenção se o histórico de reversão manual for raro"
+              ],
+              [
+                "Alta escala",
+                "20 deploys/dia, 60 tasks por frota",
+                "60 tasks extras por até 35 min, vinte vezes ao dia",
+                "custo comparável ao das próprias tasks de regime permanente",
+                "encurtar a janela de canário para incrementos que decidam mais rápido (linear 1min em vez de canário 5min), se o histórico permitir"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A frota azul retida não é \"de graça\"",
+            "content": "Ela dobra o custo de compute pela janela inteira, e um `termination_wait_time` longo esquecido é o Elastic IP órfão do L01 de novo: paga-se por estar ligado, não por ser usado. Em alta escala, a diferença entre 30 e 300 minutos de retenção multiplicada por vinte deploys ao dia é a maior linha de custo que este laboratório introduz — e a mais fácil de esquecer configurada."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "deploy canário com validação de concorrência e reversão automática",
+                "o `CreateDeployment` ainda é disparado por script, não por pipeline federado",
+                "mover para pipeline com credencial OIDC (L54)",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "listener de teste restrito por SG; papel do CodeDeploy com managed policy oficial",
+                "hook Lambda com permissão de rede para alcançar o listener de teste é superfície nova",
+                "revisar a política da role de execução do hook periodicamente",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "exposição de defeito de concorrência contida a uma fatia e uma janela",
+                "a validação de concorrência é sintética; volume real de pico pode revelar algo que o hook não simula",
+                "ampliar o cenário do hook com base em incidentes reais medidos",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "defeito de pool detectado antes de 100% do tráfego",
+                "a causa raiz (N+1) continua existindo até ser corrigida no código",
+                "revisão de consultas por item de pedido; considerar carregamento em lote",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "termination wait time curto; frota extra só durante o deploy",
+                "frota inteira dobrada custa mais que o excedente parcial do L03",
+                "medir se linear com incrementos maiores atinge o mesmo resultado por menos tempo",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "janela de capacidade dobrada é finita e configurável",
+                "cada deploy consome o dobro de recursos por minutos, mesmo quando a versão é boa",
+                "revisar a necessidade de canário em serviços de baixo risco, onde all-at-once basta",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho novo: é a resposta a QUANDO trocar de estratégia de deploy — e este laboratório é só um degrau da escada que o L03 já começou."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do deploy manual ao canário orientado por dado — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo (pré-L03)",
+                "instruction": "Deploy manual, uma task, `:latest`. Legítimo só em desenvolvimento.",
+                "note": "Risco resolvido: nenhum. Novo risco: publicar dói, então publica-se pouco. Custo: o mais baixo."
+              },
+              {
+                "label": "Nível 2 — Rolling update (L03)",
+                "instruction": "Tag imutável, excedente, disjuntor de implantação, alarme de 5xx do alvo.",
+                "note": "Risco resolvido: janela de indisponibilidade e rollback impossível. Novo risco: defeito de concorrência exposto assim que os primeiros alvos passam no health check. Custo: minutos de excedente por deploy."
+              },
+              {
+                "label": "Nível 3 — Blue/green canário (este laboratório)",
+                "instruction": "Duas frotas completas, listener de teste, canário de 10%, alarme escopado no alvo verde.",
+                "note": "Risco resolvido: exposição total antes de detectar defeito sob carga real. Novo risco: custo de capacidade dobrada por toda a janela; complexidade de coordenar dois mecanismos de rollback. Custo: a frota inteira, não um excedente parcial."
+              },
+              {
+                "label": "Nível 4 — Pipeline federado (L54)",
+                "instruction": "`CreateDeployment` sai da máquina de uma pessoa; credencial OIDC, aprovação para produção.",
+                "note": "Risco resolvido: credencial de longa duração disparando deploy. Novo risco: o pipeline vira alvo — quem o compromete publica na conta. Custo: minutos de build por deploy."
+              },
+              {
+                "label": "Nível 5 — Liberação por usuário (feature flags)",
+                "instruction": "A aplicação lê uma flag e decide, por conta ou por atributo, quem vê a versão nova — independente de qual fatia de infraestrutura está no ar.",
+                "note": "Risco resolvido: granularidade grosseira de \"10% de todo mundo\" quando o que importa é \"estes 5 clientes piloto\". Novo risco: lógica de flag na aplicação vira dívida se não for removida depois. Custo: baixo, é código, não infraestrutura extra."
+              },
+              {
+                "label": "Nível 6 — Canário graduado por dado",
+                "instruction": "Histórico de deploys (diff, arquivos tocados, incidentes anteriores) alimenta uma decisão de qual estratégia usar — canário longo para mudança de risco alto, all-at-once para mudança trivial.",
+                "note": "Risco resolvido: tratar toda mudança com a mesma cautela, mesmo a trivial. Novo risco: modelo com poucos exemplos aprova mudança arriscada com confiança; exige avaliação e caminho manual sempre disponível. Custo: baixo — o dado já existe em CloudTrail e CloudWatch."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Canário graduado por dado (nível 6) depende de ter histórico de canários reais para aprender com eles — que depende de já estar no nível 3. Quem tenta pular direto para \"IA decide a estratégia de deploy\" sem ter passado pelo canário manual está treinando um modelo sem dado nenhum para treinar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, como no L03, o problema central tem resposta determinística: exposição limitada por percentual e janela, validação por concorrência simulada, reversão por regra de listener. Nenhuma das três é decisão que um modelo melhore."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O nível 6 da escada anterior aponta onde IA acrescentaria valor real, e ele continua sendo modesto: GRADUAR o risco de uma mudança para escolher a estratégia — canário longo para uma mudança que mexe em consulta ao banco, all-at-once para uma mudança de texto de tela. Hoje toda mudança usa a mesma estratégia, e correção de string custa os mesmos 5-6 minutos de canário que uma migração de schema."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "graduar a estratégia de deploy pelo risco real da mudança, em vez de aplicar canário uniforme a tudo"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "uma regra cobre a maior parte: \"tocou consulta ou schema → canário; só front-end → all-at-once\". IA só se justifica quando a regra simples mostrar seu limite"
+              ],
+              [
+                "De onde viriam os dados?",
+                "CloudTrail, eventos de deployment do CodeDeploy, métricas do CloudWatch por deploy, histórico de reversões — tudo já existe depois deste laboratório"
+              ],
+              [
+                "Qual o risco?",
+                "aprender de poucos incidentes e liberar all-at-once uma mudança que precisava de canário; exige avaliação com dado retido e um caminho manual sempre disponível"
+              ],
+              [
+                "Por que não agora?",
+                "a Cadência tem dezenas de deploys de histórico, não centenas — modelo sobre poucos exemplos é superstição com aparência de estatística, o mesmo limite que o L03 já registrou"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b19_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"olhar o log do hook e decidir se libera\" troca um limiar determinístico — taxa de erro e p99, medidos e comparados a um número — por um julgamento probabilístico sobre o MESMO dado. Onde já existe limiar claro, IA só acrescenta latência e a chance de aprovar com confiança algo que devia reprovar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta"
+            ],
+            "rows": [
+              [
+                "Blue/green sem listener de teste",
+                "menos uma porta, uma regra de segurança e um recurso para manter",
+                "nada valida a frota verde com tráfego real antes do canário começar — o defeito do incidente original chegaria a clientes de qualquer jeito",
+                "o mesmo tipo de regressão de concorrência que motivou este laboratório reaparece",
+                "listener de teste com hook de validação, restrito por security group"
+              ],
+              [
+                "Alarme genérico do serviço em vez de escopado no alvo verde",
+                "parece mais simples reaproveitar o alarme do L03",
+                "o sinal se mistura com a frota azul saudável, e o alarme praticamente nunca dispara durante um canário real",
+                "reversões automáticas quase inexistentes, mesmo com incidentes conhecidos",
+                "um alarme por deployment group, com dimensão TargetGroup apontando para o verde"
+              ],
+              [
+                "`termination_wait_time_in_minutes = 0`",
+                "\"por que manter algo que já passou no canário?\"",
+                "elimina a rede de segurança humana — um problema sutil percebido minutos depois do deploy concluído não tem mais para onde reverter",
+                "incidente detectado tarde vira reconstrução, não reapontamento",
+                "retenção curta, mas não-zero (15-30 min é um ponto de partida razoável, a validar com o seu tempo médio de detecção)"
+              ],
+              [
+                "Confundir o alarme do CodeDeploy com o disjuntor de implantação do L03",
+                "os dois \"revertem sozinho\", parecem intercambiáveis",
+                "um serviço `CODE_DEPLOY` não tem o disjuntor como opção — supor que ele existe deixa o serviço sem proteção nenhuma até o alarme ser configurado",
+                "primeiro deploy ruim vai a 100% sem nenhuma reversão automática",
+                "configurar `alarm_configuration` e `auto_rollback_configuration` explicitamente; não presumir herança do L03"
+              ],
+              [
+                "Terraform sem `ignore_changes` no serviço ECS",
+                "ninguém percebeu que o CodeDeploy modifica o serviço por fora do state",
+                "`terraform apply` de rotina tenta devolver o serviço à revisão de task definition antiga do state",
+                "deploy \"revertido\" sozinho por um apply que não tinha nada a ver com o CodeDeploy",
+                "`lifecycle { ignore_changes = [task_definition, load_balancer, desired_count] }`"
+              ],
+              [
+                "Usar o hook de validação só para checar `/health/ready`",
+                "reaproveitar o que já existe é menos código",
+                "não testa NADA que o health check da task já não testasse — o defeito de concorrência continua invisível",
+                "o mesmo incidente original se repete, mesmo com toda a infraestrutura de blue/green no lugar",
+                "o hook precisa gerar concorrência real, não reconsultar a mesma rota que o health check já consulta"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "Se só corrigir um destes seis, corrija o escopo do alarme",
+            "content": "Um alarme apontado para o grupo de destino errado é o único item desta lista que faz TODOS os outros parecerem estar funcionando — o canário desloca, a janela observa, e nada reverte, porque o sinal que decidiria a reversão nunca chega. É também o mais fácil de testar isoladamente: confira a dimensão `TargetGroup` do alarme antes de confiar em qualquer prova de rollback automático."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "`CreateDeployment` falha com erro de papel",
+                "trust policy do papel do CodeDeploy não permite `codedeploy.amazonaws.com`",
+                "confira o `assume_role_policy` do papel de serviço",
+                "IAM → papel do CodeDeploy → Trust relationships",
+                "corrigir o `Principal` para `codedeploy.amazonaws.com`"
+              ],
+              [
+                "Deployment travado em `AllowTestTraffic`",
+                "o hook nunca chama `PutLifecycleEventHookExecutionStatus`",
+                "confira o log da Lambda e se ela lança exceção antes de notificar",
+                "CloudWatch Logs da função do hook",
+                "garantir a chamada em `finally`, mesmo em falha de validação"
+              ],
+              [
+                "Falha injetada não dispara o alarme",
+                "alarme escopado no grupo de destino errado, ou `enabled = false`",
+                "compare a dimensão `TargetGroup` do alarme com o ARN do grupo verde",
+                "`describe-alarms` → `Dimensions`",
+                "apontar a dimensão para o grupo verde; confirmar `alarm_configuration.enabled = true`"
+              ],
+              [
+                "Alarme dispara, mas o deploy conclui em 100% mesmo assim",
+                "`DEPLOYMENT_STOP_ON_ALARM` ausente de `auto_rollback_configuration.events`",
+                "confira a lista de eventos configurada na deployment group",
+                "Terraform state ou console → deployment group → configuração de rollback",
+                "incluir `DEPLOYMENT_STOP_ON_ALARM` explicitamente na lista"
+              ],
+              [
+                "`terraform apply` de rotina reverte um deploy recente",
+                "ausência de `ignore_changes` no serviço ECS",
+                "compare o `task_definition` no state com o realmente ativo no serviço",
+                "diff do plano do Terraform antes de aplicar",
+                "adicionar `lifecycle { ignore_changes = [...] }` no `aws_ecs_service`"
+              ],
+              [
+                "NLB configurado com canário nunca aceita a deployment group",
+                "Network Load Balancer só suporta `CodeDeployDefault.ECSAllAtOnce`",
+                "confira o tipo do load balancer associado",
+                "documentação do CodeDeploy sobre considerações de blue/green para ECS",
+                "trocar para Application Load Balancer, ou aceitar all-at-once com o NLB"
+              ],
+              [
+                "Rollback ocorre, mas a frota azul já não existe",
+                "`termination_wait_time_in_minutes` baixo demais ou o deploy anterior já a removeu",
+                "confira `describe-task-sets` para status PRIMARY antes de confiar em rollback automático",
+                "histórico de deployments do CodeDeploy",
+                "aumentar a retenção; para incidente detectado tarde, o caminho vira reconstrução, não reversão"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em parâmetro, pergunte: o hook validou de verdade, ou só confirmou que a rota responde? A maioria dos deploys \"canário\" que não pegam regressão real tem um hook que reconsulta o mesmo health check da task — sem concorrência, sem carga, sem diferença nenhuma do que o L03 já fazia."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva, além do L03"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório acrescenta poucos recursos ao L03, mas dois deles cobram por hora mesmo vazios — o segundo grupo de destino e o listener de teste."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# limpar.sh — o que este laboratorio acrescenta ao L03, e o que sobrevive\n\n# 1. Deployment group e app do CodeDeploy — nao cobram por hora, mas ficam\n#    orfaos se voce apagar o servico ECS primeiro.\naws deploy delete-deployment-group \\\n  --application-name ffv-lab-api --deployment-group-name ffv-lab-api\naws deploy delete-application --application-name ffv-lab-api\n\n# 2. Segundo grupo de destino, e o listener de teste — cobram por hora como\n#    qualquer grupo/listener do L01, mesmo vazios.\nterraform destroy -target=aws_lb_listener.teste \\\n                   -target=aws_lb_target_group.green \\\n                   -auto-approve\n\n# 3. O alarme do alvo verde nao desaparece sozinho quando o grupo de destino\n#    e apagado — ele so fica \"sem dado\", o que NAO e a mesma coisa que apagado.\naws cloudwatch delete-alarms --alarm-names ffv-lab-api-5xx-alvo-verde\n\n# 4. Revisoes de task definition acumuladas pelos deploys do CodeDeploy —\n#    nao cobram, mas poluem a lista tanto quanto no L03.\nfor arn in $(aws ecs list-task-definitions --family-prefix ffv-lab-api \\\n               --query \"taskDefinitionArns\" --output text); do\n  aws ecs deregister-task-definition --task-definition \"$arn\" >/dev/null\ndone\n\n# 5. Resto do Terraform (blue.tf, codedeploy.tf) e o que o L03/L01 ja\n#    cobravam — ALB, RDS, NAT, Elastic IP. Rode a limpeza deles tambem se nao\n#    for seguir para o L54.\nterraform destroy -auto-approve\n"
+          }
+        },
+        {
+          "id": "b22_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Deployment group e app do CodeDeploy",
+                "sim",
+                "não",
+                "fica órfão se o serviço ECS for apagado primeiro"
+              ],
+              [
+                "Grupo de destino verde",
+                "sim, se em Terraform",
+                "sim, por hora",
+                "idêntico ao grupo azul do L01 — cobra existindo, mesmo vazio"
+              ],
+              [
+                "Listener de teste",
+                "sim, se em Terraform",
+                "sim, por hora",
+                "regra a mais no mesmo ALB do L01"
+              ],
+              [
+                "Alarme do alvo verde",
+                "depende",
+                "centavos",
+                "não desaparece sozinho quando o grupo de destino é apagado — fica \"sem dado\""
+              ],
+              [
+                "Revisões de task definition dos deploys do CodeDeploy",
+                "não",
+                "não",
+                "acumulam a cada deploy, como no L03"
+              ],
+              [
+                "O que já vinha do L01/L03",
+                "depende",
+                "sim, por hora",
+                "ALB original, RDS, NAT, Elastic IP — rode a limpeza deles também"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Defeito de concorrência não visto no health check",
+                "listener de teste + hook com carga simulada",
+                "prontidão testa uma conexão; o hook testa dezenas simultâneas, o que o health check nunca fez"
+              ],
+              [
+                "Deploy ruim exposto a 100% do tráfego",
+                "canário 10%/5min, não all-at-once",
+                "blue/green direto resolve velocidade de rollback, não exposição — só o incremento pequeno resolve exposição"
+              ],
+              [
+                "Alarme que nunca dispara",
+                "escopo explícito no grupo de destino VERDE",
+                "sinal misturado com a frota azul saudável não aponta para o deploy em curso"
+              ],
+              [
+                "Rollback lento",
+                "duas frotas completas convivendo",
+                "reversão é reapontar o listener, não reconstruir imagem"
+              ],
+              [
+                "Terraform brigando com o CodeDeploy",
+                "`ignore_changes` no serviço ECS",
+                "o CodeDeploy modifica task_definition/load_balancer/desired_count por fora do state"
+              ],
+              [
+                "Problema sutil percebido depois do deploy \"concluído\"",
+                "termination wait time da frota azul",
+                "é a rede de segurança humana, entre o alarme automático e a reconstrução manual"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "O deploy é disparado com `CreateDeployment`, referenciando um AppSpec com a task definition nova.",
+              "O CodeDeploy cria a frota verde no tamanho TOTAL, num segundo grupo de destino, antes de qualquer tráfego real.",
+              "O listener de teste é associado à verde, e o hook AfterAllowTestTraffic gera concorrência real contra ela.",
+              "Se o hook aprova, o listener de produção começa a deslocar 10% do tráfego para a verde.",
+              "Por 5 minutos, o alarme do alvo verde observa; a frota azul continua recebendo o resto, intacta.",
+              "Se o alarme dispara, o CodeDeploy reaponta o listener de produção 100% de volta para a azul.",
+              "Se o alarme fica quieto, o restante do tráfego migra para a verde.",
+              "A frota azul é mantida pelo termination wait time, e só então é removida."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "O disjuntor de implantação do L03 também funciona em serviços blue/green do CodeDeploy?",
+            "answer": "Não. O disjuntor de implantação (`deployment_circuit_breaker`) é uma opção exclusiva do controlador nativo do ECS, usado no rolling update. Ao trocar `deployment_controller` para `CODE_DEPLOY`, esse campo deixa de se aplicar — não fica desligado, deixa de existir como opção válida para o serviço. A proteção equivalente em blue/green vem de dois campos diferentes na deployment group do CodeDeploy: `alarm_configuration`, que associa um alarme do CloudWatch, e `auto_rollback_configuration`, que declara em quais eventos reverter. Quem assume que o disjuntor continua ativo por baixo publica sem nenhuma rede de segurança automática até configurar os dois campos explicitamente."
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Blue/green resolve sozinho um defeito que só aparece com tráfego real?",
+            "answer": "Só se a estratégia de tráfego for canário ou linear, não all-at-once. Blue/green direto cria a frota verde inteira antes de expor qualquer cliente, o que já resolve velocidade de rollback — a reversão vira reapontar um listener em vez de reconstruir uma imagem. Mas se a troca de tráfego é all-at-once, 100% dos clientes ainda veem a versão nova de uma vez, só que instantaneamente em vez de aos poucos. Quem resolve \"defeito só aparece com tráfego real\" é o incremento pequeno do canário, combinado com um alarme escopado no alvo verde e uma janela de observação antes de liberar o resto."
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Preciso mesmo de um listener de teste, ou o health check da task já basta?",
+            "answer": "Precisa, se o objetivo é pegar defeito de concorrência antes de expor cliente real. O health check da task confirma que o processo responde a UMA conexão; o listener de teste permite que um hook gere dezenas de chamadas simultâneas pelo MESMO caminho do balanceador que o cliente usaria, sem que nenhum cliente real seja afetado. É exatamente essa diferença que fez o incidente deste laboratório passar despercebido no L03: a prontidão nunca testou concorrência, só uma conexão isolada."
+          }
+        },
+        {
+          "id": "b24_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Quanto tempo a frota azul fica de pé depois de um deploy bem-sucedido?",
+            "answer": "O tempo que você declarar em `termination_wait_time_in_minutes`, com teto documentado de 2880 minutos (48 horas) e sem valor padrão publicado pela AWS — decida explicitamente, não confie num padrão implícito. Um valor curto, como 15 a 30 minutos, cobre o tempo humano de perceber um problema sutil que nem o hook nem o alarme automático pegaram, sem manter a capacidade dobrada por muito tempo. Um valor de zero elimina essa rede de segurança: se um incidente aparece minutos depois do deploy \"concluído\", não há mais para onde reverter, e a correção vira reconstrução em vez de reapontamento."
+          }
+        },
+        {
+          "id": "b24_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Canário do CodeDeploy funciona com Network Load Balancer?",
+            "answer": "Não. Um Network Load Balancer só suporta `CodeDeployDefault.ECSAllAtOnce` — desloca todo o tráfego de uma vez, sem incremento. Canário e linear dependem de regras de listener por peso, que existem na camada 7 (HTTP) de um Application Load Balancer e não têm equivalente na camada 4 de um NLB. Se o requisito de exposição limitada for inegociável e a carga de trabalho exigir NLB por outro motivo (protocolo não-HTTP, latência ultrabaixa), a resposta não é forçar canário — é revisar se blue/green com all-at-once mais um alarme sensível cobre o risco de outro jeito."
+          }
+        },
+        {
+          "id": "b24_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "O que acontece se o hook Lambda nunca chamar de volta o CodeDeploy?",
+            "answer": "A implantação inteira é marcada como falha depois de 1 hora de espera, mesmo que a função ainda esteja processando. `PutLifecycleEventHookExecutionStatus` é a única forma de o CodeDeploy saber se deve seguir ou reverter — sem ela, ele não assume sucesso por padrão, assume timeout. É por isso que o corpo da função precisa garantir a chamada mesmo em caminho de exceção: um `try/finally` que notifique `Failed` em qualquer erro não tratado evita um deploy travado por uma hora inteira por um bug no próprio hook."
+          }
+        },
+        {
+          "id": "b24_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Blue/green muda como eu atualizo o serviço ECS pelo Terraform?",
+            "answer": "Sim, e ignorar essa mudança é a causa mais comum de \"o deploy sumiu sozinho\". Depois do primeiro deploy pelo CodeDeploy, os campos `task_definition`, `load_balancer` e `desired_count` do serviço ECS deixam de refletir o que o Terraform registrou no state — porque o CodeDeploy os modifica por fora dele, criando conjuntos de tarefas e trocando o grupo de destino ativo. Sem `lifecycle { ignore_changes = [...] }` nesses três campos, o próximo `terraform apply` de rotina tenta devolver o serviço à revisão antiga que o state ainda acha correta, revertendo um deploy que nada tinha a ver com aquele apply."
+          }
+        },
+        {
+          "id": "b24_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Qual é a diferença prática entre canário e linear no CodeDeploy?",
+            "answer": "Canário desloca em DOIS incrementos — uma fatia inicial, uma pausa de observação, depois o restante — enquanto linear desloca em VÁRIOS incrementos iguais, um atrás do outro, sem uma pausa longa fixa entre eles (por exemplo, 10% a cada minuto até completar). O canário dá uma janela clara e previsível para o alarme reagir antes de mais tráfego chegar; o linear chega a 100% mais rápido quando tudo está bem, mas dá menos tempo de reação por incremento. Para um defeito que só aparece sob concorrência SUSTENTADA — não numa rajada breve —, a pausa do canário costuma ser a escolha mais segura."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b25_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Um hook `AfterAllowTestTraffic` chama apenas a rota `/health/ready` da frota verde, com uma única requisição, e sempre aprova. Uma regressão que só aparece sob 30 chamadas simultâneas ao banco chega a produção sem ser detectada. Qual é o erro de raciocínio no desenho deste hook?",
+            "options": [
+              "O problema é do CodeDeploy, que deveria ter um hook de concorrência embutido por padrão",
+              "O listener de teste não estava configurado corretamente",
+              "O hook deveria chamar `/health/live` em vez de `/health/ready`",
+              "O hook reproduz exatamente o que o health check da task já testa, sem acrescentar carga concorrente — não testa nada de novo"
+            ],
+            "correctIndex": 3,
+            "explanation": "O valor do hook `AfterAllowTestTraffic` está em testar algo que o health check da task NÃO testa: comportamento sob concorrência real. Chamar a mesma rota de prontidão, com uma única requisição, é reproduzir exatamente a verificação que já rodou antes — o hook existe como bloco de código, mas não acrescenta cobertura nenhuma. A regressão deste cenário só aparece com múltiplas chamadas simultâneas esgotando o pool de conexões, e nenhuma requisição isolada revela isso.\n\nA primeira alternativa troca a rota errada pela rota errada: tanto `/health/live` quanto `/health/ready` continuam sendo verificações de uma única conexão, e nenhuma das duas reproduz carga. A terceira desloca a causa para a infraestrutura de rede, quando o enunciado já garante que o listener alcança a frota — o defeito está na LÓGICA do hook, não na configuração do listener. A quarta espera do CodeDeploy uma responsabilidade que é do autor do módulo: o serviço orquestra QUANDO o hook roda e o que fazer com o resultado, mas o CONTEÚDO da validação é sempre escrito por quem implanta."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Durante a janela do canário, o alarme do alvo verde dispara `ALARM`, e minutos depois `describe-listeners` mostra a regra de produção apontando 100% para o grupo de destino AZUL de novo, sem nenhum build ou push novo ter acontecido. O que aconteceu, exatamente?",
+            "options": [
+              "O CodeDeploy reimplantou automaticamente a revisão anterior da task definition, como o disjuntor do L03 faz",
+              "O CodeDeploy reapontou a regra do listener de produção de volta para o grupo azul, que nunca parou de existir nem de receber tráfego",
+              "O ECS matou a frota verde e recriou a azul do zero a partir da imagem antiga",
+              "O Terraform detectou o alarme e aplicou um rollback automático no próximo apply"
+            ],
+            "correctIndex": 1,
+            "explanation": "É a diferença estrutural central deste laboratório: rollback em blue/green é reapontar uma regra de listener, não reconstruir nem reimplantar nada. A frota azul nunca parou de existir nem de receber o tráfego que ainda não tinha migrado — reverter é só devolver a regra de produção a 100% para ela, o que acontece em segundos porque não depende de subir processo nenhum.\n\nA primeira alternativa importa o mecanismo do L03 para o contexto errado: o disjuntor reimplanta uma revisão de task definition porque, no rolling update, não existe uma segunda frota pronta para onde voltar. Aqui existe, e é exatamente essa existência que torna a reversão mais rápida. A terceira inventa uma reconstrução que não precisa acontecer — a frota azul nunca foi derrubada, então não há \"recriar do zero\" nenhum. A quarta atribui ao Terraform uma reação em tempo real que ele não tem: o Terraform só age quando alguém roda `apply`, e o rollback automático deste cenário é uma ação do CodeDeploy, não do estado declarado da infraestrutura."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b26_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L03 no ar (tag imutável, disjuntor, rolling update) e L18 (migration aditiva); noção de listener e grupo de destino de ALB"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "diferença estrutural entre rolling update e blue/green; canário como resposta a \"defeito só aparece com 100% do tráfego\"; listener de teste; alarme do CodeDeploy vs disjuntor do L03; termination wait time da frota azul"
+              ],
+              [
+                "Limitação que fica",
+                "a validação de concorrência do hook é sintética — volume real de pico sustentado pode revelar algo que a simulação não reproduz; o `CreateDeployment` ainda sai de um script, não de um pipeline"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L54 — pipeline com credencial federada (OIDC). Reutiliza o AppSpec e a deployment group deste módulo, e é onde o `CreateDeployment` deixa de sair da máquina de uma pessoa"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "módulos futuros de liberação por feature flag e de canário graduado por dado de risco dependem da deployment group e do alarme construídos aqui"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b26_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "CodeDeploy blue/green deployments for Amazon ECS",
+                "code": true
+              },
+              {
+                "text": " — os dois grupos de destino, o listener de teste opcional e as restrições de NLB; "
+              },
+              {
+                "text": "Working with deployment configurations in CodeDeploy",
+                "code": true
+              },
+              {
+                "text": " — os percentuais exatos de canário, linear e all-at-once; "
+              },
+              {
+                "text": "AppSpec 'hooks' section for an Amazon ECS deployment",
+                "code": true
+              },
+              {
+                "text": " — a ordem dos cinco hooks e o que cada um pode reprovar; e "
+              },
+              {
+                "text": "BlueInstanceTerminationOption (API Reference)",
+                "code": true
+              },
+              {
+                "text": " — o teto de 2880 minutos para a retenção da frota azul. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "A AWS não documenta um valor padrão para `termination_wait_time_in_minutes` — os 30 minutos usados aqui são uma escolha explícita da Cadência, não uma referência oficial; derive o seu do tempo real que sua equipe leva para perceber um problema sutil. Os limites de concorrência e latência do hook (30 chamadas, 2% de erro, 800 ms de p99) são medidos na aplicação de exemplo e servem como ordem de grandeza — meça o pico real do seu serviço antes de copiá-los. E a restrição de NLB para `ECSAllAtOnce` está confirmada na documentação oficial consultada; comportamentos de versão de console podem mudar, então confira a página antes de desenhar em torno dela."
+          }
+        }
+      ]
+    }
+  ]
+}

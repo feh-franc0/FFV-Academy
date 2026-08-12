@@ -17,10 +17,10 @@ const VALID_PHONE = '+5511987654321';
 beforeEach(() => localStorage.clear());
 
 describe('requestToken', () => {
-  it('aceita email válido e resolve { ok: true, isNewUser }', async () => {
+  it('aceita email válido e resolve { ok: true } sem isNewUser (endpoint público, não prova posse do email)', async () => {
     const r = await requestToken(VALID_EMAIL);
     expect(r.ok).toBe(true);
-    expect(typeof r.isNewUser).toBe('boolean');
+    expect('isNewUser' in r).toBe(false);
   });
 
   it('rejeita email malformado', async () => {
@@ -49,9 +49,10 @@ describe('verifyToken — token 000000', () => {
     }
   });
 
-  it('primeira auth exige pendingRegistration', async () => {
+  it('primeira auth sem registration retorna registrationRequired (código já validado, cadastro pendente)', async () => {
     const r = await verifyToken(VALID_EMAIL, MOCK_TOKEN);
     expect(r.ok).toBe(false);
+    expect(r.registrationRequired).toBe(true);
   });
 
   it('segundo login (mesmo email) reaproveita user existente', async () => {

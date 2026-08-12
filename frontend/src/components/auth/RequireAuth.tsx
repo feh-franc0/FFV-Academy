@@ -4,7 +4,10 @@
  * RequireAuth — gate de autenticação para conteúdo protegido.
  *
  * - Se o usuário está logado: renderiza children normalmente.
- * - Se ainda está verificando a sessão (hydration): mostra skeleton de loading.
+ * - Se ainda está verificando a sessão: mostra esqueleto — decidido por
+ *   `carregando` do contexto, NUNCA por `typeof window`. Ramo por ambiente
+ *   dentro do render garante incompatibilidade de hidratação, e foi o defeito
+ *   que a varredura de todas as telas encontrou em 05/ago/2026.
  * - Se não está logado: mostra mensagem de "login necessário" com botão que
  *   dispara o modal via requireLogin() do AuthContext.
  */
@@ -28,7 +31,7 @@ export function RequireAuth({
   title = 'Login necessário',
   description = 'Faça login para acessar os simulados e acompanhar seu progresso.',
 }: Props) {
-  const { user, isLoggedIn, requireLogin } = useAuth();
+  const { isLoggedIn, carregando, requireLogin } = useAuth();
   const [triggering, setTriggering] = useState(false);
 
   // Enquanto o AuthProvider restaura a sessão (user === null mas ainda não
@@ -42,6 +45,23 @@ export function RequireAuth({
   // Portanto mostramos o skeleton apenas quando user===null para evitar flash
   // de conteúdo protegido. Se há sessão, ela é restaurada antes do primeiro
   // render interativo.
+  // Enquanto a sessão é restaurada, esqueleto — e o servidor renderiza o MESMO
+  // esqueleto, porque `carregando` começa `true` nos dois lados.
+  if (carregando) {
+    return (
+      <div
+        className="min-h-[60vh] flex items-center justify-center"
+        aria-busy="true"
+        aria-label="Verificando autenticação…"
+      >
+        <div
+          className="w-8 h-8 rounded-full border-2 border-t-transparent animate-spin"
+          style={{ borderColor: 'var(--ffv-border)', borderTopColor: 'var(--ffv-red)' }}
+        />
+      </div>
+    );
+  }
+
   if (isLoggedIn) {
     return <>{children}</>;
   }
@@ -60,21 +80,6 @@ export function RequireAuth({
     }
   }
 
-  // Se user ainda é null e acabou de montar, mostra loading skeleton leve
-  // (dura apenas os milissegundos do restoreSession).
-  if (user === null && typeof window === 'undefined') {
-    return (
-      <div
-        className="min-h-[60vh] flex items-center justify-center"
-        aria-busy="true"
-        aria-label="Verificando autenticação…"
-      >
-        <div className="w-8 h-8 rounded-full border-2 border-t-transparent animate-spin"
-          style={{ borderColor: 'var(--ffv-border)', borderTopColor: '#f78166' }} />
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-[60vh] flex items-center justify-center px-4 py-16">
       <div
@@ -84,7 +89,7 @@ export function RequireAuth({
         {/* Ícone de cadeado */}
         <div
           className="mx-auto mb-5 w-14 h-14 rounded-full flex items-center justify-center text-2xl"
-          style={{ background: 'color-mix(in srgb, #f78166 15%, transparent)' }}
+          style={{ background: 'color-mix(in srgb, var(--ffv-red) 15%, transparent)' }}
           aria-hidden="true"
         >
           🔒
@@ -99,7 +104,7 @@ export function RequireAuth({
           onClick={handleLogin}
           disabled={triggering}
           className="w-full py-2.5 px-6 rounded-xl text-sm font-semibold transition-opacity disabled:opacity-60"
-          style={{ background: '#f78166', color: 'white' }}
+          style={{ background: 'var(--ffv-red)', color: 'var(--primary-foreground)' }}
         >
           {triggering ? 'Abrindo login…' : 'Fazer login'}
         </button>

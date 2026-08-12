@@ -2,25 +2,25 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { SIMULADOS_CATALOG } from '@/lib/simulados-catalog';
 import { SimuladoCard } from '@/components/SimuladoCard';
+import { BASE, social } from '@/lib/metadata-social';
 
 export const metadata: Metadata = {
-  title: 'Simulados com Tutor IA — FFV Academy',
+  title: 'Simulados com Tutor IA',
   description: 'Simulados profissionais para certificações AWS, com tutor IA que explica cada questão por dentro. Gratuito — acesso completo para todos os usuários.',
   keywords: 'simulado aws, aws cloud practitioner simulado, aws saa simulado, simulado com tutor ia, certificação aws preparação',
-  alternates: { canonical: 'https://fernandofrancovalle.com/simulados' },
-  openGraph: {
-    title: 'Simulados com Tutor IA — FFV Academy',
-    description: 'Prepare-se para certificações AWS com simulados que ensinam.',
-    type: 'website',
-    url: 'https://fernandofrancovalle.com/simulados',
-  },
+  alternates: { canonical: `${BASE}/simulados` },
+  ...social({
+    titulo: 'Simulados com Tutor IA — FFV Academy',
+    descricao: 'Prepare-se para certificações AWS com simulados que ensinam.',
+    caminho: '/simulados',
+  }),
 };
 
 export default function SimuladosPage() {
   return (
     <div className="max-w-5xl mx-auto px-6 py-12">
       <nav className="text-xs mb-8" style={{ color: 'var(--ffv-muted)' }}>
-        <Link href="/" style={{ color: 'var(--ffv-muted)' }}>FFV Academy</Link>
+        <Link href="/" className="inline-flex min-h-[24px] items-center" style={{ color: 'var(--ffv-muted)' }}>FFV Academy</Link>
         <span className="mx-1">/</span>
         <span style={{ color: 'var(--foreground)' }}>Simulados</span>
       </nav>
@@ -37,14 +37,14 @@ export default function SimuladosPage() {
         className="block p-6 rounded-xl mb-8 transition-transform hover:scale-[1.005]"
         style={{ background: 'linear-gradient(135deg, rgba(247,129,102,0.15), rgba(247,129,102,0.05))', border: '1px solid #f78166' }}
       >
-        <p className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: '#f78166' }}>
+        <p className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: 'var(--ffv-red)' }}>
           Novo · Modo de estudo livre
         </p>
         <h2 className="text-xl md:text-2xl font-bold mb-2">Estudo livre Cloud Practitioner</h2>
         <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
           335+ questões reais do banco CLF-C02, sorteadas com distribuição oficial do blueprint AWS. Modo livre, sem timer, com tutor IA para tirar dúvidas. Gratuito.
         </p>
-        <p className="text-xs mt-3 font-medium" style={{ color: '#f78166' }}>
+        <p className="text-xs mt-3 font-medium" style={{ color: 'var(--ffv-red)' }}>
           Começar a estudar →
         </p>
       </Link>

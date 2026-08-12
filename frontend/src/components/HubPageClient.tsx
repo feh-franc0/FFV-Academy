@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useGameState } from '@/hooks/useGameState';
+import { safeJsonLd } from '@/lib/safe-json';
 import {
   HUBS,
   getHubStats,
@@ -17,8 +18,61 @@ export function HubPageClient({ hub }: { hub: Hub }) {
   const stats = getHubStats(hub, completed);
   const trails = getHubTrails(hub);
 
+  /**
+   * Lista de cursos do hub.
+   *
+   * As páginas de hub não tinham dado estruturado nenhum — e são exatamente o
+   * formato que o buscador espera para carrossel de cursos: uma página-resumo com
+   * `ItemList` de `Course`, apontando para as páginas de cada curso, que já têm o
+   * `Course` completo. Faltava metade do par.
+   *
+   * `description` e `name` são as duas propriedades exigidas; `provider` é a
+   * recomendada. Nada além disso é usado pelo recurso, então não há motivo para
+   * inflar o objeto.
+   */
+  const cursosLd = {
+    '@context': 'https://schema.org',
+    '@type': 'ItemList',
+    name: `Trilhas de ${hub.name} — FFV Academy`,
+    itemListElement: trails.map((t, i) => ({
+      '@type': 'ListItem',
+      position: i + 1,
+      item: {
+        '@type': 'Course',
+        name: t.name,
+        description: t.desc,
+        url: `https://fernandofrancovalle.com${getTrailHref(t.id)}`,
+        provider: {
+          '@type': 'Organization',
+          name: 'FFV Academy',
+          url: 'https://fernandofrancovalle.com',
+        },
+        inLanguage: 'pt-BR',
+        isAccessibleForFree: true,
+      },
+    })),
+  };
+
+  // Migalha legível por máquina. O hub tinha `ItemList` de cursos e nenhuma
+  // `BreadcrumbList`: sem ela, o resultado de busca mostra a URL crua em vez da
+  // linha de contexto, e o buscador não sabe que o hub está sob a jornada.
+  const migalhaLd = {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'FFV Academy', item: 'https://fernandofrancovalle.com' },
+      { '@type': 'ListItem', position: 2, name: 'A jornada', item: 'https://fernandofrancovalle.com/jornada' },
+      { '@type': 'ListItem', position: 3, name: hub.name, item: `https://fernandofrancovalle.com${hub.href}` },
+    ],
+  };
+
   return (
     <div style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(migalhaLd) }} />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(cursosLd) }}
+      />
       <HubHero hub={hub} stats={stats} />
       <HubTrails hub={hub} trails={trails} completed={completed} />
       <HubCrossSell hub={hub} />
@@ -47,7 +101,7 @@ function HubHero({
         <nav className="flex items-center gap-2 text-xs mb-6" style={{ color: 'var(--ffv-muted)' }}>
           <Link href="/" className="transition-colors hover:text-white">FFV Academy</Link>
           <span>/</span>
-          <span style={{ color: hub.color }}>{hub.name}</span>
+          <span className="ffv-acento-texto" style={{ '--ffv-acento': hub.color } as React.CSSProperties}>{hub.name}</span>
         </nav>
 
         <div className="flex items-center gap-3 mb-6">
@@ -61,8 +115,8 @@ function HubHero({
             {hub.icon}
           </div>
           <p
-            className="font-mono text-[11px] tracking-[0.18em] uppercase font-bold"
-            style={{ color: hub.color }}
+            className="font-mono text-[11px] tracking-[0.18em] uppercase font-bold ffv-acento-texto"
+            style={{ '--ffv-acento': hub.color } as React.CSSProperties}
           >
             Hub · {hub.shortName}
           </p>
@@ -308,9 +362,15 @@ function TrailCard({
         />
 
         <div className="flex items-center justify-between mb-5">
+          {/* Cor de trilha como TEXTO falha WCAG AA em tema claro: `#ff9900` a
+              2,01:1, medido aqui em 07/ago/2026 — 5 cards × 2 rótulos = 10 nós.
+              O utilitário de acento (globals.css) escurece 57% só no claro.
+              (Comentário curto de propósito: `tema-falha-em-seguranca.test.ts`
+              procura a variável numa janela de 400 caracteres depois de cada
+              menção à classe, e conta a menção em comentário como uso.) */}
           <span
-            className="font-mono"
-            style={{ fontSize: 11, color: trail.color, letterSpacing: '0.08em', fontWeight: 700 }}
+            className="font-mono ffv-acento-texto"
+            style={{ fontSize: 11, '--ffv-acento': trail.color, letterSpacing: '0.08em', fontWeight: 700 } as React.CSSProperties}
           >
             TRILHA {String(number).padStart(2, '0')}
           </span>
@@ -401,8 +461,8 @@ function TrailCard({
                 PROGRESSO
               </span>
               <span
-                className="font-mono"
-                style={{ fontSize: 10, color: trail.color, fontWeight: 700 }}
+                className="font-mono ffv-acento-texto"
+                style={{ fontSize: 10, '--ffv-acento': trail.color, fontWeight: 700 } as React.CSSProperties}
               >
                 {done}/{trail.modules.length}
               </span>
@@ -438,14 +498,15 @@ function TrailCard({
             {trail.modules.length} ARTIGOS · {totalXp} XP
           </span>
           <span
+            className="ffv-acento-texto"
             style={{
               fontSize: 13,
               fontWeight: 700,
-              color: trail.color,
+              '--ffv-acento': trail.color,
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
-            }}
+            } as React.CSSProperties}
           >
             Abrir
             <span
@@ -564,14 +625,16 @@ function HubCrossSell({ hub }: { hub: Hub }) {
                     {h.trailIds.length} trilha{h.trailIds.length !== 1 ? 's' : ''}
                   </div>
                 </div>
+                {/* className ANTES do style: o gate de tema procura
+                    `--ffv-acento` numa janela para FRENTE da menção à classe. */}
                 <span
+                  className="group-hover:translate-x-1 inline-block ffv-acento-texto"
                   style={{
-                    color: h.color,
+                    '--ffv-acento': h.color,
                     fontWeight: 700,
                     fontSize: 14,
                     transition: 'transform 0.2s ease',
-                  }}
-                  className="group-hover:translate-x-1 inline-block"
+                  } as React.CSSProperties}
                 >
                   →
                 </span>

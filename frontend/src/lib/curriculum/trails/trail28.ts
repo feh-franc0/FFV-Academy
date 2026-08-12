@@ -1,0 +1,20 @@
+import type { Trail } from '../types';
+
+/** FinOps & Cost Engineering */
+export const trilha_trail28: Trail = {
+    id: 'trail28', name: 'FinOps & Cost Engineering',
+    color: '#22c55e', icon: '💰',
+    desc: 'FinOps como disciplina: unit economics de software, cost anomaly detection, rightsizing sem medo, reservas/Savings Plans/Spot strategy, cultura FinOps cross-team, observability de custo (tags, allocation), capstone de redução 30% em app real.',
+    level: 'intermediate', href: '/finops',
+    prerequisites: ['cloud-adoption-framework'],
+    modules: [
+      { slug: 'unit-economics-em-software', title: 'Unit economics em software: CAC, LTV, cost per request', icon: '📊', xp: 45, readTime: 11, desc: 'SaaS economics: CAC, LTV, gross margin, cost per request, cost per user, unit cost curves. Como engineering decisions impactam economics.',
+        objetivo: 'Você calcula o custo por request do seu sistema e liga essa conta a uma decisão de engenharia real.', keywords: 'unit economics software, cac ltv saas, cost per request, engineering economics', nextSuggested: ['cost-anomaly-detection'], level: 'intermediate' },
+      { slug: 'cost-anomaly-detection', title: 'Cost anomaly detection: quando alertar', icon: '🚨', xp: 50, readTime: 12, desc: 'AWS Cost Anomaly Detection ML, Datadog Cloud Cost, Vantage, CloudZero. Alert fatigue vs signal. Thresholds, baselines, seasonal adjustment.', keywords: 'cost anomaly detection, aws cost anomaly, datadog cloud cost, vantage cloudzero', prerequisites: ['unit-economics-em-software'], nextSuggested: ['rightsizing-sem-medo'], level: 'intermediate' },
+      { slug: 'rightsizing-sem-medo', title: 'Rightsizing sem medo: metodologia de cortar sem quebrar', icon: '✂️', xp: 50, readTime: 12, desc: 'Compute Optimizer recommendations, VPA (Vertical Pod Autoscaler), memory vs CPU bottleneck identification, safety buffer, rollback strategy, chaos testing.', keywords: 'rightsizing aws, compute optimizer, vertical pod autoscaler, capacity planning', prerequisites: ['cost-anomaly-detection'], nextSuggested: ['reservas-savings-plans-spot'], level: 'intermediate' },
+      { slug: 'reservas-savings-plans-spot', title: 'Reservas, Savings Plans e Spot: estratégia de portfolio', icon: '💸', xp: 55, readTime: 13, desc: 'Savings Plans (Compute vs EC2 vs SageMaker), Reserved Instances (Standard vs Convertible), Spot capacity + interruption handling, commitment portfolio mix.', keywords: 'savings plans, reserved instances, spot instances strategy, commitment portfolio', prerequisites: ['rightsizing-sem-medo'], nextSuggested: ['finops-cultura-e-time'], level: 'intermediate' },
+      { slug: 'finops-cultura-e-time', title: 'FinOps cultura: team accountability + processes', icon: '🤝', xp: 50, readTime: 12, desc: 'FinOps Framework (Inform/Optimize/Operate), showback vs chargeback, cost KPIs por time, central FinOps team vs embedded, monthly reviews.', keywords: 'finops framework, showback chargeback, cost kpis, central finops team', prerequisites: ['reservas-savings-plans-spot'], nextSuggested: ['observability-de-custo'], level: 'intermediate' },
+      { slug: 'observability-de-custo', title: 'Observability de custo: tags, allocation, dashboards', icon: '🔍', xp: 50, readTime: 12, desc: 'Tagging strategy (mandatory vs optional), AWS Cost Allocation Tags, Cost Categories, dashboards Grafana/Datadog com cost, tag policies enforcement.', keywords: 'cost allocation tags, cost categories, cost dashboards grafana, tag policy', prerequisites: ['finops-cultura-e-time'], nextSuggested: ['capstone-reducao-de-30-custo'], level: 'intermediate' },
+      { slug: 'capstone-reducao-de-30-custo', title: 'Capstone: redução de 30% de custo em app real', icon: '🏁', xp: 85, readTime: 18, desc: 'Escolha app real (próprio ou case study). Baseline de custo (Cost Explorer). Identifique top 5 opportunities (rightsizing, commitments, spot, storage tiering, sobras). Implemente, meça, documente.', nextSuggested: ['threat-modeling-stride'], keywords: 'capstone finops, reducao custo cloud, cloud cost optimization case', prerequisites: ['observability-de-custo'], level: 'advanced' },
+    ],
+  };

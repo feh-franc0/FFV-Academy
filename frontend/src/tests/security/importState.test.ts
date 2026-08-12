@@ -16,16 +16,16 @@ import { GAME_CONFIG } from '../../lib/constants';
 beforeEach(() => localStorage.clear());
 
 describe('importState — size limits', () => {
-  it('rejeita payload > IMPORT_STATE_MAX_BYTES', () => {
+  it('rejeita payload > IMPORT_STATE_MAX_BYTES', async () => {
     const big = '{"xp":0,"filler":"' + 'x'.repeat(GAME_CONFIG.IMPORT_STATE_MAX_BYTES + 10) + '"}';
-    const r = importState(big);
+    const r = await importState(big);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('excede');
   });
 });
 
 describe('importState — prototype pollution', () => {
-  it('rejeita payload com __proto__', () => {
+  it('rejeita payload com __proto__', async () => {
     // strict() da Zod rejeita campos desconhecidos. __proto__ em JSON.parse
     // é parseado como own-property em JS moderno (não afeta o protótipo),
     // mas ainda assim nosso schema strict deve rejeitar.
@@ -39,7 +39,7 @@ describe('importState — prototype pollution', () => {
       onboardedAt: null, articleProgress: {},
       __proto__: { isAdmin: true },
     });
-    const r = importState(evil);
+    const r = await importState(evil);
     // Object literal no JS não carrega __proto__ como own-prop; o JSON.parse mantém.
     // Zod strict pode ou não pegar dependendo do parse — garantimos que o state
     // importado não pollui Object.prototype.
@@ -47,7 +47,7 @@ describe('importState — prototype pollution', () => {
     expect((({} as unknown) as { isAdmin?: boolean }).isAdmin).toBeUndefined();
   });
 
-  it('rejeita payload com "constructor" como campo', () => {
+  it('rejeita payload com "constructor" como campo', async () => {
     const evil = JSON.stringify({
       xp: 0, level: 1, streak: 0, lastStudyDate: null,
       completedModules: [], quizScores: {}, badges: [],
@@ -58,14 +58,14 @@ describe('importState — prototype pollution', () => {
       onboardedAt: null, articleProgress: {},
       constructor: { prototype: { evil: true } },
     });
-    const r = importState(evil);
+    const r = await importState(evil);
     expect(r.ok).toBe(false); // strict → campo desconhecido
   });
 });
 
 describe('importState — type coercion blocking', () => {
-  it('rejeita xp como boolean', () => {
-    const r = importState(JSON.stringify({
+  it('rejeita xp como boolean', async () => {
+    const r = await importState(JSON.stringify({
       xp: true, level: 1, streak: 0, lastStudyDate: null,
       completedModules: [], quizScores: {}, badges: [],
       totalStudyTime: 0, startedAt: null, reviewCards: [],
@@ -76,8 +76,8 @@ describe('importState — type coercion blocking', () => {
     expect(r.ok).toBe(false);
   });
 
-  it('rejeita freezes negativo', () => {
-    const r = importState(JSON.stringify({
+  it('rejeita freezes negativo', async () => {
+    const r = await importState(JSON.stringify({
       xp: 0, level: 1, streak: 0, lastStudyDate: null,
       completedModules: [], quizScores: {}, badges: [],
       totalStudyTime: 0, startedAt: null, reviewCards: [],
@@ -88,21 +88,21 @@ describe('importState — type coercion blocking', () => {
     expect(r.ok).toBe(false);
   });
 
-  it('rejeita JSON não-objeto (array top-level)', () => {
-    expect(importState('[]').ok).toBe(false);
+  it('rejeita JSON não-objeto (array top-level)', async () => {
+    expect((await importState('[]')).ok).toBe(false);
   });
 
-  it('rejeita string vazia', () => {
-    expect(importState('').ok).toBe(false);
+  it('rejeita string vazia', async () => {
+    expect((await importState('')).ok).toBe(false);
   });
 
-  it('rejeita JSON mal-formado', () => {
-    expect(importState('{xp:0}').ok).toBe(false);
+  it('rejeita JSON mal-formado', async () => {
+    expect((await importState('{xp:0}')).ok).toBe(false);
   });
 });
 
 describe('importState — roundtrip (zero regression)', () => {
-  it('export → import preserva XP, badges e módulos', () => {
+  it('export → import preserva XP, badges e módulos', async () => {
     completeModule({
       slug: 'o-que-e-ia',
       title: 'O que é IA?',
@@ -114,7 +114,7 @@ describe('importState — roundtrip (zero regression)', () => {
     const exported = exportState();
     localStorage.clear();
 
-    const r = importState(exported);
+    const r = await importState(exported);
     expect(r.ok).toBe(true);
 
     const state = loadState();

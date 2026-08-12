@@ -28,9 +28,31 @@ func NewCurriculumRepo(pool *pgxpool.Pool) *CurriculumRepo {
 	return &CurriculumRepo{pool: pool}
 }
 
-// FindBySlug retorna um artigo pelo slug permanente.
-// Retorna shared.ErrNotFound se não existir ou estiver soft-deleted.
+// FindBySlug retorna um artigo PUBLICADO pelo slug permanente — uso público.
+// Retorna shared.ErrNotFound se não existir, estiver soft-deleted ou não
+// estiver publicado (rascunho não é servido por slug adivinhado).
 func (r *CurriculumRepo) FindBySlug(ctx context.Context, slug string) (*domcurriculum.Article, error) {
+	const q = `
+		SELECT id, slug, title, trail_id, hub_id, content_md, xp, read_time,
+		       difficulty, "order", published, created_at, updated_at
+		FROM curriculum_articles
+		WHERE slug = $1 AND deleted_at IS NULL AND published = TRUE
+	`
+	row := r.pool.QueryRow(ctx, q, slug)
+	article, err := scanCurriculumRow(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: artigo '%s'", shared.ErrNotFound, slug)
+		}
+		return nil, fmt.Errorf("curriculum: find by slug: %w", err)
+	}
+	return article, nil
+}
+
+// FindBySlugForAdmin retorna um artigo pelo slug SEM filtrar por published —
+// uso exclusivo de rotas admin, que precisam editar rascunhos antes de
+// publicá-los. Retorna shared.ErrNotFound se não existir ou estiver soft-deleted.
+func (r *CurriculumRepo) FindBySlugForAdmin(ctx context.Context, slug string) (*domcurriculum.Article, error) {
 	const q = `
 		SELECT id, slug, title, trail_id, hub_id, content_md, xp, read_time,
 		       difficulty, "order", published, created_at, updated_at
@@ -43,7 +65,7 @@ func (r *CurriculumRepo) FindBySlug(ctx context.Context, slug string) (*domcurri
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("%w: artigo '%s'", shared.ErrNotFound, slug)
 		}
-		return nil, fmt.Errorf("curriculum: find by slug: %w", err)
+		return nil, fmt.Errorf("curriculum: find by slug for admin: %w", err)
 	}
 	return article, nil
 }

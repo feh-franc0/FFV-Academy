@@ -1,12 +1,17 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { CURRICULUM, HUBS } from '@/lib/curriculum';
+import { BASE, social } from '@/lib/metadata-social';
+
+/** Uma definição só: serve à meta description e ao cartão social. */
+const DESCRICAO_CARTAO =
+  'Quem está por trás da FFV Academy e por que essa plataforma existe: tecnologia só faz sentido quando vira produto que entrega valor.';
 
 export const metadata: Metadata = {
-  title: 'Sobre — FFV Academy',
-  description:
-    'Quem está por trás da FFV Academy e por que essa plataforma existe: tecnologia só faz sentido quando vira produto que entrega valor.',
-  alternates: { canonical: 'https://fernandofrancovalle.com/sobre' },
+  title: 'Sobre',
+  description: DESCRICAO_CARTAO,
+  alternates: { canonical: `${BASE}/sobre` },
+  ...social({ titulo: `Sobre — FFV Academy`, descricao: DESCRICAO_CARTAO, caminho: '/sobre' }),
 };
 
 const TOTAL_MODULES = CURRICULUM.flatMap(t => t.modules).length;
@@ -194,7 +199,7 @@ export default function SobrePage() {
               className="inline-flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-sm transition-transform hover:scale-[1.04]"
               style={{
                 background: 'linear-gradient(90deg, var(--ffv-blue), var(--ffv-purple))',
-                color: '#fff',
+                color: 'var(--primary-foreground)',
                 boxShadow: '0 16px 40px -12px color-mix(in srgb, var(--ffv-blue) 50%, transparent)',
               }}
             >
@@ -252,7 +257,10 @@ function Principle({ num, title, desc }: { num: string; title: string; desc: str
       <span
         className="font-mono font-bold text-3xl flex-shrink-0"
         style={{
-          color: 'color-mix(in srgb, var(--ffv-blue) 60%, var(--ffv-bg))',
+          // Era `color-mix(… var(--ffv-blue) 60%, var(--ffv-bg))`, que mistura o
+          // azul COM O FUNDO — apagar o texto de propósito, 2,62:1. O número é o
+          // conteúdo da seção; quem quer suavizar suaviza o rótulo, não o dado.
+          color: 'var(--ffv-blue)',
           letterSpacing: '-0.02em',
           lineHeight: 1,
         }}

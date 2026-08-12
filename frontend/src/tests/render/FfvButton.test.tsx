@@ -50,4 +50,21 @@ describe('FfvButton', () => {
     rerender(<FfvButton size="xl" href="/x">XL</FfvButton>);
     expect(screen.getByText('XL').className).toContain('px-8');
   });
+
+  /**
+   * Regressão do defeito medido em 11/ago/2026: a variante `primary` (o
+   * botão que esta change elegeu como ÚNICO) fixava `color: '#fff'` sobre um
+   * gradient `var(--ffv-blue)→var(--ffv-purple)`. No tema ESCURO (padrão do
+   * site), essas variáveis são claras (#58a6ff/#d2a8ff) — branco sobre elas
+   * mede 2,53:1 e 1,95:1, os dois abaixo do mínimo. Funcionava só no tema
+   * claro, onde as mesmas variáveis são escuras. `var(--primary-foreground)`
+   * inverte junto com o tema; não pode voltar a ser hex literal.
+   */
+  it('variant primary usa var(--primary-foreground), não hex literal', () => {
+    render(<FfvButton href="/x">CTA</FfvButton>);
+    const style = screen.getByText('CTA').getAttribute('style') ?? '';
+    expect(style).toContain('var(--primary-foreground)');
+    expect(style).not.toMatch(/color:\s*#fff/i);
+    expect(style).not.toMatch(/color:\s*white/i);
+  });
 });

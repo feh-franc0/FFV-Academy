@@ -65,7 +65,7 @@ export default function AdminDashboard() {
     Promise.all([fetchAdminStats(), fetchAdminGrowth(30)])
       .then(([statsRes, growthRes]) => {
         if (cancelled) return;
-        if (!statsRes) setError('Falha ao carregar métricas. Backend está rodando?');
+        if (!statsRes) setError('Não foi possível carregar as métricas agora. Tente novamente em instantes.');
         else setData(statsRes);
         setGrowth(growthRes);
       })

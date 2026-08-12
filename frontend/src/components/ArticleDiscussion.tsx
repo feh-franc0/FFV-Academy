@@ -119,6 +119,7 @@ export function ArticleDiscussion({ slug, title, accentColor = 'var(--ffv-blue)'
         {!submitted ? (
           <>
             <textarea
+              aria-label="Escreva sua dúvida técnica"
               value={newQuestion}
               onChange={e => setNewQuestion(e.target.value)}
               placeholder="Escreva sua dúvida técnica aqui..."
@@ -129,6 +130,7 @@ export function ArticleDiscussion({ slug, title, accentColor = 'var(--ffv-blue)'
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <input
                 type="text"
+                aria-label="Seu nome (opcional)"
                 value={authorName}
                 onChange={e => setAuthorName(e.target.value)}
                 placeholder="Seu nome (opcional)"

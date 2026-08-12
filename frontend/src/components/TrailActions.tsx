@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import type { Trail } from '@/lib/curriculum';
 
 interface Props {
@@ -8,6 +9,7 @@ interface Props {
 }
 
 export function TrailActions({ trail }: Props) {
+  const router = useRouter();
   const accent = trail.color;
 
   const handlePrint = useCallback(() => {
@@ -21,8 +23,8 @@ export function TrailActions({ trail }: Props) {
     const first = trail.modules[0];
     if (!first) return;
     try { window.plausible?.('present-trail', { props: { trail: trail.id } }); } catch {}
-    window.location.href = `/aprenda/${first.slug}?present=trail`;
-  }, [trail]);
+    router.push(`/aprenda/${first.slug}?present=trail`);
+  }, [trail, router]);
 
   return (
     <div className="flex items-center gap-2 ffv-no-print mt-4 flex-wrap">

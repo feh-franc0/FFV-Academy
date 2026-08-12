@@ -32,15 +32,19 @@ func (r *AttemptRepo) Save(ctx context.Context, a *domsim.Attempt) error {
 	if err != nil {
 		return fmt.Errorf("attempt repo: marshal flags: %w", err)
 	}
+	questionIDsJSON, err := marshalQuestionIDs(a.QuestionIDs())
+	if err != nil {
+		return fmt.Errorf("attempt repo: marshal question ids: %w", err)
+	}
 
 	const q = `
 		INSERT INTO simulado_attempts
-			(id, user_id, simulado_id, started_at, deadline, answers, review_flags, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $4)
+			(id, user_id, simulado_id, started_at, deadline, answers, review_flags, question_ids, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $4)
 	`
 	_, err = r.pool.Exec(ctx, q,
 		a.ID().String(), a.UserID().String(), a.SimuladoID().String(),
-		a.StartedAt(), a.Deadline(), answersJSON, flagsJSON,
+		a.StartedAt(), a.Deadline(), answersJSON, flagsJSON, questionIDsJSON,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -100,10 +104,47 @@ func (r *AttemptRepo) Update(ctx context.Context, a *domsim.Attempt) error {
 	return nil
 }
 
+// UpsertAnswer grava a resposta atomicamente via jsonb_set — evita o lost
+// update do padrão find→mutate→Update quando duas respostas da mesma
+// tentativa chegam em paralelo (cliente com retry, múltiplas abas). A
+// cláusula WHERE reforça as invariantes de domínio (não finalizada, não
+// expirada) no próprio banco, então mesmo sob corrida a linha só muda se
+// ainda for uma resposta válida no momento exato do UPDATE.
+func (r *AttemptRepo) UpsertAnswer(ctx context.Context, attemptID shared.AttemptID, qID shared.QuestionID, opt domsim.OptionID, now time.Time) (bool, error) {
+	const q = `
+		UPDATE simulado_attempts
+		SET answers = jsonb_set(answers, ARRAY[$2::text], to_jsonb($3::text), true),
+		    updated_at = $4
+		WHERE id = $1 AND finished_at IS NULL AND deadline > $4
+	`
+	res, err := r.pool.Exec(ctx, q, attemptID.String(), string(qID), string(opt), now)
+	if err != nil {
+		return false, fmt.Errorf("attempt repo: upsert answer: %w", err)
+	}
+	return res.RowsAffected() > 0, nil
+}
+
+// ClaimXPCredit grava xp_credited_at atomicamente — só quando ainda era NULL,
+// pertence ao usuário e a tentativa está finalizada. RowsAffected==0 cobre os
+// três casos "não é a primeira reivindicação" e "não pertence a este usuário"
+// e "ainda não terminou" com a MESMA query, sem corrida entre checar e gravar.
+func (r *AttemptRepo) ClaimXPCredit(ctx context.Context, attemptID shared.AttemptID, userID shared.UserID, now time.Time) (bool, error) {
+	const q = `
+		UPDATE simulado_attempts
+		SET xp_credited_at = $3
+		WHERE id = $1 AND user_id = $2 AND finished_at IS NOT NULL AND xp_credited_at IS NULL
+	`
+	res, err := r.pool.Exec(ctx, q, attemptID.String(), userID.String(), now)
+	if err != nil {
+		return false, fmt.Errorf("attempt repo: claim xp credit: %w", err)
+	}
+	return res.RowsAffected() > 0, nil
+}
+
 func (r *AttemptRepo) FindByID(ctx context.Context, id shared.AttemptID) (*domsim.Attempt, error) {
 	const q = `
 		SELECT id, user_id, simulado_id, started_at, deadline, finished_at,
-		       answers, review_flags, score, passed, score_details
+		       answers, review_flags, score, passed, score_details, question_ids
 		FROM simulado_attempts WHERE id = $1
 	`
 	row := r.pool.QueryRow(ctx, q, id.String())
@@ -120,7 +161,7 @@ func (r *AttemptRepo) FindByID(ctx context.Context, id shared.AttemptID) (*domsi
 func (r *AttemptRepo) FindActiveByUserAndSimulado(ctx context.Context, userID shared.UserID, simID shared.SimuladoID) (*domsim.Attempt, error) {
 	const q = `
 		SELECT id, user_id, simulado_id, started_at, deadline, finished_at,
-		       answers, review_flags, score, passed, score_details
+		       answers, review_flags, score, passed, score_details, question_ids
 		FROM simulado_attempts
 		WHERE user_id = $1 AND simulado_id = $2 AND finished_at IS NULL
 		LIMIT 1
@@ -136,6 +177,30 @@ func (r *AttemptRepo) FindActiveByUserAndSimulado(ctx context.Context, userID sh
 	return a, nil
 }
 
+func (r *AttemptRepo) ListFinishedByUserAndSimulado(ctx context.Context, userID shared.UserID, simID shared.SimuladoID) ([]*domsim.Attempt, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, user_id, simulado_id, started_at, deadline, finished_at,
+		       answers, review_flags, score, passed, score_details, question_ids
+		FROM simulado_attempts
+		WHERE user_id = $1 AND simulado_id = $2 AND finished_at IS NOT NULL
+		ORDER BY finished_at DESC
+	`, userID.String(), simID.String())
+	if err != nil {
+		return nil, fmt.Errorf("attempt repo: list finished: %w", err)
+	}
+	defer rows.Close()
+
+	attempts := make([]*domsim.Attempt, 0)
+	for rows.Next() {
+		a, scanErr := scanAttempt(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("attempt repo: list finished: %w", scanErr)
+		}
+		attempts = append(attempts, a)
+	}
+	return attempts, rows.Err()
+}
+
 func (r *AttemptRepo) ListByUser(ctx context.Context, userID shared.UserID, limit, offset int) ([]*domsim.Attempt, int, error) {
 	var total int
 	if err := r.pool.QueryRow(ctx,
@@ -146,7 +211,7 @@ func (r *AttemptRepo) ListByUser(ctx context.Context, userID shared.UserID, limi
 
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, user_id, simulado_id, started_at, deadline, finished_at,
-		       answers, review_flags, score, passed, score_details
+		       answers, review_flags, score, passed, score_details, question_ids
 		FROM simulado_attempts WHERE user_id = $1
 		ORDER BY started_at DESC LIMIT $2 OFFSET $3
 	`, userID.String(), limit, offset)
@@ -172,22 +237,23 @@ type attemptScanner interface {
 
 func scanAttempt(row attemptScanner) (*domsim.Attempt, error) {
 	var (
-		idStr       string
-		userIDStr   string
-		simIDStr    string
-		startedAt   time.Time
-		deadline    time.Time
-		finishedAt  *time.Time
-		answersJSON []byte
-		flagsJSON   []byte
-		scoreVal    *int
-		passed      *bool
-		scoreJSON   []byte
+		idStr           string
+		userIDStr       string
+		simIDStr        string
+		startedAt       time.Time
+		deadline        time.Time
+		finishedAt      *time.Time
+		answersJSON     []byte
+		flagsJSON       []byte
+		scoreVal        *int
+		passed          *bool
+		scoreJSON       []byte
+		questionIDsJSON []byte
 	)
 
 	if err := row.Scan(
 		&idStr, &userIDStr, &simIDStr, &startedAt, &deadline, &finishedAt,
-		&answersJSON, &flagsJSON, &scoreVal, &passed, &scoreJSON,
+		&answersJSON, &flagsJSON, &scoreVal, &passed, &scoreJSON, &questionIDsJSON,
 	); err != nil {
 		return nil, err
 	}
@@ -201,14 +267,41 @@ func scanAttempt(row attemptScanner) (*domsim.Attempt, error) {
 		return nil, fmt.Errorf("unmarshal flags: %w", err)
 	}
 	score := unmarshalScore(scoreVal, passed, scoreJSON)
+	questionIDs, err := unmarshalQuestionIDs(questionIDsJSON)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal question ids: %w", err)
+	}
 
 	return domsim.ReconstituteAttempt(
 		shared.AttemptID(idStr),
 		shared.UserID(userIDStr),
 		shared.SimuladoID(simIDStr),
 		startedAt, deadline, finishedAt,
-		answers, flags, score,
+		answers, flags, score, questionIDs,
 	), nil
+}
+
+func marshalQuestionIDs(ids []shared.QuestionID) ([]byte, error) {
+	strs := make([]string, len(ids))
+	for i, id := range ids {
+		strs[i] = string(id)
+	}
+	return json.Marshal(strs)
+}
+
+func unmarshalQuestionIDs(data []byte) ([]shared.QuestionID, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	var strs []string
+	if err := json.Unmarshal(data, &strs); err != nil {
+		return nil, err
+	}
+	ids := make([]shared.QuestionID, len(strs))
+	for i, s := range strs {
+		ids[i] = shared.QuestionID(s)
+	}
+	return ids, nil
 }
 
 func marshalAnswers(a domsim.Answers) ([]byte, error) {

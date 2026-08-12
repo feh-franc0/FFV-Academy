@@ -22,7 +22,7 @@ export function GlossaryClient() {
         style={{ color: 'var(--ffv-muted)' }}
         aria-label="Migalha de pão"
       >
-        <Link href="/" className="transition-colors hover:underline">FFV Academy</Link>
+        <Link href="/" className="inline-flex items-center min-h-[24px] transition-colors hover:underline">FFV Academy</Link>
         <span aria-hidden>/</span>
         <span style={{ color: 'var(--foreground)' }}>Glossário</span>
       </nav>
@@ -36,6 +36,7 @@ export function GlossaryClient() {
 
       <input
         type="text"
+        aria-label="Buscar termo no glossário"
         placeholder="Buscar termo..."
         value={search}
         onChange={e => setSearch(e.target.value)}
@@ -44,7 +45,6 @@ export function GlossaryClient() {
           background: 'var(--ffv-bg2)',
           border: '1px solid var(--ffv-border)',
           color: 'var(--foreground)',
-          outline: 'none',
         }}
       />
 
@@ -73,7 +73,7 @@ export function GlossaryClient() {
                     <a
                       key={r}
                       href={`#${r}`}
-                      className="text-xs px-2 py-0.5 rounded-full transition-colors"
+                      className="inline-flex items-center min-h-[24px] text-xs px-2.5 py-1 rounded-full transition-colors"
                       style={{
                         background: 'var(--ffv-bg3)',
                         border: '1px solid var(--ffv-border)',

@@ -20,6 +20,14 @@ const PATHS = [
     color: '#d2a8ff',
   },
   {
+    icon: '◈',
+    title: 'Quero colocar IA na AWS',
+    desc: 'Bedrock, Knowledge Bases, agents e AgentCore — da primeira chamada à arquitetura em produção.',
+    href: '/ia-aws',
+    cta: 'IA na AWS',
+    color: '#ff9900',
+  },
+  {
     icon: '🔧',
     title: 'Quero codar com IA',
     desc: 'Claude Code, Cursor, Codex — qual usar e quando.',
@@ -30,26 +38,18 @@ const PATHS = [
   {
     icon: '☁️',
     title: 'Quero certificação AWS',
-    desc: 'Cloud Practitioner, Developer e Solutions Architect.',
+    desc: 'Cloud Practitioner, AI Practitioner, Developer e Solutions Architect.',
     href: '/aws-cloud-practitioner',
-    cta: 'AWS Cloud',
+    cta: 'Certificações AWS',
     color: '#ff9900',
   },
   {
     icon: '🏗️',
-    title: 'Quero virar sênior',
-    desc: 'DevOps, distribuídos, observabilidade — engenheiro de sistemas.',
+    title: 'Quero botar IA em produção',
+    desc: 'MLOps, distribuídos, observabilidade e security — operar IA de verdade.',
     href: '/engenharia',
-    cta: 'Engenharia',
+    cta: 'Engenharia de Produção',
     color: '#e3b341',
-  },
-  {
-    icon: '🎤',
-    title: 'Quero crescer no digital',
-    desc: 'Comunicação, carreira, conteúdo, marketing, empreendedorismo.',
-    href: '/aprenda/comunicacao-falar-em-publico',
-    cta: 'Profissional Digital',
-    color: '#f472b6',
   },
 ];
 
@@ -88,6 +88,17 @@ export function ComecarAqui({ hidden = false }: { hidden?: boolean }) {
           momento — todo o conteúdo fica disponível.
         </p>
 
+        {/* A jornada é o caminho ORDENADO, e precisa estar a um clique da home:
+            é a resposta a "por onde começo?", a consulta de maior intenção do
+            domínio, e a única página que liga as 38 trilhas de uma URL só. */}
+        <Link
+          href="/jornada"
+          className="inline-flex items-center gap-2 mb-10 px-4 py-2.5 rounded-full text-sm font-semibold transition-colors"
+          style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
+        >
+          Ou siga a jornada completa, em ordem: de zero a arquiteto de IA na AWS →
+        </Link>
+
         <div
           className="grid gap-4"
           style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}
@@ -103,11 +114,13 @@ export function ComecarAqui({ hidden = false }: { hidden?: boolean }) {
               }}
               onMouseOver={e => {
                 e.currentTarget.style.borderColor = `${p.color}80`;
-                e.currentTarget.style.transform = 'translateY(-2px)';
+                e.currentTarget.style.transform = 'translateY(-5px)';
+                e.currentTarget.style.boxShadow = `0 24px 50px -24px ${p.color}66`;
               }}
               onMouseOut={e => {
                 e.currentTarget.style.borderColor = `${p.color}25`;
                 e.currentTarget.style.transform = '';
+                e.currentTarget.style.boxShadow = '';
               }}
             >
               <span className="text-2xl">{p.icon}</span>
@@ -115,7 +128,7 @@ export function ComecarAqui({ hidden = false }: { hidden?: boolean }) {
               <span className="text-sm" style={{ color: 'var(--ffv-muted)', lineHeight: 1.6 }}>
                 {p.desc}
               </span>
-              <span className="text-sm font-bold mt-auto pt-3" style={{ color: p.color }}>
+              <span className="text-sm font-bold mt-auto pt-3 ffv-acento-texto" style={{ '--ffv-acento': p.color } as React.CSSProperties}>
                 {p.cta} →
               </span>
             </Link>

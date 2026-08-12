@@ -89,13 +89,13 @@ export function LeaderboardWidget() {
             >
               <span
                 className="text-xs font-bold w-5 text-center"
-                style={{ color: entry.rank <= 3 ? '#fbbf24' : 'var(--ffv-muted)' }}
+                style={{ color: entry.rank <= 3 ? 'var(--ffv-gold)' : 'var(--ffv-muted)' }}
               >
                 {entry.rank <= 3 ? ['🥇', '🥈', '🥉'][entry.rank - 1] : `#${entry.rank}`}
               </span>
               <span
                 className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0"
-                style={{ background: 'var(--ffv-blue)', color: '#fff' }}
+                style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
               >
                 {entry.avatarInitials}
               </span>

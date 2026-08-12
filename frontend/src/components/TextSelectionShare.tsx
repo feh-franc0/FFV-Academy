@@ -1,6 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { readableTextColor } from '@/lib/readable-text';
+
+const TWITTER_BLUE = '#1da1f2';
 
 interface TextSelectionShareProps {
   articleSlug: string;
@@ -82,8 +85,8 @@ export function TextSelectionShare({ articleSlug, articleTitle }: TextSelectionS
         onClick={handleShare}
         className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold shadow-lg transition-all hover:scale-105 active:scale-95"
         style={{
-          background: '#1da1f2',
-          color: '#fff',
+          background: TWITTER_BLUE,
+          color: readableTextColor(TWITTER_BLUE),
           boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
         }}
       >

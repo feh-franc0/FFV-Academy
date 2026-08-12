@@ -9,8 +9,8 @@ import { colorForInitials } from '@/lib/avatar-color';
 const BENEFITS = [
   {
     icon: '🧠',
-    title: '900+ artigos técnicos — não tutoriais',
-    desc: 'Transformers, MVCC, RAG, sistemas distribuídos, LLMOps. O que engenheiros sênior realmente sabem.',
+    title: '400+ artigos técnicos — não tutoriais',
+    desc: 'Transformers, RAG, agents, Claude Code, MCP, MVCC, LLMOps. O que engenheiros sênior realmente sabem — explicado por dentro.',
   },
   {
     icon: '⚡',
@@ -65,7 +65,7 @@ export function LeadCaptureSection() {
           }}
         />
 
-        <div className="relative max-w-6xl mx-auto grid lg:grid-cols-[1.1fr,0.9fr] gap-16 items-start">
+        <div className="relative max-w-6xl mx-auto grid lg:grid-cols-[1.1fr_0.9fr] gap-16 items-start">
           {/* ── Lado esquerdo: storytelling ─────────────────────────── */}
           <div>
             <p
@@ -145,7 +145,7 @@ export function LeadCaptureSection() {
                 boxShadow: '0 24px 60px -12px rgba(0,0,0,0.35)',
               }}
             >
-              {/* Urgência / FOMO */}
+              {/* Reciprocidade + baixa fricção (honesto, sem FOMO fabricado) */}
               <div
                 className="flex items-center gap-2 mb-5 px-3 py-2 rounded-lg text-xs font-semibold"
                 style={{
@@ -154,8 +154,8 @@ export function LeadCaptureSection() {
                   color: 'var(--ffv-blue)',
                 }}
               >
-                <span>🔥</span>
-                <span>Devs estão se cadastrando agora — junte-se a eles</span>
+                <span>⚡</span>
+                <span>Grátis pra sempre · leva 30 segundos · sem cartão</span>
               </div>
 
               <h3
@@ -188,7 +188,6 @@ export function LeadCaptureSection() {
                       background: 'var(--ffv-bg)',
                       border: '1px solid var(--ffv-border)',
                       color: 'var(--foreground)',
-                      outline: 'none',
                     }}
                     onFocus={e => (e.currentTarget.style.borderColor = 'var(--ffv-blue)')}
                     onBlur={e => (e.currentTarget.style.borderColor = 'var(--ffv-border)')}
@@ -200,7 +199,7 @@ export function LeadCaptureSection() {
                   className="w-full py-3.5 rounded-xl text-sm font-bold transition-all hover:scale-[1.02]"
                   style={{
                     background: 'linear-gradient(90deg, var(--ffv-blue), var(--ffv-purple))',
-                    color: '#fff',
+                    color: 'var(--primary-foreground)',
                     boxShadow: '0 8px 24px -6px color-mix(in srgb, var(--ffv-blue) 50%, transparent)',
                   }}
                 >
@@ -228,7 +227,9 @@ export function LeadCaptureSection() {
                       className="w-7 h-7 rounded-full flex items-center justify-center text-[9px] font-bold border-2"
                       style={{
                         background: colorForInitials(init),
-                        color: '#fff',
+                        // Paleta fechada de 8 cores (avatar-color.ts) — todas medem
+                        // ≥7:1 contra #0d1117, mesmo padrão de SocialProofBar.tsx.
+                        color: '#0d1117',
                         borderColor: 'var(--ffv-bg2)',
                         zIndex: SOCIAL_AVATARS.length - i,
                       }}
@@ -238,8 +239,8 @@ export function LeadCaptureSection() {
                   ))}
                 </div>
                 <p className="text-xs" style={{ color: 'var(--ffv-muted)', lineHeight: 1.5 }}>
-                  <strong style={{ color: 'var(--foreground)' }}>Devs reais</strong> aprendendo aqui agora.{' '}
-                  <span style={{ color: 'var(--ffv-green)' }}>●</span> Online agora
+                  Faça parte da <strong style={{ color: 'var(--foreground)' }}>primeira leva</strong> de
+                  devs construindo com IA de verdade — em PT-BR.
                 </p>
               </div>
 

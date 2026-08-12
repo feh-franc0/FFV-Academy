@@ -49,7 +49,7 @@ export function RoadmapsClient() {
                 <div className="flex items-start gap-4 mb-5 flex-wrap">
                   <span className="text-4xl">{roadmap.emoji}</span>
                   <div className="flex-1 min-w-[200px]">
-                    <h2 className="text-2xl font-bold mb-1" style={{ color: roadmap.color }}>
+                    <h2 className="text-2xl font-bold mb-1 ffv-acento-texto" style={{ '--ffv-acento': roadmap.color } as React.CSSProperties}>
                       {roadmap.title}
                     </h2>
                     <p className="text-sm mb-2">{roadmap.subtitle}</p>
@@ -61,7 +61,7 @@ export function RoadmapsClient() {
                     <p className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
                       Estimativa (10h/semana)
                     </p>
-                    <p className="text-lg font-bold" style={{ color: roadmap.color }}>
+                    <p className="text-lg font-bold ffv-acento-texto" style={{ '--ffv-acento': roadmap.color } as React.CSSProperties}>
                       {roadmap.estimatedWeeks} semanas
                     </p>
                   </div>
@@ -73,7 +73,7 @@ export function RoadmapsClient() {
                     <span style={{ color: 'var(--ffv-muted)' }}>
                       {doneModules}/{totalModules} módulos · {allTrails.length} trilhas
                     </span>
-                    <span style={{ color: roadmap.color }}>{pct}%</span>
+                    <span className="ffv-acento-texto" style={{ '--ffv-acento': roadmap.color } as React.CSSProperties}>{pct}%</span>
                   </div>
                   <div className="h-2 rounded-full overflow-hidden" style={{ background: 'var(--ffv-bg)' }}>
                     <div
@@ -126,12 +126,12 @@ export function RoadmapsClient() {
                             <Link
                               key={t.id}
                               href={t.href ?? '/'}
-                              className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full transition-opacity hover:opacity-80"
+                              className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full transition-opacity hover:opacity-80 ffv-acento-texto"
                               style={{
                                 background: `${t.color}15`,
-                                color: t.color,
+                                '--ffv-acento': t.color,
                                 border: `1px solid ${t.color}40`,
-                              }}
+                              } as React.CSSProperties}
                             >
                               {t.icon} {t.name}
                             </Link>

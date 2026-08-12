@@ -1,0 +1,2544 @@
+{
+  "slug": "lab-consistencia-eventual-ponto-de-vista-usuario",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Rota Livre é um marketplace de entregas com 1.200 restaurantes parceiros. Cada um atualiza o status do próprio pedido — pendente, confirmado, cancelado — pelo tablet na cozinha, e o mesmo aplicativo mostra esse status na tela seguinte. A escrita já passa por uma fila e um cache antes de chegar ao banco: decisão tomada para o pico de meio-dia não derrubar a tabela, e legítima."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O ticket que chega ao suporte é sempre a mesma frase: \"confirmei o pedido, saí da tela e voltei, e continua pendente.\" A pessoa de suporte reabre como bug, porque reproduz — literalmente, o mesmo restaurante consegue reproduzir na hora, na frente de quem atende. O que ninguém tinha medido ainda é que a reprodução é intermitente: às vezes acontece, às vezes não, e essa intermitência é a pista que aponta para dois relógios assíncronos, não para uma falha determinística."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório assume que a decisão de usar fila e cache já foi tomada — é o assunto do L32 — e parte do sintoma que ela produz quando ninguém trata quem é o AUTOR da escrita como um caso diferente de qualquer outro leitor."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Básico — não pressupõe saga (L35); a peça nova é como o usuário PERCEBE a assincronia"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "API HTTP, fila assíncrona (ideal ter feito L32), Terraform e .NET 8 básicos"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 40 min · implementação 1 h 30 a 2 h"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo — o nó do ElastiCache é o único recurso que cobra 24/7; o resto é por uso"
+              },
+              {
+                "k": "Serviços",
+                "v": "DynamoDB (com Streams), SQS (fila + DLQ), ElastiCache for Redis, Lambda, CloudWatch"
+              },
+              {
+                "k": "Volume atual",
+                "v": "Rota Livre: 1.200 restaurantes, ~40 mil atualizações de status/dia, pico de 15/s no almoço"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "o restaurante que muda o status do próprio pedido tem de ver a mudança na tela dele, sempre"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "o cliente que ACOMPANHA a entrega (não quem a altera) pode continuar vendo o status antigo por alguns segundos — é o comportamento aceito, não uma lacuna"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "uma rota de leitura com 0% de divergência medida para o autor, e consistência eventual normal, sem alteração, para qualquer outro leitor"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é sobre eliminar a fila ou o cache — isso reintroduziria o problema de capacidade que os dois resolvem, e é outro laboratório de trade-off. Não é sobre transação distribuída nem compensação (saga, L35): aqui existe um único item, uma única escrita. E não é sobre a decisão síncrono/assíncrono em si (L32): este módulo começa DEPOIS que essa decisão já foi tomada, e trata do sintoma que ela produz quando ninguém distingue o autor da escrita de qualquer outro leitor."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que a mesma arquitetura parece \"com bug\" para o autor e normal para qualquer outro leitor.",
+              "Nomear os dois relógios assíncronos deste desenho e medir, com número, a janela de cada um.",
+              "Derivar, a partir da documentação oficial, por que ConsistentRead sozinho não resolve o atraso de uma fila.",
+              "Implementar um marcador de leitura-própria-escrita com chave composta por autor e recurso, e TTL derivado de medição.",
+              "Justificar, com o comportamento do SQS padrão, por que o invalidador de cache deve apagar a chave em vez de escrever o novo valor.",
+              "Medir a taxa de divergência do autor antes e depois da correção, com os dois números registrados.",
+              "Provar que outros usuários continuam eventualmente consistentes, por decisão, e não por falha da correção.",
+              "Diagnosticar, a partir do sintoma relatado pelo suporte, qual dos dois relógios — fila ou cache — está em jogo."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Consistência eventual vs forte no DynamoDB",
+                "SAP-C02, DVA-C02",
+                "`ConsistentRead` de um lado, leitura padrão do outro",
+                "quando a leitura forte resolve, e quando não resolve nada (atraso de fila)"
+              ],
+              [
+                "Read-your-writes como padrão de arquitetura",
+                "SAP-C02",
+                "marcador com TTL gravado no request de escrita",
+                "é solução de UX cirúrgica, não muda o modelo de consistência do sistema todo"
+              ],
+              [
+                "Garantias de entrega e ordem do SQS",
+                "SAP-C02, DVA-C02",
+                "fila padrão: pelo menos uma vez, sem ordem garantida",
+                "por que isso exige idempotência em quem consome, não em quem produz"
+              ],
+              [
+                "DynamoDB Streams como fonte de eventos",
+                "DVA-C02, SAP-C02",
+                "event source mapping do invalidador para o Lambda",
+                "NewImage/OldImage, StreamViewType, e que a leitura do stream também é eventualmente consistente"
+              ],
+              [
+                "Padrão cache-aside e invalidação",
+                "SAP-C02",
+                "ElastiCache como camada de leitura, populada sob demanda",
+                "quando invalidar (DELETE) versus atualizar (SET), e por que a ordem de chegada decide isso"
+              ],
+              [
+                "Acoplamento temporal e disponibilidade composta",
+                "SAP-C02",
+                "fila entre a API e a persistência — ligado à decisão do L32",
+                "o trade-off entre latência percebida pelo usuário e resiliência a pico de escrita"
+              ],
+              [
+                "Idempotência em processamento distribuído",
+                "SAP-C02, DVA-C02",
+                "`PutItem` sobrescrevendo pela mesma chave de partição",
+                "por que entrega \"pelo menos uma vez\" exige que reprocessar tenha o mesmo efeito que processar uma vez"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve um usuário que não vê a própria alteração e pede a causa mais provável, oferecendo \"o DynamoDB perdeu o dado\" como distrator. A resposta certa nomeia o mecanismo: nada foi perdido, a leitura ocorreu numa janela em que o dado ainda não tinha sido processado ou o cache ainda não tinha sido avisado. \"Perda\" e \"atraso\" são conceitos diferentes, e a prova cobra a distinção."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito não funcional que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Autor vê a própria escrita",
+                "sempre, sem exceção perceptível",
+                "marcador síncrono gravado no mesmo request que aceita a escrita, com TTL derivado de medição"
+              ],
+              [
+                "Escrita não pode sobrecarregar a tabela em pico",
+                "até 15 escritas/s no almoço",
+                "fila SQS absorvendo o pico antes do `PutItem`, sem mudar com esta correção"
+              ],
+              [
+                "Leitura repetida não pode bater direto no banco",
+                "toda leitura do painel",
+                "cache-aside com ElastiCache para a chave compartilhada, sem mudar com esta correção"
+              ],
+              [
+                "Outros usuários podem continuar eventualmente consistentes",
+                "aceito pela hipótese declarada",
+                "o marcador é EXCLUSIVO do autor — chave composta por autor e recurso, nunca só o recurso"
+              ],
+              [
+                "Mensagens podem chegar fora de ordem ou duplicadas",
+                "fila SQS padrão, não FIFO",
+                "`PutItem` idempotente por chave; invalidador usa DELETE, nunca SET"
+              ],
+              [
+                "Rejeição de regra não pode continuar \"confirmada\" na tela do autor",
+                "obrigatório",
+                "o worker apaga o marcador do autor ao rejeitar a escrita"
+              ],
+              [
+                "Sistema sobrevive a falha de nó do Redis",
+                "sem indisponibilidade de leitura",
+                "réplica automática do ElastiCache, e a função de leitura cai para o DynamoDB se o Redis não responder"
+              ],
+              [
+                "Auditabilidade de quem alterou o quê e quando",
+                "obrigatório para disputas de pedido",
+                "`autorId` e `atualizadoEm` gravados no item; Streams carrega `OldImage`/`NewImage` completos"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o defeito visível"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Rota Livre já tinha construído para resolver capacidade — fila absorvendo pico de escrita, cache absorvendo leitura repetida — e ele está certo nisso. O laboratório começa por medir o efeito colateral dele, porque um número torna o defeito discutível, e \"às vezes não atualiza\" não."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Dois relógios assíncronos, e o autor da escrita atravessa os dois",
+            "caption": "Nada aqui está mal configurado — a fila absorve pico de escrita e o cache tira carga de leitura repetida, os dois por bons motivos. O que ninguém decidiu de propósito é por quanto tempo a PRÓPRIA pessoa que acabou de salvar fica sem ver o resultado. Percorra os passos: a leitura do autor não sabe que é dele.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Usuário que acabou de salvar",
+                    "note": "é quem decide se isto é bug — a experiência dele é o critério deste laboratório, não a documentação"
+                  }
+                ]
+              },
+              {
+                "label": "Escrita, decidida assíncrona por fila",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "api_escrita",
+                    "service": "apigateway",
+                    "label": "POST /pedidos/{id}",
+                    "note": "devolve 200 assim que a mensagem está na fila, não quando o item passa a existir"
+                  },
+                  {
+                    "id": "sqs_escrita",
+                    "service": "sqs",
+                    "label": "Fila de comandos de escrita",
+                    "note": "fila padrão: entrega pelo menos uma vez e não garante ordem — os dois fatos importam adiante"
+                  },
+                  {
+                    "id": "worker_escrita",
+                    "service": "lambda",
+                    "label": "Worker que aplica a escrita",
+                    "note": "valida a regra de negócio de verdade; a validação da API foi só de forma"
+                  },
+                  {
+                    "id": "dynamodb",
+                    "service": "dynamodb",
+                    "label": "Tabela Pedidos",
+                    "note": "fonte da verdade; a leitura padrão dela também é eventualmente consistente, não só o cache"
+                  },
+                  {
+                    "id": "stream",
+                    "service": "cdc",
+                    "label": "DynamoDB Streams",
+                    "note": "captura a mudança para disparar a invalidação; a AWS não publica um SLA de latência para isto"
+                  }
+                ]
+              },
+              {
+                "label": "Leitura",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "api_leitura",
+                    "service": "apigateway",
+                    "label": "GET /pedidos/{id}",
+                    "note": "a rota que o usuário aciona ao atualizar a página logo depois de salvar"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — cache e invalidação",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "lambda_leitura",
+                    "service": "lambda",
+                    "label": "Função de leitura",
+                    "note": "só conhece o padrão cache-aside: tenta o Redis, cai para o banco na falta"
+                  },
+                  {
+                    "id": "elasticache",
+                    "service": "elasticache",
+                    "label": "ElastiCache Redis",
+                    "note": "guarda a chave compartilhada do item; nada aqui sabe quem foi o autor da última escrita"
+                  },
+                  {
+                    "id": "lambda_invalidador",
+                    "service": "lambda",
+                    "label": "Função invalidadora",
+                    "note": "apaga a chave compartilhada ao ouvir o Streams; é o segundo relógio assíncrono deste desenho"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "api_escrita",
+                "label": "salva a alteração (POST)",
+                "style": "solid"
+              },
+              {
+                "from": "api_escrita",
+                "to": "sqs_escrita",
+                "label": "comando de escrita enfileirado, resposta 200 imediata",
+                "style": "solid"
+              },
+              {
+                "from": "sqs_escrita",
+                "to": "worker_escrita",
+                "label": "consumido sujeito a visibility timeout e à ordem que a fila entregar",
+                "style": "solid"
+              },
+              {
+                "from": "worker_escrita",
+                "to": "dynamodb",
+                "label": "só aqui o item passa a existir de fato",
+                "style": "solid"
+              },
+              {
+                "from": "dynamodb",
+                "to": "stream",
+                "label": "evento de INSERT ou MODIFY capturado",
+                "style": "dashed"
+              },
+              {
+                "from": "stream",
+                "to": "lambda_invalidador",
+                "label": "aciona a função ao detectar a mudança",
+                "style": "dashed"
+              },
+              {
+                "from": "lambda_invalidador",
+                "to": "elasticache",
+                "label": "apaga a chave compartilhada do item",
+                "style": "solid"
+              },
+              {
+                "from": "user",
+                "to": "api_leitura",
+                "label": "atualiza a página em seguida (GET)",
+                "style": "solid"
+              },
+              {
+                "from": "api_leitura",
+                "to": "lambda_leitura",
+                "label": "busca o valor mais recente",
+                "style": "solid"
+              },
+              {
+                "from": "lambda_leitura",
+                "to": "elasticache",
+                "label": "cache-aside: tenta a chave compartilhada antes do banco",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A resposta 200 não é prova de que o item existe",
+                "detail": "A API valida só a forma do pedido e devolve sucesso assim que a mensagem está na fila — não quando o item foi gravado. Para o cliente HTTP, a diferença entre \"aceito\" e \"aplicado\" já desapareceu neste ponto.",
+                "nodes": [
+                  "user",
+                  "api_escrita",
+                  "sqs_escrita"
+                ],
+                "edges": [
+                  "user>api_escrita",
+                  "api_escrita>sqs_escrita"
+                ]
+              },
+              {
+                "label": "A fila entrega quando entrega",
+                "detail": "Fila padrão do SQS garante entrega pelo menos uma vez, não ordem nem latência fixa. Duas mensagens da mesma sessão podem ser processadas fora da ordem de envio, e o tempo até o worker pegar a mensagem varia com o backlog.",
+                "nodes": [
+                  "sqs_escrita",
+                  "worker_escrita"
+                ],
+                "edges": [
+                  "sqs_escrita>worker_escrita"
+                ]
+              },
+              {
+                "label": "O item só existe a partir deste instante",
+                "detail": "É dentro do worker que a validação de negócio de verdade acontece e o item é gravado. Antes deste ponto, uma leitura direta ao DynamoDB para aquele ID não encontraria a mudança — não é problema de cache, é ausência do dado.",
+                "nodes": [
+                  "worker_escrita",
+                  "dynamodb"
+                ],
+                "edges": [
+                  "worker_escrita>dynamodb"
+                ]
+              },
+              {
+                "label": "A mudança ainda precisa avisar o cache, por um caminho separado",
+                "detail": "O Streams e a função invalidadora formam um SEGUNDO relógio assíncrono, independente do primeiro. Mesmo depois de o item existir no DynamoDB, a chave velha continua servível no Redis até este caminho terminar.",
+                "nodes": [
+                  "stream",
+                  "lambda_invalidador",
+                  "elasticache"
+                ],
+                "edges": [
+                  "dynamodb>stream",
+                  "stream>lambda_invalidador",
+                  "lambda_invalidador>elasticache"
+                ]
+              },
+              {
+                "label": "O autor lê pelo caminho comum, igual a qualquer outro usuário",
+                "detail": "Nada nesta leitura sabe que foi o mesmo usuário que acabou de escrever. Ela pode cair em qualquer um dos dois atrasos: se o worker ainda não processou, o item nem existe; se já existe mas a invalidação não chegou, o Redis devolve o valor antigo.",
+                "nodes": [
+                  "user",
+                  "api_leitura",
+                  "lambda_leitura",
+                  "elasticache"
+                ],
+                "edges": [
+                  "user>api_leitura",
+                  "api_leitura>lambda_leitura",
+                  "lambda_leitura>elasticache"
+                ]
+              },
+              {
+                "label": "Por que alguém desenha exatamente assim",
+                "detail": "Fila e cache resolvem problemas reais: a fila absorve pico de escrita sem sobrecarregar a tabela, o cache tira carga de leitura repetida. O que ninguém decidiu de propósito foi por quanto tempo o AUTOR da escrita fica sem ver o próprio resultado.",
+                "nodes": [
+                  "sqs_escrita",
+                  "elasticache"
+                ],
+                "edges": [
+                  "api_escrita>sqs_escrita",
+                  "lambda_leitura>elasticache"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Dois atrasos diferentes, com a mesma aparência para o usuário",
+            "content": "Se a leitura do autor cai ANTES de o worker processar a fila, o item simplesmente não existe ainda no DynamoDB — nenhuma leitura, forte ou eventual, encontra dado que não foi gravado. Se cai DEPOIS disso mas antes de a invalidação chegar, o item existe e o Redis está mentindo sobre ele. São causas diferentes, com correções diferentes, e tratá-las como \"o mesmo bug de sempre\" é o que faz alguém aplicar `ConsistentRead` e continuar vendo o problema — porque ele só ataca a segunda causa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. Se você não conseguir apontar o requisito, a peça é adorno — e este desenho não tem nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Um marcador síncrono, e a leitura passa a perguntar por ele primeiro",
+            "caption": "A escrita ganha um segundo destino, gravado no MESMO request que aceita o pedido — não mais um relógio a menos, e sim um caminho que não depende de relógio nenhum. Percorra os passos: cada peça nova resolve um requisito da seção anterior, e a durabilidade continua exatamente assíncrona como antes.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Usuário que acabou de salvar",
+                    "note": "é o único leitor para quem o comportamento muda neste desenho"
+                  }
+                ]
+              },
+              {
+                "label": "Escrita",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "api_escrita",
+                    "service": "apigateway",
+                    "label": "POST /pedidos/{id}",
+                    "note": "agora grava dois destinos antes de responder: a fila durável e o marcador do autor"
+                  },
+                  {
+                    "id": "sqs_escrita",
+                    "service": "sqs",
+                    "label": "Fila de comandos de escrita",
+                    "note": "inalterada — continua absorvendo pico antes da validação de regra"
+                  },
+                  {
+                    "id": "worker_escrita",
+                    "service": "lambda",
+                    "label": "Worker que aplica a escrita",
+                    "note": "inalterado; se rejeitar, agora também apaga o marcador do autor"
+                  },
+                  {
+                    "id": "dynamodb",
+                    "service": "dynamodb",
+                    "label": "Tabela Pedidos",
+                    "note": "continua sendo a única fonte da verdade; o marcador nunca substitui isto"
+                  },
+                  {
+                    "id": "stream",
+                    "service": "cdc",
+                    "label": "DynamoDB Streams",
+                    "note": "inalterado — segue capturando a mudança para invalidar a chave compartilhada"
+                  }
+                ]
+              },
+              {
+                "label": "Leitura",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "api_leitura",
+                    "service": "apigateway",
+                    "label": "GET /pedidos/{id}",
+                    "note": "identifica o usuário autenticado antes de decidir por onde ler"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — cache compartilhado",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "lambda_leitura",
+                    "service": "lambda",
+                    "label": "Função de leitura",
+                    "note": "agora pergunta pelo marcador do autor ANTES de tentar a chave compartilhada"
+                  },
+                  {
+                    "id": "elasticache",
+                    "service": "elasticache",
+                    "label": "ElastiCache Redis",
+                    "note": "inalterado — continua guardando só a chave compartilhada, sem saber quem foi o autor"
+                  },
+                  {
+                    "id": "lambda_invalidador",
+                    "service": "lambda",
+                    "label": "Função invalidadora",
+                    "note": "inalterada — continua apagando só a chave compartilhada, nunca o marcador de ninguém"
+                  }
+                ]
+              },
+              {
+                "label": "Marcador de escrita recente",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "marcador",
+                    "service": "elasticache",
+                    "label": "Chave de marcador (mesmo Redis, TTL de chave)",
+                    "note": "MESMA instância Redis do cache compartilhado, mas namespace de chave PRÓPRIO (`rw:` em vez de `item:`) — TTL por chave expira o marcador sozinho, sem job de limpeza"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cloudwatch",
+                    "service": "cloudwatch",
+                    "label": "Métrica OrigemDaResposta",
+                    "note": "é a prova de que o marcador está sendo usado, medida — não a sensação de ter testado"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "api_escrita",
+                "label": "salva a alteração (POST)",
+                "style": "solid"
+              },
+              {
+                "from": "api_escrita",
+                "to": "sqs_escrita",
+                "label": "comando de escrita durável, para o worker validar de verdade",
+                "style": "solid"
+              },
+              {
+                "from": "api_escrita",
+                "to": "marcador",
+                "label": "grava o marcador do autor (TTL curto), no mesmo request",
+                "style": "solid"
+              },
+              {
+                "from": "sqs_escrita",
+                "to": "worker_escrita",
+                "label": "consumido sujeito a visibility timeout; a durabilidade continua assíncrona",
+                "style": "solid"
+              },
+              {
+                "from": "worker_escrita",
+                "to": "dynamodb",
+                "label": "grava o item validado, fonte da verdade permanece aqui",
+                "style": "solid"
+              },
+              {
+                "from": "dynamodb",
+                "to": "stream",
+                "label": "evento de INSERT ou MODIFY capturado",
+                "style": "dashed"
+              },
+              {
+                "from": "stream",
+                "to": "lambda_invalidador",
+                "label": "aciona a invalidação, sem mudança em relação ao desenho anterior",
+                "style": "dashed"
+              },
+              {
+                "from": "lambda_invalidador",
+                "to": "elasticache",
+                "label": "apaga a chave COMPARTILHADA — nunca a chave de marcador de ninguém",
+                "style": "solid"
+              },
+              {
+                "from": "user",
+                "to": "api_leitura",
+                "label": "atualiza a página em seguida (GET)",
+                "style": "solid"
+              },
+              {
+                "from": "api_leitura",
+                "to": "lambda_leitura",
+                "label": "busca o valor, identificado como o mesmo usuário da escrita",
+                "style": "solid"
+              },
+              {
+                "from": "lambda_leitura",
+                "to": "marcador",
+                "label": "primeiro pergunta pelo marcador do autor; só na ausência cai na chave comum",
+                "style": "solid"
+              },
+              {
+                "from": "lambda_leitura",
+                "to": "elasticache",
+                "label": "na ausência de marcador, cai no caminho comum de sempre (cache-aside)",
+                "style": "solid"
+              },
+              {
+                "from": "lambda_leitura",
+                "to": "cloudwatch",
+                "label": "publica se serviu o marcador (fresco) ou a chave comum (pode estar velha)",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O marcador nasce no mesmo request que a resposta",
+                "detail": "A função de escrita grava o marcador numa chave PRÓPRIA do Redis, de forma síncrona, antes de responder — não depende do worker nem da fila terem processado nada. Ainda depende do MESMO Redis do cache compartilhado estar saudável — diferença real do desenho, tratada na seção de segurança.",
+                "nodes": [
+                  "api_escrita",
+                  "marcador"
+                ],
+                "edges": [
+                  "api_escrita>marcador"
+                ]
+              },
+              {
+                "label": "A durabilidade continua assíncrona, e isso é intencional",
+                "detail": "A fila e o worker não mudaram: continuam absorvendo pico e validando de verdade antes de gravar no DynamoDB. Visibilidade do autor e durabilidade do dado são requisitos diferentes, e resolvê-los por caminhos diferentes é a decisão central deste laboratório.",
+                "nodes": [
+                  "sqs_escrita",
+                  "worker_escrita",
+                  "dynamodb"
+                ],
+                "edges": [
+                  "sqs_escrita>worker_escrita",
+                  "worker_escrita>dynamodb"
+                ]
+              },
+              {
+                "label": "Para todo mundo, exceto o autor, nada mudou",
+                "detail": "A invalidação por Streams segue exatamente como no desenho anterior. Outros usuários continuam eventualmente consistentes — de propósito: dar a todo mundo o mesmo atalho do autor devolveria à arquitetura o custo que a fila e o cache existem para evitar.",
+                "nodes": [
+                  "stream",
+                  "lambda_invalidador",
+                  "elasticache"
+                ],
+                "edges": [
+                  "dynamodb>stream",
+                  "stream>lambda_invalidador",
+                  "lambda_invalidador>elasticache"
+                ]
+              },
+              {
+                "label": "A leitura pergunta ao marcador antes de perguntar ao cache de todo mundo",
+                "detail": "A função de leitura busca primeiro o item do marcador daquele usuário. Se existir, devolve o valor dali — que É a escrita recém-feita, porque foi gravado no passo 1. Só na ausência do marcador ela cai na chave compartilhada, exatamente o caminho cache-aside do desenho mínimo.",
+                "nodes": [
+                  "api_leitura",
+                  "lambda_leitura",
+                  "marcador",
+                  "elasticache"
+                ],
+                "edges": [
+                  "api_leitura>lambda_leitura",
+                  "lambda_leitura>marcador",
+                  "lambda_leitura>elasticache"
+                ]
+              },
+              {
+                "label": "A prova de que funcionou está no painel, não na sensação de ter testado",
+                "detail": "Cada leitura publica se veio do marcador ou da chave comum. É essa métrica, não uma inspeção manual, que mostra a divergência do autor caindo a zero enquanto a de terceiros continua existindo por alguns segundos.",
+                "nodes": [
+                  "lambda_leitura",
+                  "cloudwatch"
+                ],
+                "edges": [
+                  "lambda_leitura>cloudwatch"
+                ]
+              },
+              {
+                "label": "O marcador expira de propósito",
+                "detail": "Passado o TTL do item, o autor volta a ler pelo caminho comum, igual a qualquer usuário. Isso só é seguro porque o TTL foi calibrado para ser MAIOR que a janela de invalidação medida — a saída do atalho é silenciosa e não deveria ser notada.",
+                "nodes": [
+                  "api_escrita",
+                  "marcador"
+                ],
+                "edges": [
+                  "api_escrita>marcador"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "Por que um mecanismo só resolve os dois atrasos",
+            "content": "O marcador não pergunta \"a fila já processou?\" nem \"o cache já foi invalidado?\" — ele simplesmente CONTÉM o valor novo, gravado no instante em que a escrita foi aceita. Isso o torna imune aos dois relógios ao mesmo tempo: não importa se o worker ainda não rodou ou se a invalidação ainda não chegou, a leitura do autor encontra o marcador antes de perguntar a qualquer um dos dois."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Como funciona, ponta a ponta: os dois relógios na mesma linha do tempo"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os nomes dos campos do evento de Streams não são jargão: são a prova de que a mudança realmente ocorreu e de qual era o valor anterior. "
+              },
+              {
+                "text": "eventName",
+                "code": true
+              },
+              {
+                "text": " diz o tipo de mudança; "
+              },
+              {
+                "text": "NewImage",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "OldImage",
+                "code": true
+              },
+              {
+                "text": " existem porque a tabela está configurada com "
+              },
+              {
+                "text": "NEW_AND_OLD_IMAGES",
+                "code": true
+              },
+              {
+                "text": "."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "A janela que o usuário sente, numa linha do tempo só",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "t+0 ms — POST aceito",
+                "desc": "A API valida a forma do pedido e enfileira o comando. Sem o marcador da seção de produção, a resposta 200 aqui não diz nada sobre o que um GET devolveria no instante seguinte."
+              },
+              {
+                "label": "t+0 ms — marcador gravado (desenho de produção)",
+                "desc": "É neste mesmo instante, dentro do mesmo request, que a chave do autor é escrita no Redis — antes de qualquer processamento assíncrono começar."
+              },
+              {
+                "label": "t+dezenas a centenas de ms — mensagem consumida",
+                "desc": "O worker tira a mensagem da fila, sujeito ao backlog e ao visibility timeout. A AWS não publica um número de latência para isso; meça no seu ambiente."
+              },
+              {
+                "label": "t+algumas centenas de ms — item gravado no DynamoDB",
+                "desc": "Só a partir daqui o item existe para qualquer leitura direta à tabela — inclusive uma leitura fortemente consistente."
+              },
+              {
+                "label": "t+segundos, sem SLA publicado — Streams entrega o evento",
+                "desc": "A documentação do DynamoDB Streams descreve o comportamento como próximo do tempo real, sem número de latência garantido — e mesmo a leitura do stream é, por definição, eventualmente consistente."
+              },
+              {
+                "label": "logo em seguida — chave compartilhada invalidada",
+                "desc": "A chave é apagada, não substituída. A partir daqui, qualquer leitura que caia em cache-miss busca o valor atual direto no DynamoDB."
+              },
+              {
+                "label": "em qualquer ponto antes disso — o autor tenta ler",
+                "desc": "Se a leitura do autor cai neste intervalo, sem marcador ela vê ausência do item, o valor anterior, ou nenhum dos dois se caiu exatamente entre os dois relógios — dependendo de QUAL deles ela cruzou."
+              }
+            ]
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "evento-streams-pedido.json — o que o Lambda invalidador recebe NewImage/OldImage só existem porque a tabela usa StreamViewType NEW_AND_OLD_IMAGES; com KEYS_ONLY este evento não teria o campo \"status\"."
+              }
+            ]
+          },
+          "position": 2
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "json",
+            "filename": "evento-streams-pedido.json",
+            "code": "{\n  \"eventID\": \"3b2c1de9f7a84e6a9c3d1f6b2a7e5c41\",\n  \"eventName\": \"MODIFY\",\n  \"eventSource\": \"aws:dynamodb\",\n  \"awsRegion\": \"us-east-1\",\n  \"dynamodb\": {\n    \"Keys\": { \"pedidoId\": { \"S\": \"PED-93214\" } },\n    \"NewImage\": {\n      \"pedidoId\": { \"S\": \"PED-93214\" },\n      \"status\": { \"S\": \"confirmado\" },\n      \"autorId\": { \"S\": \"usr-7781\" },\n      \"atualizadoEm\": { \"S\": \"2026-08-07T18:04:02.118Z\" }\n    },\n    \"OldImage\": {\n      \"pedidoId\": { \"S\": \"PED-93214\" },\n      \"status\": { \"S\": \"pendente\" },\n      \"autorId\": { \"S\": \"usr-7781\" },\n      \"atualizadoEm\": { \"S\": \"2026-08-07T18:03:58.004Z\" }\n    },\n    \"SequenceNumber\": \"820400000000015221234567\",\n    \"StreamViewType\": \"NEW_AND_OLD_IMAGES\"\n  },\n  \"eventSourceARN\": \"arn:aws:dynamodb:us-east-1:111122223333:table/Pedidos/stream/2026-08-07T18:00:00.000\"\n}\n"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "Nem os Streams são garantidamente instantâneos",
+            "content": "A documentação descreve o comportamento do DynamoDB Streams como próximo do tempo real, sem publicar um número de latência garantido — e a leitura do próprio stream é, por definição, eventualmente consistente, no mesmo sentido em que uma leitura padrão da tabela é. Tratar o Streams como \"instantâneo\" é o mesmo erro, uma camada acima, de tratar o cache como sempre certo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Restaurantes parceiros de um marketplace de entregas atualizam o status do próprio pedido pelo tablet, e o mesmo aplicativo mostra o status logo depois. A escrita já passa por fila e cache por decisão anterior (capacidade); o time não pode voltar a escrever direto na tabela sem perder essa proteção.",
+            "winner": "Marcador de leitura-própria-escrita gravado de forma síncrona no ElastiCache, com TTL curto",
+            "why": "O marcador resolve os dois relógios assíncronos com um mecanismo só, porque é escrito no mesmo request que aceita a alteração — não depende de a fila nem o worker terem processado nada. Ele custa uma escrita a mais no Redis por requisição de escrita, e nada muda para quem não é o autor: a fila continua absorvendo pico, o cache continua eventualmente consistente para todo mundo, e o time não perde nenhuma das duas proteções.",
+            "alternatives": [
+              {
+                "name": "ConsistentRead=true no DynamoDB para o autor",
+                "downside": "resolve a leitura eventualmente consistente da TABELA, mas nada resolve a espera da fila — se o worker ainda não processou, mesmo uma leitura fortemente consistente não encontra o item. É a armadilha mais comum: tratar como problema de leitura do banco algo que também é atraso de fila."
+              },
+              {
+                "name": "Ler sempre do DynamoDB, sem cache, para todo mundo",
+                "downside": "elimina a inconsistência do CACHE mas não a da fila, e joga toda a carga de leitura repetida de volta na tabela — o problema que o cache existia para resolver volta inteiro, para resolver só metade do problema original."
+              },
+              {
+                "name": "Escrita síncrona, sem fila",
+                "downside": "resolve os dois atrasos de uma vez, mas devolve ao cliente a latência real de validar e gravar, e tira da arquitetura a proteção contra pico de escrita que a fila oferecia — troca um problema de UX por um de capacidade."
+              },
+              {
+                "name": "WebSocket empurrando a confirmação real para o cliente",
+                "downside": "resolve de forma mais elegante do ponto de vista do cliente, mas exige conexão persistente e estado de sessão no servidor — investimento de infraestrutura maior que o marcador para o mesmo resultado percebido; é o nível 3 da evolução deste laboratório, não o ponto de partida."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "danger",
+            "title": "O erro de raciocínio mais caro deste laboratório",
+            "content": "Achar que `ConsistentRead=true` no DynamoDB \"resolve consistência eventual\" e parar por aí. Ele resolve a leitura da TABELA — se a única fonte de atraso fosse a réplica de leitura interna do DynamoDB, bastaria. Nesta arquitetura, com uma fila entre a API e a persistência, o atraso pode estar inteiramente ANTES de o item existir, e nenhuma configuração de leitura encontra o que ainda não foi escrito."
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Onde grava o marcador",
+                "ElastiCache, chave por autor + recurso, TTL curto",
+                "DynamoDB com atributo de expiração; sessão em memória do processo",
+                "leitura em microssegundos e expiração automática sem job de limpeza",
+                "é dado descartável por definição — se o Redis reiniciar, o autor só perde o atalho, nunca o dado real"
+              ],
+              [
+                "O que o invalidador faz com a chave comum",
+                "DELETE da chave",
+                "SET com o novo valor vindo do evento do Streams",
+                "apagar é idempotente independente da ordem de chegada; SET não é — mensagem fora de ordem pode deixar a chave com um valor mais antigo que o atual",
+                "uma leitura imediatamente após o DELETE paga o custo de um cache-miss a mais"
+              ],
+              [
+                "Como a leitura decide a fonte",
+                "marcador primeiro, chave comum depois, banco por último",
+                "sempre banco para o próprio autor durante N segundos, sem cache nenhum",
+                "caminho único e barato quando o marcador expira ou nunca existiu",
+                "uma consulta a mais na cadeia de decisão dentro da função"
+              ],
+              [
+                "TTL do marcador",
+                "curto, derivado da janela de invalidação medida",
+                "longo, \"para garantir\"",
+                "o marcador não é fonte da verdade — mantê-lo vivo além do necessário arrisca servir um valor que o worker depois rejeitou",
+                "se a janela real variar com um pico de fila, um TTL curto demais expõe o autor de novo"
+              ],
+              [
+                "O que fazer quando o worker rejeita a escrita",
+                "apagar o marcador imediatamente",
+                "deixar o marcador expirar sozinho",
+                "o autor não deveria continuar vendo, por mais alguns segundos, um valor que o sistema já sabe que é inválido",
+                "exige que o worker tenha permissão de escrita no Redis — mais uma responsabilidade nele"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: a tabela, a fila e o cache"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os três recursos onde um dos dois relógios começa ou termina. Nenhum deles é novo neste laboratório — o que muda é a atenção dada a cada um: o Streams precisa estar ligado, a fila precisa ser padrão (não FIFO) de propósito, e o Redis precisa das duas chaves, não só de uma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "dados.tf",
+            "code": "# dados.tf — a tabela, a fila e o cache: os tres pontos onde um relogio comeca ou termina\n\nresource \"aws_dynamodb_table\" \"pedidos\" {\n  name         = \"${var.projeto}-pedidos\"\n  billing_mode = \"PAY_PER_REQUEST\"\n  hash_key     = \"pedidoId\"\n\n  attribute {\n    name = \"pedidoId\"\n    type = \"S\"\n  }\n\n  # Sem isto nao ha evento para o invalidador ouvir. NEW_AND_OLD_IMAGES porque\n  # o invalidador so precisa da CHAVE para apagar o cache, mas o OldImage fica\n  # disponivel para auditoria — fora do escopo deste laboratorio, mas caro de\n  # adicionar depois se voce escolher KEYS_ONLY agora.\n  stream_enabled   = true\n  stream_view_type = \"NEW_AND_OLD_IMAGES\"\n\n  point_in_time_recovery {\n    enabled = true\n  }\n}\n\n# Fila PADRAO, nao FIFO: aceitar mensagem fora de ordem e o pressuposto deste\n# desenho, nao uma limitacao contornada. FIFO custaria taxa de mensagem maior\n# e um grupo por recurso so para resolver um problema que o invalidador ja\n# resolve de outro jeito — apagando a chave em vez de escrever nela.\nresource \"aws_sqs_queue\" \"comandos_escrita\" {\n  name = \"${var.projeto}-comandos-escrita\"\n\n  # Tempo para o worker processar UM lote antes da mensagem reaparecer para\n  # outro consumidor. Maior que o pior caso medido de validacao + PutItem;\n  # menor que isso reprocessa mensagem que ainda esta em voo (duplicata).\n  visibility_timeout_seconds = 30\n\n  redrive_policy = jsonencode({\n    deadLetterTargetArn = aws_sqs_queue.comandos_escrita_dlq.arn\n    maxReceiveCount      = 5\n  })\n}\n\n# Mensagem que falha 5 vezes nao fica reprocessando para sempre: vai para a\n# DLQ, e um alarme (secao de observabilidade) avisa alguem. Sem isto, uma\n# mensagem invalida fica em loop de visibilidade indefinidamente.\nresource \"aws_sqs_queue\" \"comandos_escrita_dlq\" {\n  name                      = \"${var.projeto}-comandos-escrita-dlq\"\n  message_retention_seconds = 1209600 # 14 dias, o teto do SQS\n}\n\nresource \"aws_elasticache_replication_group\" \"cache\" {\n  replication_group_id      = \"${var.projeto}-cache\"\n  description                = \"Chave comum do item e marcador de leitura-propria-escrita\"\n  engine                     = \"redis\"\n  node_type                  = \"cache.t4g.micro\"\n  num_cache_clusters         = 2 # primario + replica; leitura nao para se o primario falhar\n  automatic_failover_enabled = true\n  subnet_group_name          = aws_elasticache_subnet_group.cache.name\n  security_group_ids         = [aws_security_group.cache.id]\n  at_rest_encryption_enabled = true\n  transit_encryption_enabled = true\n}\n\nresource \"aws_elasticache_subnet_group\" \"cache\" {\n  name       = \"${var.projeto}-cache\"\n  subnet_ids = aws_subnet.privada[*].id\n}\n\n# O grupo do cache so aceita trafego do grupo das funcoes — nunca faixa de IP.\n# O Redis nao tem politica de recurso como o DynamoDB; o security group E o\n# controle de acesso aqui.\nresource \"aws_security_group\" \"cache\" {\n  name   = \"${var.projeto}-cache\"\n  vpc_id = aws_vpc.principal.id\n\n  ingress {\n    from_port       = 6379\n    to_port         = 6379\n    protocol        = \"tcp\"\n    security_groups = [aws_security_group.funcoes.id]\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "Fila FIFO pareceria a correção óbvia, e não é",
+            "content": "Garantir ordem por chave de grupo resolveria o risco de o invalidador processar eventos fora de ordem — mas custa taxa de mensagem maior, throughput menor, e o invalidador já resolve o mesmo risco de outro jeito, apagando a chave em vez de escrevê-la. Pagar por ordem quando você não precisa de ordem é comprar uma garantia que o desenho não usa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: quatro funções, dois caminhos assíncronos e um marcador síncrono"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Escrita e leitura mudam nesta seção; worker e invalidador continuam com a mesma responsabilidade do desenho mínimo — e essa estabilidade é o ponto: a correção não mexeu na durabilidade, só na visibilidade."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "funcoes.tf",
+            "code": "# funcoes.tf — quatro funcoes: duas no caminho sincrono, duas nos dois relogios assincronos\n\nresource \"aws_security_group\" \"funcoes\" {\n  name   = \"${var.projeto}-funcoes\"\n  vpc_id = aws_vpc.principal.id\n\n  egress {\n    from_port   = 0\n    to_port     = 0\n    protocol    = \"-1\"\n    cidr_blocks = [\"0.0.0.0/0\"] # so saida; a funcao nao recebe conexao direta\n  }\n}\n\ndata \"aws_iam_policy_document\" \"assume_lambda\" {\n  statement {\n    actions = [\"sts:AssumeRole\"]\n    principals {\n      type        = \"Service\"\n      identifiers = [\"lambda.amazonaws.com\"]\n    }\n  }\n}\n\n# ── Escrita: enfileira o comando E grava o marcador, na mesma invocacao ─────\nresource \"aws_iam_role\" \"escrita\" {\n  name               = \"${var.projeto}-escrita\"\n  assume_role_policy = data.aws_iam_policy_document.assume_lambda.json\n}\n\ndata \"aws_iam_policy_document\" \"escrita\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"sqs:SendMessage\"]\n    resources = [aws_sqs_queue.comandos_escrita.arn]\n  }\n  statement {\n    effect  = \"Allow\"\n    actions = [\"ec2:CreateNetworkInterface\", \"ec2:DescribeNetworkInterfaces\", \"ec2:DeleteNetworkInterface\"]\n    # Lambda em VPC precisa gerenciar a propria interface de rede; a acao nao\n    # aceita recurso especifico — e por isso que aparece com \"*\", nao preguica.\n    resources = [\"*\"]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"escrita\" {\n  role   = aws_iam_role.escrita.id\n  policy = data.aws_iam_policy_document.escrita.json\n}\n\nresource \"aws_lambda_function\" \"escrita\" {\n  function_name = \"${var.projeto}-escrita\"\n  role          = aws_iam_role.escrita.arn\n  runtime       = \"dotnet8\"\n  handler       = \"Funcoes::Consistencia.EscritaFunction::ManipularAsync\"\n  filename      = data.archive_file.funcoes.output_path\n  timeout       = 10\n  memory_size   = 256\n\n  vpc_config {\n    subnet_ids         = aws_subnet.privada[*].id\n    security_group_ids = [aws_security_group.funcoes.id]\n  }\n\n  environment {\n    variables = {\n      FILA_URL       = aws_sqs_queue.comandos_escrita.url\n      REDIS_ENDPOINT = aws_elasticache_replication_group.cache.primary_endpoint_address\n      # Deve ser MAIOR que a janela de invalidacao medida na prova 4. Comeca\n      # conservador; recalibre com o numero real do seu ambiente.\n      TTL_MARCADOR_S = \"10\"\n    }\n  }\n}\n\n# ── Worker: consome a fila, valida de verdade, grava a fonte da verdade ─────\nresource \"aws_lambda_event_source_mapping\" \"worker\" {\n  event_source_arn = aws_sqs_queue.comandos_escrita.arn\n  function_name    = aws_lambda_function.worker.arn\n  batch_size       = 10\n}\n\nresource \"aws_lambda_function\" \"worker\" {\n  function_name = \"${var.projeto}-worker\"\n  role          = aws_iam_role.worker.arn\n  runtime       = \"dotnet8\"\n  handler       = \"Funcoes::Consistencia.WorkerFunction::ProcessarAsync\"\n  filename      = data.archive_file.funcoes.output_path\n  timeout       = 30 # cobre o visibility_timeout da fila com folga\n  memory_size   = 256\n\n  vpc_config {\n    subnet_ids         = aws_subnet.privada[*].id\n    security_group_ids = [aws_security_group.funcoes.id]\n  }\n}\n\n# ── Invalidador: ouve o Streams, apaga a chave comum ────────────────────────\nresource \"aws_lambda_event_source_mapping\" \"invalidador\" {\n  event_source_arn  = aws_dynamodb_table.pedidos.stream_arn\n  function_name     = aws_lambda_function.invalidador.arn\n  starting_position = \"LATEST\"\n}\n\nresource \"aws_lambda_function\" \"invalidador\" {\n  function_name = \"${var.projeto}-invalidador\"\n  role          = aws_iam_role.invalidador.arn\n  runtime       = \"dotnet8\"\n  handler       = \"Funcoes::Consistencia.InvalidadorFunction::InvalidarAsync\"\n  filename      = data.archive_file.funcoes.output_path\n\n  vpc_config {\n    subnet_ids         = aws_subnet.privada[*].id\n    security_group_ids = [aws_security_group.funcoes.id]\n  }\n}\n\n# ── Leitura: marcador primeiro, chave comum depois, banco por ultimo ────────\nresource \"aws_lambda_function\" \"leitura\" {\n  function_name = \"${var.projeto}-leitura\"\n  role          = aws_iam_role.leitura.arn\n  runtime       = \"dotnet8\"\n  handler       = \"Funcoes::Consistencia.LeituraFunction::ManipularAsync\"\n  filename      = data.archive_file.funcoes.output_path\n\n  vpc_config {\n    subnet_ids         = aws_subnet.privada[*].id\n    security_group_ids = [aws_security_group.funcoes.id]\n  }\n}\n\n# Os papeis de worker, invalidador e leitura seguem o mesmo padrao do de\n# escrita — dynamodb:PutItem/GetItem restrito ao ARN da tabela, mais as tres\n# acoes de ENI acima — e foram omitidos aqui por repeticao, nao por estarem\n# ausentes: cada funcao tem o SEU papel, nunca um papel compartilhado entre as\n# quatro, porque o menor privilegio de cada uma e diferente.\n\nresource \"aws_apigatewayv2_api\" \"http\" {\n  name          = \"${var.projeto}-http\"\n  protocol_type = \"HTTP\"\n}\n\nresource \"aws_apigatewayv2_route\" \"escrita\" {\n  api_id    = aws_apigatewayv2_api.http.id\n  route_key = \"POST /pedidos/{id}\"\n  target    = \"integrations/${aws_apigatewayv2_integration.escrita.id}\"\n}\n\nresource \"aws_apigatewayv2_route\" \"leitura\" {\n  api_id    = aws_apigatewayv2_api.http.id\n  route_key = \"GET /pedidos/{id}\"\n  target    = \"integrations/${aws_apigatewayv2_integration.leitura.id}\"\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O `*` que aparece na política, e por que ele se justifica",
+            "content": "`ec2:CreateNetworkInterface`, `DescribeNetworkInterfaces` e `DeleteNetworkInterface` são as três ações que uma Lambda em VPC precisa para gerenciar a própria interface de rede, e nenhuma delas aceita recurso específico — são operações de conta, não de objeto. A regra não é \"nunca use `*`\"; é \"todo `*` tem de ter uma frase explicando por que não pode ser mais estreito\". Sem a frase, é preguiça; com ela, é decisão."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o marcador que resolve os dois atrasos"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O handler de escrita grava dois destinos antes de responder: a fila, para a durabilidade que já existia, e o marcador, que é a peça nova. A ordem dentro do código não importa para o resultado — o que importa é que os dois acontecem no MESMO request, antes do `return`."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Funcoes.cs — Escrita e Leitura",
+            "code": "// Funcoes.cs — os dois handlers que resolvem o sintoma do usuario, sem mudar\n// a arquitetura duravel por baixo\n\nusing System.Text.Json;\nusing Amazon.Lambda.APIGatewayEvents;\nusing Amazon.SQS;\nusing Amazon.SQS.Model;\nusing Amazon.DynamoDBv2;\nusing Amazon.DynamoDBv2.Model;\nusing Amazon.CloudWatch;\nusing Amazon.CloudWatch.Model;\nusing StackExchange.Redis;\n\nnamespace Consistencia;\n\npublic class EscritaFunction\n{\n    private static readonly IAmazonSQS Sqs = new AmazonSQSClient();\n    private static readonly Lazy<ConnectionMultiplexer> Redis = new(() =>\n        ConnectionMultiplexer.Connect(Environment.GetEnvironmentVariable(\"REDIS_ENDPOINT\")!));\n    private static readonly int TtlMarcadorSegundos =\n        int.Parse(Environment.GetEnvironmentVariable(\"TTL_MARCADOR_S\") ?? \"10\");\n\n    public async Task<APIGatewayHttpApiV2ProxyResponse> ManipularAsync(\n        APIGatewayHttpApiV2ProxyRequest req)\n    {\n        var pedidoId = req.PathParameters[\"id\"];\n        // A identidade do autor vem do contexto de autorizacao ja validado\n        // pelo API Gateway (JWT authorizer) — fora do escopo deste\n        // laboratorio, que assume que a identidade ja chega resolvida.\n        var autorId = req.RequestContext.Authorizer.Jwt.Claims[\"sub\"];\n        var corpo = JsonSerializer.Deserialize<PedidoEntrada>(req.Body)!;\n\n        // Validacao de FORMA apenas. A validacao de REGRA de negocio — que\n        // pode rejeitar o pedido — acontece no worker, depois da fila. Essa\n        // divisao e o que permite responder rapido sem mentir sobre o que\n        // ja foi checado.\n        if (string.IsNullOrWhiteSpace(corpo.Status))\n            return Resposta(400, new { erro = \"status obrigatorio\" });\n\n        var comando = new\n        {\n            pedidoId,\n            autorId,\n            corpo.Status,\n            enviadoEm = DateTimeOffset.UtcNow,\n        };\n        var comandoJson = JsonSerializer.Serialize(comando);\n\n        await Sqs.SendMessageAsync(new SendMessageRequest\n        {\n            QueueUrl    = Environment.GetEnvironmentVariable(\"FILA_URL\"),\n            MessageBody = comandoJson,\n        });\n\n        // O passo que resolve os DOIS atrasos do desenho minimo: grava o\n        // resultado que o autor vai querer ler, no MESMO request que aceitou\n        // a escrita — sem esperar fila nem worker. TTL curto: o marcador nao\n        // e fonte da verdade, e um atalho com prazo de validade.\n        //\n        // Fail-open, igual a Leitura: se o Redis estiver fora do ar aqui, a\n        // ESCRITA (que ja foi enfileirada acima) nao pode falhar por causa de\n        // um atalho de visibilidade. O autor so perde o marcador, nao a escrita.\n        try\n        {\n            var db = Redis.Value.GetDatabase();\n            await db.StringSetAsync(\n                $\"rw:{autorId}:{pedidoId}\",\n                comandoJson,\n                TimeSpan.FromSeconds(TtlMarcadorSegundos));\n        }\n        catch (RedisConnectionException)\n        {\n            // Sem marcador, o autor cai no caminho comum ate a fila processar —\n            // pior UX, nunca escrita perdida: a mensagem ja esta no SQS.\n        }\n\n        return Resposta(200, comando);\n    }\n\n    private static APIGatewayHttpApiV2ProxyResponse Resposta(int codigo, object corpo) => new()\n    {\n        StatusCode = codigo,\n        Body       = JsonSerializer.Serialize(corpo),\n        Headers    = new Dictionary<string, string> { [\"Content-Type\"] = \"application/json\" },\n    };\n}\n\npublic record PedidoEntrada(string Status);\n\npublic class LeituraFunction\n{\n    private static readonly Lazy<ConnectionMultiplexer> Redis = new(() =>\n        ConnectionMultiplexer.Connect(Environment.GetEnvironmentVariable(\"REDIS_ENDPOINT\")!));\n    private static readonly IAmazonDynamoDB Dynamo = new AmazonDynamoDBClient();\n    private static readonly IAmazonCloudWatch Metricas = new AmazonCloudWatchClient();\n\n    public async Task<APIGatewayHttpApiV2ProxyResponse> ManipularAsync(\n        APIGatewayHttpApiV2ProxyRequest req)\n    {\n        var pedidoId = req.PathParameters[\"id\"];\n        var autorId  = req.RequestContext.Authorizer.Jwt.Claims[\"sub\"];\n        IDatabase db;\n        try { db = Redis.Value.GetDatabase(); }\n        catch (RedisConnectionException)\n        {\n            // Falha do Redis nao vira 500 para o leitor: cai direto para o\n            // banco. Fail-open para consistencia, nao fail-closed para erro.\n            return await LerDoBancoAsync(pedidoId, \"RedisIndisponivel\");\n        }\n\n        // 1) O marcador do PROPRIO autor tem prioridade. Se existir, E a\n        // escrita que ele acabou de fazer — nao ha condicao de corrida\n        // possivel aqui, porque foi ele mesmo quem gravou.\n        var marcador = await db.StringGetAsync($\"rw:{autorId}:{pedidoId}\");\n        if (marcador.HasValue)\n        {\n            await PublicarMetricaAsync(\"MarcadorAutor\");\n            return Resposta(200, marcador.ToString());\n        }\n\n        // 2) Chave compartilhada, igual para qualquer usuario. Pode estar\n        // desatualizada se a invalidacao ainda nao chegou — aceitavel para\n        // quem NAO e o autor da ultima escrita.\n        var chaveComum = $\"item:{pedidoId}\";\n        var comum = await db.StringGetAsync(chaveComum);\n        if (comum.HasValue)\n        {\n            await PublicarMetricaAsync(\"ChaveComum\");\n            return Resposta(200, comum.ToString());\n        }\n\n        // 3) Cache-miss: busca no DynamoDB e repovoa a chave comum.\n        return await LerDoBancoAsync(pedidoId, \"BancoAposMiss\", db, chaveComum);\n    }\n\n    private async Task<APIGatewayHttpApiV2ProxyResponse> LerDoBancoAsync(\n        string pedidoId, string origemMetrica, IDatabase? db = null, string? chaveParaRepovoar = null)\n    {\n        // Leitura padrao (eventualmente consistente): a mesma tabela nao tem\n        // por que custar o dobro so porque o cache falhou ou estava vazio.\n        var item = await Dynamo.GetItemAsync(new GetItemRequest\n        {\n            TableName = \"Pedidos\",\n            Key = new() { [\"pedidoId\"] = new AttributeValue(pedidoId) },\n        });\n        if (item.Item.Count == 0) return Resposta(404, new { erro = \"nao encontrado\" });\n\n        var valor = JsonSerializer.Serialize(item.Item);\n        if (db is not null && chaveParaRepovoar is not null)\n            await db.StringSetAsync(chaveParaRepovoar, valor, TimeSpan.FromMinutes(5));\n\n        await PublicarMetricaAsync(origemMetrica);\n        return Resposta(200, valor);\n    }\n\n    // A prova da secao de implantacao le esta metrica, nao o log — e a\n    // diferenca entre testar e medir.\n    private static Task PublicarMetricaAsync(string origem) =>\n        Metricas.PutMetricDataAsync(new PutMetricDataRequest\n        {\n            Namespace = \"Consistencia/Leitura\",\n            MetricData = new List<MetricDatum> { new()\n            {\n                MetricName = \"OrigemDaResposta\",\n                Dimensions = new List<Dimension> { new() { Name = \"Origem\", Value = origem } },\n                Value      = 1,\n                Unit       = StandardUnit.Count,\n            }},\n        });\n\n    private static APIGatewayHttpApiV2ProxyResponse Resposta(int codigo, object corpo) => new()\n    {\n        StatusCode = codigo,\n        Body       = corpo is string s ? s : JsonSerializer.Serialize(corpo),\n        Headers    = new Dictionary<string, string> { [\"Content-Type\"] = \"application/json\" },\n    };\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O marcador não é fonte da verdade, é atalho de visibilidade",
+            "content": "Se o worker rejeitar a escrita depois, o marcador — que já foi lido por um GET entre o momento da resposta 200 e a rejeição — mostrou ao autor um valor que o sistema decidiu invalidar. É por isso que o worker apaga o marcador ao rejeitar, e por isso o TTL é curto: quanto menor a janela em que o marcador pode estar \"errado\", menor o dano de uma UI otimista que confiou nele."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: o worker e o invalidador, sem mudança de propósito"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A validação de regra e a invalidação de cache continuam fazendo exatamente o que faziam no desenho mínimo. A única linha nova é o `KeyDeleteAsync` do marcador quando o worker rejeita — o resto é o mesmo código, e isso é deliberado: menos mudança é menos risco."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Funcoes.cs — Worker e Invalidador",
+            "code": "// Funcoes.cs (continuacao) — a validacao de verdade e a invalidacao; nada\n// aqui muda em relacao ao desenho minimo, e essa estabilidade e proposital\n\nusing System.Text.Json;\nusing Amazon.DynamoDBv2;\nusing Amazon.DynamoDBv2.Model;\nusing Amazon.Lambda.SQSEvents;\nusing Amazon.Lambda.DynamoDBEvents;\nusing StackExchange.Redis;\n\nnamespace Consistencia;\n\npublic class WorkerFunction\n{\n    private static readonly IAmazonDynamoDB Dynamo = new AmazonDynamoDBClient();\n    private static readonly Lazy<ConnectionMultiplexer> Redis = new(() =>\n        ConnectionMultiplexer.Connect(Environment.GetEnvironmentVariable(\"REDIS_ENDPOINT\")!));\n\n    public async Task ProcessarAsync(SQSEvent evento)\n    {\n        foreach (var msg in evento.Records)\n        {\n            var comando = JsonSerializer.Deserialize<ComandoEscrita>(msg.Body)!;\n\n            // A validacao de REGRA acontece aqui, nao na API. Se falhar, o\n            // item nunca chega ao DynamoDB — e o marcador que a Escrita ja\n            // gravou continua de pe ate o TTL expirar, mostrando ao autor um\n            // valor que o sistema decidiu recusar. Por isso apagamos.\n            if (!RegraDeStatusValida(comando.Status))\n            {\n                var db = Redis.Value.GetDatabase();\n                await db.KeyDeleteAsync($\"rw:{comando.AutorId}:{comando.PedidoId}\");\n                continue; // mensagem processada; a rejeicao e o resultado\n            }\n\n            // Escrita idempotente por natureza: PutItem com o mesmo\n            // pedidoId sobrescreve. Se o SQS entregar a mesma mensagem duas\n            // vezes (at-least-once), o efeito final e o mesmo.\n            await Dynamo.PutItemAsync(new PutItemRequest\n            {\n                TableName = \"Pedidos\",\n                Item = new()\n                {\n                    [\"pedidoId\"]     = new AttributeValue(comando.PedidoId),\n                    [\"autorId\"]      = new AttributeValue(comando.AutorId),\n                    [\"status\"]       = new AttributeValue(comando.Status),\n                    [\"atualizadoEm\"] = new AttributeValue(DateTimeOffset.UtcNow.ToString(\"O\")),\n                },\n            });\n        }\n    }\n\n    private static bool RegraDeStatusValida(string status) =>\n        status is \"pendente\" or \"confirmado\" or \"cancelado\";\n}\n\npublic record ComandoEscrita(string PedidoId, string AutorId, string Status, DateTimeOffset EnviadoEm);\n\npublic class InvalidadorFunction\n{\n    private static readonly Lazy<ConnectionMultiplexer> Redis = new(() =>\n        ConnectionMultiplexer.Connect(Environment.GetEnvironmentVariable(\"REDIS_ENDPOINT\")!));\n\n    public async Task InvalidarAsync(DynamoDBEvent evento)\n    {\n        var db = Redis.Value.GetDatabase();\n\n        foreach (var registro in evento.Records)\n        {\n            if (registro.EventName is not (\"INSERT\" or \"MODIFY\")) continue;\n\n            var pedidoId = registro.Dynamodb.Keys[\"pedidoId\"].S;\n\n            // DELETE, nunca SET. A fila que carrega este evento e a mesma\n            // maquina de Streams->Lambda, sujeita a nova tentativa e a\n            // reprocessamento: se dois eventos do mesmo item forem\n            // processados fora de ordem, escrever o \"novo valor\" poderia\n            // deixar no cache um dado MAIS VELHO que o atual. Apagar e\n            // idempotente — nao importa a ordem, o resultado final e sempre\n            // \"sem chave\", e a proxima leitura busca a verdade no DynamoDB.\n            await db.KeyDeleteAsync($\"item:{pedidoId}\");\n        }\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "Por que o comentário sobre ordem está no código, não só no módulo",
+            "content": "É o tipo de decisão que alguém \"otimiza\" seis meses depois, trocando `KeyDeleteAsync` por um `StringSetAsync` com o valor do `NewImage` — parece evitar um cache-miss e passa no teste local, onde eventos raramente colidem. O comentário existe para essa pessoa, não para quem está lendo o módulo hoje."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar com número — não com \"parece que funcionou\""
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. A primeira mede o defeito no desenho mínimo, para que ele deixe de ser opinião. As quatro seguintes rodam contra o desenho de produção."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "medir-divergencia-autor.sh",
+            "code": "#!/usr/bin/env bash\n# medir-divergencia-autor.sh — a prova do defeito, ANTES da correção\n# Roda contra o desenho MÍNIMO (sem marcador). Escreve, e imediatamente tenta\n# ler como o MESMO autor, repetidas vezes, contando quantas leituras não\n# batem com o que acabou de ser escrito.\nset -euo pipefail\n\nBASE_URL=\"$(terraform output -raw url_api)\"\nTOKEN=\"$(obter-token-teste.sh usr-7781)\"  # helper local, fora do escopo\nPEDIDO=\"ped-$(date +%s)\"\n\ncurl -s -X POST \"$BASE_URL/pedidos/$PEDIDO\" \\\n  -H \"Authorization: Bearer $TOKEN\" -d '{\"status\":\"confirmado\"}' > /dev/null\n\ndivergentes=0; total=50\nfor i in $(seq 1 $total); do\n  resp=$(curl -s \"$BASE_URL/pedidos/$PEDIDO\" -H \"Authorization: Bearer $TOKEN\")\n  echo \"$resp\" | grep -q '\"status\":\"confirmado\"' || divergentes=$((divergentes+1))\ndone\necho \"$divergentes de $total leituras do PRÓPRIO autor não viram a escrita\"\n# Medido no ambiente de exemplo, com a fila em backlog normal: 21 de 50\n# (42%). O número varia com o backlog da fila no instante do teste — meça\n# o seu, não copie este.\n"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "#!/usr/bin/env bash\n# provas.sh — quatro medições contra o desenho de PRODUÇÃO (com marcador)\n\nBASE_URL=\"$(terraform output -raw url_api)\"\nTOKEN_A=\"$(obter-token-teste.sh usr-7781)\"\nTOKEN_B=\"$(obter-token-teste.sh usr-4402)\"  # um SEGUNDO usuário, que não escreveu nada\n\n# ── Prova 1: divergência do autor, com o marcador ativo ──────────────────────\nPEDIDO=\"ped-$(date +%s)\"\ncurl -s -X POST \"$BASE_URL/pedidos/$PEDIDO\" \\\n  -H \"Authorization: Bearer $TOKEN_A\" -d '{\"status\":\"confirmado\"}' > /dev/null\ndivergentes=0\nfor i in $(seq 1 50); do\n  resp=$(curl -s \"$BASE_URL/pedidos/$PEDIDO\" -H \"Authorization: Bearer $TOKEN_A\")\n  echo \"$resp\" | grep -q '\"Status\":\"confirmado\"' || divergentes=$((divergentes+1))\ndone\necho \"Prova 1 — divergência do autor: $divergentes de 50 (esperado: 0)\"\n\n# ── Prova 2: outros usuários continuam eventualmente consistentes ───────────\n# Isto NÃO é um bug remanescente: é a decisão central do módulo funcionando.\nresp_b=$(curl -s \"$BASE_URL/pedidos/$PEDIDO\" -H \"Authorization: Bearer $TOKEN_B\")\necho \"Prova 2 — leitura de outro usuário logo após a escrita: $resp_b\"\necho \"  (esperado: pode mostrar 'pendente' por alguns segundos — é o design, não a falha)\"\n\n# ── Prova 3: a métrica publicada confirma a origem de cada resposta ─────────\naws cloudwatch get-metric-statistics --namespace Consistencia/Leitura \\\n  --metric-name OrigemDaResposta --dimensions Name=Origem,Value=MarcadorAutor \\\n  --start-time \"$(date -u -d '5 min ago' +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --period 300 --statistics Sum --output text\necho \"Prova 3 — esperado: Sum próximo de 50 (as leituras do autor na prova 1)\"\n\n# ── Prova 4: a janela real de invalidação, para calibrar o TTL do marcador ──\n# Compara o instante do PutItem (atualizadoEm) com o instante do DELETE nos\n# logs do invalidador. O TTL do marcador tem de ser MAIOR que este p99.\naws logs filter-log-events --log-group-name /aws/lambda/ffv-lab-invalidador \\\n  --filter-pattern \"apagou\" --query 'events[].message' --output text\necho \"Prova 4 — o maior intervalo observado é o piso do TTL do marcador\"\n\n# ── Prova 5: DELETE é idempotente diante de eventos fora de ordem ───────────\n# Duas escritas rápidas no mesmo item; a leitura final (após o marcador\n# expirar) tem de bater com o ÚLTIMO estado gravado no DynamoDB, não importa\n# a ordem em que os dois eventos do Streams chegaram ao invalidador.\ncurl -s -X POST \"$BASE_URL/pedidos/$PEDIDO\" -H \"Authorization: Bearer $TOKEN_A\" \\\n  -d '{\"status\":\"confirmado\"}' > /dev/null &\ncurl -s -X POST \"$BASE_URL/pedidos/$PEDIDO\" -H \"Authorization: Bearer $TOKEN_A\" \\\n  -d '{\"status\":\"cancelado\"}' > /dev/null &\nwait; sleep 12  # aguarda o marcador expirar (TTL=10s) e a invalidação assentar\nfinal=$(curl -s \"$BASE_URL/pedidos/$PEDIDO\" -H \"Authorization: Bearer $TOKEN_B\")\nverdade=$(aws dynamodb get-item --table-name ffv-lab-pedidos \\\n  --key \"{\\\"pedidoId\\\":{\\\"S\\\":\\\"$PEDIDO\\\"}}\" --query 'Item.status.S' --output text)\necho \"Prova 5 — cache: $final | DynamoDB: $verdade (têm de bater)\"\n"
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Divergência do autor, sem marcador",
+                "laço de GET logo após o POST, 50 tentativas",
+                "um número maior que zero — o defeito é real e mensurável",
+                "zero aqui não prova que o desenho mínimo está certo; prova que o teste rodou fora do horário de pico"
+              ],
+              [
+                "2 · Divergência do autor, com marcador",
+                "mesmo laço, contra o desenho de produção",
+                "0 de 50",
+                "qualquer valor > 0 indica TTL menor que a janela real, ou marcador com chave errada"
+              ],
+              [
+                "3 · Outros usuários continuam eventuais",
+                "GET de um segundo usuário logo após a escrita",
+                "pode devolver o valor antigo por alguns segundos",
+                "se SEMPRE devolver o valor novo, o marcador vazou para quem não é o autor — falha de segurança, não só de design"
+              ],
+              [
+                "4 · A janela real de invalidação",
+                "diff entre `atualizadoEm` e o log do DELETE",
+                "um número — é o piso do TTL do marcador",
+                "se o maior valor observado for maior que o TTL configurado, o marcador expira cedo demais"
+              ],
+              [
+                "5 · DELETE é idempotente sob desordem",
+                "duas escritas rápidas no mesmo item, leitura após TTL",
+                "cache e DynamoDB concordam no valor final",
+                "divergência aqui indica que o invalidador foi trocado para SET em algum ponto"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três produzem o mesmo sintoma superficial — \"o autor não vê a própria mudança\" — depois de o marcador já existir. O que as separa é onde o marcador falhou."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "TTL menor que a janela real",
+                "configure `TTL_MARCADOR_S = 2` com a fila em backlog de 5 s",
+                "divergência volta a aparecer, mas só perto do fim do TTL — parece intermitente de novo",
+                "compare o TTL configurado com o maior valor da prova 4",
+                "recalibrar o TTL com o p99 MEDIDO, não com um número redondo"
+              ],
+              [
+                "Invalidador trocado de DELETE para SET",
+                "altere `InvalidarAsync` para escrever o `NewImage` do evento em vez de apagar a chave",
+                "divergência esporádica para leitores QUAISQUER, que \"conserta sozinha\" na próxima escrita",
+                "compare o `SequenceNumber` do evento processado por último com o valor salvo no cache",
+                "reverter para `KeyDeleteAsync`"
+              ],
+              [
+                "Marcador sem `autorId` na chave",
+                "grave o marcador como `rw:{pedidoId}` em vez de `rw:{autorId}:{pedidoId}`",
+                "um SEGUNDO usuário lendo o mesmo recurso vê o valor que o primeiro autor acabou de escrever",
+                "teste com dois usuários simultâneos no mesmo recurso",
+                "sempre compor a chave com autor e recurso — nunca só o recurso"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A terceira falha não é só um bug de UX",
+            "content": "Se o corpo do marcador contiver qualquer dado que o segundo usuário não deveria ver — um campo interno, um preço negociado, uma nota do autor — a chave sem `autorId` transforma um defeito de consistência em vazamento de dado entre usuários. É a diferença entre \"a tela está desatualizada\" e \"a tela mostrou algo que não era seu\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Um usuário salva um pedido e, meio segundo depois, atualiza a página e ainda vê o status antigo. A equipe de suporte registra como bug. Dado que a escrita passa por uma fila SQS antes de chegar ao DynamoDB, qual é a explicação mais provável?",
+        "options": [
+          "A leitura caiu numa janela em que a mensagem ainda não tinha sido processada pelo worker, ou o cache ainda não foi invalidado",
+          "O ElastiCache está com a réplica fora de sincronia com o primário",
+          "O API Gateway aplicou cache na resposta do GET",
+          "O DynamoDB perdeu o dado porque usa consistência eventual por padrão"
+        ],
+        "correctIndex": 0,
+        "explanation": "A leitura pode ter cruzado qualquer um dos dois relógios assíncronos do desenho: se caiu antes de o worker consumir a mensagem da fila, o item sequer existe no DynamoDB ainda; se caiu depois disso mas antes de o invalidador apagar a chave do cache, o Redis ainda serve o valor antigo. Os dois produzem o MESMO sintoma para o usuário — \"salvei e não vejo\" — mas pedem correções diferentes, e é por isso que a causa precisa ser diagnosticada, não assumida.\n\nA primeira alternativa erra ao chamar de \"perda\" o que é apenas ausência temporária: o DynamoDB não perdeu nada, o item simplesmente ainda não tinha sido escrito quando a leitura aconteceu — a mensagem ainda estava na fila. A terceira confunde consistência entre réplicas do ElastiCache, que é interna ao serviço gerenciado e não é o mecanismo em jogo aqui, com o atraso de invalidação entre a escrita e a atualização da chave, que é decisão da aplicação. A quarta inventa um comportamento que o API Gateway não tem por padrão: ele não armazena em cache respostas de rotas HTTP a menos que isso seja configurado explicitamente, e nada no enunciado indica essa configuração."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o marcador é um caminho novo, e caminho novo é superfície nova"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Nada aqui expõe o Redis à internet nem muda a fronteira de rede — o risco introduzido é lógico: uma chave mal composta pode servir o dado de um autor para outro leitor."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Marcador vaza entre usuários por chave sem `autorId`",
+                "baixa",
+                "alto",
+                "chave sempre composta por `autorId` + `pedidoId`, nunca só o recurso",
+                "teste automatizado com dois usuários simultâneos; auditoria de padrão de chaves no Redis",
+                "corrigir a chave e invalidar (`SCAN` + `DEL`) todos os marcadores existentes do padrão errado"
+              ],
+              [
+                "Identidade do autor confiada sem verificação",
+                "baixa",
+                "alto",
+                "JWT authorizer nativo do API Gateway, nunca decodificação manual do token na função",
+                "CloudWatch de tentativas rejeitadas pelo authorizer",
+                "revisar a configuração do authorizer, não a lógica da função"
+              ],
+              [
+                "Mensagem processada mais de uma vez (at-least-once)",
+                "média",
+                "médio",
+                "`PutItem` idempotente por natureza — mesmo `pedidoId` sobrescreve com o mesmo resultado",
+                "`SequenceNumber` ou `MessageId` duplicado nos logs",
+                "nenhuma: é o comportamento esperado e já coberto pelo design"
+              ],
+              [
+                "Marcador gravado sem TTL por falha de configuração",
+                "baixa",
+                "médio",
+                "TTL sempre explícito no `StringSetAsync`, nunca chave sem expiração",
+                "script de auditoria rodando `TTL rw:*` no Redis — qualquer `-1` é falha",
+                "`EXPIRE` manual na chave e correção do código"
+              ],
+              [
+                "DLQ acumulando comandos rejeitados sem ninguém olhar",
+                "média",
+                "baixo a médio",
+                "alarme de profundidade da DLQ acima de zero",
+                "`ApproximateNumberOfMessagesVisible` da fila de DLQ",
+                "processar manualmente ou descartar com justificativa registrada"
+              ],
+              [
+                "Redis alcançável além do grupo de funções",
+                "baixa",
+                "alto",
+                "security group do cache só libera o SG das funções — nunca faixa de IP",
+                "IAM Access Analyzer / Config rule sobre o security group",
+                "corrigir a regra; girar a validação se havia caminho sem TLS"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "Quantas leituras do autor vieram do marcador, da chave comum ou do banco?",
+                "custom: `OrigemDaResposta` por dimensão `Origem`",
+                "é a métrica que prova a correção — deve dominar `MarcadorAutor` logo após cada escrita",
+                "nenhum limiar de alarme; é painel de leitura, não de disparo"
+              ],
+              [
+                "A fila de comandos está atrasando?",
+                "`ApproximateNumberOfMessages`",
+                "crescente sem baixar alonga a janela sem marcador em caso de falha do Redis",
+                "crescimento sustentado por mais de 5 min"
+              ],
+              [
+                "Quantas mensagens foram para a DLQ?",
+                "`ApproximateNumberOfMessagesVisible` da DLQ",
+                "comando que a regra de negócio recusa repetidamente, ou payload malformado",
+                "qualquer valor > 0"
+              ],
+              [
+                "Qual o atraso entre escrita e invalidação?",
+                "diff entre `atualizadoEm` e o log do DELETE",
+                "é o número que calibra o TTL do marcador",
+                "p99 acima do TTL configurado"
+              ],
+              [
+                "A taxa de acerto da chave comum caiu?",
+                "razão entre `ChaveComum` e `BancoAposMiss`",
+                "TTL da chave comum mal calibrado, ou invalidação disparando cedo demais",
+                "queda abrupta em relação à média da semana"
+              ],
+              [
+                "O worker está rejeitando mais comandos que o normal?",
+                "contagem de `RegraDeStatusValida = false`",
+                "pico correlacionado com um deploy do cliente indica contrato quebrado",
+                "acima de 1% dos comandos processados"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana se você olhar sozinha",
+            "content": "`MarcadorAutor` alto é bom logo após uma escrita, mas alto o TEMPO TODO indica TTL longo demais — o marcador virou cache permanente do autor, disfarçado de correção pontual. Compare sempre com o instante da última escrita daquele usuário, não com o total isolado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 escritas/dia",
+                "worker processa quase instantaneamente; o marcador quase nunca é necessário",
+                "nada — é o cenário de desenvolvimento",
+                "nada"
+              ],
+              [
+                "10 mil escritas/dia, pico de 15/s",
+                "a fila absorve a rajada; sem marcador, a janela cresce no pico",
+                "é justamente quando o suporte recebe mais tickets — pico de pedido é pico de reclamação",
+                "o marcador já cobre isso; confirmar que o TTL foi medido NO pico, não fora dele"
+              ],
+              [
+                "1 milhão de escritas/dia",
+                "muitas chaves de marcador de curta duração no Redis simultaneamente",
+                "pressão de memória no nó, e esgotamento de conexão se cada invocação abrir uma nova",
+                "TTL curto já ajuda a memória; `Lazy<ConnectionMultiplexer>` reutiliza conexão entre invocações do mesmo runtime"
+              ],
+              [
+                "Falha de AZ durante o pico",
+                "o primário do ElastiCache falha e a réplica assume",
+                "leituras de marcador podem falhar por alguns segundos durante o failover",
+                "a função de leitura cai para o DynamoDB nesse intervalo — fail-open, não erro 500"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O gargalo que só aparece em frota grande",
+            "content": "Lambda em VPC paga o custo de anexar uma interface de rede por execução concorrente. Em pico alto, o número de execuções simultâneas das funções de escrita e leitura pode esbarrar em cota de ENI da sub-rede antes de esbarrar em qualquer limite do Redis — e o sintoma parece lentidão do cache quando é falta de rede para a própria função."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "centenas de escritas/dia",
+                "um nó `cache.t4g.micro` ligado 24/7; Lambda e SQS praticamente de graça no free tier",
+                "o cache domina o custo total, mesmo pequeno",
+                "nenhuma; otimizar aqui é gastar atenção onde não há dinheiro"
+              ],
+              [
+                "Produção pequena",
+                "40 mil escritas/dia, pico de 15/s",
+                "réplica do cache (2 nós) + invocações de 4 funções + métricas customizadas",
+                "previsível; métrica customizada cresce com o número de leituras, não de escritas",
+                "agrupar a métrica por período maior se o volume de leitura for muito acima do de escrita"
+              ],
+              [
+                "Alta escala",
+                "milhões de escritas/dia",
+                "nó de cache maior, mais réplicas, e concorrência de Lambda em VPC dimensionada",
+                "o Redis passa a ser a linha mais visível, seguido de perto pelas métricas customizadas",
+                "reduzir a granularidade da métrica de `OrigemDaResposta` (amostragem) se o volume de leitura for muito alto"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "ElastiCache",
+                "hora do nó ligado, independente de tráfego",
+                "é o único recurso \"sempre ligado\" desta arquitetura inteiramente orientada a evento"
+              ],
+              [
+                "Lambda em VPC",
+                "duração + GB-segundo, com custo adicional de latência de rede na primeira invocação fria",
+                "quatro funções em VPC multiplicam o efeito de partida fria em relação a uma única função"
+              ],
+              [
+                "SQS",
+                "por milhão de requisições",
+                "o polling do event source mapping do worker conta como requisição"
+              ],
+              [
+                "DynamoDB sob demanda",
+                "por leitura e escrita",
+                "cache-miss em pico gera onda de leitura direta na tabela"
+              ],
+              [
+                "CloudWatch, métricas customizadas",
+                "por métrica-mês, não por chamada",
+                "a dimensão `Origem` com valores distintos (`MarcadorAutor`, `ChaveComum`, `BancoAposMiss`, `RedisIndisponivel`) conta como métricas separadas — não adicione uma dimensão nova sem necessidade"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "O custo oculto que este desenho evita",
+            "content": "A alternativa \"ler sempre do DynamoDB para todo mundo\" pareceria mais simples e mais barata em Terraform — sem ElastiCache, sem marcador. Na fatura ela é o oposto: perde a proteção de leitura repetida que o cache oferece, e toda leitura do painel, de todo restaurante, o tempo todo, vira uma leitura na tabela. O marcador custa um nó de cache 24/7; a alternativa custaria a tabela inteira sob a carga de leitura de 1.200 restaurantes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "divergência do autor medida e provada em zero; painel distingue origem da resposta",
+                "o TTL do marcador é um valor manual, revisado por pessoa",
+                "recalibração automática do TTL a partir da métrica de janela real (nível 6 da evolução)",
+                "média"
+              ],
+              [
+                "Segurança",
+                "marcador isolado por autor; JWT authorizer nativo; segredo do Redis por TLS/security group",
+                "nenhuma rotina audita periodicamente o padrão de chaves do marcador",
+                "job agendado que confere `SCAN rw:*` contra o padrão esperado",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "leitura cai para o DynamoDB se o Redis falhar; worker idempotente contra reentrega da fila",
+                "nenhum alarme automático se a divergência do autor voltar a subir",
+                "alarme sobre a métrica `OrigemDaResposta` quando `MarcadorAutor` cai abaixo do esperado logo após uma escrita",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "marcador resolve em leitura de Redis, mais barata que leitura forte no DynamoDB",
+                "quatro funções em VPC pagam custo de ENI que uma arquitetura sem VPC não pagaria",
+                "avaliar VPC Lattice ou endpoint de interface se o número de funções crescer (fora do escopo aqui)",
+                "baixa"
+              ],
+              [
+                "Otimização de custos",
+                "cache dimensionado pequeno; TTL curto evita acúmulo de chaves de marcador",
+                "métricas customizadas por dimensão podem crescer sem controle se novos valores de `Origem` forem adicionados",
+                "revisar a lista de valores de `Origem` antes de qualquer mudança de código",
+                "baixa"
+              ],
+              [
+                "Sustentabilidade",
+                "TTL curto libera memória do Redis automaticamente, sem job de limpeza",
+                "nó de cache sempre ligado mesmo fora do horário de pico",
+                "avaliar escala automática do número de réplicas por horário, se o tráfego permitir",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de estratégia de leitura. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do banco sem proteção ao dado que decide sua própria consistência",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Leitura sempre direto do DynamoDB, sem fila nem cache: escrita e leitura síncronas e simples.",
+                "note": "Risco resolvido: nenhum. Novo risco: nenhuma proteção contra pico — toda leitura paga o custo total da tabela. Custo: o mais barato em volume baixo."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Fila absorvendo pico de escrita, cache absorvendo leitura repetida, e marcador de leitura-própria-escrita para o autor.",
+                "note": "Risco resolvido: pico de escrita derruba a tabela; leitura repetida sobrecarrega; autor vê o próprio \"bug\". Novo risco: dois relógios assíncronos e um marcador para manter coerentes. Custo: nó de cache 24/7 mais Lambda em VPC."
+              },
+              {
+                "label": "Nível 3 — Notificação ativa",
+                "instruction": "WebSocket ou eventos empurram a confirmação real para o cliente, em vez de o cliente confiar num marcador local com prazo de validade.",
+                "note": "Risco resolvido: o cliente não precisa mais adivinhar \"ainda estou na janela do marcador?\" — é avisado. Novo risco: conexão persistente e estado de sessão no servidor. Custo: API de WebSocket e gerenciamento de conexões."
+              },
+              {
+                "label": "Nível 4 — Multi-região",
+                "instruction": "Réplica global de tabela e cache replicado por região, para servir leitura de baixa latência perto do usuário.",
+                "note": "Risco resolvido: usuário longe da região primária espera mais pela invalidação. Novo risco: consistência entre regiões é mais fraca ainda que entre serviços na mesma região. Custo: réplicas dobrando armazenamento e escrita."
+              },
+              {
+                "label": "Nível 5 — Orquestração por saga",
+                "instruction": "Quando a escrita deixa de ser um item isolado e passa a envolver múltiplos serviços — estoque, pagamento, pedido — a janela de inconsistência de um item vira compensação entre vários (L35).",
+                "note": "Risco resolvido: item isolado consistente não implica fluxo de negócio consistente. Novo risco: compensação mal desenhada deixa rastro pior que o atraso original. Custo: orquestrador e estado de transação de longa duração."
+              },
+              {
+                "label": "Nível 6 — Dados e um modelo pequeno, não decoração",
+                "instruction": "Os dados já existem: a métrica `OrigemDaResposta`, por tipo de fluxo, é uma série histórica de quanto tempo cada fluxo passa servindo do marcador antes de cair no caminho comum. Isso vira o conjunto de treino de um modelo pequeno — regressão simples, não geração de texto — que prevê o TTL de marcador por fluxo em vez de um valor único fixo para todos. A pergunta que separa isto de IA decorativa: sem o modelo, a alternativa é um humano olhando o mesmo painel de tempos em tempos e ajustando o TTL à mão — o modelo faz a mesma coisa, com mais fluxos e mais frequência do que uma pessoa consegue acompanhar.",
+                "note": "Risco resolvido: TTL único para todos os fluxos, quando eles têm perfis de latência de fila muito diferentes. Novo risco: decisão de UX passa a vir de um modelo sobre dados de produção, e precisa de teto manual e de reversão fácil — senão erra silenciosamente e ninguém percebe até o suporte ligar de novo. Custo: baixo — os dados já existem nas métricas; o novo custo é validar o modelo antes de confiar nele."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Notificação ativa no nível 3 só faz sentido depois de o nível 2 garantir que existe um valor correto e recente para notificar — sem o marcador, o WebSocket empurraria exatamente a mesma incerteza, só que mais rápido. É a decoração que o nível anterior evita."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não resolve o problema central, e forçá-la seria o antipadrão que a própria série critica. \"Como garantir que o autor veja a própria escrita\" tem resposta determinística: um marcador com TTL derivado de medição. Um modelo não melhora nenhuma das duas peças — são configuração e aritmética."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar onde IA acrescentaria valor real, e ele é modesto: calibrar o TTL POR TIPO de fluxo, em vez de um valor único para todo o sistema. Hoje todo comando passa pelo mesmo TTL; um pedido de restaurante e uma atualização de perfil de usuário podem ter distribuições de latência de fila muito diferentes, e um TTL pensado para o pico do almoço pode ser generoso demais para tráfego fora de hora."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "ajustar o TTL do marcador por tipo de fluxo, em vez de um valor único"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "uma regra bastaria para começar: \"TTL = p99 medido por tipo de fluxo, mais margem fixa\" cobre a maior parte. IA só se justifica depois de a regra simples mostrar seu limite"
+              ],
+              [
+                "De onde viriam os dados?",
+                "a própria métrica `OrigemDaResposta` e o log de instante de invalidação, segmentados por tipo de comando — nada disso é novo, já existe no CloudWatch"
+              ],
+              [
+                "Qual o risco?",
+                "TTL calculado errado para baixo expõe o autor ao próprio bug de novo, de forma mais difícil de depurar porque parece ocasional; exige teto manual e alarme de divergência"
+              ],
+              [
+                "Por que não agora?",
+                "a Rota Livre tem poucos tipos de fluxo distintos hoje. Um modelo sobre poucas categorias é complexidade sem ganho mensurável sobre a regra simples"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"decidir se este valor está desatualizado\" olhando o conteúdo do item troca um sinal determinístico — a presença ou ausência do marcador, que é exata — por um probabilístico. A pergunta \"isto é uma escrita recente deste autor?\" já tem resposta binária no Redis; um modelo aqui só acrescentaria latência e uma nova forma de errar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Marcador sem TTL, \"para garantir que o usuário sempre veja\"",
+                "parece mais seguro deixar o valor lá indefinidamente",
+                "o marcador vira fonte da verdade paralela, e diverge do DynamoDB se o worker rejeitar depois",
+                "usuário vê, por minutos ou horas, um estado que o sistema já invalidou",
+                "TTL curto, derivado da janela medida",
+                "nunca em produção"
+              ],
+              [
+                "Chave do marcador sem `autorId`, só o recurso",
+                "é uma linha a menos de código — \"o pedido é o pedido\"",
+                "vaza a escrita de um usuário para outro que lê o mesmo recurso na janela",
+                "usuário B vê o estado transitório que o usuário A acabou de gravar",
+                "sempre compor a chave com autor e recurso",
+                "recurso genuinamente sem noção de autor — mas aí não é mais read-your-writes, é outra coisa"
+              ],
+              [
+                "Invalidador escrevendo o novo valor (SET) em vez de apagar (DELETE)",
+                "parece uma otimização — evita um cache-miss na próxima leitura",
+                "SQS padrão não garante ordem; um SET fora de ordem deixa a chave com um valor mais VELHO que o real",
+                "divergência esporádica que \"conserta sozinha\" na próxima escrita, difícil de reproduzir",
+                "DELETE, sempre",
+                "só com fila FIFO por chave — que custa mais e não resolve o resto do problema"
+              ],
+              [
+                "Tratar `ConsistentRead=true` como a correção completa",
+                "é a resposta que aparece primeiro numa busca sobre consistência eventual no DynamoDB",
+                "resolve só a leitura da TABELA; nada resolve o atraso da fila antes de o worker processar",
+                "autor ainda não vê a própria escrita quando ela está na fila, mesmo com leitura fortemente consistente",
+                "marcador cobre os dois atrasos, não só um",
+                "quando não existe fila no caminho — escrita síncrona — aí `ConsistentRead` sozinho já resolve"
+              ],
+              [
+                "UI otimista sem plano para quando o worker rejeita",
+                "a maioria das escritas passa mesmo, e o caminho feliz é o que se testa primeiro",
+                "usuário vê confirmação de algo que o sistema, segundos depois, decide que é inválido — silenciosamente",
+                "reclamação de \"sumiu\" ao contrário: viu, depois não viu mais",
+                "worker apaga o marcador ao rejeitar; a UI trata a ausência subsequente como reversão, não como bug",
+                "fluxos onde a rejeição é praticamente impossível, porque a validação de forma já cobre tudo"
+              ],
+              [
+                "Aplicar o marcador a todo leitor recente, não só ao autor",
+                "parece mais justo e mais uniforme para todo mundo",
+                "a função de leitura vira sempre-consistente de fato, e o motivo de ter cache desaparece",
+                "toda leitura passa a pagar o custo total, e o cache perde sua função",
+                "marcador é exclusivo do autor da escrita",
+                "nunca — é a decisão central do módulo sendo revertida"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Autor não vê a própria escrita mesmo com o marcador implementado",
+                "TTL menor que a janela real de invalidação/fila",
+                "compare o TTL configurado com o p99 medido na prova 4",
+                "métrica `OrigemDaResposta` caindo para `ChaveComum`/`BancoAposMiss` antes do esperado",
+                "aumentar o TTL com base no dado medido, não estimado"
+              ],
+              [
+                "Usuário B vê o rascunho do usuário A",
+                "chave do marcador sem `autorId`",
+                "inspecionar o padrão de chaves no Redis (`SCAN rw:*`)",
+                "logs da função de leitura, comparando o autor da sessão com o dono do marcador retornado",
+                "recompor a chave com `autorId` + `pedidoId`"
+              ],
+              [
+                "Divergência que \"some sozinha\" e reaparece",
+                "invalidador fazendo SET em vez de DELETE, com mensagens fora de ordem",
+                "comparar o `SequenceNumber` do evento processado por último com o valor salvo",
+                "logs do invalidador e métricas do Streams",
+                "trocar para `DELETE`"
+              ],
+              [
+                "Fila de comandos crescendo sem parar",
+                "worker mais lento que a taxa de chegada, ou travado num erro não tratado até o timeout",
+                "`ApproximateNumberOfMessages` e duração média das invocações do worker",
+                "métricas de `Duration` e `Errors` do Lambda",
+                "aumentar concorrência/memória, ou corrigir o erro que trava o worker"
+              ],
+              [
+                "DLQ acumulando mensagens",
+                "regra de negócio mudou e comandos antigos não passam mais, ou payload malformado",
+                "inspecionar o corpo das mensagens retidas na DLQ",
+                "console ou CLI da fila de DLQ",
+                "reprocessar manualmente após corrigir, ou descartar com justificativa registrada"
+              ],
+              [
+                "Erro 500 na leitura durante um evento de failover do Redis",
+                "função de leitura sem caminho de fallback quando o Redis está indisponível",
+                "correlacionar eventos de failover do ElastiCache com erros da função de leitura",
+                "logs da Lambda de leitura",
+                "cair para o DynamoDB quando o Redis não responde, nunca 500"
+              ],
+              [
+                "Marcador nunca expira, Redis cheio de chaves antigas",
+                "`StringSetAsync` chamado sem `TimeSpan` — TTL esquecido",
+                "`TTL rw:*` no Redis; qualquer `-1` é falha",
+                "código do handler de escrita",
+                "sempre setar o TTL explicitamente"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em qualquer parâmetro, pergunte: o problema está ANTES de o item existir no DynamoDB, ou DEPOIS disso mas antes de o cache saber? A primeira aponta para a fila e o worker; a segunda aponta para o Streams e o invalidador. As duas produzem o mesmo sintoma visível e pedem investigação em lugares opostos."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório acrescenta poucos recursos, mas o cache é o que mais cobra parado — é o único recurso \"sempre ligado\" desta arquitetura orientada a evento."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Derrube o que o Terraform administra.\nterraform destroy -auto-approve\n\n# 2. FILA DLQ: mensagens retidas por ate 14 dias sobrevivem se a fila\n#    principal foi apagada antes da DLQ, ou se o destroy foi interrompido.\naws sqs list-queues --queue-name-prefix ffv-lab-comandos --output table\n\n# 3. GRUPOS DE LOGS das quatro funcoes: tem retencao propria e nao\n#    pertencem ao ciclo de vida do Lambda que os escreveu.\nfor fn in escrita leitura worker invalidador; do\n  aws logs delete-log-group --log-group-name \"/aws/lambda/ffv-lab-${fn}\" 2>/dev/null || true\ndone\n\n# 4. METRICAS CUSTOMIZADAS nao sao apagaveis por comando, mas continuam\n#    aparecendo no CloudWatch (sem cobrar) ate expirar por retencao padrao.\n#    Confirme que nenhum alarme criado a mao ficou orfao.\naws cloudwatch describe-alarms --alarm-name-prefix ffv-lab --output table\n\n# 5. Prova final: nada com nome do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O ElastiCache é o item que cobra por estar ligado, não por uso",
+            "content": "Diferente de Lambda, SQS e DynamoDB sob demanda, o `aws_elasticache_replication_group` cobra por hora do nó independentemente de tráfego. Se você pausar o laboratório sem rodar o `destroy`, é este recurso que segue cobrando enquanto os outros ficam ociosos de graça."
+          }
+        },
+        {
+          "id": "b23_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Tabela DynamoDB e Streams",
+                "sim",
+                "não",
+                "nenhum item permanece; o stream some com a tabela"
+              ],
+              [
+                "Fila SQS principal",
+                "sim",
+                "não",
+                "sem custo por estar vazia"
+              ],
+              [
+                "Fila DLQ",
+                "sim, se referenciada no Terraform",
+                "não",
+                "mensagens retidas somem junto; risco é a fila ter sido apagada antes de você olhar o conteúdo"
+              ],
+              [
+                "ElastiCache Redis",
+                "sim",
+                "sim, por hora do nó",
+                "é o único recurso desta arquitetura que cobra 24/7"
+              ],
+              [
+                "Grupos de logs das 4 funções",
+                "depende de `skip_destroy`",
+                "sim, por retenção",
+                "ciclo próprio; sobrevivem à função que os alimentava"
+              ],
+              [
+                "Métricas customizadas no CloudWatch",
+                "não se aplica (não são recurso)",
+                "não",
+                "não há como \"apagar\" uma métrica; ela só para de receber pontos novos"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Autor não vê a própria escrita",
+                "marcador de leitura-própria-escrita, TTL curto",
+                "é gravado no mesmo request da escrita — não depende de fila nem de invalidação terem terminado"
+              ],
+              [
+                "Item ainda não existe quando o autor lê",
+                "o marcador CONTÉM o valor, não aponta para ele",
+                "resolve mesmo quando o `PutItem` de verdade ainda não aconteceu"
+              ],
+              [
+                "Cache mentindo sobre um item que já existe",
+                "invalidador com DELETE",
+                "apagar é idempotente independente da ordem de chegada do evento"
+              ],
+              [
+                "Outros usuários não deveriam pagar o custo da correção do autor",
+                "chave composta por `autorId`",
+                "restringe o atalho a quem escreveu, preservando a proteção de cache para todos os outros"
+              ],
+              [
+                "Worker rejeita a escrita depois de o autor já ter visto \"sucesso\"",
+                "apagar o marcador na rejeição",
+                "evita que o autor continue vendo, por segundos, um valor que o sistema já invalidou"
+              ],
+              [
+                "Redis fica indisponível durante um failover",
+                "fallback de leitura para o DynamoDB",
+                "fail-open para consistência em vez de fail-closed com erro 500"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Autor não vê a própria escrita",
+                "marcador síncrono com TTL",
+                "se o TTL for menor que a janela real, o autor volta a ser exposto perto do fim do prazo"
+              ],
+              [
+                "Cache desatualizado para outros usuários",
+                "invalidação por Streams",
+                "nada — é o comportamento aceito por design"
+              ],
+              [
+                "Vazamento de estado entre usuários",
+                "chave composta por `autorId`",
+                "se o `autorId` vier de fonte não autenticada, a composição da chave não ajuda"
+              ],
+              [
+                "Reprocessamento duplicado de mensagem",
+                "`PutItem` idempotente",
+                "efeitos colaterais fora do `PutItem`, se existissem"
+              ],
+              [
+                "Ordem de eventos do Streams fora de sequência",
+                "DELETE em vez de SET no invalidador",
+                "não resolve latência da invalidação, só a correção do valor final"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "O restaurante confirma o pedido; a API valida a forma e responde antes de qualquer processamento pesado.",
+              "No mesmo request, a API grava o marcador de leitura-própria-escrita no Redis, com TTL curto.",
+              "Também no mesmo request, a API enfileira o comando de escrita durável no SQS.",
+              "O worker consome a mensagem, valida a regra de negócio de verdade e grava o item no DynamoDB.",
+              "O DynamoDB Streams captura a mudança e aciona a função invalidadora.",
+              "O invalidador apaga a chave compartilhada do item — nunca a chave de marcador de ninguém.",
+              "O restaurante atualiza a própria tela: a leitura encontra o marcador e devolve o valor certo, sem tocar na fila nem no worker.",
+              "Um segundo usuário lendo o mesmo pedido pode ainda ver o valor antigo por alguns segundos — por decisão, não por falha.",
+              "Passado o TTL, o marcador expira e o autor volta a ler pelo caminho comum, já invalidado.",
+              "A métrica `OrigemDaResposta` registrou cada uma dessas decisões, e é ela — não a sensação de ter testado — que prova o resultado."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que meu app mostra o dado antigo logo depois de eu salvar?",
+            "answer": "Porque a escrita e a leitura passam por caminhos diferentes que não terminam ao mesmo tempo: sua alteração pode ainda estar numa fila esperando ser processada, ou já ter sido gravada mas o cache que a leitura consulta ainda não foi avisado da mudança. Nenhum dos dois é uma falha do sistema — são dois relógios assíncronos correndo em paralelo, e o efeito, para você, é indistinguível de um bug até alguém explicar a causa. A correção não é eliminar os dois relógios, que existem por bons motivos de capacidade; é garantir que você, como autor da escrita, leia por um caminho que reflita o que acabou de fazer, enquanto outros usuários continuam no caminho eventual."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Read-your-writes resolve consistência eventual de verdade?",
+            "answer": "Não elimina o atraso entre a escrita e a réplica ou o cache — só garante que a PESSOA que escreveu não o sinta. A técnica dá ao autor um caminho de leitura que reflete a própria escrita, como um marcador com chave por usuário e recurso, enquanto todo o resto do sistema continua eventualmente consistente, de propósito. É uma correção de UX cirúrgica, não uma mudança no modelo de consistência do sistema: se você precisa que TODOS os leitores vejam o mesmo estado no mesmo instante, o problema é outro, e chama-se consistência forte, com o custo de capacidade que isso implica."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "ConsistentRead no DynamoDB resolve o problema de não ver a própria escrita?",
+            "answer": "Só resolve a parte da leitura da tabela, e frequentemente nem essa: se a escrita ainda está numa fila esperando ser processada por um worker, o item simplesmente não existe no DynamoDB ainda — nenhuma configuração de leitura, forte ou eventual, encontra um dado que não foi gravado. `ConsistentRead=true` ajuda quando a única fonte de atraso é a réplica de leitura da própria tabela, mas numa arquitetura com fila de escrita e cache, ele resolve no máximo um dos dois relógios envolvidos. Tratar como resolvido é o erro mais comum ao aplicar essa correção."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Por que o invalidador de cache deve apagar a chave, e não escrever o novo valor nela?",
+            "answer": "Porque apagar é uma operação idempotente e escrever não é: não importa a ordem em que os eventos de mudança chegam, o resultado de apagar a chave é sempre \"ausente\", e a próxima leitura busca o valor atual direto na fonte da verdade. Se o invalidador escrevesse o novo valor a partir do evento, e a fila que carrega esses eventos não garantir ordem — como é o caso de uma fila SQS padrão — dois eventos do mesmo item processados fora de ordem podem deixar o cache com um valor mais antigo que o real, e essa divergência não se anuncia: só aparece na próxima vez que alguém ler aquela chave."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Quanto tempo devo deixar o marcador de leitura-própria-escrita vivo?",
+            "answer": "O tempo deve vir da medição da sua janela real de invalidação, nunca de um valor redondo escolhido de antemão. Meça, em produção ou em carga simulada, o intervalo entre o instante em que o item é gravado na fonte da verdade e o instante em que a chave de cache correspondente é invalidada; o TTL do marcador precisa cobrir o p99 dessa distância com folga, porque é exatamente essa janela que ele existe para esconder do autor. Um TTL menor que essa janela real deixa o autor exposto ao próprio bug de novo, só que perto do fim do prazo — o que é ainda mais difícil de depurar, porque parece intermitente."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "É seguro mostrar a mudança na tela antes do servidor confirmar (UI otimista)?",
+            "answer": "É seguro quando existe um plano explícito para o caso em que a validação, feita depois, rejeita a escrita — sem esse plano, a interface confirma algo que o backend ainda vai desfazer, e o usuário vê uma reversão silenciosa que parece ainda mais um bug do que o atraso original. A prática correta é a validação de forma acontecer antes de aceitar a requisição, a validação de regra acontecer no processamento assíncrono, e qualquer rejeição nessa segunda etapa apagar o estado otimista imediatamente, para que a próxima leitura do autor reflita a rejeição em vez de continuar mostrando o valor que não vingou."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Outros usuários também precisam do marcador de leitura-própria-escrita?",
+            "answer": "Não, e dar o marcador a todo mundo anula o motivo de ele existir: ele é uma exceção pontual, aplicada só a quem acabou de escrever, exatamente porque ler sempre pela fonte forte para todo mundo devolveria à arquitetura o problema de capacidade que a fila e o cache foram construídos para resolver. Outros usuários continuam lendo pelo caminho eventual, e isso é o comportamento correto, não uma lacuna: a experiência de quem não escreveu nada não muda, porque para eles nunca houve uma escrita própria para sentir falta."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Como eu meço se meu sistema tem esse problema, sem esperar um usuário reclamar?",
+            "answer": "Escreva um item pelo caminho normal da sua aplicação e, imediatamente depois, leia esse mesmo item várias vezes seguidas pelo mesmo caminho que o autor usaria — um teste automatizado de algumas dezenas de repetições já revela a taxa de divergência com um número, em vez de depender de alguém notar. Se qualquer leitura logo após a escrita devolver um valor diferente do que acabou de ser gravado, o sistema tem o sintoma, e o número de repetições divergentes por total de tentativas é a métrica que prova a correção depois: ela deveria cair a zero para o autor sem também cair a zero para outros usuários, porque a segunda mudança indicaria que você eliminou a consistência eventual, não o sintoma dela."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Depois de implementar o marcador de leitura-própria-escrita no ElastiCache, um teste automatizado mostra 0% de divergência para o autor, mas um SEGUNDO usuário lendo o mesmo item ainda vê o valor antigo por alguns segundos após a escrita. O que isso indica?",
+            "options": [
+              "É o comportamento esperado: o marcador cobre só o autor da escrita, e outros usuários continuam eventualmente consistentes de propósito",
+              "O marcador não está funcionando corretamente e precisa ser corrigido",
+              "A chave do marcador deveria incluir o ID do recurso em vez do ID do usuário, para cobrir todos os leitores",
+              "O TTL do marcador está configurado baixo demais"
+            ],
+            "correctIndex": 0,
+            "explanation": "O marcador de leitura-própria-escrita é uma correção CIRÚRGICA, aplicada só a quem acabou de escrever — dar o mesmo atalho a todo leitor devolveria à arquitetura o problema de capacidade que a fila e o cache foram construídos para resolver, e anularia o motivo de eles existirem. Um segundo usuário sem marcador próprio lendo pelo caminho comum, e vendo o valor antigo até a invalidação chegar, é exatamente o comportamento pretendido — a métrica que importa é a divergência do AUTOR, que caiu a zero.\n\nA primeira alternativa interpreta como falha algo que é o desenho funcionando: se todo mundo parasse de ver divergência, isso indicaria consistência forte para todos, não a correção pontual que este laboratório propõe. A terceira aponta para o TTL do marcador, mas o marcador do autor nem está em jogo na leitura do segundo usuário — ele nunca teve um marcador para consultar, porque não foi ele quem escreveu. A quarta descreve, sem perceber, a violação da regra central do módulo: uma chave só pelo recurso, sem o autor, é exatamente o anti-padrão que vaza o estado transitório de quem escreveu para qualquer outro leitor do mesmo recurso — o oposto de uma correção segura."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "A função invalidadora deste laboratório apaga a chave do cache (DELETE) em vez de gravar o novo valor a partir do evento do DynamoDB Streams (SET). Por que essa escolha importa especificamente numa fila padrão como a que alimenta o invalidador?",
+            "options": [
+              "DELETE é mais rápido de executar no Redis do que SET",
+              "SET consome mais memória do Redis do que DELETE",
+              "O evento do DynamoDB Streams não contém o novo valor do item, só a chave",
+              "A entrega de eventos não garante ordem, e um SET fora de ordem pode deixar no cache um valor mais antigo que o real; DELETE é idempotente independente da ordem"
+            ],
+            "correctIndex": 3,
+            "explanation": "A garantia que falta é ordem, não desempenho nem tamanho de payload: o event source mapping do Streams para o Lambda, como qualquer processamento distribuído orientado a evento nesta arquitetura, não garante que dois eventos do mesmo item cheguem na ordem em que ocorreram. Se forem processados fora de ordem, um invalidador que faz SET pode aplicar por último o evento MAIS ANTIGO, deixando o cache com um valor que já não é verdade — um bug mais difícil de perceber que o cache simplesmente estar frio. DELETE não sofre disso: não importa a ordem, o resultado final é sempre \"chave ausente\", e a próxima leitura busca a verdade atual direto na fonte.\n\nA primeira e a terceira alternativas trazem diferenças reais entre as operações, mas nenhuma delas é o motivo da escolha — memória e velocidade não mudam com a garantia de ordem, que é o que este cenário testa. A quarta é factualmente errada sobre o desenho deste laboratório: o `NewImage` do evento de Streams contém, sim, o item inteiro após a mudança, quando o `StreamViewType` inclui imagens — a limitação não está no que o evento carrega, está na ordem em que os eventos chegam."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "API HTTP básica, fila assíncrona (ideal ter feito L32 — síncrono ou assíncrono entre serviços), Terraform e .NET 8 básicos"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "os dois relógios assíncronos de uma escrita desacoplada e por que produzem o mesmo sintoma; por que ConsistentRead resolve só metade do problema; o marcador de leitura-própria-escrita como correção de UX que não muda o modelo de consistência; por que invalidação de cache deve apagar, não sobrescrever"
+              ],
+              [
+                "Limitação que fica",
+                "o TTL do marcador é um valor único, calibrado manualmente; fluxos com perfis de latência de fila muito diferentes compartilham o mesmo prazo"
+              ],
+              [
+                "Também depende de",
+                "L32 (síncrono ou assíncrono entre serviços) — a decisão que introduz o primeiro relógio deste laboratório; e conceitualmente de L35 (saga), como contraste: aqui existe um item só, lá existem vários serviços compensando uns aos outros. Nenhum dos dois tinha seed publicado no momento desta escrita, e este módulo os referencia pelo papel no catálogo, sem repetir conteúdo que ainda não existe"
+              ],
+              [
+                "Próximo módulo recomendado",
+                "L67 — lakehouse com Iceberg, upsert e time travel. O mesmo raciocínio de \"quem lê o quê, e quando\" generaliza de um item no DynamoDB para uma tabela analítica: lá, a pergunta vira \"que SNAPSHOT esta consulta deveria ver\", em vez de \"este usuário vê a própria escrita\""
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "DynamoDB read consistency",
+                "code": true
+              },
+              {
+                "text": " — a distinção entre leitura eventualmente consistente (padrão) e fortemente consistente, e a nota de que GSI e Streams são sempre eventualmente consistentes; "
+              },
+              {
+                "text": "Amazon SQS at-least-once delivery",
+                "code": true
+              },
+              {
+                "text": " — entrega pelo menos uma vez, ordem não garantida em fila padrão, e o `visibility timeout` padrão de 30 s; e "
+              },
+              {
+                "text": "Change data capture for DynamoDB Streams",
+                "code": true
+              },
+              {
+                "text": " — o formato do registro (`eventName`, `NewImage`, `OldImage`, `StreamViewType`). Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "A taxa de divergência de 42% citada na prova 1 é a medida no ambiente de exemplo, sob um backlog de fila específico — serve como ordem de grandeza de que o defeito é real e mensurável, não como número de referência. A AWS não publica um SLA de latência para o DynamoDB Streams nem para a propagação de eventos até o event source mapping do Lambda; o TTL de 10 s usado nos exemplos deste módulo é ponto de partida conservador, e o valor certo para o seu sistema é o que a prova 4 medir no seu ambiente."
+          }
+        }
+      ]
+    }
+  ]
+}

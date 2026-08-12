@@ -43,6 +43,7 @@ export default function AdminAuditPage() {
 
       <input
         type="text"
+        aria-label="Filtrar por ação"
         placeholder="Filtrar por ação (ex: POST /api/v1/auth)…"
         value={action}
         onChange={e => { setPage(0); setAction(e.target.value); }}
@@ -50,7 +51,7 @@ export default function AdminAuditPage() {
         style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)' }}
       />
 
-      <div className="rounded-xl overflow-x-auto" style={{ border: '1px solid var(--ffv-border)' }}>
+      <div tabIndex={0} role="group" aria-label="Tabela, rolável na horizontal" className="rounded-xl overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ffv-blue)]" style={{ border: '1px solid var(--ffv-border)' }}>
         <table className="w-full text-xs">
           <thead style={{ background: 'var(--ffv-bg2)' }}>
             <tr>

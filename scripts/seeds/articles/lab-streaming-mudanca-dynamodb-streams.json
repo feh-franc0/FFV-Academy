@@ -1,0 +1,2452 @@
+{
+  "slug": "lab-streaming-mudanca-dynamodb-streams",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O "
+              },
+              {
+                "text": "L16",
+                "code": true
+              },
+              {
+                "text": " deixou a Cadência com uma tabela única, "
+              },
+              {
+                "text": "pedidos_cadencia",
+                "code": true
+              },
+              {
+                "text": ", servindo quatro padrões de acesso sem nenhum "
+              },
+              {
+                "text": "Scan",
+                "code": true
+              },
+              {
+                "text": ". O problema agora é outro: três sistemas diferentes PRECISAM saber quando um pedido muda de status, e hoje nenhum deles sabe até perguntar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O mais visível é o painel de operação que os gerentes de loja olham no início do turno. Ele é alimentado por uma função agendada a cada 2 minutos, que compara o campo `updated_at` com o horário da última execução — o jeito mais natural de fazer isso para quem vem de banco relacional, e funcionou bem em teste."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Em produção, apareceu um problema que ninguém tinha previsto: quando um pedido é separado e, minutos depois, cancelado — cliente desistiu, fraude, endereço inválido — o time de estoque precisa ser avisado para devolver o item já embalado à prateleira. Essa regra depende de saber que o pedido PASSOU por \"separado\" antes de chegar a \"cancelado\". A função de polling só vê o status final: se as duas mudanças aconteceram dentro do mesmo intervalo de 2 minutos, o alerta simplesmente nunca dispara — não atrasado, nunca. Uma auditoria de estoque no mês anterior encontrou 30 casos assim, todos descobertos só na contagem física."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado — depende do L16 (DynamoDB Streams é atributo da mesma tabela)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L16 concluído e no ar, .NET 8, Docker, Git, Terraform, AWS CLI"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 45 min · implementação 2 h 30 a 3 h"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo: o stream em si não é cobrado; o custo é do Lambda por invocação, proporcional a mudanças reais, não ao tamanho da tabela"
+              },
+              {
+                "k": "Serviços",
+                "v": "DynamoDB Streams, Lambda (event source mapping), SQS (DLQ), SNS, CloudWatch"
+              },
+              {
+                "k": "Volume atual",
+                "v": "900 lojas, ~40 mil pedidos/dia, cada um passa por 2 a 4 mudanças de status; pico de 20× em campanha"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "painel atualizado em segundos, e nenhuma transição intermediária pode ser perdida"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "o consumidor nunca fica fora do ar por mais de algumas horas — se isso mudar, a retenção de 24 h do stream deixa de cobrir"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "um consumidor reagindo em segundos a cada mudança de status, com a ordem preservada por pedido e prova de que nada se perde"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é uma fila de mensagens de uso geral: DynamoDB Streams está atrelado à tabela que o gerou, retém só 24 horas e serve bem UM padrão — reagir à mudança de um item específico. Quando o requisito vira \"vários sistemas diferentes, cada um com seu próprio ritmo de consumo, precisando reprocessar semanas de histórico\", a resposta certa é Kinesis Data Streams na frente do DynamoDB, e isso é o L63. Este módulo também não trata CDC de banco relacional — WAL, slot de replicação, DMS — porque isso já foi construído no L19, sobre Aurora/RDS; aqui a origem é DynamoDB, e o mecanismo nativo é outro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com uma medição na seção de implantação, não com a sensação de ter entendido a teoria."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que uma consulta periódica por timestamp PERDE transição, e não apenas atrasa.",
+              "Ligar DynamoDB Streams numa tabela existente com o tipo de visualização correto para o caso de uso.",
+              "Distinguir o que NEW_IMAGE sozinho responde do que só NEW_AND_OLD_IMAGES responde.",
+              "Escrever um consumidor Lambda via event source mapping, com relato parcial de falha de lote.",
+              "Provar, com medição, que a ordem de processamento é preservada DENTRO da mesma chave de partição.",
+              "Explicar por que a ordem NÃO é garantida entre chaves de partição diferentes, e quando isso importa.",
+              "Tornar a escrita do consumidor idempotente diante de entrega pelo menos uma vez (at-least-once).",
+              "Reconhecer o limite de retenção de 24 horas e desenhar o plano de reconciliação para quando ele é excedido."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Change data capture (CDC)",
+                "SAP-C02, DVA-C02",
+                "DynamoDB Streams como CDC nativo da tabela",
+                "a diferença entre \"consultar mudança\" e \"ser avisado de mudança\""
+              ],
+              [
+                "Tipos de visualização do stream",
+                "DVA-C02",
+                "NEW_AND_OLD_IMAGES para decidir com base na transição",
+                "KEYS_ONLY, NEW_IMAGE, OLD_IMAGE, NEW_AND_OLD_IMAGES — o que cada um contém"
+              ],
+              [
+                "Ordem por partição, não global",
+                "SAP-C02",
+                "shard dedicado por partição da tabela",
+                "ordem garantida DENTRO da chave; não garantida ENTRE chaves diferentes"
+              ],
+              [
+                "Retenção de 24 horas",
+                "SAP-C02, DVA-C02",
+                "plano de reconciliação para downtime maior",
+                "stream não é fila durável para sempre"
+              ],
+              [
+                "At-least-once vs exactly-once",
+                "SAP-C02",
+                "idempotência na escrita do consumidor",
+                "a entrega é pelo menos uma vez; \"exatamente uma vez\" é responsabilidade da aplicação"
+              ],
+              [
+                "Event source mapping do Lambda",
+                "DVA-C02",
+                "quem faz o polling dos shards é o serviço, não o código",
+                "tamanho de lote, janela de batching, bisecção em erro"
+              ],
+              [
+                "ReportBatchItemFailures",
+                "DVA-C02",
+                "falha parcial de lote sem reprocessar tudo",
+                "formato de resposta com itemIdentifier = SequenceNumber"
+              ],
+              [
+                "DynamoDB Streams vs Kinesis Data Streams for DynamoDB",
+                "SAP-C02",
+                "quando um consumidor basta, e quando não basta",
+                "retenção (24 h vs até 1 ano) e fan-out para múltiplos consumidores independentes"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve um sistema que \"consulta a cada X segundos\" para saber o que mudou, e pede o problema com a abordagem quando X diminui. A resposta esperada não é \"ainda vai ficar lento\" — é que reduzir o intervalo não elimina a perda de transição intermediária, só a torna menos provável. A resposta certa é trocar consulta por notificação: CDC, não polling mais frequente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não aparece numa configuração do stream ou do consumidor é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Latência do painel",
+                "segundos, não minutos",
+                "obriga trocar consulta periódica por consumo de stream — nenhum ajuste de intervalo de polling chega perto disso"
+              ],
+              [
+                "Nenhuma transição perdida",
+                "inclusive dentro de janelas curtas",
+                "obriga NEW_AND_OLD_IMAGES e escrita append-only no painel, uma linha por transição"
+              ],
+              [
+                "Alerta de reposição correto",
+                "dispara sempre que SEPARADO precede CANCELADO",
+                "só é decidível com a imagem ANTES e DEPOIS no mesmo registro"
+              ],
+              [
+                "Sem duplicar alerta em reprocessamento",
+                "a entrega é pelo menos uma vez",
+                "escrita idempotente com SK derivado do SequenceNumber do stream"
+              ],
+              [
+                "Falha isolada não trava outros pedidos",
+                "requisito operacional da equipe pequena",
+                "bisecção de lote em erro, mais DLQ para o que não se resolve sozinho"
+              ],
+              [
+                "Downtime do consumidor tolerado",
+                "até poucas horas, não dias",
+                "compatível com a retenção de 24 h do stream; acima disso exige reconciliação manual"
+              ],
+              [
+                "Sem sharding manual, sem tuning contínuo",
+                "equipe de duas pessoas, sem plantão",
+                "DynamoDB Streams em vez de Kinesis: sem shard para provisionar ou rebalancear"
+              ],
+              [
+                "Rastreabilidade da decisão",
+                "saber quando e por que cada alerta disparou",
+                "log de transições no painel, e não só o estado atual"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: consultar em vez de ser avisado"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem hoje, e ele é legítimo como ponto de partida: usa só o que a tabela já tinha (`updated_at`) e nenhum serviço novo. O laboratório começa medindo a perda, não o atraso — porque atraso todo mundo já suspeita; perda, ninguém tinha percebido até a auditoria de estoque."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O painel atualizado por consulta periódica, e o alerta que nunca dispara",
+            "caption": "Este desenho publica, e resolve o caso comum: o gerente vê o status do pedido com até dois minutos de atraso, e ninguém reclama. O defeito não aparece na demonstração — aparece quando um pedido muda de status DUAS VEZES dentro do intervalo, porque a consulta enxerga o banco no instante em que pergunta, nunca o caminho que ele percorreu. Percorra os passos e repare que o alerta de reposição de estoque não tem como disparar, não importa a frequência do relógio.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "gerente",
+                    "service": "browser",
+                    "label": "Gerente de operação",
+                    "note": "decide prioridade do turno pelo que o painel mostra; não sabe que o painel mente por omissão"
+                  }
+                ]
+              },
+              {
+                "label": "Disparo periódico",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "agenda",
+                    "service": "eventbridge",
+                    "label": "Regra a cada 2 minutos",
+                    "note": "dispara sempre, tenha ou não mudança — o custo da consulta é do RELÓGIO, não do evento"
+                  }
+                ]
+              },
+              {
+                "label": "Processamento",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "poll",
+                    "service": "lambda",
+                    "label": "Função de sondagem",
+                    "note": "compara updated_at com o checkpoint da última execução; não tem como ver o que aconteceu ENTRE execuções"
+                  }
+                ]
+              },
+              {
+                "label": "Dado de origem e painel",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "pedidos",
+                    "service": "dynamodb",
+                    "label": "pedidos_cadencia (GSI2)",
+                    "note": "guarda o estado ATUAL de cada pedido; nenhum rastro de por onde ele passou antes"
+                  },
+                  {
+                    "id": "painel",
+                    "service": "dynamodb",
+                    "label": "painel_operacao (cache)",
+                    "note": "sobrescrito a cada rodada com o valor mais recente lido — é um espelho, não um histórico"
+                  }
+                ]
+              },
+              {
+                "label": "Consequência não disparada",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "estoque",
+                    "service": "sns",
+                    "label": "Alerta de reposição de estoque",
+                    "note": "deveria avisar quando um pedido é cancelado DEPOIS de separado, para devolver o item embalado ao estoque físico"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "agenda",
+                "to": "poll",
+                "label": "dispara a cada 2 minutos",
+                "style": "solid"
+              },
+              {
+                "from": "poll",
+                "to": "pedidos",
+                "label": "Query no GSI2: updated_at > última_execução",
+                "style": "solid"
+              },
+              {
+                "from": "pedidos",
+                "to": "poll",
+                "label": "linha final de cada pedido alterado no intervalo",
+                "style": "dashed"
+              },
+              {
+                "from": "poll",
+                "to": "painel",
+                "label": "sobrescreve o status conhecido do pedido",
+                "style": "solid"
+              },
+              {
+                "from": "gerente",
+                "to": "painel",
+                "label": "abre o painel e vê o status mais recente",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O relógio dispara, e o banco decide se havia algo",
+                "detail": "A função roda a cada 2 minutos independentemente de ter ocorrido mudança. O custo desta consulta é proporcional ao INTERVALO configurado, não à quantidade de eventos reais — rodar mais rápido custa mais RCU, não corrige o defeito central.",
+                "nodes": [
+                  "agenda",
+                  "poll"
+                ],
+                "edges": [
+                  "agenda>poll"
+                ]
+              },
+              {
+                "label": "A pergunta sempre olha para trás, e o atraso é a própria pergunta",
+                "detail": "Uma mudança que ocorre logo depois de uma execução espera o intervalo inteiro até a próxima; uma que ocorre pouco antes é vista quase na hora. Em média, o atraso é metade do intervalo — 1 minuto neste desenho — e no pior caso é o intervalo cheio.",
+                "nodes": [
+                  "poll",
+                  "pedidos"
+                ],
+                "edges": [
+                  "poll>pedidos"
+                ]
+              },
+              {
+                "label": "updated_at sobrescreve; não acumula",
+                "detail": "Se um pedido vai de PENDENTE a SEPARADO a CANCELADO em 40 segundos, todos dentro do mesmo intervalo de 2 minutos, a Query devolve UMA linha, com o status FINAL. Não existe consulta que recupere o SEPARADO intermediário depois que o item foi sobrescrito — a informação não está atrasada, está perdida.",
+                "nodes": [
+                  "pedidos",
+                  "poll"
+                ],
+                "edges": [
+                  "pedidos>poll"
+                ]
+              },
+              {
+                "label": "O painel reflete o banco agora, não o histórico",
+                "detail": "A função grava por cima do que já sabia. O painel_operacao é um espelho do estado atual — não guarda nenhuma trilha de transição, porque nunca recebeu essa informação para guardar.",
+                "nodes": [
+                  "poll",
+                  "painel"
+                ],
+                "edges": [
+                  "poll>painel"
+                ]
+              },
+              {
+                "label": "O alerta que deveria disparar, nunca tem como disparar",
+                "detail": "A regra de negócio \"avisar o estoque quando um pedido é cancelado DEPOIS de separado\" precisa saber o ANTES e o DEPOIS da mudança. Este desenho só tem o DEPOIS. Não há frequência de polling que resolva isso: mesmo consultando a cada segundo, uma leitura de snapshot nunca contém a transição, só o estado.",
+                "nodes": [
+                  "painel",
+                  "estoque"
+                ],
+                "edges": []
+              },
+              {
+                "label": "Por que alguém constrói assim",
+                "detail": "Porque a tabela já tem `updated_at`, e comparar timestamp é o padrão que quem vem do relacional já sabe fazer — nenhum serviço novo, nenhum conceito de stream ou de shard. Funciona bem enquanto a mudança é rara comparada ao intervalo, e o defeito é silencioso justamente porque não aparece em teste manual, feito devagar.",
+                "nodes": [
+                  "agenda",
+                  "poll"
+                ],
+                "edges": [
+                  "agenda>poll"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Antes de mudar qualquer coisa, reproduza o defeito de propósito: force duas transições do mesmo pedido dentro de um único intervalo de polling e confira o que o painel sabe depois."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "filename": "medir-a-perda.sh",
+            "code": "#!/usr/bin/env bash\n# medir-a-perda.sh — prova a perda de transicao no desenho MINIMO, com numero\nset -euo pipefail\n\n# 1. Estado inicial: crie um pedido e confirme que ele esta PENDENTE no painel.\naws dynamodb get-item --table-name painel_operacao \\\n  --key '{\"PK\":{\"S\":\"PEDIDO#demo-001\"},\"SK\":{\"S\":\"ATUAL\"}}' \\\n  --query 'Item.status.S' --output text\n\n# 2. Dentro de UM intervalo de polling (aqui, 2 minutos), execute as tres\n#    transicoes em sequencia rapida.\naws dynamodb update-item --table-name pedidos_cadencia \\\n  --key '{\"PK\":{\"S\":\"PEDIDO#demo-001\"},\"SK\":{\"S\":\"METADADOS\"}}' \\\n  --update-expression 'SET #s = :v' --expression-attribute-names '{\"#s\":\"status\"}' \\\n  --expression-attribute-values '{\":v\":{\"S\":\"SEPARADO\"}}'\nsleep 5\naws dynamodb update-item --table-name pedidos_cadencia \\\n  --key '{\"PK\":{\"S\":\"PEDIDO#demo-001\"},\"SK\":{\"S\":\"METADADOS\"}}' \\\n  --update-expression 'SET #s = :v' --expression-attribute-names '{\"#s\":\"status\"}' \\\n  --expression-attribute-values '{\":v\":{\"S\":\"CANCELADO\"}}'\n\n# 3. Espere o job de polling rodar (ate 2 min) e confira o painel de novo.\nsleep 130\naws dynamodb get-item --table-name painel_operacao \\\n  --key '{\"PK\":{\"S\":\"PEDIDO#demo-001\"},\"SK\":{\"S\":\"ATUAL\"}}' \\\n  --query 'Item.status.S' --output text\n# Esperado no desenho MINIMO: \"CANCELADO\", sem nenhum registro de SEPARADO —\n# o painel nunca soube que o pedido passou por la. Na Cadencia, medido em\n# 07/ago/2026: 0 alertas de reposicao de estoque disparados em 30 casos assim\n# ocorridos no mes anterior, todos descobertos so na contagem fisica.\n"
+          }
+        },
+        {
+          "id": "b4_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "A perda não é atraso — é ausência, e ela não aparece em teste manual",
+            "content": "Quem testa clicando devagar nunca reproduz o defeito, porque cada clique cai num intervalo de polling diferente e a função sempre vê a transição. O defeito só aparece sob volume real, quando duas mudanças do MESMO pedido caem dentro da MESMA janela de 2 minutos — e nesse caso não existe consulta, por mais frequente que seja, capaz de recuperar o estado intermediário depois que ele foi sobrescrito. Reduzir o intervalo torna o defeito mais raro; não o elimina."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção: a tabela ouvida, não consultada"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. Se você não conseguir apontar o requisito, a peça é adorno — e este desenho não tem nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A tabela ouvida por um stream, com antes e depois de cada mudança",
+            "caption": "Não é o desenho anterior com um Lambda a mais: a tabela deixou de ser CONSULTADA e passou a ser OUVIDA. Cada mudança gera um registro com a imagem antiga e a nova, entregue em segundos — e é essa dupla imagem, não a velocidade, que faz o alerta de reposição existir. Percorra os passos: a ordem que o stream garante é mais estreita do que parece, e é exatamente aí que times erram.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "gerente",
+                    "service": "browser",
+                    "label": "Gerente de operação",
+                    "note": "agora vê o status atual E a lista de transições, com poucos segundos de atraso"
+                  }
+                ]
+              },
+              {
+                "label": "Origem — tabela com stream",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "pedidos",
+                    "service": "dynamodb",
+                    "label": "pedidos_cadencia, Streams NEW_AND_OLD_IMAGES",
+                    "note": "a MESMA tabela do L16; o stream é um atributo dela, não uma tabela nova"
+                  }
+                ]
+              },
+              {
+                "label": "Consumo do stream",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "consumidor",
+                    "service": "lambda",
+                    "label": "Consumidor (event source mapping)",
+                    "note": "a AWS faz o polling dos shards por trás; o código só reage ao lote entregue"
+                  },
+                  {
+                    "id": "dlq",
+                    "service": "sqs",
+                    "label": "Fila de descarte",
+                    "note": "recebe o lote que esgotou as tentativas, sem travar o processamento das outras partições"
+                  }
+                ]
+              },
+              {
+                "label": "Painel e alerta",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "painel",
+                    "service": "dynamodb",
+                    "label": "painel_operacao (log de transições)",
+                    "note": "cada mudança vira um ITEM NOVO, indexado pela sequência do stream — nada é sobrescrito"
+                  },
+                  {
+                    "id": "estoque",
+                    "service": "sns",
+                    "label": "Alerta de reposição de estoque",
+                    "note": "publica só quando a imagem antiga é SEPARADO e a nova é CANCELADO — decisão que exige as duas"
+                  },
+                  {
+                    "id": "leitura",
+                    "service": "apigateway",
+                    "label": "API do painel",
+                    "note": "serve o histórico e o estado atual ao navegador do gerente"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "IteratorAge e erros do lote",
+                    "note": "mede quanto o consumidor está atrasado em relação ao que já foi escrito na tabela"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "pedidos",
+                "to": "consumidor",
+                "label": "registro do stream: chave + imagem antiga e nova + tipo de evento",
+                "style": "dashed"
+              },
+              {
+                "from": "consumidor",
+                "to": "painel",
+                "label": "grava a transição como item novo (SK = sequência do stream)",
+                "style": "solid"
+              },
+              {
+                "from": "consumidor",
+                "to": "estoque",
+                "label": "publica só quando OLD=SEPARADO e NEW=CANCELADO",
+                "style": "solid"
+              },
+              {
+                "from": "consumidor",
+                "to": "dlq",
+                "label": "lote que esgotou as tentativas configuradas",
+                "style": "dashed"
+              },
+              {
+                "from": "gerente",
+                "to": "leitura",
+                "label": "abre o painel de operação",
+                "style": "solid"
+              },
+              {
+                "from": "leitura",
+                "to": "painel",
+                "label": "lê o histórico de transições e o status atual",
+                "style": "solid"
+              },
+              {
+                "from": "consumidor",
+                "to": "cw",
+                "label": "IteratorAge por invocação, e erros do lote",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O stream nasce por chave de partição, não pela tabela inteira",
+                "detail": "Cada partição da tabela escreve seus registros de mudança num shard interno dedicado a ela, e nenhuma outra partição escreve nesse mesmo shard. Não existe um shard único compartilhado pela tabela toda — é esse desenho que faz a garantia de ordem valer POR CHAVE, e não globalmente.",
+                "nodes": [
+                  "pedidos",
+                  "consumidor"
+                ],
+                "edges": [
+                  "pedidos>consumidor"
+                ]
+              },
+              {
+                "label": "NEW_AND_OLD_IMAGES é o que faz a transição existir, não só o estado final",
+                "detail": "Sem a imagem antiga, o registro diria apenas \"agora status = CANCELADO\". Com as duas, o consumidor compara e sabe que veio de SEPARADO. É a diferença entre saber ONDE o pedido está e saber POR ONDE ele passou — e a segunda pergunta é a que o alerta de estoque precisa responder.",
+                "nodes": [
+                  "pedidos",
+                  "consumidor"
+                ],
+                "edges": [
+                  "pedidos>consumidor"
+                ]
+              },
+              {
+                "label": "Quem consulta os shards é o serviço Lambda, não o seu código",
+                "detail": "O event source mapping faz o polling dos shards por trás das cortinas, agrupa registros em lotes e invoca a função — tipicamente em poucos segundos após a escrita, não minutos. O código de aplicação nunca chama GetRecords diretamente.",
+                "nodes": [
+                  "consumidor",
+                  "painel"
+                ],
+                "edges": [
+                  "consumidor>painel"
+                ]
+              },
+              {
+                "label": "Cada transição vira um item novo; nada sobrescreve o anterior",
+                "detail": "O painel_operacao passa a ser um log de transições, com a chave de ordenação derivada da sequência do stream. Duas mudanças no mesmo pedido em menos de um minuto viram DOIS itens — é isso que resolve a perda que o polling tinha.",
+                "nodes": [
+                  "consumidor",
+                  "painel"
+                ],
+                "edges": [
+                  "consumidor>painel"
+                ]
+              },
+              {
+                "label": "O alerta de reposição finalmente tem informação para existir",
+                "detail": "A regra \"separado, depois cancelado\" só é decidível com a imagem antiga E a nova no mesmo registro. O consumidor publica no tópico só quando as duas condições batem — e o estoque físico deixa de dessincronizar do sistema.",
+                "nodes": [
+                  "consumidor",
+                  "estoque"
+                ],
+                "edges": [
+                  "consumidor>estoque"
+                ]
+              },
+              {
+                "label": "Ordem é garantida DENTRO do pedido, não ENTRE pedidos",
+                "detail": "Se dois pedidos DIFERENTES — de lojas diferentes — mudam de status no mesmo segundo, mas moram em partições diferentes, não há garantia sobre qual dos dois eventos o consumidor processa primeiro. Isso não importa aqui, porque cada linha do painel e cada alerta são avaliados por pedido, nunca comparando um pedido com outro.",
+                "nodes": [
+                  "pedidos",
+                  "consumidor"
+                ],
+                "edges": [
+                  "pedidos>consumidor"
+                ]
+              },
+              {
+                "label": "Lote com erro vai para a fila, sem travar as outras partições",
+                "detail": "Se o consumidor falhar ao processar um registro, o event source mapping esgota as tentativas configuradas e manda o lote para a fila de descarte. O processamento das demais chaves de partição continua normalmente, em vez de o shard inteiro travar esperando aquele registro ser resolvido.",
+                "nodes": [
+                  "consumidor",
+                  "dlq"
+                ],
+                "edges": [
+                  "consumidor>dlq"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação ao desenho anterior não é \"mais um Lambda\": é que a tabela de origem PARA de ser consultada por um relógio externo e PASSA a notificar quem está interessado. O painel deixa de ser um espelho sobrescrito e vira um log de transições, porque só um log preserva o que um espelho apaga."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ajuste que resolve os dois problemas com a mesma peça",
+            "content": "NEW_AND_OLD_IMAGES não foi escolhido para acelerar nada — foi escolhido porque a regra de negócio do alerta de estoque exige o ANTES e o DEPOIS no mesmo registro. A latência em segundos é um efeito colateral de trocar consulta por notificação; o que resolve o alerta que nunca disparava é especificamente a imagem dupla."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Como funciona, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os nomes dos campos não são jargão: eles são a prova de que a transição foi capturada. Um registro de stream com `OldImage` e `NewImage` diferentes É a transição — não uma inferência sobre ela."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "De um clique da expedição ao alerta de estoque — em segundos, sem perder o meio do caminho",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1. Expedidor marca o pedido como SEPARADO",
+                "desc": "`UpdateItem` no `pedidos_cadencia`: `SET status = SEPARADO REMOVE GSI3PK, GSI3SK` — a mesma operação que o L16 já usava para tirar o pedido da fila de pendentes."
+              },
+              {
+                "label": "2. A escrita é confirmada, e o stream captura a mudança",
+                "desc": "Com `StreamViewType = NEW_AND_OLD_IMAGES`, o DynamoDB grava um registro com a imagem ANTES (status=PENDENTE) e DEPOIS (status=SEPARADO) no shard da partição `PEDIDO#<id>`."
+              },
+              {
+                "label": "3. O event source mapping do Lambda entrega o lote",
+                "desc": "O serviço Lambda faz o polling do shard, agrupa registros disponíveis e invoca o consumidor — tipicamente em poucos segundos, não minutos."
+              },
+              {
+                "label": "4. O consumidor distingue o tipo de evento",
+                "desc": "`eventName` diz se foi INSERT, MODIFY ou REMOVE. Só MODIFY é relevante para transição de status; INSERT é pedido novo, REMOVE é exclusão física, que este módulo não usa."
+              },
+              {
+                "label": "5. Compara a imagem antiga com a nova",
+                "desc": "Se `OldImage.status != NewImage.status`, é uma transição de negócio. Sem a imagem antiga, esta comparação simplesmente não existiria."
+              },
+              {
+                "label": "6. Grava a transição no painel, com chave derivada da sequência do stream",
+                "desc": "`PutItem` em `painel_operacao` com `SK = TRANSICAO#<SequenceNumber>`. Reprocessar o MESMO registro do stream — que a entrega pelo menos uma vez permite — grava o MESMO item, em vez de duplicar."
+              },
+              {
+                "label": "7. Some o pedido segue: PENDENTE → SEPARADO → CANCELADO em 40 segundos",
+                "desc": "Cada mudança gera seu próprio registro no stream e sua própria transição no painel. As três aparecem, na ordem em que ocorreram — nenhuma se perde no meio."
+              },
+              {
+                "label": "8. Se OLD=SEPARADO e NEW=CANCELADO, publica o alerta de estoque",
+                "desc": "A regra de negócio que o polling nunca conseguia avaliar agora tem as duas informações no mesmo registro. `sns:Publish` no tópico de reposição."
+              },
+              {
+                "label": "9. Lote com erro vai para a fila de descarte, sem travar outras partições",
+                "desc": "Se o consumidor falhar ao processar um registro após as tentativas configuradas, o event source mapping manda o LOTE para a DLQ; pedidos de outras partições continuam sendo processados normalmente."
+              },
+              {
+                "label": "10. O gerente abre o painel e vê o histórico completo, com segundos de atraso",
+                "desc": "A API lê `painel_operacao`: o item `ATUAL` para o status de agora, e os itens `TRANSICAO#...` para a trilha completa — inclusive a passagem por SEPARADO que o desenho anterior nunca soube que existiu."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "json",
+            "filename": "registro-do-stream.json",
+            "code": "// O que o event source mapping entrega ao consumidor .NET, um registro do\n// lote (DynamoDBEvent.Records[i]). NewImage e OldImage vêm no formato de tipo\n// do DynamoDB (wrapper {\"S\": ...}, {\"N\": ...}), não em JSON \"normal\".\n{\n  \"eventID\": \"8f105b654fb0c2c4e6a6f6b0f1a2b3c4\",\n  \"eventName\": \"MODIFY\",\n  \"eventSource\": \"aws:dynamodb\",\n  \"awsRegion\": \"us-east-1\",\n  \"dynamodb\": {\n    \"ApproximateCreationDateTime\": 1754571801,\n    \"Keys\": {\n      \"PK\": { \"S\": \"PEDIDO#b7a1f0b0-2c44-4e9a-9d31-000000009182\" },\n      \"SK\": { \"S\": \"METADADOS\" }\n    },\n    \"OldImage\": {\n      \"status\": { \"S\": \"PENDENTE\" },\n      \"GSI3PK\": { \"S\": \"LOJA#a10ecb4e-6f21-4a02-8b9d-000000000512\" },\n      \"GSI3SK\": { \"S\": \"2026-08-07T14:03:21Z\" }\n    },\n    \"NewImage\": {\n      \"status\": { \"S\": \"SEPARADO\" }\n      // GSI3PK/GSI3SK ausentes: o L16 já os removia ao separar — o item some\n      // da fila de pendentes, e essa ausência também está retratada aqui.\n    },\n    // A ordem DENTRO desta partição (este pedido) é garantida pelo número de\n    // sequência crescente. Entre pedidos de partições diferentes, não é.\n    \"SequenceNumber\": \"400000000000000499659\",\n    \"SizeBytes\": 287,\n    \"StreamViewType\": \"NEW_AND_OLD_IMAGES\"\n  },\n  \"eventSourceARN\": \"arn:aws:dynamodb:us-east-1:111122223333:table/pedidos_cadencia/stream/2026-08-07T00:00:00.000\"\n}"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "Por que o SequenceNumber vira parte da chave do painel, e não um timestamp",
+            "content": "A entrega do event source mapping é PELO MENOS UMA VEZ: o mesmo registro pode ser reprocessado depois de uma falha parcial de lote. Um timestamp gerado no momento do processamento seria DIFERENTE a cada tentativa, e cada tentativa criaria uma transição nova — duplicando a linha no painel. O SequenceNumber vem PRONTO do stream, é o mesmo em toda tentativa, e faz o `PutItem` reescrever o mesmo item em vez de criar outro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "A mesma Cadência do L16 — 900 lojas, 40 mil pedidos/dia — precisando que um painel interno e um alerta de reposição de estoque reajam a mudanças de status em segundos, sem perder nenhuma transição intermediária, com uma equipe de duas pessoas sem capacidade de operar sharding manual.",
+            "winner": "DynamoDB Streams (NEW_AND_OLD_IMAGES) com consumo via event source mapping do Lambda",
+            "why": "É nativo da tabela que o L16 já criou — não exige provisionar nem administrar nenhum recurso de streaming separado. A leitura via gatilho do Lambda não tem cobrança adicional de GetRecords, então o custo novo é só a execução do Lambda, proporcional a mudanças reais. E a granularidade de ordem que ele garante — por chave de partição — é exatamente a que os dois casos de uso precisam: o painel e o alerta avaliam cada pedido isoladamente, nunca comparando a ordem entre pedidos diferentes.",
+            "alternatives": [
+              {
+                "name": "Kinesis Data Streams for DynamoDB (captura para Kinesis)",
+                "downside": "Dá retenção de até 1 ano em vez de 24 horas, e permite múltiplos consumidores lendo o mesmo stream com checkpoints independentes — sem competir pelos mesmos registros. É a escolha certa quando mais de um sistema precisaria consumir a mesma mudança de forma independente, ou quando 24 horas de retenção é curto demais para o plano de reprocessamento. É o L63."
+              },
+              {
+                "name": "Aumentar a frequência do polling (ex.: a cada 10 segundos)",
+                "downside": "Reduz a JANELA em que a perda pode ocorrer, mas não a elimina: duas mudanças do mesmo pedido dentro de QUALQUER intervalo, por menor que seja, continuam colapsando na mesma consulta. E o custo de leitura cresce linearmente com a frequência, sem nunca chegar à garantia que o requisito pede."
+              },
+              {
+                "name": "DMS lendo Aurora/RDS via WAL (CDC relacional)",
+                "downside": "É a via equivalente para banco relacional, já construída no L19 sobre Aurora/RDS com slot de replicação lógica. Não se aplica aqui: a origem é DynamoDB, que não tem WAL nem binlog — o mecanismo de captura é o stream nativo da própria tabela, não um produto de replicação externo."
+              },
+              {
+                "name": "Outbox manual (tabela de eventos escrita na mesma transação de negócio)",
+                "downside": "Funcionaria, mas reimplementa em código de aplicação o que o stream já oferece de graça pela infraestrutura: todo caminho de escrita da tabela teria que lembrar de gravar também no outbox, e um caminho esquecido produz o mesmo silêncio que o polling produzia — só que por bug de aplicação, não por limite de arquitetura."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Tipo de visualização do stream",
+                "NEW_AND_OLD_IMAGES",
+                "KEYS_ONLY; NEW_IMAGE",
+                "o alerta de estoque exige comparar o antes com o depois no mesmo registro",
+                "cada registro fica maior; KEYS_ONLY bastaria se só a CHAVE do item alterado importasse"
+              ],
+              [
+                "Consumo do stream",
+                "event source mapping do Lambda",
+                "aplicação chamando GetRecords manualmente",
+                "a AWS administra polling de shard, checkpoint e paralelismo",
+                "menos controle fino sobre o ritmo exato de leitura de cada shard"
+              ],
+              [
+                "Retentativa do lote",
+                "MaximumRetryAttempts=3 + DLQ",
+                "padrão: tentativas infinitas até o registro expirar",
+                "um lote genuinamente quebrado não pode bloquear a partição indefinidamente",
+                "sem alerta manual na DLQ, o lote fica esquecido lá sem ninguém perceber"
+              ],
+              [
+                "Escrita do painel",
+                "append-only: cada transição é um item novo",
+                "sobrescrever o registro do estado atual",
+                "é o que resolve o defeito central: nenhuma transição intermediária desaparece",
+                "mais itens gravados por pedido, mais unidade de escrita consumida"
+              ],
+              [
+                "Identidade da transição no painel",
+                "SK = SequenceNumber do stream",
+                "gerar um novo identificador a cada execução",
+                "entrega pelo menos uma vez exige uma chave determinística para não duplicar",
+                "nada relevante — é praticamente de graça de implementar"
+              ],
+              [
+                "Alcance da garantia de ordem",
+                "aceitar ordem só por partição (por pedido)",
+                "exigir ordem global entre pedidos diferentes",
+                "nenhuma regra de negócio deste módulo compara a ordem ENTRE pedidos",
+                "se isso um dia for necessário, a resposta é outro desenho — não uma configuração diferente deste mesmo stream"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este laboratório cria, e que ele não paga",
+            "content": "Se o consumidor ficar fora do ar por mais de 24 horas — deploy quebrado não percebido, incidente prolongado — os registros mais antigos que a janela de retenção já foram descartados, e não existe \"recomeçar do zero\" depois disso: é preciso reconciliar com uma varredura pontual na tabela de origem, comparando `updated_at` como um polling de emergência faria. Este módulo não constrói essa reconciliação; ele constrói o caminho feliz e documenta o limite."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: ligar o stream, e o log de transições"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O stream não é um recurso à parte: é um atributo da tabela que o L16 já criou. Ligá-lo não move dado nenhum — passa a CAPTURAR o que já estava acontecendo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "tabela.tf",
+            "code": "# tabela.tf — o stream é um ATRIBUTO da tabela do L16, não uma tabela nova\n\nresource \"aws_dynamodb_table\" \"pedidos\" {\n  name         = \"pedidos_cadencia\"\n  billing_mode = \"PAY_PER_REQUEST\"\n  hash_key     = \"PK\"\n  range_key    = \"SK\"\n\n  attribute { name = \"PK\" type = \"S\" }\n  attribute { name = \"SK\" type = \"S\" }\n  # ... GSI1/GSI2/GSI3 continuam como no L16; omitidos aqui por brevidade.\n\n  # As duas linhas que este laboratório acrescenta à tabela do L16.\n  # NEW_AND_OLD_IMAGES e nao NEW_IMAGE: sem a imagem antiga, o consumidor\n  # nunca saberia que um pedido \"cancelado\" tinha passado por \"separado\" —\n  # e essa comparacao e o motivo deste laboratorio existir.\n  stream_enabled   = true\n  stream_view_type = \"NEW_AND_OLD_IMAGES\"\n\n  point_in_time_recovery {\n    enabled = true\n  }\n}\n\noutput \"stream_arn\" {\n  value       = aws_dynamodb_table.pedidos.stream_arn\n  description = \"ARN do stream; muda se a tabela for recriada — o consumidor referencia este output, nunca uma string fixa\"\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "LATEST não captura o que já existia antes de ligar o stream",
+            "content": "`starting_position = \"LATEST\"` significa que o consumidor só vê mudanças a partir do momento em que o event source mapping foi criado — o que já estava no ar antes fica de fora. Para este laboratório está certo: o painel começa vazio e se preenche com o uso normal. Se o requisito fosse reconstruir o painel com o histórico inteiro desde sempre, a resposta não seria `TRIM_HORIZON` — o stream só retém 24 horas — seria uma carga inicial por `Scan`, seguida da entrada em regime pelo stream."
+          }
+        },
+        {
+          "id": "b8_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "hcl",
+            "filename": "painel.tf",
+            "code": "# painel.tf — o log de transicoes, e o alerta que passa a ter informacao para existir\n\nresource \"aws_dynamodb_table\" \"painel_operacao\" {\n  name         = \"painel_operacao\"\n  billing_mode = \"PAY_PER_REQUEST\"\n  hash_key     = \"PK\"\n  range_key    = \"SK\"\n\n  # PK = PEDIDO#<id> igual a tabela de origem, para o gerente nao precisar\n  # aprender uma segunda convencao de chave.\n  # SK = \"ATUAL\"                    -> o estado mais recente conhecido\n  # SK = \"TRANSICAO#<SequenceNumber>\" -> uma linha por mudanca, append-only\n  attribute { name = \"PK\" type = \"S\" }\n  attribute { name = \"SK\" type = \"S\" }\n\n  tags = { Projeto = \"ffv-lab\", Papel = \"read-model-operacional\" }\n}\n\nresource \"aws_sns_topic\" \"alerta_estoque\" {\n  name = \"ffv-lab-alerta-reposicao-estoque\"\n}\n\nresource \"aws_sqs_queue\" \"dlq_stream\" {\n  name                      = \"ffv-lab-consumidor-pedidos-dlq\"\n  message_retention_seconds = 1209600 # 14 dias — tempo para alguem investigar antes de expirar\n}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o consumidor, o papel e o event source mapping"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Três peças amarradas por comentário: o papel com permissão mínima, a função, e o mapping que liga uma coisa na outra. Nenhuma delas funciona sozinha."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "consumidor.tf",
+            "code": "# consumidor.tf — o Lambda que ouve o stream, e o event source mapping que o alimenta\n\ndata \"aws_iam_policy_document\" \"consumidor_assume\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sts:AssumeRole\"]\n    principals {\n      type        = \"Service\"\n      identifiers = [\"lambda.amazonaws.com\"]\n    }\n  }\n}\n\nresource \"aws_iam_role\" \"consumidor\" {\n  name               = \"ffv-lab-consumidor-pedidos\"\n  assume_role_policy = data.aws_iam_policy_document.consumidor_assume.json\n}\n\ndata \"aws_iam_policy_document\" \"consumidor_permissoes\" {\n  # Ler o stream. As tres primeiras aceitam o ARN especifico do stream; a\n  # quarta e operacao de DESCOBERTA DE CONTA e nao aceita recurso — mesma\n  # justificativa do ecr:GetAuthorizationToken no L03.\n  statement {\n    effect = \"Allow\"\n    actions = [\n      \"dynamodb:DescribeStream\",\n      \"dynamodb:GetRecords\",\n      \"dynamodb:GetShardIterator\",\n    ]\n    resources = [\"${aws_dynamodb_table.pedidos.stream_arn}\"]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"dynamodb:ListStreams\"]\n    resources = [\"*\"] # ListStreams e por conta/regiao; nao existe ARN de stream para restringir\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"dynamodb:PutItem\"]\n    resources = [aws_dynamodb_table.painel_operacao.arn]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"sns:Publish\"]\n    resources = [aws_sns_topic.alerta_estoque.arn]\n  }\n  # O event source mapping usa o papel DA FUNCAO para escrever na DLQ quando\n  # descarta um lote — por isso a permissao mora aqui, nao num papel separado.\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"sqs:SendMessage\"]\n    resources = [aws_sqs_queue.dlq_stream.arn]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"consumidor\" {\n  role   = aws_iam_role.consumidor.id\n  policy = data.aws_iam_policy_document.consumidor_permissoes.json\n}\n\nresource \"aws_lambda_function\" \"consumidor\" {\n  function_name = \"ffv-lab-consumidor-pedidos\"\n  role          = aws_iam_role.consumidor.arn\n  runtime       = \"dotnet8\"\n  handler       = \"Consumidor::Consumidor.Function::HandlerAsync\"\n  filename      = \"consumidor.zip\"\n  timeout       = 30\n  memory_size   = 256\n\n  environment {\n    variables = {\n      TABELA_PAINEL   = aws_dynamodb_table.painel_operacao.name\n      TOPICO_ESTOQUE  = aws_sns_topic.alerta_estoque.arn\n    }\n  }\n}\n\nresource \"aws_lambda_event_source_mapping\" \"stream_pedidos\" {\n  event_source_arn  = aws_dynamodb_table.pedidos.stream_arn\n  function_name     = aws_lambda_function.consumidor.arn\n  starting_position = \"LATEST\" # so o que acontecer DAQUI PRA FRENTE; ver callout sobre TRIM_HORIZON\n\n  batch_size                        = 100 # padrao do stream do DynamoDB; maximo 10000\n  maximum_batching_window_in_seconds = 1   # nao espera lote encher; prioriza latencia sobre eficiencia\n\n  # Falha isolada nao trava a particao inteira: divide o lote ao meio e tenta\n  # de novo cada metade separadamente, ate achar o registro problematico.\n  bisect_batch_on_function_error = true\n  maximum_retry_attempts         = 3 # finito, de proposito — ver callout sobre o padrao ser infinito\n\n  # Permite ao consumidor reportar QUAIS registros do lote falharam, em vez de\n  # o lote inteiro ser tratado como falha ou sucesso.\n  function_response_types = [\"ReportBatchItemFailures\"]\n\n  destination_config {\n    on_failure {\n      destination_arn = aws_sqs_queue.dlq_stream.arn\n    }\n  }\n}\n\nresource \"aws_cloudwatch_metric_alarm\" \"atraso_do_consumidor\" {\n  alarm_name          = \"ffv-lab-consumidor-pedidos-iterator-age\"\n  namespace           = \"AWS/Lambda\"\n  metric_name         = \"IteratorAge\"\n  statistic           = \"Maximum\"\n  period              = 60\n  evaluation_periods  = 3\n  threshold           = 60000 # 60 s em milissegundos — bem acima do que a operacao normal produz\n  comparison_operator = \"GreaterThanThreshold\"\n  treat_missing_data  = \"notBreaching\"\n\n  dimensions = {\n    FunctionName = aws_lambda_function.consumidor.function_name\n  }\n\n  alarm_actions = [aws_sns_topic.alerta_estoque.arn] # reaproveitado para alerta operacional\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Tentativa finita, e por que isso é intencional",
+            "content": "O padrão do event source mapping para fontes de stream é tentar INDEFINIDAMENTE até o registro expirar do stream — o que soa seguro e não é: um lote com um bug de desserialização travaria a partição por até 24 horas, retentando para sempre um registro que nunca vai processar com sucesso. `maximum_retry_attempts = 3` mais a DLQ troca essa espera cega por um sinal explícito: alguém vê a mensagem na fila e investiga."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o consumidor em C#, com falha parcial de lote"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A parte que mais importa aqui não é a chamada ao DynamoDB — é a resposta que a função devolve quando um registro do lote falha e os outros não."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Function.cs",
+            "code": "// Function.cs — compara antes e depois, grava a transicao, publica o alerta\n// que o polling nunca conseguia disparar.\n\nusing Amazon.DynamoDBv2;\nusing Amazon.DynamoDBv2.Model;\nusing Amazon.Lambda.Core;\nusing Amazon.Lambda.DynamoDBEvents;\nusing Amazon.SimpleNotificationService;\nusing Amazon.SimpleNotificationService.Model;\n\nnamespace Consumidor;\n\npublic class Function\n{\n    private readonly IAmazonDynamoDB _dynamo = new AmazonDynamoDBClient();\n    private readonly IAmazonSimpleNotificationService _sns = new AmazonSimpleNotificationServiceClient();\n    private readonly string _tabelaPainel = Environment.GetEnvironmentVariable(\"TABELA_PAINEL\")!;\n    private readonly string _topicoEstoque = Environment.GetEnvironmentVariable(\"TOPICO_ESTOQUE\")!;\n\n    // Retorna DynamoDBBatchResponse com os itens que falharam, para o event\n    // source mapping reprocessar SO ESSES — e nao o lote inteiro. Sem isso,\n    // um unico registro com formato inesperado faria o lote inteiro repetir,\n    // inclusive os que ja tinham sido gravados com sucesso.\n    public async Task<DynamoDBBatchResponse> HandlerAsync(DynamoDBEvent evento, ILambdaContext contexto)\n    {\n        var falhas = new List<DynamoDBBatchResponse.BatchItemFailure>();\n\n        foreach (var registro in evento.Records)\n        {\n            try\n            {\n                await ProcessarAsync(registro, contexto);\n            }\n            catch (Exception ex)\n            {\n                contexto.Logger.LogError($\"Falha no registro {registro.Dynamodb.SequenceNumber}: {ex.Message}\");\n                // O identificador tem de ser o SequenceNumber: e a chave que o\n                // event source mapping usa para saber ONDE retomar.\n                falhas.Add(new DynamoDBBatchResponse.BatchItemFailure\n                {\n                    ItemIdentifier = registro.Dynamodb.SequenceNumber\n                });\n            }\n        }\n\n        return new DynamoDBBatchResponse { BatchItemFailures = falhas };\n    }\n\n    private async Task ProcessarAsync(DynamoDBEvent.DynamodbStreamRecord registro, ILambdaContext contexto)\n    {\n        // INSERT e pedido novo; REMOVE e exclusao fisica. So MODIFY carrega\n        // uma transicao de status, que e o que este laboratorio trata.\n        if (registro.EventName != \"MODIFY\") return;\n\n        var pedidoId = registro.Dynamodb.Keys[\"PK\"].S;\n        var statusAntigo = registro.Dynamodb.OldImage.TryGetValue(\"status\", out var oldAttr) ? oldAttr.S : null;\n        var statusNovo = registro.Dynamodb.NewImage.TryGetValue(\"status\", out var newAttr) ? newAttr.S : null;\n\n        if (statusAntigo == statusNovo) return; // mudou outro atributo; nao e transicao de status\n\n        // Chave deterministica a partir do SequenceNumber: reprocessar o MESMO\n        // registro do stream (entrega e pelo menos uma vez) grava o MESMO\n        // item, em vez de duplicar a transicao no painel.\n        var itemTransicao = new Dictionary<string, AttributeValue>\n        {\n            [\"PK\"] = new AttributeValue { S = pedidoId },\n            [\"SK\"] = new AttributeValue { S = $\"TRANSICAO#{registro.Dynamodb.SequenceNumber}\" },\n            [\"de\"] = new AttributeValue { S = statusAntigo ?? \"INEXISTENTE\" },\n            [\"para\"] = new AttributeValue { S = statusNovo ?? \"DESCONHECIDO\" },\n            [\"em\"] = new AttributeValue { S = DateTimeOffset.UtcNow.ToString(\"O\") },\n        };\n        await _dynamo.PutItemAsync(_tabelaPainel, itemTransicao);\n\n        // O item ATUAL e sobrescrito de proposito — e o unico que representa\n        // \"agora\", e nao precisa de historico.\n        var itemAtual = new Dictionary<string, AttributeValue>\n        {\n            [\"PK\"] = new AttributeValue { S = pedidoId },\n            [\"SK\"] = new AttributeValue { S = \"ATUAL\" },\n            [\"status\"] = new AttributeValue { S = statusNovo ?? \"DESCONHECIDO\" },\n            [\"atualizadoEm\"] = new AttributeValue { S = DateTimeOffset.UtcNow.ToString(\"O\") },\n        };\n        await _dynamo.PutItemAsync(_tabelaPainel, itemAtual);\n\n        // A regra que o polling nunca conseguia avaliar: exige o ANTES e o\n        // DEPOIS no MESMO registro, e so o stream entrega os dois juntos.\n        if (statusAntigo == \"SEPARADO\" && statusNovo == \"CANCELADO\")\n        {\n            await _sns.PublishAsync(new PublishRequest\n            {\n                TopicArn = _topicoEstoque,\n                Subject = \"Pedido cancelado apos separado — reposicao de estoque\",\n                Message = $\"Pedido {pedidoId} foi cancelado depois de ja estar separado. \" +\n                          \"O item embalado precisa voltar ao estoque fisico.\"\n            });\n        }\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Sem ReportBatchItemFailures, um registro ruim reprocessa o lote inteiro",
+            "content": "O comportamento padrão do event source mapping é tratar o lote como TUDO ou NADA: se a função lançar uma exceção não tratada, TODO o lote é considerado falho e reentregue — inclusive os registros que já tinham sido gravados com sucesso no painel. Sem a escrita idempotente (chave por SequenceNumber) isso duplicaria transições; com ela, é só trabalho refeito. `ReportBatchItemFailures` evita o reprocessamento desnecessário dos registros que já deram certo, mas não substitui a idempotência — as duas proteções resolvem problemas diferentes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Implantar, e provar que nada se perde"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma aceita \"o painel parece atualizado\" como resultado — cada uma tem um número, uma contagem ou uma ordem esperada."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medicoes; nenhuma aceita \"parece que esta funcionando\"\n\nTABELA_ORIGEM=pedidos_cadencia\nTABELA_PAINEL=painel_operacao\n\n# ── Prova 1: reacao em segundos, nao minutos ──────────────────────────────\nINICIO=$(date +%s%3N)\naws dynamodb update-item --table-name $TABELA_ORIGEM \\\n  --key '{\"PK\":{\"S\":\"PEDIDO#demo-002\"},\"SK\":{\"S\":\"METADADOS\"}}' \\\n  --update-expression 'SET #s = :v' --expression-attribute-names '{\"#s\":\"status\"}' \\\n  --expression-attribute-values '{\":v\":{\"S\":\"SEPARADO\"}}'\nwhile true; do\n  R=$(aws dynamodb get-item --table-name $TABELA_PAINEL \\\n       --key '{\"PK\":{\"S\":\"PEDIDO#demo-002\"},\"SK\":{\"S\":\"ATUAL\"}}' \\\n       --query 'Item.status.S' --output text 2>/dev/null || echo \"\")\n  [ \"$R\" = \"SEPARADO\" ] && break\n  sleep 0.5\ndone\nFIM=$(date +%s%3N)\necho \"atraso: $(( (FIM - INICIO) ))ms\"\n# Esperado: abaixo de 10.000 ms na maioria das execucoes. Contra os ate\n# 120.000 ms do desenho minimo, e a diferenca de ordem de grandeza que o\n# stream compra.\n\n# ── Prova 2: nenhuma transicao intermediaria some ─────────────────────────\naws dynamodb update-item --table-name $TABELA_ORIGEM \\\n  --key '{\"PK\":{\"S\":\"PEDIDO#demo-003\"},\"SK\":{\"S\":\"METADADOS\"}}' \\\n  --update-expression 'SET #s = :v' --expression-attribute-names '{\"#s\":\"status\"}' \\\n  --expression-attribute-values '{\":v\":{\"S\":\"SEPARADO\"}}'\naws dynamodb update-item --table-name $TABELA_ORIGEM \\\n  --key '{\"PK\":{\"S\":\"PEDIDO#demo-003\"},\"SK\":{\"S\":\"METADADOS\"}}' \\\n  --update-expression 'SET #s = :v' --expression-attribute-names '{\"#s\":\"status\"}' \\\n  --expression-attribute-values '{\":v\":{\"S\":\"CANCELADO\"}}'\nsleep 5\naws dynamodb query --table-name $TABELA_PAINEL \\\n  --key-condition-expression 'PK = :p AND begins_with(SK, :t)' \\\n  --expression-attribute-values '{\":p\":{\"S\":\"PEDIDO#demo-003\"},\":t\":{\"S\":\"TRANSICAO#\"}}' \\\n  --query 'length(Items)'\n# Esperado: 2 (PENDENTE->SEPARADO e SEPARADO->CANCELADO), nao 1.\n\n# ── Prova 3: ordem preservada por chave de particao ───────────────────────\nfor i in 1 2 3 4 5; do\n  aws dynamodb update-item --table-name $TABELA_ORIGEM \\\n    --key '{\"PK\":{\"S\":\"PEDIDO#demo-004\"},\"SK\":{\"S\":\"METADADOS\"}}' \\\n    --update-expression 'SET contador = :v' \\\n    --expression-attribute-values \"{\\\":v\\\":{\\\"N\\\":\\\"$i\\\"}}\"\ndone\nsleep 5\naws dynamodb query --table-name $TABELA_PAINEL \\\n  --key-condition-expression 'PK = :p AND begins_with(SK, :t)' \\\n  --expression-attribute-values '{\":p\":{\"S\":\"PEDIDO#demo-004\"},\":t\":{\"S\":\"TRANSICAO#\"}}' \\\n  --query 'Items[].SK.S' --output text\n# Esperado: os SequenceNumber nos SKs aparecem em ordem CRESCENTE — a mesma\n# ordem em que as cinco escritas foram enviadas.\n\n# ── Prova 4: reprocessamento nao duplica (idempotencia) ───────────────────\nANTES=$(aws dynamodb query --table-name $TABELA_PAINEL \\\n  --key-condition-expression 'PK = :p' \\\n  --expression-attribute-values '{\":p\":{\"S\":\"PEDIDO#demo-003\"}}' \\\n  --query 'length(Items)')\naws lambda invoke --function-name ffv-lab-consumidor-pedidos \\\n  --payload file://registro-de-teste.json /tmp/saida.json >/dev/null\naws lambda invoke --function-name ffv-lab-consumidor-pedidos \\\n  --payload file://registro-de-teste.json /tmp/saida.json >/dev/null\nDEPOIS=$(aws dynamodb query --table-name $TABELA_PAINEL \\\n  --key-condition-expression 'PK = :p' \\\n  --expression-attribute-values '{\":p\":{\"S\":\"PEDIDO#demo-003\"}}' \\\n  --query 'length(Items)')\necho \"antes=$ANTES depois=$DEPOIS\"\n# Esperado: os dois numeros IGUAIS, mesmo invocando o mesmo registro duas vezes.\n\n# ── Prova 5: o atraso do consumidor, medido pelo IteratorAge ──────────────\naws cloudwatch get-metric-statistics --namespace AWS/Lambda \\\n  --metric-name IteratorAge --statistics Maximum --period 60 \\\n  --start-time \"$(date -u -d '10 minutes ago' +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --dimensions Name=FunctionName,Value=ffv-lab-consumidor-pedidos \\\n  --query 'Datapoints[].Maximum'\n# Esperado: valores na casa de milissegundos a poucos segundos, em operacao\n# normal. Um numero crescendo ao longo de varios pontos indica que o\n# consumidor esta processando mais devagar do que a tabela escreve.\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "O que mede",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Latência do consumidor",
+                "tempo entre o `UpdateItem` e o item aparecer no painel",
+                "abaixo de 10 segundos na maioria das execuções",
+                "acima disso, confira `IteratorAge`: o consumidor pode estar processando mais devagar do que a tabela escreve"
+              ],
+              [
+                "2 · Nenhuma transição some",
+                "contagem de itens `TRANSICAO#` para um pedido com 2 mudanças",
+                "exatamente 2, uma por mudança de status",
+                "1 significa que a segunda mudança sobrescreveu a primeira — sinal de que a chave do painel não está usando o SequenceNumber"
+              ],
+              [
+                "3 · Ordem preservada por partição",
+                "SequenceNumber dos SKs de um mesmo pedido, em sequência",
+                "ordem crescente, igual à ordem de envio das escritas",
+                "fora de ordem indicaria processamento paralelo cruzando registros da MESMA partição, o que o modelo de consumo não deveria permitir"
+              ],
+              [
+                "4 · Reprocessamento não duplica",
+                "contagem de itens antes e depois de invocar o mesmo evento duas vezes",
+                "os dois números iguais",
+                "números diferentes indicam que a chave de escrita não é determinística"
+              ],
+              [
+                "5 · Atraso do consumidor sob operação normal",
+                "`IteratorAge` via CloudWatch",
+                "casa de milissegundos a poucos segundos",
+                "crescendo ao longo de vários pontos: o consumidor está acumulando atraso, não só tendo picos pontuais"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "Fora do ar por mais de 24 horas: não há \"recomeçar de onde parou\"",
+            "content": "A retenção do stream é fixa em 24 horas — não é ajustável para cima. Se o consumidor ficar parado além desse prazo, os registros mais antigos já foram descartados pela própria infraestrutura, e ligá-lo de volta simplesmente não os encontra mais. A única forma de fechar a lacuna é uma reconciliação pontual — uma varredura na tabela de origem comparando `updated_at` — e ela tem exatamente o mesmo defeito do desenho mínimo deste laboratório: perde transição intermediária que ocorreu durante a lacuna. É um limite real deste desenho, não um detalhe de operação."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três se parecem no sintoma superficial — \"o painel ou o alerta não refletem a realidade\" — mas cada uma tem uma causa e uma correção diferentes."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Stream com NEW_IMAGE em vez de NEW_AND_OLD_IMAGES",
+                "mude `stream_view_type` para `\"NEW_IMAGE\"` e refaça a prova 2",
+                "o painel atualiza normalmente, mas o alerta de reposição NUNCA dispara — mesmo com o pedido claramente passando por SEPARADO antes de CANCELADO",
+                "`describe-table` → `StreamSpecification.StreamViewType`",
+                "NEW_AND_OLD_IMAGES; sem a imagem antiga a comparação de transição não existe"
+              ],
+              [
+                "Chave do painel não determinística",
+                "troque `SequenceNumber` por `Guid.NewGuid()` na chave e reprocesse o mesmo lote duas vezes",
+                "o número de transições cresce a cada retentativa, mesmo sem nenhuma mudança real no pedido",
+                "contagem de itens `TRANSICAO#` crescendo sem novo `UpdateItem` correspondente",
+                "chave derivada do `SequenceNumber`, que é o mesmo em toda tentativa do mesmo registro"
+              ],
+              [
+                "Consumidor desligado por mais de 24 horas",
+                "pare o event source mapping, espere além da retenção, religue",
+                "um intervalo inteiro de mudanças simplesmente não aparece no painel, sem erro nenhum no CloudWatch",
+                "`IteratorAge` não mostra nada de anormal, porque não há mais registro para medir o atraso",
+                "reconciliação pontual comparando `updated_at`, aceitando o mesmo risco de perda do desenho mínimo só para o período da lacuna"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25_0",
+      "type": "quiz",
+      "position": 13,
+      "data": {
+        "question": "Um job compara `updated_at` a cada 2 minutos. Um pedido muda PENDENTE → SEPARADO → CANCELADO em 40 segundos, todos dentro do mesmo intervalo. O que o job vê na próxima consulta?",
+        "options": [
+          "Duas linhas, uma para cada transição, porque updated_at mudou duas vezes",
+          "Apenas o pedido com status CANCELADO, sem nenhuma menção a SEPARADO",
+          "Um erro de concorrência, porque o item mudou durante a leitura",
+          "Nada, porque updated_at coincide com o horário da última execução"
+        ],
+        "correctIndex": 1,
+        "explanation": "Uma consulta de snapshot devolve o VALOR ATUAL do item no instante em que pergunta, não um histórico de valores por onde ele passou. Como CANCELADO é o último valor gravado, é isso que a Query encontra — SEPARADO foi sobrescrito antes de qualquer consulta lê-lo, e não existe forma de recuperá-lo depois disso a partir da tabela de origem.\n\nA primeira alternativa erra o modelo mental do DynamoDB: um item tem UM valor por atributo a cada instante, não um histórico acumulado — updated_at mudar duas vezes não produz duas linhas, produz duas ESCRITAS sobre a mesma linha. A terceira confunde o cenário com controle de concorrência: não há conflito de escrita aqui, as três mudanças aconteceram em sequência, sem disputa. A quarta erra a aritmética: updated_at MUDOU (para o horário do CANCELADO), então ele é maior que o checkpoint da última execução e a linha aparece normalmente na consulta — só que sem contar a história completa."
+      }
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 14,
+      "data": {
+        "title": "Segurança: o que passa a trafegar por um caminho novo"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O stream entrega a imagem COMPLETA do item, não só o campo que mudou. Se o item tiver atributo sensível, ele agora passa por um caminho novo — o consumidor, seus logs, e a eventual DLQ."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Papel do consumidor com permissão além do necessário",
+                "média",
+                "médio",
+                "ações restritas ao ARN do stream e da tabela do painel; `ListStreams` é a única exceção justificada, por ser operação de conta",
+                "IAM Access Analyzer sobre uso real",
+                "reduzir ao uso medido, como no L41"
+              ],
+              [
+                "Atributo sensível do pedido vazando em log do consumidor",
+                "média",
+                "alto",
+                "nunca logar `OldImage`/`NewImage` inteiros; logar só os campos relevantes à decisão (neste caso, `status`)",
+                "busca por padrão de dado sensível no grupo de logs",
+                "redigir o log; se já vazou, tratar como incidente de exposição de dado"
+              ],
+              [
+                "Mensagem presa na DLQ sem ninguém notando",
+                "média",
+                "baixo",
+                "alarme sobre `ApproximateNumberOfMessages` da fila",
+                "CloudWatch no atributo da fila",
+                "investigar e reprocessar manualmente, ou descartar com justificativa registrada"
+              ],
+              [
+                "Consumidor consegue escrever fora da tabela do painel",
+                "baixa",
+                "médio",
+                "`dynamodb:PutItem` restrito ao ARN específico de `painel_operacao`",
+                "CloudTrail em `PutItem` fora do ARN esperado",
+                "revisar a política; o erro apareceria como `AccessDenied`, não como escrita indevida"
+              ],
+              [
+                "Tópico de alerta recebendo assinante não autorizado",
+                "baixa",
+                "médio",
+                "política do tópico SNS restrita a quem deveria assinar",
+                "auditoria periódica de assinaturas do tópico",
+                "remover a assinatura; investigar como foi criada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O `*` que aparece na política, e por que ele se justifica",
+            "content": "`dynamodb:ListStreams` é uma operação de CONTA/REGIÃO — ela lista os streams existentes antes de você saber o ARN de nenhum, e por isso não aceita recurso específico. As demais ações desta política são restritas ao ARN exato do stream ou da tabela. A regra não é \"nunca use `*`\" — é \"todo `*` tem de vir com a frase que explica por que não pode ser mais estreito\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel de operação do CONSUMIDOR responde"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um consumidor de stream tem uma pergunta central: ele está acompanhando o ritmo da tabela, ou está ficando para trás? Todo o resto decorre disso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "O consumidor está atrasado em relação à escrita?",
+                "`IteratorAge` (AWS/Lambda)",
+                "tempo entre o registro ser escrito no stream e ser entregue à função",
+                "> 60 s por 3 períodos de 1 min"
+              ],
+              [
+                "Há lote falhando sistematicamente?",
+                "`Errors` da função associada ao event source mapping",
+                "erro recorrente indica bug de processamento, não falha pontual",
+                "> 0 sustentado"
+              ],
+              [
+                "Mensagens estão se acumulando na fila de descarte?",
+                "`ApproximateNumberOfMessages` da DLQ",
+                "lote que ninguém está reprocessando",
+                "> 0 por mais de 1 hora"
+              ],
+              [
+                "Quantas transições estão sendo gravadas por minuto?",
+                "contagem de `PutItem` no painel",
+                "queda abrupta pode indicar consumidor parado, não ausência real de mudança",
+                "comparar com a linha de base"
+              ],
+              [
+                "O alerta de estoque está disparando na frequência esperada?",
+                "contagem de publicações no tópico SNS",
+                "zero por muito tempo pode ser bom sinal ou consumidor silenciosamente quebrado",
+                "cruzar com o volume de cancelamentos, não olhar isolado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que some exatamente quando mais precisa dela",
+            "content": "Sob um pico de escrita — uma campanha, por exemplo — `IteratorAge` é justamente a métrica que sobe, e é justamente quando a atenção do time está no painel de negócio, não no de infraestrutura. Alarme automático nesta métrica substitui a vigilância manual que a equipe pequena não tem tempo de fazer durante o próprio pico que gerou o atraso."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão de mudanças por dia"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece com o consumo",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 mudanças/dia",
+                "um shard, invocações esparsas",
+                "nada; é o cenário do laboratório",
+                "nada"
+              ],
+              [
+                "10 mil mudanças/dia (900 lojas, regime normal)",
+                "poucos shards ativos, lotes pequenos",
+                "nenhum ajuste especial; `maximum_batching_window` de 1 s prioriza latência",
+                "confirmar que `IteratorAge` fica na casa de segundos sob esse regime"
+              ],
+              [
+                "1 milhão de mudanças/dia (campanha, 20× o normal)",
+                "mais partições escrevendo ao mesmo tempo, mais shards, Lambda escalando concorrência automaticamente",
+                "concorrência do Lambda pode esbarrar em cota de conta se outras funções competem pelo mesmo limite",
+                "verificar cota de concorrência reservada; considerar `parallelization_factor` acima de 1 por shard se um shard concentrar volume"
+              ],
+              [
+                "Falha de AZ",
+                "DynamoDB, Streams e Lambda são serviços gerenciados multi-AZ por padrão",
+                "nenhuma ação manual — não há instância nem shard fixo para religar",
+                "nada a fazer aqui; é diferente do ALB/ECS do L01, onde AZ é decisão explícita de rede"
+              ],
+              [
+                "Uma loja concentra volume muito acima das outras",
+                "a partição dela concentra escrita e leitura do stream",
+                "possível hot partition — o mesmo risco que o L16 já registrou como dívida aberta",
+                "sufixo de dispersão na chave, quando o volume real justificar"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O que NÃO cresce com o volume: o custo por transição",
+            "content": "Diferente do Scan do desenho errado do L16, o custo do consumo por stream é proporcional a QUANTAS mudanças acontecem, nunca a quantos itens a tabela tem no total. Uma tabela com 40 milhões de pedidos acumulados e uma com 40 mil pagam o mesmo por transição — a diferença é só o volume de transições em si."
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "Concorrência do Lambda é um limite de CONTA, não só desta função",
+            "content": "Sob um pico de 20×, o consumidor pode escalar concorrência o suficiente para esbarrar na cota da conta — que é compartilhada com toda função Lambda daquela conta, não só a deste laboratório. O sintoma é sutil: outra função, sem relação nenhuma com pedidos, começa a ser limitada (throttled) durante a campanha, porque o consumidor do stream consumiu a fatia disponível. Concorrência reservada para o consumidor evita que ele roube capacidade de outra função, mas também limita o quanto ELE pode escalar — é uma troca, não uma folga de graça."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O stream em si não tem cobrança própria, e a leitura via gatilho do Lambda para DynamoDB Streams não é cobrada separadamente — o que se paga é a execução da função, proporcional a mudanças reais, e a tabela nova do painel."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "algumas dezenas de mudanças/dia",
+                "invocações esporádicas do Lambda; tabela do painel quase vazia",
+                "desprezível",
+                "nenhuma; otimizar aqui é gastar atenção onde não há dinheiro"
+              ],
+              [
+                "Produção atual",
+                "~40 mil pedidos/dia, 2 a 4 mudanças cada",
+                "dezenas de milhares de invocações/dia, cada uma processando um lote pequeno",
+                "baixa e previsível, cresce com o número de PEDIDOS, não com o tamanho da tabela",
+                "lote maior (`batch_size`) reduz número de invocações às custas de um pouco de latência"
+              ],
+              [
+                "Pico de campanha",
+                "20× o volume normal, em rajadas",
+                "mais concorrência simultânea do Lambda; mais unidade de escrita no painel",
+                "sob demanda no painel absorve sem replanejamento",
+                "confirmar cota de concorrência reservada antes do pico, não durante"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Lambda (consumidor)",
+                "GB-segundo de execução, por invocação",
+                "proporcional a mudanças reais — é a inversão do defeito do Scan, que crescia com o tamanho da tabela"
+              ],
+              [
+                "DynamoDB Streams",
+                "nada além da tabela de origem, para leitura via gatilho do Lambda",
+                "consumidores QUE NÃO são gatilho do Lambda pagam por leitura acima de uma cota mensal gratuita — não é o caso deste desenho"
+              ],
+              [
+                "Tabela painel_operacao",
+                "unidade de escrita/leitura sob demanda",
+                "append-only grava mais itens por pedido que um espelho sobrescrito — mais WCU que o desenho mínimo, e é o preço de não perder transição"
+              ],
+              [
+                "SQS (DLQ)",
+                "por requisição, e por GB-mês de retenção",
+                "valor pequeno em operação normal; sobe se o consumidor começar a falhar sistematicamente"
+              ],
+              [
+                "SNS",
+                "por publicação e por notificação entregue",
+                "proporcional a quantos alertas de fato disparam — baixo por natureza"
+              ],
+              [
+                "CloudWatch",
+                "métrica customizada e alarme-mês",
+                "valor pequeno e fixo; não é onde se economiza"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho de custo que não está em nenhuma linha da AWS",
+            "content": "Os 30 casos mensais de item embalado e não devolvido ao estoque, encontrados só na auditoria física, representavam perda de inventário que nenhuma fatura da AWS jamais mostraria. O que este laboratório resolve não aparece como redução de custo de nuvem — aparece como redução de perda operacional, que estava sendo descoberta tarde demais para ser corrigida."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "consumidor reagindo em segundos, com falha parcial de lote isolada e observável",
+                "sem reconciliação automática para downtime acima de 24 h",
+                "rotina de reconciliação por varredura, disparada por alarme de gap detectado",
+                "média"
+              ],
+              [
+                "Segurança",
+                "permissão restrita por ARN de stream e de tabela; log sem imagem completa do item",
+                "DLQ sem verificação automática de conteúdo sensível antes de reter 14 dias",
+                "política de retenção mais curta na DLQ, ou redação automática antes de gravar",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "ordem preservada por chave, escrita idempotente, bisecção de lote em erro",
+                "ordem NÃO garantida entre pedidos diferentes — aceitável hoje, documentado como limite",
+                "se algum dia precisar de ordem global, é outro desenho — não uma configuração deste",
+                "baixa"
+              ],
+              [
+                "Eficiência de performance",
+                "latência em segundos, medida por `IteratorAge`",
+                "lote pequeno com `maximum_batching_window=1s` prioriza latência sobre eficiência de custo",
+                "aumentar a janela de batching se o custo por invocação começar a importar mais que a latência",
+                "baixa"
+              ],
+              [
+                "Otimização de custos",
+                "custo proporcional a mudanças reais, não ao tamanho da tabela",
+                "nenhum hoje, no volume atual",
+                "revisar `batch_size` se o volume crescer uma ordem de grandeza",
+                "baixa"
+              ],
+              [
+                "Sustentabilidade",
+                "nenhum recurso ocioso: sem servidor fixo, sem shard provisionado sem uso",
+                "DLQ retendo mensagem por 14 dias mesmo se ninguém for olhar",
+                "alarme na DLQ para forçar decisão em vez de deixar reter até expirar",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de mecanismo de notificação. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do painel sem sincronização à plataforma de eventos — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Painel sem sincronização nenhuma: o gerente pergunta ao suporte por telefone. É de onde a Cadência partiu antes mesmo do polling.",
+                "note": "Risco resolvido: nenhum. Novo risco: informação desatualizada o tempo todo, sem ninguém perceber. Custo: zero em infraestrutura, alto em tempo de pessoas."
+              },
+              {
+                "label": "Nível 2 — Polling por timestamp",
+                "instruction": "Função agendada comparando `updated_at`. É o desenho mínimo deste laboratório, e continua aceitável quando duas mudanças no mesmo item dentro do intervalo são raras e toleráveis.",
+                "note": "Risco resolvido: informação totalmente estática. Novo risco: perda silenciosa de transição intermediária — não atraso, ausência. Custo: baixo, RCU do polling."
+              },
+              {
+                "label": "Nível 3 — Este laboratório",
+                "instruction": "DynamoDB Streams com NEW_AND_OLD_IMAGES, consumidor via event source mapping, escrita idempotente e append-only.",
+                "note": "Risco resolvido: perda de transição e atraso de minutos. Novo risco: ordem só por partição, retenção de 24 h, exige idempotência explícita. Custo: baixo, proporcional a mudanças reais."
+              },
+              {
+                "label": "Nível 4 — Múltiplos consumidores independentes",
+                "instruction": "Kinesis Data Streams for DynamoDB: retenção de até 1 ano, fan-out para vários sistemas lendo o mesmo stream com checkpoints próprios (L63).",
+                "note": "Risco resolvido: um único consumidor monopolizando o stream, e janela curta de retenção. Novo risco: shard a administrar, rebalanceamento sob pico. Custo: médio, por shard-hora mais unidade de dado."
+              },
+              {
+                "label": "Nível 5 — Plataforma e barramento de eventos",
+                "instruction": "O consumidor republica a transição num barramento (EventBridge) com contrato de evento versionado entre times, e replay controlado (L24).",
+                "note": "Risco resolvido: cada time novo integrando direto no stream, acoplado ao formato interno da tabela. Novo risco: schema do evento vira contrato público, com o custo de versionar sem quebrar. Custo: baixo, mensal fixo do barramento."
+              },
+              {
+                "label": "Nível 6 — Dados e IA sobre o histórico de transições",
+                "instruction": "O log de transições, acumulado ao longo de meses, vira base para detectar padrão anormal de SEPARADO→CANCELADO por loja — candidato a erro de separação ou fraude interna.",
+                "note": "Risco resolvido: padrão de negócio anormal descoberto só na auditoria manual, meses depois. Novo risco: alarme falso a partir de pouco histórico, exigindo avaliação e caminho de revisão humana. Custo: baixo — o dado já está sendo gravado desde o nível 3."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "O nível 6 depende de um histórico de transições confiável, que depende de nenhuma delas ter se perdido — que é exatamente o que o nível 3 resolve. Treinar um classificador sobre dado que o nível 2 produziria seria treinar sobre um histórico com buracos que ninguém sabe onde estão, porque o próprio mecanismo de coleta os escondia."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não resolve o problema central, e forçá-la seria o antipadrão que a própria série critica. \"Como reagir a uma mudança em segundos, sem perder nenhuma e com ordem preservada\" tem resposta determinística: CDC nativo, imagem dupla, chave idempotente. Um modelo não melhora nenhuma dessas três — são mecanismo de infraestrutura, não julgamento."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar onde IA agregaria valor real, e ele só existe DEPOIS deste laboratório: com o histórico de transições fluindo de forma confiável, é possível treinar um classificador que sinaliza um padrão anormal — por exemplo, uma loja específica com taxa de SEPARADO→CANCELADO muito acima da média das outras, candidato a erro de processo ou fraude interna, antes que o volume vire prejuízo relevante."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "detectar um padrão anormal na taxa de transição SEPARADO→CANCELADO por loja, cedo o suficiente para investigar antes do prejuízo somar"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "uma regra de limiar fixo bastaria para começar — \"mais de N cancelamentos pós-separação por dia\" cobre o caso óbvio. IA só se justifica quando o padrão normal varia por loja, sazonalidade ou porte, e um limiar único gera alarme falso demais para ser útil"
+              ],
+              [
+                "De onde viriam os dados?",
+                "o próprio log de transições que este laboratório grava — nenhum dado novo a coletar"
+              ],
+              [
+                "Qual o risco?",
+                "aprender de poucas lojas com histórico longo e reprovar loja pequena com amostra insuficiente; exige avaliação e um caminho de revisão humana sempre disponível, nunca decisão automática de bloqueio"
+              ],
+              [
+                "Por que não agora?",
+                "porque este laboratório acabou de nascer: sem meses de histórico confiável, treinar qualquer modelo aqui seria superstição com aparência de estatística"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b19_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"olhar o evento do stream e decidir se deve alertar o estoque\" trocaria uma regra determinística — OLD=SEPARADO e NEW=CANCELADO, exata e auditável — por uma decisão probabilística sobre algo que já é 100% observável no próprio registro. Onde existe comparação direta de dois valores, um modelo só acrescenta latência e uma chance de errar com confiança. O lugar certo para IA é a CAMADA ACIMA, sobre o padrão agregado — não sobre a decisão individual que já tem resposta exata."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Reduzir o intervalo de polling para \"resolver\" o atraso",
+                "é a menor mudança possível sobre um código que já existe",
+                "reduz a JANELA de perda, não a elimina; e multiplica o custo de leitura",
+                "perda de transição continua ocorrendo, só que com menos frequência — mais difícil de reproduzir e diagnosticar",
+                "trocar consulta por stream",
+                "nunca, quando a regra de negócio depende de transição intermediária"
+              ],
+              [
+                "NEW_IMAGE sozinho, sem OLD_IMAGE",
+                "parece suficiente porque \"eu só preciso saber o estado atual\"",
+                "qualquer regra que dependa do ANTES fica impossível de implementar depois — é preciso religar o stream e perder o que já passou",
+                "alerta ou lógica que depende de transição específica nunca funciona, sem erro nenhum no código",
+                "NEW_AND_OLD_IMAGES sempre que houver qualquer chance de precisar da transição, não só do estado",
+                "quando genuinamente só o estado atual importa, e isso está escrito no requisito"
+              ],
+              [
+                "Timestamp de aplicação como chave de idempotência",
+                "parece mais legível que um número de sequência opaco",
+                "muda a cada tentativa de reprocessamento, então não protege contra duplicação nenhuma",
+                "contagem de itens cresce sem novo evento de negócio correspondente",
+                "SequenceNumber do próprio registro do stream",
+                "nunca; ele existe e é feito exatamente para isso"
+              ],
+              [
+                "Tentativas infinitas sem DLQ",
+                "é o padrão, e \"resolver sozinho\" parece mais robusto",
+                "um lote genuinamente quebrado trava a partição até o registro expirar do stream, até 24 horas",
+                "partição específica atrasada enquanto as outras processam normalmente, sem erro visível",
+                "limite finito de tentativas mais DLQ com alarme",
+                "nunca em produção; aceitável só em prototipagem isolada"
+              ],
+              [
+                "Tratar o stream como fila durável para sempre",
+                "o nome \"stream\" sugere durabilidade, e o conceito de fila é familiar",
+                "a retenção é fixa em 24 horas; downtime maior perde dado de forma irrecuperável pelo próprio stream",
+                "\"sumiu um pedaço do histórico e não sabemos por quê\" depois de um incidente prolongado",
+                "plano de reconciliação explícito para downtime acima da retenção",
+                "nunca — é sempre um limite a respeitar, não uma suposição a fazer"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Painel atualiza, mas alerta de estoque nunca dispara",
+                "stream sem NEW_AND_OLD_IMAGES, ou comparação de status ausente no código",
+                "confira o tipo de visualização e releia a condição no consumidor",
+                "`describe-table` → `StreamViewType`; log do consumidor",
+                "NEW_AND_OLD_IMAGES; comparar OldImage.status com NewImage.status explicitamente"
+              ],
+              [
+                "Contagem de transições maior que o número de mudanças reais",
+                "chave de escrita não determinística — duplicando em reprocessamento",
+                "compare o número de `UpdateItem` na origem com o número de itens `TRANSICAO#`",
+                "como a chave `SK` do painel é gerada no código do consumidor",
+                "usar o SequenceNumber do registro do stream, nunca timestamp ou GUID gerado na hora"
+              ],
+              [
+                "IteratorAge crescendo continuamente",
+                "consumidor processando mais devagar do que a tabela escreve",
+                "compare a taxa de invocação com a taxa de escrita na tabela de origem",
+                "`IteratorAge` e `Duration` da função no CloudWatch",
+                "aumentar `parallelization_factor` por shard, ou reduzir trabalho por invocação"
+              ],
+              [
+                "Partição específica sempre atrasada, as outras normais",
+                "um registro daquela partição está travando o lote repetidamente",
+                "veja se `bisect_batch_on_function_error` está ativo, e confira a DLQ",
+                "mensagem correspondente na fila de descarte",
+                "corrigir o registro problemático ou o parsing que falha nele; reprocessar manualmente a partir da DLQ"
+              ],
+              [
+                "Lacuna de dados depois de um incidente prolongado",
+                "consumidor ficou fora do ar por mais de 24 horas",
+                "compare o horário do incidente com a janela de retenção do stream",
+                "histórico de eventos do event source mapping; horário do incidente",
+                "reconciliação pontual por varredura, aceitando que a ordem de transição da lacuna se perdeu"
+              ],
+              [
+                "Função nunca é invocada, mesmo com mudanças na tabela",
+                "event source mapping desabilitado, ou papel sem permissão de leitura no stream",
+                "confira o estado do mapping e teste a permissão isoladamente",
+                "`aws lambda get-event-source-mapping` → `State`",
+                "reabilitar o mapping; corrigir a política do papel de execução"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em parâmetro, pergunte: o problema é de CAPTURA (a mudança não virou registro no stream) ou de CONSUMO (o registro existe, mas o consumidor não o processou a tempo ou corretamente)? A primeira família aponta para a configuração da tabela e do tipo de visualização; a segunda, para o event source mapping e o código do consumidor. As duas produzem o mesmo sintoma visível — \"o painel está errado\" — e apontam para metades diferentes do desenho."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O stream em si morre com a tabela — não é um recurso separado a apagar. O que sobrevive ao "
+              },
+              {
+                "text": "terraform destroy",
+                "code": true
+              },
+              {
+                "text": " é o que fica de pé se a ordem de remoção for invertida, ou o que foi criado fora do estado do Terraform."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# limpar.sh — o que o destroy nao leva\n\n# 1. Derrube o que o Terraform administra.\nterraform destroy -auto-approve\n\n# 2. FILA DE DESCARTE COM MENSAGEM: se algum lote foi descartado durante o\n#    laboratorio, a fila pode nao esvaziar sozinha e continuar cobrando\n#    centavos por retencao de 14 dias.\naws sqs get-queue-attributes --queue-url \"$(terraform output -raw dlq_url 2>/dev/null)\" \\\n  --attribute-names ApproximateNumberOfMessages 2>/dev/null || true\n\n# 3. O STREAM NAO E UM RECURSO SEPARADO: ele morre com a tabela. Mas se voce\n#    manteve a tabela do L16 e so removeu o consumidor, o stream CONTINUA\n#    LIGADO e continua gerando registros que ninguem le — sem custo de\n#    armazenamento (streams nao cobram parado), mas sem utilidade nenhuma.\naws dynamodb describe-table --table-name pedidos_cadencia \\\n  --query 'Table.StreamSpecification'\n\n# 4. Confirme que nao sobrou nada com a tag do projeto.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table\n"
+          }
+        },
+        {
+          "id": "b22_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Stream da tabela",
+                "sim, junto com a tabela",
+                "não",
+                "não é um recurso independente; é um atributo. Mas se você manteve a tabela do L16 e só apagou o consumidor, o stream CONTINUA LIGADO gerando registros que ninguém lê"
+              ],
+              [
+                "Tabela painel_operacao",
+                "sim",
+                "sim, por unidade sob demanda enquanto existir",
+                "igual a qualquer tabela DynamoDB — cobra por leitura/escrita, não por hora ligada"
+              ],
+              [
+                "Fila DLQ com mensagem",
+                "sim, mas com mensagem dentro se não foi esvaziada antes",
+                "sim, retenção de 14 dias",
+                "mensagem de lote descartado não é apagada automaticamente pelo destroy"
+              ],
+              [
+                "Tópico SNS",
+                "sim",
+                "centavos por publicação, não por estar parado",
+                "sem custo relevante de estar ocioso"
+              ],
+              [
+                "Papel e política IAM",
+                "sim",
+                "não",
+                "nenhum custo, mas confira se não sobrou papel órfão referenciado em outro lugar"
+              ],
+              [
+                "Alarme CloudWatch",
+                "sim se em Terraform",
+                "centavos",
+                "alarme criado à mão no console não aparece no estado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "Stream ligado sem consumidor não custa, mas confunde quem investigar depois",
+            "content": "DynamoDB Streams não é cobrado por ficar parado nem por gerar registros que ninguém lê — mas um stream ligado numa tabela sem event source mapping ativo é exatamente o tipo de configuração órfã que confunde uma investigação futura: alguém encontra o atributo ligado, presume que existe um consumidor, e perde tempo procurando um Lambda que já foi apagado. Desligue `stream_enabled` junto com o consumidor, não separado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Painel atrasado até 2 minutos",
+                "DynamoDB Streams + event source mapping do Lambda",
+                "reação em segundos, sem precisar de shard próprio para administrar"
+              ],
+              [
+                "Transição intermediária desaparecendo",
+                "NEW_AND_OLD_IMAGES + escrita append-only",
+                "a imagem dupla é o que permite comparar antes/depois; append-only é o que preserva cada mudança como um item"
+              ],
+              [
+                "Alerta de estoque que nunca disparava",
+                "comparação OLD.status=SEPARADO e NEW.status=CANCELADO",
+                "só é decidível com as duas imagens no mesmo registro"
+              ],
+              [
+                "Duplicação em reprocessamento",
+                "chave do painel derivada do SequenceNumber",
+                "entrega pelo menos uma vez exige uma chave determinística para não duplicar"
+              ],
+              [
+                "Lote quebrado travando uma partição",
+                "tentativas finitas + DLQ + bisecção de lote",
+                "isola o registro problemático sem parar o processamento das outras chaves"
+              ],
+              [
+                "Ordem confundida com garantia global",
+                "aceitar ordem só por chave de partição",
+                "é a granularidade real que o serviço garante — fingir mais do que isso quebra em produção, não em teste"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Transição intermediária perdida",
+                "NEW_AND_OLD_IMAGES + append-only",
+                "downtime do consumidor acima de 24 horas — aí a perda volta a existir"
+              ],
+              [
+                "Duplicação por reprocessamento",
+                "chave idempotente por SequenceNumber",
+                "duplicação por bug de lógica que grava duas transições distintas para o mesmo evento"
+              ],
+              [
+                "Lote quebrado travando a partição",
+                "tentativas finitas + DLQ",
+                "a causa raiz do registro quebrado — a DLQ isola, não corrige"
+              ],
+              [
+                "Atraso não percebido",
+                "alarme em `IteratorAge`",
+                "atraso que ainda está dentro do limiar mas já maior que o histórico normal — vale olhar tendência, não só limiar fixo"
+              ],
+              [
+                "Ordem trocada dentro do mesmo pedido",
+                "shard dedicado por partição",
+                "ordem relativa entre pedidos DIFERENTES — nunca foi garantida"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Expedidor muda o status do pedido com um UpdateItem comum, igual ao L16.",
+              "A tabela, com o stream ligado, grava um registro com a imagem antes e depois no shard da partição.",
+              "O event source mapping do Lambda entrega o registro num lote, em poucos segundos.",
+              "O consumidor distingue INSERT/MODIFY/REMOVE, e só processa MODIFY com status alterado.",
+              "Grava a transição no painel com SK derivado do SequenceNumber — idempotente por construção.",
+              "Se OLD=SEPARADO e NEW=CANCELADO, publica o alerta de reposição de estoque.",
+              "Se o processamento de um registro falha, o event source mapping isola o lote e tenta de novo.",
+              "Após as tentativas configuradas, o lote vai para a DLQ, sem travar as outras partições.",
+              "O gerente abre o painel e vê o histórico completo, com segundos de atraso.",
+              "Uma segunda transição do mesmo pedido, minutos depois, aparece como um SEGUNDO item — nada some."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que um job que consulta updated_at a cada minuto ainda perde mudança de status?",
+            "answer": "Porque uma consulta de snapshot só enxerga o valor guardado no instante em que pergunta, nunca o caminho que o item percorreu entre uma execução e a próxima. Se um pedido passa por PENDENTE, SEPARADO e CANCELADO dentro do mesmo intervalo de consulta, a Query devolve uma única linha com o status FINAL — a passagem por SEPARADO nunca é vista, porque o valor anterior já foi sobrescrito no banco antes de a consulta rodar. Reduzir o intervalo torna esse cenário mais raro, mas não o elimina: duas mudanças do mesmo item dentro de QUALQUER intervalo, por menor que seja, colapsam na mesma leitura."
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "DynamoDB Streams garante que os eventos chegam na ordem em que aconteceram?",
+            "answer": "Só dentro da mesma chave de partição, não entre partições diferentes. Cada partição da tabela escreve seus registros de mudança num shard interno dedicado a ela, e é esse desenho que garante que as mudanças de UM MESMO item aparecem na ordem correta. Se dois itens diferentes, em partições diferentes, mudam no mesmo instante, não há garantia sobre qual dos dois eventos o consumidor processa primeiro. Isso raramente importa, porque a maioria das regras de negócio avalia um item de cada vez — mas quebra silenciosamente se alguém tentar montar um contador ou uma ordem GLOBAL a partir do stream sem saber dessa limitação."
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Por quanto tempo o DynamoDB Streams guarda os registros de mudança?",
+            "answer": "24 horas, e esse valor não é ajustável para cima. Um consumidor que fica fora do ar além desse prazo — por um deploy quebrado não percebido, ou um incidente prolongado — não consegue \"recomeçar de onde parou\": os registros mais antigos que a janela já foram descartados pela própria infraestrutura, de forma irreversível. A única forma de fechar essa lacuna é uma reconciliação pontual, comparando o estado atual da tabela com o que o sistema secundário já sabia — e essa reconciliação tem o mesmo risco de perder transição intermediária que o polling original tinha, só que restrito ao período da lacuna."
+          }
+        },
+        {
+          "id": "b24_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Preciso da imagem antiga (OLD) se só quero saber o estado atual de um item?",
+            "answer": "Não — para saber só o estado atual, `NEW_IMAGE` sozinho basta e gera um registro menor. A imagem antiga se torna obrigatória no momento em que alguma regra depende da TRANSIÇÃO, não do estado: \"avisar quando um pedido é cancelado depois de já ter sido separado\" é uma pergunta sobre o ANTES e o DEPOIS juntos, e `NEW_IMAGE` sozinho simplesmente não contém essa informação. Descobrir essa necessidade depois de já ter ligado o stream sem a imagem antiga custa caro: é preciso religar com o tipo correto, e tudo que já passou antes da mudança está fora da janela de 24 horas de retenção."
+          }
+        },
+        {
+          "id": "b24_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "DynamoDB Streams garante exactly-once na entrega para o Lambda?",
+            "answer": "Não — a entrega é pelo menos uma vez (at-least-once), e a aplicação é responsável por tratar reprocessamento. O event source mapping pode reentregar o mesmo registro após uma falha parcial de lote, então um consumidor que grava sem uma chave determinística acaba duplicando dado a cada retentativa. A forma de simular \"exatamente uma vez\" na prática é tornar a escrita idempotente: usar o `SequenceNumber` do próprio registro do stream como parte da chave, de forma que reprocessar o mesmo evento sobrescreva o mesmo item em vez de criar um novo."
+          }
+        },
+        {
+          "id": "b24_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Qual a diferença entre DynamoDB Streams e Kinesis Data Streams for DynamoDB?",
+            "answer": "A diferença central é retenção e número de consumidores independentes. DynamoDB Streams retém 24 horas e é consumido bem por um número pequeno de consumidores via event source mapping, sem shard para administrar manualmente. Kinesis Data Streams for DynamoDB retém até um ano e permite vários consumidores lendo o mesmo fluxo de mudanças com checkpoints totalmente independentes — sem competir pelos mesmos registros. A troca é operacional: Kinesis cobra por shard-hora e exige atenção a rebalanceamento sob pico, o que DynamoDB Streams simplesmente não pede."
+          }
+        },
+        {
+          "id": "b24_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "O que acontece se meu consumidor ficar fora do ar por mais de 24 horas?",
+            "answer": "Os registros de mudança mais antigos que a janela de retenção já foram descartados pela infraestrutura, e não existem mais para serem lidos — não é uma questão de reconfigurar nada, é perda definitiva daquele trecho do stream. A saída é reconciliar por fora: uma varredura pontual na tabela de origem, comparando o estado atual com o que o sistema secundário já sabia antes da lacuna, exatamente como um job de polling faria. Essa reconciliação herda o mesmo risco de perder transição intermediária que o desenho de polling tem — só que limitado ao período da interrupção, não ao regime inteiro."
+          }
+        },
+        {
+          "id": "b24_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Preciso pagar por GetRecords quando uso DynamoDB Streams com Lambda?",
+            "answer": "Não — chamadas de `GetRecords` feitas por meio de um gatilho do Lambda para DynamoDB Streams não têm cobrança adicional; o que se paga é a execução do Lambda em si, pelo modelo padrão de duração e memória. A cobrança por leitura de stream existe para consumidores que NÃO são gatilho do Lambda — por exemplo, uma aplicação lendo os shards diretamente — e mesmo nesse caso os primeiros 2,5 milhões de solicitações de leitura por mês são gratuitos. Para o desenho deste laboratório, o custo novo relevante é só a invocação do consumidor, proporcional a mudanças reais."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b25_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Os pedidos P1 (loja A) e P2 (loja B) mudam de status no mesmo segundo. O que o DynamoDB Streams garante sobre a ordem relativa entre esses dois eventos?",
+            "options": [
+              "Nada: P1 e P2 estão em partições diferentes, e não há garantia de ordem entre eles",
+              "Os dois sempre chegam no mesmo lote de invocação do Lambda",
+              "P1 sempre aparece antes de P2, porque a tabela processa em ordem alfabética de chave",
+              "A ordem é garantida globalmente, pelo horário de criação de cada registro"
+            ],
+            "correctIndex": 0,
+            "explanation": "A garantia de ordem do DynamoDB Streams é por CHAVE DE PARTIÇÃO: cada partição escreve seus registros de mudança num shard dedicado a ela, e essa dedicação é o que ordena as mudanças de UM MESMO item. P1 e P2 pertencem a partições diferentes — não há shard compartilhado entre eles, e portanto não há relação de ordem definida entre seus eventos.\n\nA segunda alternativa inventa um critério — ordem alfabética de chave — que não existe em nenhuma documentação do serviço; é o tipo de suposição que parece razoável e nunca foi verificada. A terceira confunde ordem com agrupamento de entrega: dois eventos PODEM cair no mesmo lote por acaso, mas isso não é garantia nenhuma, e frequentemente não acontece. A quarta é a confusão mais comum e mais perigosa: tratar \"cada registro tem um timestamp\" como se isso implicasse \"existe uma ordem total confiável entre registros de partições diferentes\" — o serviço nunca promete isso, mesmo que o timestamp exista no payload."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "O consumidor grava uma transição no painel usando o `SequenceNumber` do registro do stream como parte da chave, em vez de um timestamp gerado pela aplicação no momento do processamento. Por quê?",
+            "options": [
+              "Porque o SequenceNumber é mais curto e economiza espaço de armazenamento",
+              "Porque um timestamp de aplicação não existe nesse tipo de evento",
+              "Porque a entrega é pelo menos uma vez, e uma chave determinística evita duplicar a transição quando o mesmo registro é reprocessado",
+              "Porque o SequenceNumber garante ordem entre partições diferentes, o que um timestamp não faria"
+            ],
+            "correctIndex": 2,
+            "explanation": "A entrega do event source mapping é pelo menos uma vez: uma falha parcial de lote pode fazer o mesmo registro do stream ser reprocessado. Um timestamp gerado no MOMENTO DO PROCESSAMENTO seria diferente a cada tentativa, e cada tentativa criaria um item novo no painel — duplicando a transição. O SequenceNumber vem PRONTO dentro do registro do stream, é sempre o mesmo em toda tentativa de processá-lo, e faz a escrita reescrever o MESMO item em vez de criar outro.\n\nA primeira alternativa erra o motivo: tamanho de chave não é a preocupação aqui, e um timestamp em geral nem é mais longo. A terceira é factualmente incorreta — o timestamp de processamento existiria perfeitamente bem, só que geraria um valor diferente a cada tentativa, que é justamente o problema. A quarta confunde duas garantias distintas: ordem entre partições nunca é garantida pelo serviço, com ou sem SequenceNumber — o que ele resolve é IDEMPOTÊNCIA (não duplicar), não ORDEM GLOBAL, que é uma questão diferente tratada no passo anterior deste laboratório."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b26_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L16 no ar (tabela pedidos_cadencia com GSIs), .NET 8, Docker, Git e Terraform básicos"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "por que polling por timestamp perde transição, não só atrasa; NEW_AND_OLD_IMAGES como requisito de regras que dependem do antes e do depois; ordem garantida por partição, não globalmente; retenção de 24 h como limite real; idempotência via SequenceNumber diante de entrega pelo menos uma vez"
+              ],
+              [
+                "Limitação que fica",
+                "sem reconciliação automática para downtime acima de 24 h; ordem entre pedidos diferentes nunca foi garantida e continua não sendo"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L63 — ingestão em streaming com Kinesis: shard, chave de partição e reprocesso a partir do início, para quando um único stream de 24 h deixa de ser suficiente"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "qualquer sistema secundário que hoje consulta pedidos_cadencia periodicamente pode migrar para o mesmo consumidor, ou um novo, lendo o mesmo stream"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b26_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Change data capture for DynamoDB Streams",
+                "code": true
+              },
+              {
+                "text": " — retenção de 24 horas, tipos de visualização e a garantia de ordem por partição; "
+              },
+              {
+                "text": "Process DynamoDB records with Lambda",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "Configuring partial batch response with DynamoDB and Lambda",
+                "code": true
+              },
+              {
+                "text": " — tamanho de lote, tentativas, destino de falha e o formato de resposta do `ReportBatchItemFailures`; e a página de preços do DynamoDB, quanto à isenção de cobrança quando o consumo é feito via gatilho do Lambda. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "Os números de latência citados — abaixo de 10 segundos na maioria das execuções — vêm de uma medição de exemplo em volume baixo, e servem como ordem de grandeza, não como referência. Sob pico real, `IteratorAge` pode subir por minutos até o Lambda escalar concorrência o suficiente; meça na SUA conta, sob a SUA carga de pico, antes de definir o limiar do alarme. Da mesma forma, os \"30 casos mensais\" de reposição perdida são uma hipótese narrativa deste laboratório, não um dado da AWS."
+          }
+        }
+      ]
+    }
+  ]
+}

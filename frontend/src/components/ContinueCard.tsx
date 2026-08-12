@@ -2,7 +2,15 @@
 
 import Link from 'next/link';
 import { useGameState } from '@/hooks/useGameState';
-import { CURRICULUM, HUBS, getHubBySlug, getHubTrails, type Module, type Trail } from '@/lib/curriculum';
+import { HUBS } from '@/lib/curriculum/hubs';
+// Índice leve — este componente só usa slug/title/icon/xp/readTime/color/name,
+// todos presentes em CURRICULO_LEVE. Renderiza na home (rota de maior
+// tráfego), então evita os ~92 KB gz de `desc`/`keywords` do currículo cheio.
+// `getHubBySlug`/`getHubTrailsLeve` vêm de `queries-leves.ts` (caminho
+// estreito) — nunca do barril `@/lib/curriculum`, que arrasta `queries.ts` e,
+// com ele, o currículo completo.
+import { CURRICULO_LEVE, type ModuloLeve, type TrilhaLeve } from '@/lib/curriculum/indice-leve';
+import { getHubBySlug, getHubTrailsLeve } from '@/lib/curriculum/queries-leves';
 
 type Suggestion = {
   kind: 'resume' | 'next-in-trail' | 'start-preferred' | 'start-fresh';
@@ -16,8 +24,8 @@ type Suggestion = {
   trailName: string;
 };
 
-function allPosts(): Array<{ mod: Module; trail: Trail }> {
-  return CURRICULUM.flatMap(t => t.modules.map(m => ({ mod: m, trail: t })));
+function allPosts(): Array<{ mod: ModuloLeve; trail: TrilhaLeve }> {
+  return CURRICULO_LEVE.flatMap(t => t.modules.map(m => ({ mod: m, trail: t })));
 }
 
 function buildSuggestion(
@@ -47,7 +55,7 @@ function buildSuggestion(
   // 2. Next unfinished in the last-seen trail
   if (state.lastArticle) {
     const la = state.lastArticle;
-    const trail = CURRICULUM.find(t => t.modules.some(m => m.slug === la.slug));
+    const trail = CURRICULO_LEVE.find(t => t.modules.some(m => m.slug === la.slug));
     if (trail) {
       const nextMod = trail.modules.find(m => !completed.includes(m.slug));
       if (nextMod) {
@@ -69,7 +77,7 @@ function buildSuggestion(
   if (state.preferredHub) {
     const hub = getHubBySlug(state.preferredHub);
     if (hub) {
-      const trails = getHubTrails(hub);
+      const trails = getHubTrailsLeve(hub);
       for (const trail of trails) {
         const firstUndone = trail.modules.find(m => !completed.includes(m.slug));
         if (firstUndone) {
@@ -183,16 +191,16 @@ export function ContinueCard() {
                   <span style={{ fontSize: 11, color: 'var(--ffv-muted)' }}>{s.trailName}</span>
                   {hubChip && s.kind === 'start-preferred' && (
                     <span
-                      className="font-mono"
+                      className="font-mono ffv-acento-texto"
                       style={{
                         fontSize: 9,
                         padding: '1px 6px',
                         borderRadius: 999,
-                        color: hubChip.color,
+                        '--ffv-acento': hubChip.color,
                         background: `color-mix(in srgb, ${hubChip.color} 12%, transparent)`,
                         border: `1px solid color-mix(in srgb, ${hubChip.color} 30%, transparent)`,
                         letterSpacing: '0.08em',
-                      }}
+                      } as React.CSSProperties}
                     >
                       SEU HUB
                     </span>

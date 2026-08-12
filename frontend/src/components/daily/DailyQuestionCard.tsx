@@ -3,27 +3,57 @@
 /**
  * DailyQuestionCard — MVP da "Pergunta do Dia".
  *
- * Sorteia 1 pergunta diária do pool unificado (módulos visitados + simulados free)
+ * Sorteia 1 pergunta diária do pool unificado (módulos visitados + simulados)
  * e renderiza um card interativo. Acerto soma 5 XP + atualiza SRS (good);
  * erro soma 1 XP + cria/marca card como again no SRS.
  *
  * Determinismo: a seed combina userId (ou 'anon') + today, então a mesma
  * pergunta aparece o dia inteiro mesmo com refresh.
+ *
+ * ## A amostra de simulado é buscada aqui, não lida do catálogo (ago/2026)
+ *
+ * Todo simulado com banco real guarda `questions: []` no catálogo — o banco
+ * vive no Postgres. Sem buscar uma amostra pela API, o pool de um usuário SEM
+ * nenhum `reviewCard` ainda (todo usuário novo) ficava vazio e o card inteiro
+ * desaparecia da tela sem erro nenhum. Ver a nota completa em
+ * `lib/random-question.ts`, em cima de `fetchSimuladoSample`.
+ *
+ * Cacheada em memória por dia — `fetchSimuladoSample` chama a API uma vez por
+ * sessão de dia, não a cada render, e falha aberta (pool sem amostra, não card
+ * quebrado) se o usuário não estiver logado ou a API estiver fora do ar.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useGameState } from '@/hooks/useGameState';
 import { useAuth } from '@/hooks/useAuth';
-import { buildPool, pickDailyQuestion } from '@/lib/random-question';
+import { buildPool, fetchSimuladoSample, pickDailyQuestion, type PoolQuestion } from '@/lib/random-question';
 import { todayISO } from '@/lib/srs';
 
 export function DailyQuestionCard() {
   const { state, answerDaily } = useGameState();
-  const { user } = useAuth();
+  const { user, isLoggedIn } = useAuth();
   const today = todayISO();
 
-  const pool = useMemo(() => buildPool(state?.reviewCards), [state?.reviewCards]);
+  const [simuladoSample, setSimuladoSample] = useState<PoolQuestion[]>([]);
+
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    let ativo = true;
+    fetchSimuladoSample().then(sample => {
+      if (ativo) setSimuladoSample(sample);
+    });
+    return () => {
+      ativo = false;
+    };
+    // Refaz a busca uma vez por dia (chave `today` na dependência) — o mesmo
+    // dia não deve reamostrar a cada remontagem do componente.
+  }, [isLoggedIn, today]);
+
+  const pool = useMemo(
+    () => buildPool(state?.reviewCards, simuladoSample),
+    [state?.reviewCards, simuladoSample],
+  );
   const question = useMemo(() => {
     if (!state) return null;
     return pickDailyQuestion(state, pool, today, user?.id || user?.email || 'anon');

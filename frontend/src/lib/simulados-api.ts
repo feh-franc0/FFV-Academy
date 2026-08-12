@@ -90,8 +90,10 @@ export async function listSimuladosApi(): Promise<Simulado[]> {
   if (!hasBackend()) {
     return [...SIMULADOS_CATALOG];
   }
-  const items = await apiGet<SimuladoDTO[]>('/api/v1/simulados', false);
-  return items.map(dtoToSimulado);
+  // Backend responde `{simulados, total}` (ver SimuladoHandler.ListSimulados),
+  // não um array solto.
+  const res = await apiGet<{ simulados: SimuladoDTO[]; total: number }>('/api/v1/simulados', false);
+  return res.simulados.map(dtoToSimulado);
 }
 
 /** Busca um simulado específico pelo id. */
@@ -112,20 +114,27 @@ export async function getSimuladoApi(simuladoId: string): Promise<Simulado | nul
 /**
  * Inicia ou retoma uma tentativa no servidor.
  * Retorna AttemptDTO com as questões (sem correctId).
+ *
+ * O backend responde `{attempt, simulado}` (ver SimuladoHandler.StartAttempt)
+ * — envelope, não o AttemptDTO solto. Este adaptador nunca tinha sido
+ * exercitado contra o servidor real antes do pack anti-fraude: o tipo
+ * declarado (`AttemptDTO` puro) desserializava o envelope inteiro como se
+ * fosse o attempt, e todo campo saía `undefined`.
  */
-export async function startOrResumeAttempt(simuladoId: string): Promise<AttemptDTO> {
+export async function startOrResumeAttempt(simuladoId: string): Promise<{ attempt: AttemptDTO; simulado: SimuladoDTO }> {
   if (!hasBackend()) {
     throw new Error('startOrResumeAttempt requer backend');
   }
   // POST cria nova ou retoma ativa (comportamento idempotente no servidor)
-  return apiPost<AttemptDTO>(`/api/v1/simulados/${simuladoId}/attempts`);
+  return apiPost<{ attempt: AttemptDTO; simulado: SimuladoDTO }>(`/api/v1/simulados/${simuladoId}/attempts`);
 }
 
 /** Busca tentativa ativa (sem criar nova). Retorna null se não existe. */
 export async function getActiveAttempt(simuladoId: string): Promise<AttemptDTO | null> {
   if (!hasBackend()) return null;
   try {
-    return await apiGet<AttemptDTO>(`/api/v1/simulados/${simuladoId}/attempts/active`);
+    const res = await apiGet<{ attempt: AttemptDTO; simulado: SimuladoDTO }>(`/api/v1/simulados/${simuladoId}/attempts/active`);
+    return res.attempt;
   } catch {
     return null;
   }
@@ -147,20 +156,37 @@ export async function toggleFlag(attemptId: string, questionId: string): Promise
   await apiPost(`/api/v1/attempts/${attemptId}/flags/${questionId}`);
 }
 
-/** Finaliza a tentativa e retorna score do servidor. */
-export async function finishAttempt(attemptId: string): Promise<ScoreDTO> {
+/** Finaliza a tentativa e retorna score + tópicos fracos do servidor. */
+export async function finishAttempt(attemptId: string): Promise<{ score: ScoreDTO; weakTopics: string[]; attempt: AttemptDTO }> {
   if (!hasBackend()) {
     throw new Error('finishAttempt requer backend');
   }
-  const res = await apiPost<{ score: ScoreDTO }>(`/api/v1/attempts/${attemptId}/finish`);
-  return res.score;
+  const res = await apiPost<{ attempt: AttemptDTO; weakTopics: string[] }>(`/api/v1/attempts/${attemptId}/finish`);
+  if (!res.attempt.score) {
+    throw new Error('finishAttempt: servidor não retornou score');
+  }
+  return { score: res.attempt.score, weakTopics: res.weakTopics, attempt: res.attempt };
+}
+
+/**
+ * Reivindica o crédito de XP de uma tentativa finalizada — idempotente no
+ * SERVIDOR (`xp_credited_at`), não em sessionStorage. Só a primeira chamada
+ * para um `attemptId` (de qualquer aba, dispositivo ou reload) recebe
+ * `claimed: true`; o caller só deve conceder XP localmente nesse caso.
+ */
+export async function claimXPCredit(attemptId: string): Promise<{ claimed: boolean }> {
+  if (!hasBackend()) return { claimed: false };
+  return apiPost<{ claimed: boolean }>(`/api/v1/attempts/${attemptId}/claim-xp`);
 }
 
 /** Lista todas as tentativas do usuário. */
 export async function listAttemptsApi(): Promise<SimuladoAttempt[]> {
   if (!hasBackend()) return [];
-  const items = await apiGet<AttemptDTO[]>('/api/v1/attempts');
-  return items.map(a => ({
+  // Backend responde `{attempts, total}` (ver SimuladoHandler.ListAttempts),
+  // não um array solto — mesmo padrão de envelope de startOrResumeAttempt.
+  const res = await apiGet<{ attempts: AttemptDTO[]; total: number }>('/api/v1/attempts');
+  return res.attempts.map(a => ({
+    id: a.id,
     simuladoId: a.simuladoId,
     startedAt: a.startedAt,
     finishedAt: a.finishedAt ?? undefined,

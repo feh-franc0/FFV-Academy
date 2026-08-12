@@ -1,0 +1,2279 @@
+{
+  "slug": "lab-sincrono-ou-assincrono-entre-servicos",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência, do "
+              },
+              {
+                "text": "L31",
+                "code": true
+              },
+              {
+                "text": ", continuou crescendo: 60 lojas, cerca de 500 pedidos por dia, com picos de campanha que chegam a 4.200 pedidos em três horas. Animada com o resultado de extrair Notificações pela fronteira transacional certa, a equipe extraiu mais dois serviços do mesmo monólito — Catálogo (preço e disponibilidade do item) e Pagamento (autorização de cobrança) — usando o mesmo teste."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O problema não está em ONDE cortaram. Está em COMO ligaram os cortes de volta: cada chamada de método do monólito virou uma chamada HTTP, na mesma ordem, esperando a resposta antes de seguir. Pedidos chama Catálogo; Catálogo, antes de responder, chama Pagamento; Pagamento, antes de responder, chama Notificações. Uma corrente de quatro elos síncronos, onde antes havia quatro chamadas de método no mesmo processo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O incidente que trouxe o time até aqui: durante uma campanha, o provedor de e-mail transacional (usado por Notificações) teve uma degradação de 40 segundos. Nenhum pedido devia depender disso — mas em 40 segundos, 100% das criações de pedido falharam. O time abriu um incidente de \"Pagamento fora do ar\" e gastou uma hora olhando métricas de Pagamento, que estava, o tempo todo, respondendo normalmente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado — depende do L31 (fronteira transacional) e pressupõe os serviços extraídos já no ar"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L31 concluído, EF Core básico, HttpClient/Polly em .NET 8"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 50 min · implementação 2 h 30 a 3 h"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo: SQS e EventBridge cobram por uso, sem servidor dedicado; DynamoDB de idempotência fica no nível gratuito no volume do laboratório"
+              },
+              {
+                "k": "Serviços",
+                "v": "ECS (Service Connect), SQS, EventBridge, DynamoDB, CloudWatch"
+              },
+              {
+                "k": "Volume atual",
+                "v": "60 lojas, ~500 pedidos/dia, pico de campanha de 4.200 em 3 h"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "a criação de pedido não pode depender da disponibilidade de um serviço cuja resposta ninguém espera"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "confirmação por e-mail pode chegar minutos depois — herdada do L31, é o que autoriza tirar Notificações do caminho síncrono"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "a mesma integração de criação de pedido implementada nas duas formas, com a disponibilidade composta calculada e medida em cada uma"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é sobre reduzir o número de serviços, nem sobre desfazer o L31. Os quatro serviços continuam existindo; o que muda é COMO eles conversam entre si. Também não é sobre circuit breaker — mitigar o efeito de um serviço fora do ar sem mudar a topologia é o L36, e ele pressupõe o desenho síncrono/assíncrono correto que este módulo produz."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com uma medição na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Calcular a disponibilidade composta de uma cadeia síncrona como produto, não média, e explicar por que a intuição de \"média\" está errada.",
+              "Decidir, por chamada e não por sistema, se uma integração deve ser síncrona ou assíncrona, a partir de quem precisa da resposta.",
+              "Configurar timeouts que crescem da ponta da cadeia para a raiz, e explicar o que quebra quando a ordem se inverte.",
+              "Medir, com um serviço do meio derrubado de propósito, quanto de indisponibilidade alheia um serviço saudável reporta como se fosse sua.",
+              "Redesenhar uma corrente de chamadas aninhadas em chamadas irmãs mais um evento assíncrono, e recalcular a disponibilidade resultante.",
+              "Implementar um consumidor assíncrono idempotente diante de reentrega do SQS.",
+              "Configurar uma fila de mensagens não entregues (DLQ) com política de redirecionamento.",
+              "Diagnosticar, pelo sintoma, se uma falha em produção vem de acoplamento temporal ou de indisponibilidade real do serviço apontado."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Disponibilidade composta",
+                "SAA-C03, SAP-C02",
+                "produto das disponibilidades de uma cadeia síncrona",
+                "por que quatro serviços a 99,9% não entregam 99,9% juntos"
+              ],
+              [
+                "Acoplamento temporal",
+                "DVA-C02, SAP-C02",
+                "o chamador fica bloqueado esperando o chamado",
+                "reconhecer o sintoma: serviço saudável falhando por dependência"
+              ],
+              [
+                "Desacoplamento com filas e eventos",
+                "SAA-C03, DVA-C02",
+                "EventBridge publica, SQS amortece, o consumidor lê no próprio ritmo",
+                "quando um passo do fluxo pode sair do caminho de resposta ao cliente"
+              ],
+              [
+                "Timeout em cadeia de chamadas",
+                "DVA-C02, SAP-C02",
+                "cada elo promete um teto maior que o do vizinho que chama",
+                "por que o timeout do topo tem de ser maior que o da base, não igual"
+              ],
+              [
+                "Fila de mensagens não entregues (DLQ)",
+                "DVA-C02, SOA-C02",
+                "redrive policy com maxReceiveCount",
+                "a diferença entre mensagem perdida e mensagem isolada para investigação"
+              ],
+              [
+                "Idempotência em consumidor assíncrono",
+                "DVA-C02",
+                "escrita condicional antes de processar",
+                "por que SQS padrão entrega pelo menos uma vez, nunca exatamente uma"
+              ],
+              [
+                "Amazon ECS Service Connect",
+                "SOA-C02, DVA-C02",
+                "descoberta de serviço com timeout configurável por hop",
+                "a diferença entre o timeout do Service Connect e o do cliente HTTP da aplicação"
+              ],
+              [
+                "Padrão fire-and-forget vs pergunta-resposta",
+                "SAA-C03",
+                "PutEvents não bloqueia por confirmação de processamento",
+                "que aceitar o evento é diferente de garantir que ele foi tratado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica dá quatro serviços a 99,9% de disponibilidade e pergunta a disponibilidade do sistema todo, esperando que o candidato responda 99,9% por \"todos têm a mesma\". A resposta certa multiplica: 0,999⁴ ≈ 99,60%. Errar aqui não é detalhe de casa decimal — é a diferença entre um SLA que se sustenta e um que não."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito não funcional que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Cliente sabe se o item existe e o preço, na resposta HTTP",
+                "obrigatório",
+                "Catálogo permanece síncrono, chamado direto por Pedidos"
+              ],
+              [
+                "Cliente sabe se a cobrança foi autorizada, na resposta HTTP",
+                "obrigatório",
+                "Pagamento permanece síncrono, chamado direto por Pedidos"
+              ],
+              [
+                "Confirmação por e-mail pode chegar minutos depois",
+                "herdado do L31",
+                "Notificações sai do caminho de resposta: publicação de evento, não chamada direta"
+              ],
+              [
+                "Nenhum pedido perdido, mesmo com Notificações fora do ar",
+                "zero perda",
+                "fila durável (SQS) com retenção de 14 dias entre o evento e o consumo"
+              ],
+              [
+                "Disponibilidade de criação de pedido",
+                "≥ 99,65%",
+                "descarta a corrente de 4 elos (99,60% prevista); exige achatar para 3 elos síncronos irmãos"
+              ],
+              [
+                "Latência de criação de pedido",
+                "p99 abaixo de 4 s",
+                "elimina o aninhamento: dois chamados em série sem um terceiro escondido dentro deles"
+              ],
+              [
+                "Nenhuma mensagem reentregue gera e-mail duplicado",
+                "obrigatório",
+                "escrita condicional de idempotência antes de qualquer envio"
+              ],
+              [
+                "Sem infraestrutura nova de peso (servidor dedicado)",
+                "restrição de orçamento",
+                "EventBridge e SQS são pay-per-use; nenhum broker autogerenciado"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: a corrente de quatro elos"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem hoje, resultado direto de trocar chamada de método por chamada HTTP sem repensar a ordem. Ele é implantável e funciona no caminho feliz — o defeito só aparece sob medição, e é exatamente essa medição que abre este laboratório."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A corrente de quatro elos: Pedidos → Catálogo → Pagamento → Notificações",
+            "caption": "Nenhuma configuração individual está errada — cada serviço, isolado, atinge 99,9%. O defeito é estrutural: encadear quatro chamadas síncronas multiplica as disponibilidades em vez de escolher a pior. Percorra os passos e repare que matar SÓ o Pagamento derruba a resposta de Pedidos e de Catálogo também — sem que nenhum dos dois tenha uma linha de código errada.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente do app",
+                    "note": "espera uma resposta HTTP só; não sabe que ela depende de três saltos internos"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB",
+                    "note": "só encaminha para Pedidos; a fragilidade da cadeia está inteira atrás dele"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada: a corrente síncrona",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "pedidos",
+                    "service": "fargate",
+                    "label": "Pedidos (ECS Fargate)",
+                    "note": "recebe a requisição e não responde ao cliente até o último elo da corrente voltar"
+                  },
+                  {
+                    "id": "catalogo",
+                    "service": "fargate",
+                    "label": "Catálogo (ECS Fargate)",
+                    "note": "confirma item e preço, mas só responde a Pedidos depois de Pagamento responder a ele"
+                  },
+                  {
+                    "id": "pagamento",
+                    "service": "fargate",
+                    "label": "Pagamento (ECS Fargate)",
+                    "note": "autoriza a cobrança, mas só responde a Catálogo depois de Notificações responder a ele"
+                  },
+                  {
+                    "id": "notificacoes",
+                    "service": "fargate",
+                    "label": "Notificações (ECS Fargate)",
+                    "note": "o L31 extraiu este serviço pela fronteira certa; ninguém revisou COMO ele é chamado"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "POST /pedidos, aguarda a resposta HTTP",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "pedidos",
+                "label": "encaminha para o alvo saudável",
+                "style": "solid"
+              },
+              {
+                "from": "pedidos",
+                "to": "catalogo",
+                "label": "GET /produtos/{id}, bloqueia até responder",
+                "style": "solid"
+              },
+              {
+                "from": "catalogo",
+                "to": "pagamento",
+                "label": "POST /autorizacoes, bloqueia até responder",
+                "style": "solid"
+              },
+              {
+                "from": "pagamento",
+                "to": "notificacoes",
+                "label": "POST /confirmacoes, bloqueia até responder",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A resposta ao cliente fica pendurada na corrente inteira",
+                "detail": "O cliente fez UMA chamada, mas a latência que ele sente é a soma dos quatro saltos, e o sucesso que ele recebe depende dos quatro terem funcionado. Nada nisso aparece no contrato que o app consome — só no tempo de resposta e na taxa de erro, que ninguém decompõe até investigar.",
+                "nodes": [
+                  "user",
+                  "alb",
+                  "pedidos"
+                ],
+                "edges": [
+                  "user>alb",
+                  "alb>pedidos"
+                ]
+              },
+              {
+                "label": "Pedidos não paraleliza: chama Catálogo e espera parado",
+                "detail": "A chamada é uma requisição HTTP comum, com um `HttpClient` esperando a resposta antes de seguir. Não há nada de errado NELA isoladamente — o problema é o que vem depois dela.",
+                "nodes": [
+                  "pedidos",
+                  "catalogo"
+                ],
+                "edges": [
+                  "pedidos>catalogo"
+                ]
+              },
+              {
+                "label": "Catálogo aciona Pagamento antes de responder a quem o chamou",
+                "detail": "Catálogo não devolve nada a Pedidos enquanto não tem a resposta de Pagamento. Isso é aninhamento: Pedidos depende de Catálogo, que depende de Pagamento — três elos em série, não em paralelo.",
+                "nodes": [
+                  "catalogo",
+                  "pagamento"
+                ],
+                "edges": [
+                  "catalogo>pagamento"
+                ]
+              },
+              {
+                "label": "Pagamento aciona Notificações antes de confirmar a si mesmo",
+                "detail": "O quarto elo. Notificações só precisa enviar um e-mail — mas como a chamada é síncrona, uma lentidão do provedor de e-mail atrasa a confirmação do PAGAMENTO, que é o passo que menos pode esperar de todos.",
+                "nodes": [
+                  "pagamento",
+                  "notificacoes"
+                ],
+                "edges": [
+                  "pagamento>notificacoes"
+                ]
+              },
+              {
+                "label": "A conta que ninguém faz: 0,999⁴, não a média de 0,999",
+                "detail": "Com os quatro serviços a 99,9% de disponibilidade cada, a probabilidade de os QUATRO responderem dentro do prazo, na mesma requisição, é o produto: 0,999 × 0,999 × 0,999 × 0,999 ≈ 99,60%. Não é uma média (que ficaria em 99,9%) — é uma multiplicação de probabilidades independentes, e cada elo a mais na corrente piora o resultado.",
+                "nodes": [
+                  "pedidos",
+                  "catalogo",
+                  "pagamento",
+                  "notificacoes"
+                ],
+                "edges": [
+                  "pedidos>catalogo",
+                  "catalogo>pagamento",
+                  "pagamento>notificacoes"
+                ]
+              },
+              {
+                "label": "Mate o serviço do meio, e os extremos relatam uma falha que não é deles",
+                "detail": "Derrube só o Pagamento. O health check de Catálogo continua verde — ele está de pé, funcionando, escutando requisição. Mesmo assim, toda chamada que chega nele falha, porque ele depende de um vizinho que não responde. Do lado de fora, Pedidos e Catálogo parecem culpados; a causa real está um elo à frente de onde o painel está olhando.",
+                "nodes": [
+                  "catalogo",
+                  "pagamento"
+                ],
+                "edges": [
+                  "catalogo>pagamento"
+                ]
+              },
+              {
+                "label": "Por que a equipe encadeou assim",
+                "detail": "Porque era exatamente essa a ordem das chamadas de método dentro do monólito antes do L31, e trocar `catalogo.Autorizar(pedido)` por um `HttpClient.PostAsync` preserva o comportamento observável em teste local. A extração de serviço (L31) resolveu ONDE cortar; ninguém parou para perguntar se a chamada deveria continuar bloqueante depois do corte.",
+                "nodes": [
+                  "pagamento",
+                  "notificacoes"
+                ],
+                "edges": [
+                  "pagamento>notificacoes"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Antes de mudar qualquer coisa, calcule a previsão e depois meça. Assumindo os quatro serviços a 99,9% de disponibilidade individual — meta comum de SLO interno, não um valor raro — a previsão para a cadeia inteira é:"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "text",
+            "filename": "previsao.txt",
+            "code": "0,999 × 0,999 × 0,999 × 0,999 ≈ 0,996006  →  99,6006%\n\nIndisponibilidade de um único serviço:  0,1000% do tempo\nIndisponibilidade da cadeia de quatro:  0,3994% do tempo\n                                         (quase 4× mais)\n\nEm minutos por mês (30 dias = 43.200 min):\n  um serviço só:    ~43 min de indisponibilidade\n  cadeia de quatro: ~173 min de indisponibilidade"
+          }
+        },
+        {
+          "id": "b4_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "A conta que a maioria erra ao ler \"99,9% de disponibilidade\" em quatro serviços",
+            "content": "A intuição comum é \"cada peça é boa, então o sistema é bom\" — e trata 99,9% como se fosse uma propriedade do SISTEMA, não de cada peça isolada. A disponibilidade de uma cadeia síncrona é o PRODUTO das disponibilidades dos elos que ela atravessa, porque a requisição só é bem-sucedida se TODOS os elos responderem dentro do prazo. Cada elo a mais multiplica por outro número menor que 1 — e o efeito piora rápido: com oito elos a 99,9%, a disponibilidade cai para cerca de 99,2%, oito vezes pior que um único serviço."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção: dois irmãos, um evento"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça deste desenho rastreia a uma linha da tabela de requisitos. Se você não conseguir apontar o requisito, a peça é adorno — e este desenho não tem nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Dois síncronos irmãos, um assíncrono por evento",
+            "caption": "A pergunta deixou de ser \"síncrono ou assíncrono\" para o sistema inteiro e passou a ser \"o chamador precisa da resposta?\" — feita uma vez por chamada. Catálogo e Pagamento continuam síncronos porque o cliente precisa saber o resultado; Notificações sai da cadeia porque nada no caminho de resposta depende dela. O aninhamento também sai: Pedidos chama os dois primeiros como irmãos, não como corrente.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente do app",
+                    "note": "recebe a resposta assim que Catálogo e Pagamento respondem — não espera Notificações"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB",
+                    "note": "inalterado; a mudança inteira está no que acontece depois dele"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada: caminho síncrono achatado",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "pedidos",
+                    "service": "fargate",
+                    "label": "Pedidos (ECS Fargate)",
+                    "note": "orquestra dois chamados irmãos e publica um evento; não há mais um terceiro salto síncrono aninhado"
+                  },
+                  {
+                    "id": "catalogo",
+                    "service": "fargate",
+                    "label": "Catálogo (ECS Fargate)",
+                    "note": "responde direto a Pedidos; não conhece mais o Pagamento"
+                  },
+                  {
+                    "id": "pagamento",
+                    "service": "fargate",
+                    "label": "Pagamento (ECS Fargate)",
+                    "note": "responde direto a Pedidos; não conhece mais o Notificações"
+                  }
+                ]
+              },
+              {
+                "label": "Mensageria — regional, fora da VPC",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "eventbridge",
+                    "service": "eventbridge",
+                    "label": "EventBridge, barramento próprio",
+                    "note": "recebe o evento e não bloqueia quem publicou; roteia por regra, sem acoplar produtor a consumidor"
+                  },
+                  {
+                    "id": "sqs",
+                    "service": "sqs",
+                    "label": "Fila de notificação de pedido",
+                    "note": "amortece o ritmo entre quem publica e quem consome; Notificações lê no PRÓPRIO ritmo"
+                  },
+                  {
+                    "id": "dlq",
+                    "service": "sqs",
+                    "label": "DLQ de notificação",
+                    "note": "recebe a mensagem que falhou N vezes, para não travar a fila principal em laço"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada: consumidor assíncrono",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "notificacoes",
+                    "service": "fargate",
+                    "label": "Notificações (ECS Fargate)",
+                    "note": "pode cair por minutos sem afetar a criação de pedido; a fila seguia acumulando"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cloudwatch",
+                    "service": "cloudwatch",
+                    "label": "Alarmes de fila",
+                    "note": "mede idade da mensagem mais antiga e profundidade da DLQ — os dois sintomas que a corrente antiga escondia"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "HTTPS 443, aguarda só a parte síncrona",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "pedidos",
+                "label": "encaminha para o alvo saudável",
+                "style": "solid"
+              },
+              {
+                "from": "pedidos",
+                "to": "catalogo",
+                "label": "GET /produtos/{id}, chamada irmã 1",
+                "style": "solid"
+              },
+              {
+                "from": "pedidos",
+                "to": "pagamento",
+                "label": "POST /autorizacoes, chamada irmã 2",
+                "style": "solid"
+              },
+              {
+                "from": "pedidos",
+                "to": "eventbridge",
+                "label": "PutEvents PedidoCriado, dispara e segue",
+                "style": "dashed"
+              },
+              {
+                "from": "eventbridge",
+                "to": "sqs",
+                "label": "regra de roteamento entrega na fila",
+                "style": "dashed"
+              },
+              {
+                "from": "sqs",
+                "to": "notificacoes",
+                "label": "poll assíncrono, no próprio ritmo",
+                "style": "dashed"
+              },
+              {
+                "from": "sqs",
+                "to": "dlq",
+                "label": "redrive após esgotar as tentativas",
+                "style": "dashed"
+              },
+              {
+                "from": "dlq",
+                "to": "cloudwatch",
+                "label": "profundidade > 0 dispara alarme",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O caminho síncrono tem dois saltos, não três aninhados",
+                "detail": "Pedidos chama Catálogo e Pagamento — os dois voltam a ser irmãos, respondendo direto a quem os chamou, e nenhum dos dois conhece o outro. A profundidade da árvore de chamada caiu de três para um.",
+                "nodes": [
+                  "pedidos",
+                  "catalogo",
+                  "pagamento"
+                ],
+                "edges": [
+                  "pedidos>catalogo",
+                  "pedidos>pagamento"
+                ]
+              },
+              {
+                "label": "Os dois que ficaram síncronos ficaram porque o cliente precisa da resposta",
+                "detail": "Catálogo confirma que o item existe e qual é o preço — sem isso não há pedido para criar. Pagamento confirma que a cobrança passou — sem isso o cliente não sabe se deve considerar a compra feita. As duas respostas moldam o que o app mostra na tela seguinte; por isso continuam bloqueantes.",
+                "nodes": [
+                  "pedidos",
+                  "pagamento"
+                ],
+                "edges": [
+                  "pedidos>pagamento"
+                ]
+              },
+              {
+                "label": "A confirmação ao cliente não espera a notificação",
+                "detail": "Pedidos publica um evento e NÃO aguarda confirmação de entrega — é fire-and-forget do ponto de vista do fluxo de resposta. O `PutEvents` em si é síncrono (Pedidos espera a AWS confirmar que aceitou o evento), mas isso leva milissegundos e não depende de nenhum sistema de e-mail.",
+                "nodes": [
+                  "pedidos",
+                  "eventbridge"
+                ],
+                "edges": [
+                  "pedidos>eventbridge"
+                ]
+              },
+              {
+                "label": "EventBridge desacopla quem publica de quem consome",
+                "detail": "Pedidos não sabe, e não precisa saber, que existe uma fila ou um serviço de notificação do outro lado. A regra de roteamento é o único lugar que conhece os dois lados — trocar o consumidor não exige tocar em Pedidos.",
+                "nodes": [
+                  "eventbridge",
+                  "sqs"
+                ],
+                "edges": [
+                  "eventbridge>sqs"
+                ]
+              },
+              {
+                "label": "Notificações consome no próprio ritmo, e pode cair sem derrubar o pedido",
+                "detail": "Se Notificações ficar fora do ar, a fila retém a mensagem — ela não se perde, só espera. A criação de pedido, que já respondeu ao cliente antes deste ponto, não é afetada. É a diferença estrutural entre este desenho e o anterior.",
+                "nodes": [
+                  "sqs",
+                  "notificacoes"
+                ],
+                "edges": [
+                  "sqs>notificacoes"
+                ]
+              },
+              {
+                "label": "Mensagem que falha repetidamente não trava a fila",
+                "detail": "Depois de esgotar o número configurado de tentativas, a política de redrive move a mensagem para a DLQ em vez de deixá-la ser reentregue para sempre — o que travaria o processamento das mensagens boas atrás dela.",
+                "nodes": [
+                  "sqs",
+                  "dlq"
+                ],
+                "edges": [
+                  "sqs>dlq"
+                ]
+              },
+              {
+                "label": "A disponibilidade recalculada: três fatores, não quatro",
+                "detail": "A criação de pedido agora depende de Pedidos, Catálogo e Pagamento — três serviços, não quatro: 0,999³ ≈ 99,70%, contra 99,60% da corrente original. A disponibilidade de Notificações deixou de aparecer nessa conta inteiramente; ela virou uma métrica própria (idade da fila), não um fator do pedido.",
+                "nodes": [
+                  "pedidos",
+                  "catalogo",
+                  "pagamento"
+                ],
+                "edges": [
+                  "pedidos>catalogo",
+                  "pedidos>pagamento"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação ao desenho anterior não é \"trocar uma chamada por fila\". São duas mudanças independentes, e é importante separá-las: (1) tirar Notificações do caminho síncrono, porque nada depende da resposta dela; e (2) achatar o aninhamento entre Catálogo e Pagamento, que continuam síncronos mas deixam de depender um do outro. A segunda mudança sozinha já reduz a corrente de 4 para 3 elos — e a primeira reduz de 3 para 2 o que o cliente efetivamente espera."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "text",
+            "filename": "recalculo.txt",
+            "code": "Caminho síncrono (Pedidos, Catálogo, Pagamento):\n  0,999 × 0,999 × 0,999 ≈ 0,997003  →  99,7003%\n  indisponibilidade: 0,2997% do tempo (~129 min/mês)\n\nContra a corrente original de 4 elos (99,6006%, ~173 min/mês):\n  ganho de ~44 minutos de disponibilidade por mês\n  SEM adicionar redundância nova — só removendo um fator da multiplicação\n\nNotificações: fora da conta de disponibilidade do pedido. Sua própria\ndisponibilidade agora é medida como atraso de fila, não como causa de erro 5xx."
+          }
+        },
+        {
+          "id": "b5_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "success",
+            "title": "O ganho real não é só disponibilidade — é remover uma classe de incidente",
+            "content": "O incidente que abriu este módulo (e-mail lento derrubando pedido) deixa de ser POSSÍVEL neste desenho, não só menos provável. Notificações pode ficar fora do ar por minutos, ter uma dependência externa degradada, ou processar com atraso, e nenhum desses cenários aparece como erro para o cliente que está criando um pedido."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Como funciona ponta a ponta, e onde cada relógio corre"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os números de timeout não são arbitrários — eles seguem uma regra única: o timeout de quem CHAMA tem de ser maior que o timeout que o CHAMADO promete. Se A espera até 30 s por B, e B espera até 30 s por C, o timeout de A tem de ser MAIOR que o de B — senão A desiste no instante em que B ainda poderia estar recebendo a resposta de C, e C continua trabalhando para um chamador que já foi embora."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Por que o timeout tem de crescer da ponta da corrente para a raiz",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "Notificações (o elo mais interno) — 3 s",
+                "desc": "É quem chama o provedor de e-mail. Se a chamada não voltar em 3 s, desiste e devolve erro imediatamente — não faz sentido este ser o maior timeout da corrente, porque ele não espera mais ninguém."
+              },
+              {
+                "label": "Pagamento espera Notificações — até 5 s",
+                "desc": "Tem de ser MAIOR que os 3 s de Notificações. Se fosse igual ou menor, Pagamento desistiria antes de Notificações ter chance de terminar, e Notificações continuaria processando um pedido para um chamador que já foi embora."
+              },
+              {
+                "label": "Pagamento responde a Catálogo — até 8 s",
+                "desc": "É o teto que Pagamento promete a quem o chama, e inclui o próprio processamento mais os 5 s que pode gastar esperando Notificações. Prometer menos que isso seria mentir sobre quanto tempo a operação pode legitimamente levar."
+              },
+              {
+                "label": "Catálogo espera Pagamento — até 10 s",
+                "desc": "Maior que os 8 s que Pagamento promete. A margem (2 s) cobre variação de rede entre os dois saltos — sem ela, o timeout mais externo poderia expirar no exato instante em que o interno estava prestes a responder."
+              },
+              {
+                "label": "Catálogo responde a Pedidos — até 13 s",
+                "desc": "O teto que Catálogo promete a Pedidos, cobrindo seu próprio trabalho mais os 10 s que pode gastar esperando Pagamento."
+              },
+              {
+                "label": "Pedidos espera Catálogo — até 16 s",
+                "desc": "Maior que os 13 s prometidos. Se este valor fosse 12 s, Pedidos desistiria de Catálogo um segundo antes do prazo que o próprio Catálogo diz que pode usar — a corrente quebra pela ponta que menos se espera: a de cima."
+              },
+              {
+                "label": "O cliente espera Pedidos — até 20 s (e é aqui que a regra vira decisão de produto)",
+                "desc": "Vinte segundos de espera por uma resposta HTTP já é ruim para qualquer app. É este número, olhado de cima para baixo, que revela que a corrente aninhada tem um teto de espera inaceitável — e é o argumento mais forte para achatar o desenho, não só para acertar os valores."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que acontece quando a ordem se inverte",
+            "content": "Se o timeout de Pedidos ao chamar Catálogo fosse MENOR que o que Catálogo promete (por exemplo, 10 s contra os 13 s prometidos), Pedidos devolveria erro ao cliente enquanto Catálogo ainda está processando — e, pior, ainda esperando a resposta de Pagamento. O trabalho de Pagamento não é cancelado: ele termina, cobra o cliente ou não, e a resposta cai no vazio. É assim que timeout mal ordenado produz cobrança sem pedido confirmado, não só lentidão."
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "annotated_formula",
+          "position": 3,
+          "data": {
+            "title": "Disponibilidade composta: produto, não média",
+            "formula": "disponibilidade_da_cadeia = disponibilidade_1 × disponibilidade_2 × … × disponibilidade_n",
+            "parts": [
+              {
+                "symbol": "disponibilidade_i",
+                "name": "A disponibilidade de CADA serviço na cadeia",
+                "description": "Aqui, 99,9% para cada um dos quatro — um número bom isoladamente, do tipo que qualquer time assinaria como meta de SLO interno."
+              },
+              {
+                "symbol": "n",
+                "name": "O número de elos que uma chamada síncrona atravessa",
+                "description": "Cada elo a mais multiplica por outro fator menor que 1. Não existe elo \"de graça\": mesmo um serviço perfeito hipotético (100%) não piora a conta, mas todo serviço real piora — inclusive um observability sidecar síncrono, se ele estiver no caminho crítico.",
+                "highlight": true
+              },
+              {
+                "symbol": "produto, não média",
+                "name": "O erro de raciocínio mais comum desta conta",
+                "description": "A intuição de \"quatro serviços a 99,9%, então o sistema está em 99,9%\" usa a disponibilidade de UM elo como se representasse o TODO. A conta certa multiplica: 0,999⁴ ≈ 0,9960 — quase quatro vezes mais indisponibilidade que um único serviço."
+              },
+              {
+                "symbol": "retirar um elo do caminho síncrono",
+                "name": "A alavanca que este módulo usa",
+                "description": "Tirar Notificações da cadeia não é otimização de latência — é remover um FATOR da multiplicação. A disponibilidade da criação de pedido passa a depender de três elos, não quatro: 0,999³ ≈ 0,9970."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_4",
+          "type": "paragraph",
+          "position": 4,
+          "data": {
+            "content": [
+              {
+                "text": "O evento que Pedidos publica no caminho assíncrono é o contrato entre quem cria o pedido e quem consome a notificação. Ele carrega o suficiente para o consumidor agir sem precisar perguntar de volta a nenhum dos outros serviços:"
+              }
+            ]
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Publicado por Pedidos no EventBridge; roteado por regra para a fila de notificacao. O consumidor NAO volta a chamar Catalogo ou Pagamento para completar a informacao — o evento e autossuficiente."
+              }
+            ]
+          },
+          "position": 5
+        },
+        {
+          "id": "b6_5",
+          "type": "code_block",
+          "position": 6,
+          "data": {
+            "language": "json",
+            "filename": "evento-pedido-criado.json",
+            "code": "{\n  \"source\": \"cadencia.pedidos\",\n  \"detail-type\": \"PedidoCriado\",\n  \"detail\": {\n    \"pedidoId\": \"b3f1c2a4-9e21-4a3d-8f2a-1234567890ab\",\n    \"clienteId\": \"c-9\",\n    \"email\": \"cliente@exemplo.com\",\n    \"preco\": 129.90,\n    \"autorizacaoId\": \"auth-77213\"\n  }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "A Cadência tem 60 lojas, cerca de 500 pedidos por dia, e um pico de campanha que chega a 4.200 pedidos em 3 horas. O time quer decompor os quatro serviços da corrente sem contratar ninguém e sem adicionar infraestrutura cara.",
+            "winner": "Uma pergunta por chamada — \"o chamador precisa da resposta para continuar?\" — em vez de uma escolha única para o sistema inteiro",
+            "why": "Catálogo e Pagamento respondem \"sim\": o app não tem o que mostrar ao cliente sem saber se o item existe e se a cobrança passou. Notificações responde \"não\": nada no caminho de resposta ao cliente depende do e-mail ter sido enviado. Tratar as três chamadas do mesmo jeito — todas síncronas, como estava, ou todas assíncronas, que é o exagero oposto — ignora que elas têm uma resposta diferente para a mesma pergunta. A pergunta feita por chamada é o que faz o desenho ser correto em vez de dogmático.",
+            "alternatives": [
+              {
+                "name": "Tudo síncrono (o desenho atual)",
+                "downside": "É este módulo inteiro: disponibilidade composta ruim, timeout aninhado frágil, e um serviço saudável relatando falha alheia. Continua sendo a escolha certa quando a cadeia tem só um ou dois elos — o problema cresce com o número de saltos, não existe em cadeia de um."
+              },
+              {
+                "name": "Tudo assíncrono, inclusive Pagamento",
+                "downside": "Resolveria a disponibilidade composta às custas de quebrar o requisito real: o cliente teria que sair da tela sem saber se a cobrança foi aceita, e descobrir depois — por notificação push ou reconsulta. É a arquitetura certa para pagamento assíncrono por design (boleto, Pix com confirmação tardia), não para cartão com autorização em tempo real."
+              },
+              {
+                "name": "Orquestração com Step Functions",
+                "downside": "Centraliza a lógica de \"quem chama quem\" fora do código de Pedidos, com retry e tratamento de erro configuráveis por estado — genuinamente melhor para fluxos com mais de três ou quatro passos e ramificação condicional. Para dois chamados irmãos e um evento, é mais infraestrutura do que a corrente atual justifica."
+              },
+              {
+                "name": "Manter a corrente e só adicionar circuit breaker",
+                "downside": "Reduz o dano de um serviço fora do ar (para de bater na porta de quem já está caído), mas não muda a disponibilidade composta do caminho feliz nem remove o aninhamento de timeout. É mitigação, não redesenho — e é exatamente o assunto do L36, que meça este módulo como pré-requisito."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Catálogo: síncrono ou assíncrono",
+                "síncrono, chamado direto por Pedidos",
+                "assíncrono com resposta via WebSocket/polling",
+                "o cliente precisa do preço confirmado antes de a tela seguinte existir",
+                "nenhum — é o caso claro de \"o chamador precisa da resposta\""
+              ],
+              [
+                "Pagamento: síncrono ou assíncrono",
+                "síncrono, chamado direto por Pedidos",
+                "assíncrono com confirmação por notificação push",
+                "requisito de negócio: cliente sai da tela sabendo se foi cobrado",
+                "nenhum aqui; seria diferente com boleto ou Pix com confirmação tardia"
+              ],
+              [
+                "Notificações: síncrono ou assíncrono",
+                "assíncrono, por evento e fila",
+                "síncrono (o desenho original)",
+                "nada no caminho de resposta depende do envio do e-mail",
+                "o cliente não sabe, em tempo real, se o e-mail já foi enviado — e não precisa saber"
+              ],
+              [
+                "Aninhamento entre Catálogo e Pagamento",
+                "removido: Pedidos chama os dois",
+                "manter Catálogo chamando Pagamento internamente",
+                "reduz a corrente síncrona de 3 para 2 elos efetivos e remove um nível de timeout aninhado",
+                "Pedidos passa a orquestrar duas chamadas em vez de uma; mais lógica no chamador raiz"
+              ],
+              [
+                "Mecanismo de desacoplamento",
+                "EventBridge → SQS",
+                "SNS → SQS; SQS direto sem EventBridge; Step Functions",
+                "EventBridge já roteia por padrão de evento sem acoplar Pedidos ao nome da fila",
+                "uma peça a mais na cadeia de depuração quando um evento não chega ao consumidor"
+              ],
+              [
+                "Idempotência do consumidor",
+                "escrita condicional no DynamoDB antes de processar",
+                "fila FIFO com deduplicação nativa; verificação no banco de pedidos",
+                "funciona com fila padrão (mais barata) e não acopla o consumidor ao schema de Pedidos",
+                "uma tabela e uma chamada extra por mensagem"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este desenho cria, e que este módulo não paga",
+            "content": "Se Pedidos cair depois de autorizar o pagamento mas antes de publicar o evento, o cliente foi cobrado e nenhuma notificação jamais existirá — o evento nunca foi para a fila. Isto é uma falha de consistência entre dois sistemas que não compartilham transação, e a correção correta é um padrão de outbox transacional, que fica fora do escopo deste laboratório. Por ora, um job de reconciliação que compara autorizações sem evento correspondente é a mitigação mínima."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: o caminho síncrono, com timeout que cresce para fora"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O delta em relação ao L03 e ao L31 é pequeno em linhas e grande em consequência: cada serviço declara, no Service Connect, o teto que promete a quem o chama — e o cliente HTTP interno de Pedidos usa exatamente esses tetos, sempre com uma margem maior, nunca igual."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "service-connect.tf",
+            "code": "# service-connect.tf — o timeout de cada salto, explícito, e crescendo para fora\n#\n# Amazon ECS Service Connect usa Cloud Map por baixo, mas o que importa aqui e o\n# TIMEOUT: cada servico declara o teto que promete a quem o chama. Sem isto\n# configurado, o padrao do Service Connect e generoso demais para esta cadeia\n# (idleTimeout de 5 min em HTTP) — ele nao quebra nada sozinho, mas tambem nao\n# implementa a regra dos timeouts decrescentes: e voce quem tem de configura-la.\n\nresource \"aws_service_discovery_http_namespace\" \"cadencia\" {\n  name = \"cadencia.local\"\n}\n\nresource \"aws_ecs_service\" \"notificacoes\" {\n  name            = \"cadencia-notificacoes\"\n  cluster         = aws_ecs_cluster.principal.id\n  task_definition = aws_ecs_task_definition.notificacoes.arn\n  desired_count   = 2\n  launch_type     = \"FARGATE\"\n\n  service_connect_configuration {\n    enabled   = true\n    namespace = aws_service_discovery_http_namespace.cadencia.arn\n\n    service {\n      port_name      = \"http\"\n      discovery_name  = \"notificacoes\"\n      client_alias {\n        port     = 8080\n        dns_name = \"notificacoes\"\n      }\n      # O elo mais interno da corrente original: 3 s e desiste. Nao ha ninguem\n      # depois dele para esperar, entao este e o UNICO valor que nao precisa\n      # ser maior que o de um vizinho.\n      timeout {\n        per_request_timeout_seconds = 3\n      }\n    }\n  }\n\n  network_configuration {\n    subnets         = aws_subnet.privada[*].id\n    security_groups = [aws_security_group.task.id]\n  }\n}\n\nresource \"aws_ecs_service\" \"pagamento\" {\n  name            = \"cadencia-pagamento\"\n  cluster         = aws_ecs_cluster.principal.id\n  task_definition = aws_ecs_task_definition.pagamento.arn\n  desired_count   = 2\n  launch_type     = \"FARGATE\"\n\n  service_connect_configuration {\n    enabled   = true\n    namespace = aws_service_discovery_http_namespace.cadencia.arn\n\n    service {\n      port_name     = \"http\"\n      discovery_name = \"pagamento\"\n      client_alias {\n        port     = 8080\n        dns_name = \"pagamento\"\n      }\n      # Promete 8 s a quem o chama: cobre o proprio processamento mais os ate\n      # 5 s que o cliente HTTP interno espera de Notificacoes (configurado no\n      # C#, nao aqui — Service Connect nao sabe quem o SEU servico chama).\n      timeout {\n        per_request_timeout_seconds = 8\n      }\n    }\n  }\n\n  network_configuration {\n    subnets         = aws_subnet.privada[*].id\n    security_groups = [aws_security_group.task.id]\n  }\n}\n\nresource \"aws_ecs_service\" \"catalogo\" {\n  name            = \"cadencia-catalogo\"\n  cluster         = aws_ecs_cluster.principal.id\n  task_definition = aws_ecs_task_definition.catalogo.arn\n  desired_count   = 2\n  launch_type     = \"FARGATE\"\n\n  service_connect_configuration {\n    enabled   = true\n    namespace = aws_service_discovery_http_namespace.cadencia.arn\n\n    service {\n      port_name     = \"http\"\n      discovery_name = \"catalogo\"\n      client_alias {\n        port     = 8080\n        dns_name = \"catalogo\"\n      }\n      # 13 s: cobre o proprio trabalho mais os ate 10 s que o cliente HTTP\n      # interno espera de Pagamento.\n      timeout {\n        per_request_timeout_seconds = 13\n      }\n    }\n  }\n\n  network_configuration {\n    subnets         = aws_subnet.privada[*].id\n    security_groups = [aws_security_group.task.id]\n  }\n}\n\n# Pedidos NAO precisa de service_connect_configuration para SER chamado — ele so\n# CHAMA os outros tres. O timeout que ele pratica ao chamar Catalogo (16 s) e\n# Pagamento (8 s, mesmo valor que Pagamento promete) vive no HttpClient do C#,\n# porque e ali que a decisao de \"quanto esperar\" realmente atua.\nresource \"aws_ecs_service\" \"pedidos\" {\n  name            = \"cadencia-pedidos\"\n  cluster         = aws_ecs_cluster.principal.id\n  task_definition = aws_ecs_task_definition.pedidos.arn\n  desired_count   = 2\n  launch_type     = \"FARGATE\"\n\n  service_connect_configuration {\n    enabled   = true\n    namespace = aws_service_discovery_http_namespace.cadencia.arn\n  }\n\n  load_balancer {\n    target_group_arn = aws_lb_target_group.pedidos.arn\n    container_name    = \"pedidos\"\n    container_port    = 8080\n  }\n\n  network_configuration {\n    subnets         = aws_subnet.privada[*].id\n    security_groups = [aws_security_group.task.id]\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Service Connect não substitui o timeout do cliente HTTP — ele é outra camada",
+            "content": "O `per_request_timeout_seconds` do Service Connect é o teto que o PROXY do sidecar aplica; o `HttpClient.Timeout` do C# é o teto que a SUA aplicação aplica. Eles deveriam ser coerentes, mas não são a mesma configuração — setar um sem o outro deixa metade da promessa sem efeito, porque o proxy corta a chamada num tempo e o código da aplicação continua esperando até o dele."
+          }
+        },
+        {
+          "id": "b8_3",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "Do lado da aplicação, é aqui que a regra dos timeouts decrescentes vira código: cada `HttpClient` recebe o timeout do VIZINHO que ele chama, com margem, não um valor único copiado em todo lugar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_4",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "csharp",
+            "filename": "PedidosService.cs",
+            "code": "// PedidosService.cs — dois chamados irmãos, não uma corrente; e o timeout\n// prometido por cada vizinho vira o timeout que este serviço PRATICA.\n\npublic sealed class PedidosService\n{\n    private readonly HttpClient _catalogo;\n    private readonly HttpClient _pagamento;\n    private readonly AmazonEventBridgeClient _eventos;\n    private readonly ILogger<PedidosService> _log;\n\n    public PedidosService(\n        IHttpClientFactory factory, AmazonEventBridgeClient eventos, ILogger<PedidosService> log)\n    {\n        // Cada HttpClient tem o timeout do VIZINHO que ele chama, nao um valor\n        // generico repetido tres vezes. E a regra dos timeouts decrescentes\n        // escrita em codigo: se Catalogo promete 13 s, este client espera 16 s\n        // — sempre MAIOR, nunca igual, para nao desistir no instante em que a\n        // resposta esta a caminho.\n        _catalogo = factory.CreateClient(\"catalogo\");\n        _catalogo.Timeout = TimeSpan.FromSeconds(16);\n        _catalogo.BaseAddress = new Uri(\"http://catalogo:8080\");\n\n        _pagamento = factory.CreateClient(\"pagamento\");\n        _pagamento.Timeout = TimeSpan.FromSeconds(9); // Pagamento promete 8 s; 9 s de margem\n        _pagamento.BaseAddress = new Uri(\"http://pagamento:8080\");\n\n        _eventos = eventos;\n        _log = log;\n    }\n\n    public async Task<ResultadoPedido> CriarAsync(NovoPedido novo, CancellationToken ct)\n    {\n        // 1) Catalogo primeiro: sem item valido e preco confirmado nao ha o que\n        //    cobrar. Isto e sequencial por NECESSIDADE de dado (o preco entra na\n        //    chamada de Pagamento), nao por aninhamento de servico — a diferenca\n        //    e que Catalogo nunca soube que Pagamento existe.\n        var item = await _catalogo.GetFromJsonAsync<ItemCatalogo>(\n            $\"/produtos/{novo.ProdutoId}\", ct)\n            ?? throw new ItemIndisponivelException(novo.ProdutoId);\n\n        // 2) Pagamento em seguida, com o preco que Catalogo confirmou.\n        var autorizacao = await _pagamento.PostAsJsonAsync(\n            \"/autorizacoes\", new { novo.ClienteId, item.Preco }, ct);\n        autorizacao.EnsureSuccessStatusCode();\n        var resultado = await autorizacao.Content.ReadFromJsonAsync<Autorizacao>(ct)\n            ?? throw new AutorizacaoInvalidaException();\n\n        var pedidoId = Guid.NewGuid();\n\n        // 3) So AGORA, com os dois \"sim\" que o cliente precisa, o pedido existe.\n        //    O evento e disparado e NAO bloqueia a resposta: PutEventsAsync\n        //    confirma em milissegundos que a AWS aceitou o evento, nao que\n        //    alguem o processou.\n        await _eventos.PutEventsAsync(new PutEventsRequest\n        {\n            Entries =\n            {\n                new PutEventsRequestEntry\n                {\n                    Source       = \"cadencia.pedidos\",\n                    DetailType   = \"PedidoCriado\",\n                    EventBusName = \"cadencia-eventos\",\n                    Detail = JsonSerializer.Serialize(new\n                    {\n                        pedidoId,\n                        novo.ClienteId,\n                        Email = novo.Email,\n                        item.Preco,\n                        AutorizacaoId = resultado.Id,\n                    }),\n                },\n            },\n        }, ct);\n\n        return new ResultadoPedido(pedidoId, item.Preco, resultado.Id);\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b8_5",
+          "type": "callout",
+          "position": 5,
+          "data": {
+            "variant": "warning",
+            "title": "Por que não usar Polly com retry aqui, e não sem propósito",
+            "content": "Retry automático sobre uma chamada sem margem de tempo sobra é o que transforma uma lentidão pontual em sobrecarga — cada tentativa nova soma latência e ainda multiplica a carga no serviço já sob pressão. Este módulo usa timeout fixo e propaga o erro; retry com backoff e jitter, e a decisão de QUANDO ele ajuda em vez de piorar, é o L36."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o caminho assíncrono, do evento ao consumidor idempotente"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O barramento, a fila, a DLQ e a tabela de idempotência — nenhum destes é infraestrutura pesada: os quatro cobram por uso, e o volume da Cadência (500 pedidos/dia, picos de 4.200 em três horas) fica muito abaixo de qualquer patamar que mude o modelo de custo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "eventos.tf",
+            "code": "# eventos.tf — o caminho que NAO bloqueia a resposta ao cliente\n\nresource \"aws_cloudwatch_event_bus\" \"cadencia\" {\n  name = \"cadencia-eventos\"\n}\n\nresource \"aws_sqs_queue\" \"notificacao_pedido_dlq\" {\n  name                      = \"cadencia-notificacao-pedido-dlq\"\n  message_retention_seconds = 1209600 # 14 dias — o teto do proprio SQS\n}\n\nresource \"aws_sqs_queue\" \"notificacao_pedido\" {\n  name = \"cadencia-notificacao-pedido\"\n\n  # Padrao da AWS e 30 s; o processamento (SES + gravacao de idempotencia) leva\n  # perto de 1 s no exemplo medido — 30 s fica confortavel e NAO foi reduzido,\n  # porque reduzir aqui nao devolve nada: quem espera este relogio e o proprio\n  # SQS, nao um cliente HTTP.\n  visibility_timeout_seconds = 30\n\n  redrive_policy = jsonencode({\n    deadLetterTargetArn = aws_sqs_queue.notificacao_pedido_dlq.arn\n    # Depois de 5 tentativas sem exclusao bem-sucedida da mensagem, ela sai da\n    # fila principal — e para de competir por processamento com pedidos novos.\n    maxReceiveCount = 5\n  })\n}\n\nresource \"aws_cloudwatch_event_rule\" \"roteia_pedido_criado\" {\n  name           = \"roteia-pedido-criado\"\n  event_bus_name = aws_cloudwatch_event_bus.cadencia.name\n\n  event_pattern = jsonencode({\n    source      = [\"cadencia.pedidos\"]\n    detail-type = [\"PedidoCriado\"]\n  })\n}\n\nresource \"aws_cloudwatch_event_target\" \"para_fila_notificacao\" {\n  rule           = aws_cloudwatch_event_rule.roteia_pedido_criado.name\n  event_bus_name = aws_cloudwatch_event_bus.cadencia.name\n  arn            = aws_sqs_queue.notificacao_pedido.arn\n}\n\n# So o EventBridge pode publicar nesta fila — nao qualquer principal com\n# sqs:SendMessage. Sem isto, um chamador poderia fabricar um \"PedidoCriado\" e\n# jogar direto na fila, contornando Pedidos e a autorizacao que o precede.\nresource \"aws_sqs_queue_policy\" \"so_eventbridge_publica\" {\n  queue_url = aws_sqs_queue.notificacao_pedido.id\n  policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect    = \"Allow\"\n      Principal = { Service = \"events.amazonaws.com\" }\n      Action    = \"sqs:SendMessage\"\n      Resource  = aws_sqs_queue.notificacao_pedido.arn\n      Condition = {\n        ArnEquals = { \"aws:SourceArn\" = aws_cloudwatch_event_rule.roteia_pedido_criado.arn }\n      }\n    }]\n  })\n}\n\n# Idempotencia do consumidor: guarda o pedidoId ja processado, com TTL — nao\n# para consultar depois, so para a escrita condicional decidir \"e novo ou e\n# reentrega\" em uma unica chamada atomica.\nresource \"aws_dynamodb_table\" \"notificacoes_processadas\" {\n  name         = \"cadencia-notificacoes-processadas\"\n  billing_mode = \"PAY_PER_REQUEST\"\n  hash_key     = \"pedido_id\"\n\n  attribute {\n    name = \"pedido_id\"\n    type = \"S\"\n  }\n\n  ttl {\n    attribute_name = \"expira_em\"\n    enabled        = true\n  }\n}\n\ndata \"aws_iam_policy_document\" \"notificacoes_consome_fila\" {\n  statement {\n    effect = \"Allow\"\n    actions = [\n      \"sqs:ReceiveMessage\",\n      \"sqs:DeleteMessage\",\n      \"sqs:GetQueueAttributes\",\n    ]\n    # Restrito a ESTA fila — nao ha motivo para o consumidor de notificacao\n    # enxergar qualquer outra fila da conta.\n    resources = [aws_sqs_queue.notificacao_pedido.arn]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"dynamodb:PutItem\", \"dynamodb:GetItem\"]\n    resources = [aws_dynamodb_table.notificacoes_processadas.arn]\n  }\n}\n\n# Alarme sobre o sintoma que a corrente sincrona antiga escondia: mensagem\n# envelhecendo na fila e mensagem parada na DLQ.\nresource \"aws_cloudwatch_metric_alarm\" \"fila_envelhecendo\" {\n  alarm_name          = \"cadencia-notificacao-fila-envelhecendo\"\n  namespace           = \"AWS/SQS\"\n  metric_name         = \"ApproximateAgeOfOldestMessage\"\n  dimensions          = { QueueName = aws_sqs_queue.notificacao_pedido.name }\n  statistic           = \"Maximum\"\n  period              = 60\n  evaluation_periods  = 3\n  threshold           = 300 # 5 min sem consumir e sintoma, nao normalidade\n  comparison_operator = \"GreaterThanThreshold\"\n  alarm_actions       = [aws_sns_topic.alertas.arn]\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Sem a política de fila restrita ao EventBridge, qualquer principal com credencial pode fabricar um pedido",
+            "content": "A `aws_sqs_queue_policy` que restringe `sqs:SendMessage` ao serviço `events.amazonaws.com` com a condição de `aws:SourceArn` não é boilerplate — sem ela, qualquer credencial com `sqs:SendMessage` na fila poderia publicar uma mensagem de \"PedidoCriado\" fabricada, e o consumidor de Notificações a processaria como legítima, sem nunca ter passado pela autorização de Pagamento. É a diferença entre confiar no EventBridge como única porta de entrada e confiar em qualquer coisa que saiba a URL da fila."
+          }
+        },
+        {
+          "id": "b9_3",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "O consumidor trata a reentrega do SQS como o caso normal, não como exceção — porque \"pelo menos uma vez\" é a garantia que o serviço oferece, e nenhuma configuração muda isso para \"exatamente uma vez\" numa fila padrão."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_4",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "csharp",
+            "filename": "NotificacaoWorker.cs",
+            "code": "// NotificacaoWorker.cs — consumidor assíncrono, idempotente por construção\n\npublic sealed class NotificacaoWorker : BackgroundService\n{\n    private readonly IAmazonSQS _sqs;\n    private readonly IAmazonDynamoDB _idempotencia;\n    private readonly IAmazonSimpleEmailServiceV2 _ses;\n    private readonly string _filaUrl;\n    private readonly ILogger<NotificacaoWorker> _log;\n\n    protected override async Task ExecuteAsync(CancellationToken ct)\n    {\n        while (!ct.IsCancellationRequested)\n        {\n            // Long polling de 20 s: reduz chamadas vazias sem exigir nenhum\n            // ajuste no visibility timeout da fila, que e um relogio separado.\n            var lote = await _sqs.ReceiveMessageAsync(new ReceiveMessageRequest\n            {\n                QueueUrl            = _filaUrl,\n                MaxNumberOfMessages = 10,\n                WaitTimeSeconds     = 20,\n            }, ct);\n\n            foreach (var msg in lote.Messages)\n            {\n                var evento = JsonSerializer.Deserialize<PedidoCriadoEvento>(msg.Body)!;\n\n                // A escrita condicional E a checagem de idempotencia: se o item\n                // ja existe, PutItem falha com ConditionalCheckFailedException,\n                // e isto significa \"ja processei este pedido antes\" — SQS e\n                // at-least-once, entao reentrega e o caso normal, nao a excecao.\n                try\n                {\n                    await _idempotencia.PutItemAsync(new PutItemRequest\n                    {\n                        TableName = \"cadencia-notificacoes-processadas\",\n                        Item = new Dictionary<string, AttributeValue>\n                        {\n                            [\"pedido_id\"] = new() { S = evento.PedidoId.ToString() },\n                            [\"expira_em\"] = new() { N = DateTimeOffset.UtcNow.AddDays(7).ToUnixTimeSeconds().ToString() },\n                        },\n                        ConditionExpression = \"attribute_not_exists(pedido_id)\",\n                    }, ct);\n                }\n                catch (ConditionalCheckFailedException)\n                {\n                    _log.LogInformation(\"pedido {Id} ja notificado; reentrega ignorada\", evento.PedidoId);\n                    await _sqs.DeleteMessageAsync(_filaUrl, msg.ReceiptHandle, ct);\n                    continue;\n                }\n\n                await _ses.SendEmailAsync(MontarEmailConfirmacao(evento), ct);\n\n                // So apaga DEPOIS do envio confirmado. Se o processo cair entre\n                // o PutItem e o DeleteMessage, a mensagem volta a ficar visivel\n                // apos o visibility timeout — e a proxima tentativa cai no\n                // ConditionalCheckFailedException acima e so limpa a fila, sem\n                // reenviar o e-mail. E esse o motivo de a ordem importar aqui.\n                await _sqs.DeleteMessageAsync(_filaUrl, msg.ReceiptHandle, ct);\n            }\n        }\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b9_5",
+          "type": "callout",
+          "position": 5,
+          "data": {
+            "variant": "info",
+            "title": "Por que a escrita condicional acontece ANTES do envio de e-mail, não depois",
+            "content": "Se a checagem de idempotência fosse feita depois de enviar o e-mail, uma reentrega ainda enviaria o e-mail duas vezes antes de a segunda tentativa descobrir que já havia processado a primeira. A ordem — checar e reservar antes de agir, agir, só então confirmar — é o que torna o efeito colateral (enviar e-mail) protegido pela mesma garantia que a escrita no banco."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Implantar e provar"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco medições. A primeira confirma a previsão matemática da corrente original; as seguintes provam, com número, cada afirmação estrutural feita até aqui — inclusive a de que o serviço saudável no meio da corrente relata falha alheia."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medições; a disponibilidade composta se prova, não se afirma\n\nPROJETO=cadencia; REGIAO=us-east-1\nURL=\"https://$(terraform output -raw dominio)/api/pedidos\"\n\n# ── Prova 1: a linha de base da corrente ORIGINAL (4 elos) ───────────────────\n# 2.000 requisições contra a corrente síncrona aninhada, sem matar nada.\nfor i in $(seq 1 2000); do\n  curl -s -o /dev/null -w \"%{http_code}\\n\" -X POST \"$URL\" \\\n    -d '{\"produtoId\":\"p-42\",\"clienteId\":\"c-9\"}'\ndone | sort | uniq -c\n# Esperado: por volta de 99,5–99,6% em 200/201 — perto do 0,999⁴ ≈ 99,60%\n# previsto. Ruído normal de rede explica a diferença de décimos.\n\n# ── Prova 2: derrube SÓ Pagamento, e meça quem mais falha ────────────────────\naws ecs update-service --cluster \"$PROJETO\" --service cadencia-pagamento \\\n  --desired-count 0 --region \"$REGIAO\"\nsleep 20  # tempo para as tasks de Pagamento saírem de RUNNING\n\nfor i in $(seq 1 600); do\n  curl -s -o /dev/null -w \"%{http_code}\\n\" -X POST \"$URL\" \\\n    -d '{\"produtoId\":\"p-42\",\"clienteId\":\"c-9\"}'\ndone | sort | uniq -c\n# Esperado no desenho ORIGINAL (corrente aninhada): perto de 100% de erro —\n# toda requisição que chega em Catálogo falha, porque ele depende de Pagamento.\n\naws ecs describe-services --cluster \"$PROJETO\" \\\n  --services cadencia-pedidos cadencia-catalogo --region \"$REGIAO\" \\\n  --query 'services[].{nome:serviceName,tasksSaudaveis:runningCount}'\n# Esperado: Pedidos e Catálogo com runningCount = desiredCount, os dois \"de pé\"\n# — é a prova de que a falha reportada não é deles.\n\naws ecs update-service --cluster \"$PROJETO\" --service cadencia-pagamento \\\n  --desired-count 2 --region \"$REGIAO\"\n\n# ── Prova 3: o mesmo teste, no desenho de PRODUÇÃO (achatado) ────────────────\n# Repita a prova 2 depois de aplicar o desenho achatado. Catálogo não conhece\n# mais Pagamento, então derrubar Pagamento não deveria mais afetar a chamada a\n# Catálogo — só a chamada direta de Pedidos a Pagamento.\n# Esperado: a taxa de erro cai para perto de 1/3 da cadeia (só o hop de\n# Pagamento falha), não mais toda a cadeia.\n\n# ── Prova 4: Notificações cai por 5 minutos; o pedido continua sendo criado ──\naws ecs update-service --cluster \"$PROJETO\" --service cadencia-notificacoes \\\n  --desired-count 0 --region \"$REGIAO\"\nfor i in $(seq 1 300); do\n  curl -s -o /dev/null -w \"%{http_code}\\n\" -X POST \"$URL\" \\\n    -d '{\"produtoId\":\"p-42\",\"clienteId\":\"c-9\"}'\n  sleep 1\ndone | sort | uniq -c\n# Esperado: 100% em 201, mesmo com Notificações inteiramente fora do ar — é o\n# critério de aceite do desenho de produção.\naws sqs get-queue-attributes --queue-url \"$(terraform output -raw fila_notificacao_url)\" \\\n  --attribute-names ApproximateNumberOfMessages\n# Esperado: a contagem cresce ~300 durante a janela, provando que nada se perdeu.\naws ecs update-service --cluster \"$PROJETO\" --service cadencia-notificacoes \\\n  --desired-count 2 --region \"$REGIAO\"\n# Depois de religar, a fila deve drenar para perto de zero em minutos.\n\n# ── Prova 5: mensagem-veneno vai para a DLQ sem travar as boas ───────────────\naws sqs send-message --queue-url \"$(terraform output -raw fila_notificacao_url)\" \\\n  --message-body '{\"pedidoId\": \"nao-e-um-guid-valido\"}'\n# Aguarde 5 tentativas de reentrega (5 × visibility timeout de 30 s ≈ 2,5 min).\nsleep 160\naws sqs get-queue-attributes \\\n  --queue-url \"$(terraform output -raw fila_notificacao_dlq_url)\" \\\n  --attribute-names ApproximateNumberOfMessages\n# Esperado: 1 mensagem na DLQ, e nenhum efeito nas mensagens legítimas\n# processadas na mesma janela.\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que NÃO foi verificado, e você deve medir no seu ambiente",
+            "content": "Os 99,9% de disponibilidade individual usados nas contas deste módulo são um valor de exemplo — três-noves é uma meta comum de SLO interno, não um número medido nesta aplicação específica. Antes de decidir se uma cadeia de dois, três ou quatro elos atende ao seu requisito de disponibilidade, meça a disponibilidade real de CADA serviço em produção durante algumas semanas, e refaça a multiplicação com os números medidos, não com os deste texto."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Quebrar de propósito"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Três falhas plantadas de propósito. Reproduza cada uma isoladamente — misturá-las torna o sintoma ambíguo, e o ponto deste exercício é treinar o diagnóstico, não só observar o efeito."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha plantada",
+              "Sintoma observado",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Timeout de Catálogo ao chamar Pagamento (10 s) configurado MENOR que o timeout que Pagamento promete (13 s, por engano trocado)",
+                "Catálogo devolve erro a Pedidos enquanto Pagamento ainda processa; ocasionalmente o pagamento é autorizado mesmo assim, sem pedido correspondente",
+                "logs de Pagamento mostrando conclusão APÓS o horário do erro relatado por Catálogo",
+                "reordenar os timeouts: o de quem chama sempre maior que o prometido por quem é chamado"
+              ],
+              [
+                "Consumidor de Notificações remove a checagem de idempotência \"para simplificar\"",
+                "clientes recebem dois ou três e-mails de confirmação do mesmo pedido, sem padrão fixo de quantos",
+                "CloudWatch Logs Insights filtrando por `pedidoId` repetido nos logs de envio",
+                "reintroduzir a escrita condicional antes do envio, tratando reentrega como normal"
+              ],
+              [
+                "Alarme de `ApproximateAgeOfOldestMessage` nunca foi criado",
+                "Notificações trava silenciosamente (exceção não tratada a cada mensagem) e ninguém percebe até um cliente reclamar, dias depois, que nunca recebeu confirmação",
+                "idade da mensagem mais antiga na fila principal, e profundidade crescente na DLQ",
+                "os dois alarmes do bloco de observabilidade, com ação que notifica alguém"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Segurança"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Trocar chamada síncrona por evento e fila abre uma superfície nova: quem pode publicar, quem pode consumir, e o que fica retido numa fila por até 14 dias."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Principal não autorizado publica evento fabricado direto na fila",
+                "Baixa",
+                "Alto — pedido de notificação sem autorização de pagamento correspondente",
+                "política de fila restrita a `events.amazonaws.com` com `aws:SourceArn`",
+                "CloudTrail em `sqs:SendMessage` fora do padrão esperado",
+                "revogar a policy alterada e auditar mensagens processadas na janela"
+              ],
+              [
+                "Task role de Notificações com permissão sobre filas ou tabelas de outros serviços",
+                "Baixa",
+                "Médio — leitura ou escrita cruzada entre domínios",
+                "IAM restrito ao ARN exato da fila e da tabela deste serviço",
+                "IAM Access Analyzer sinalizando acesso não utilizado",
+                "reduzir a policy ao uso real observado"
+              ],
+              [
+                "Payload do evento carrega dado sensível além do necessário (ex.: dado de cartão)",
+                "Baixa",
+                "Alto — exposição em log de fila ou DLQ retida por 14 dias",
+                "o evento carrega `autorizacaoId`, nunca o dado de pagamento em si",
+                "revisão de schema do evento em code review",
+                "purgar a fila/DLQ e rotacionar a autorização exposta"
+              ],
+              [
+                "DLQ acumula mensagens indefinidamente e vira repositório não gerenciado",
+                "Média",
+                "Baixo a médio — dado retido além do necessário, sem dono",
+                "retenção de 14 dias (o teto do próprio SQS) e alarme de profundidade",
+                "alarme de `ApproximateNumberOfMessagesVisible` na DLQ acima de zero por mais de 1 dia",
+                "investigar e reprocessar ou descartar deliberadamente"
+              ],
+              [
+                "Consumidor sem idempotência processa mensagem maliciosa reenviada em loop",
+                "Baixa",
+                "Médio — e-mail duplicado em volume, custo de SES e reputação de envio",
+                "escrita condicional antes de qualquer efeito colateral",
+                "métrica de envios de SES por `pedidoId` acima de 1",
+                "corrigir o consumidor e revisar o volume de envio do período"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24_0",
+      "type": "quiz",
+      "position": 13,
+      "data": {
+        "question": "Quatro serviços em uma cadeia síncrona têm, cada um, 99,9% de disponibilidade medida isoladamente. Qual é a disponibilidade aproximada da cadeia inteira, e por quê?",
+        "options": [
+          "99,9% — a disponibilidade do sistema é igual à do elo mais frágil, e todos são iguais aqui",
+          "99,975% — a média das quatro disponibilidades, arredondada",
+          "99,9996% — a soma das disponibilidades dividida pelo número de elos elevado ao quadrado",
+          "99,6% — o produto das quatro disponibilidades, porque a requisição só é bem-sucedida se todos os elos responderem"
+        ],
+        "correctIndex": 3,
+        "explanation": "A disponibilidade de uma cadeia síncrona é o PRODUTO das disponibilidades de cada elo — 0,999 × 0,999 × 0,999 × 0,999 ≈ 0,9960, ou 99,60% — porque o sucesso da requisição exige que TODOS os quatro respondam dentro do prazo, e cada elo a mais multiplica por outro fator menor que 1.\n\nA primeira alternativa comete o erro de raciocínio mais comum: tratar a disponibilidade de UM elo como se representasse o sistema inteiro, ignorando que a chance de FALHA se acumula a cada dependência adicional — é a intuição de \"todos são bons, então o conjunto é bom\", que a conta desmente. A terceira confunde a operação certa: calcular uma média trataria os quatro elos como alternativas entre si, como se bastasse UM responder, quando na realidade eles são exigências simultâneas — a média sempre fica otimista demais para uma cadeia em série. A quarta inventa uma fórmula sem base em teoria de probabilidade — não existe fundamento para dividir a soma pelo quadrado do número de elos; é o tipo de conta \"parece matemática\" que não resiste a uma verificação com números pequenos."
+      }
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 14,
+      "data": {
+        "title": "Observabilidade"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A corrente síncrona original escondia dois sintomas atrás de um só: \"erro 5xx em Pedidos\" tanto podia ser Pedidos quanto qualquer um dos três serviços atrás dele. O painel de produção precisa responder a perguntas específicas, não a uma pergunta genérica de \"está tudo bem?\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta que o painel responde",
+              "Métrica",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "A criação de pedido está mais lenta que o normal?",
+                "latência p99 de `POST /pedidos` (X-Ray ou CloudWatch)",
+                "> 1,5× a mediana de 7 dias"
+              ],
+              [
+                "Qual hop síncrono está contribuindo mais para a latência?",
+                "segmento X-Ray por chamada (Catálogo vs Pagamento)",
+                "nenhum hop deveria dominar sozinho >70%"
+              ],
+              [
+                "Algum hop está estourando timeout mais do que o esperado?",
+                "contagem de exceções de timeout por serviço, nos logs estruturados",
+                "> 1% das chamadas em 5 min"
+              ],
+              [
+                "Notificações está processando no ritmo em que os eventos chegam?",
+                "`ApproximateAgeOfOldestMessage` na fila principal",
+                "> 300 s"
+              ],
+              [
+                "Mensagens estão sendo descartadas para investigação?",
+                "`ApproximateNumberOfMessagesVisible` na DLQ",
+                "> 0 por mais de 15 min"
+              ],
+              [
+                "A disponibilidade composta prevista se sustenta na prática?",
+                "taxa de sucesso de `POST /pedidos` (SLO)",
+                "< 99,65% em janela móvel de 1 h"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que o alarme de DLQ é sobre profundidade, não sobre idade",
+            "content": "Uma mensagem pode chegar à DLQ minutos depois de publicada (falha imediata e repetida) ou dias depois (degradação lenta que só cruza o limiar de tentativas aos poucos). O que importa operacionalmente é que existe algo, não há quanto tempo — por isso o limiar é `> 0`, não um tempo de espera."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Escala"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Ordem de grandeza",
+              "O que muda no caminho síncrono",
+              "O que muda no caminho assíncrono"
+            ],
+            "rows": [
+              [
+                "10 pedidos/dia",
+                "nada digno de nota; a corrente de 4 elos original também \"funcionaria\" sem incidente perceptível",
+                "a fila fica ociosa quase sempre; nenhum ajuste de capacidade necessário"
+              ],
+              [
+                "500 pedidos/dia (volume atual)",
+                "a diferença entre 99,60% e 99,70% de disponibilidade já representa dezenas de minutos de indisponibilidade evitada por mês",
+                "SQS e EventBridge absorvem o volume sem configuração de capacidade — são serviços gerenciados sem provisionamento de throughput"
+              ],
+              [
+                "4.200 pedidos em 3 horas (pico de campanha)",
+                "o número de tasks de Catálogo e Pagamento precisa acompanhar o pico — auto scaling do ECS baseado em `RequestCountPerTarget`",
+                "a fila absorve o burst sem que Notificações precise escalar no mesmo instante; ela drena no próprio ritmo depois do pico"
+              ],
+              [
+                "1 milhão de pedidos/dia (fora do horizonte atual da Cadência)",
+                "a corrente síncrona de 3 elos passa a exigir revisão: mesmo em 99,70%, isso são cerca de 3.000 pedidos falhos por dia só de indisponibilidade — hora de reavaliar redundância por elo, não só a topologia",
+                "fila única pode virar gargalo de throughput por partição; considerar múltiplas filas por região de cliente ou FIFO com grupos de mensagem"
+              ],
+              [
+                "Falha de uma AZ inteira",
+                "com duas tasks por serviço distribuídas em duas AZs, a corrente síncrona perde metade da capacidade, não a disponibilidade inteira — desde que o auto scaling reponha na AZ sobrevivente",
+                "SQS e EventBridge são serviços regionais, não amarrados a uma AZ; o consumidor perde capacidade na mesma proporção que o ECS, mas a fila não perde mensagem"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Custo"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As dimensões que geram custo aqui: requisições no barramento do EventBridge, requisições na fila do SQS, e o cômputo do ECS que fica ocupado enquanto uma chamada síncrona espera resposta. Nenhum valor absoluto aparece abaixo — os modelos de cobrança mudam menos que os preços, e o AWS Pricing Calculator tem os números do dia com a região certa."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que domina o custo"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "~500 pedidos/dia, 1 task por serviço",
+                "compute do ECS ocioso a maior parte do tempo; SQS e EventBridge próximos do nível gratuito"
+              ],
+              [
+                "Produção pequena (volume atual)",
+                "~500 pedidos/dia com picos de 4.200/3h",
+                "compute do ECS dimensionado para o pico; SQS/EventBridge seguem marginais no total"
+              ],
+              [
+                "Alta escala",
+                "1 milhão de pedidos/dia",
+                "volume de mensagens no SQS e eventos no EventBridge passa a aparecer na fatura; ainda assim tende a ser pequeno comparado ao compute dos três serviços síncronos"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O custo oculto: não é a fila, é a conexão presa esperando rede",
+            "content": "O custo mais fácil de ignorar não está no SQS nem no EventBridge — está no compute do caminho SÍNCRONO. Cada requisição que Pedidos mantém aberta esperando Catálogo e Pagamento consome uma thread/conexão pelo tempo inteiro da espera, não só pelo tempo de processamento real. Quanto mais aninhada e mais lenta a cadeia, mais tasks (mais CPU e memória provisionados) são necessárias para sustentar o mesmo throughput — é custo de computação parada esperando rede, e ele não aparece em nenhuma linha de fatura chamada \"espera\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação",
+              "Risco",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "sintoma de falha aparece no serviço errado do painel",
+                "diagnóstico lento; incidente atribuído ao serviço saudável",
+                "alarmes por hop (X-Ray) e por fila (idade, profundidade)",
+                "Alta"
+              ],
+              [
+                "Segurança",
+                "fila aceita mensagem de qualquer principal com permissão",
+                "evento fabricado sem ter passado pela autorização de pagamento",
+                "policy de fila restrita ao EventBridge com `aws:SourceArn`",
+                "Alta"
+              ],
+              [
+                "Confiabilidade",
+                "disponibilidade composta de 4 elos síncronos aninhados",
+                "indisponibilidade quase 4× maior que um único serviço",
+                "achatar para elos síncronos irmãos e mover o que pode para assíncrono",
+                "Alta"
+              ],
+              [
+                "Eficiência de desempenho",
+                "timeout copiado sem relação com a posição na cadeia",
+                "chamador desiste antes do chamado terminar, ou espera além do necessário",
+                "timeout derivado da posição real de cada serviço na cadeia",
+                "Média"
+              ],
+              [
+                "Otimização de custo",
+                "compute dimensionado para segurar conexão em espera",
+                "mais tasks provisionadas do que o trabalho real exige",
+                "reduzir profundidade da cadeia síncrona antes de escalar horizontalmente",
+                "Média"
+              ],
+              [
+                "Sustentabilidade",
+                "reentrega de mensagem sem idempotência reprocessa trabalho",
+                "e-mail duplicado é trabalho e energia gastos duas vezes pelo mesmo resultado",
+                "escrita condicional de idempotência antes de qualquer efeito colateral",
+                "Baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Evolução em níveis"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Seis níveis, do monólito de método chamando método até um sistema que usa sinal em tempo real para decidir. Cada nível declara o que muda, o novo risco que ele assume, e o impacto de custo — não é uma escada de \"mais serviços\", é uma escada de decisões sobre acoplamento."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Nível",
+              "O que muda",
+              "Novo risco",
+              "Impacto de custo"
+            ],
+            "rows": [
+              [
+                "1. Protótipo — monólito, chamada de método",
+                "Pedidos, Catálogo, Pagamento e Notificações são métodos no mesmo processo",
+                "nenhum isolamento: um bug em Notificações pode derrubar o processo inteiro",
+                "mínimo — um único deployable"
+              ],
+              [
+                "2. Aplicação básica — corrente síncrona aninhada (este módulo, mínima)",
+                "os quatro viram serviços, ligados na mesma ordem, agora por HTTP",
+                "disponibilidade composta ruim; falha em cascata sem culpa direta",
+                "baixo — mais compute, mas sem infraestrutura de mensageria"
+              ],
+              [
+                "3. Produção — síncronos irmãos + evento assíncrono (este módulo, produção)",
+                "Notificações sai do caminho; Catálogo e Pagamento deixam de estar aninhados",
+                "consistência entre autorização e evento não é transacional (dívida registrada na seção 8)",
+                "baixo a médio — EventBridge, SQS e DynamoDB de idempotência, todos pay-per-use"
+              ],
+              [
+                "4. Alta escala — circuit breaker e retry com jitter (L36)",
+                "chamadas síncronas restantes ganham disjuntor que corta ANTES do timeout expirar",
+                "disjuntor mal calibrado esconde degradação real ou dispara por falso positivo",
+                "médio — observabilidade adicional para calibrar o limiar do disjuntor"
+              ],
+              [
+                "5. Plataforma — malha de serviço com timeout e retry centralizados (L33)",
+                "a política de timeout deixa de viver em cada `HttpClient` e passa a ser configuração de malha, com mTLS entre serviços",
+                "complexidade operacional da própria malha; um novo componente que também pode falhar",
+                "médio a alto — sidecar por task, e a curva de aprendizado da equipe"
+              ],
+              [
+                "6. Dados e IA — decisão de rota guiada por sinal em tempo real",
+                "um modelo prevê degradação do gateway de pagamento a partir de métricas históricas e antecipa a abertura do disjuntor, em vez de reagir depois do primeiro erro",
+                "decisão automática errada (abrir o disjuntor sem necessidade) derruba um caminho saudável; exige fallback determinístico quando o modelo diverge",
+                "alto — pipeline de treino, monitoramento de drift, e o custo de manter os dois caminhos (com e sem IA) operáveis"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Onde IA entra, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "Aqui, IA não resolve o problema central — e forçá-la seria o antipadrão que esta série evita",
+            "content": "O defeito deste módulo é aritmética de disponibilidade e uma escolha de desenho (síncrono aninhado vs. assíncrono por chamada), não um padrão que precise ser aprendido a partir de dados. Nenhum modelo decide melhor do que a pergunta \"o chamador precisa da resposta?\" — ela tem resposta determinística, conhecida no momento do design, e não muda com o tempo nem com o tráfego."
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O nível 6 da evolução em níveis aponta onde IA eventualmente agrega: prever, a partir de métricas históricas, QUANDO um serviço tende a degradar, para abrir um disjuntor preventivamente em vez de reagir ao primeiro erro. Mesmo aí, a decisão de origem — síncrono ou assíncrono, por chamada — continua sendo feita por quem desenha o sistema, não pelo modelo. O modelo ajusta UM parâmetro (quando abrir o disjuntor) dentro de um desenho que já foi decidido sem ele."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Anti-padrões"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Sintoma em produção",
+              "Forma correta"
+            ],
+            "rows": [
+              [
+                "Encadear serviços extraídos na mesma ordem das chamadas de método do monólito",
+                "é a tradução mais direta do código existente; passa nos testes locais sem mudar nenhuma lógica de negócio",
+                "disponibilidade composta pior que a soma das partes sugere; serviço saudável reportando falha alheia",
+                "perguntar, por chamada, se o resultado é necessário para responder ao cliente"
+              ],
+              [
+                "Depois de aprender sobre desacoplamento, jogar TUDO para fila — inclusive Pagamento",
+                "zelo mal direcionado: \"assíncrono é a lição aprendida\", aplicada sem distinguir os casos",
+                "cliente sai da tela sem saber se a cobrança passou; suporte lotado de \"meu pagamento sumiu\"",
+                "manter síncrono o que o cliente precisa saber antes de continuar"
+              ],
+              [
+                "Copiar o mesmo valor de timeout para todos os `HttpClient`, em todos os serviços",
+                "é o caminho de menor esforço — um valor, colado em todo lugar, \"por garantia\"",
+                "chamador desiste antes do chamado terminar, ou espera bem além do necessário",
+                "derivar o timeout da posição de cada serviço na cadeia, sempre maior que o do vizinho chamado"
+              ],
+              [
+                "Consumidor assíncrono sem checagem de idempotência",
+                "funciona perfeitamente no caminho feliz, e reentrega do SQS não aparece em teste manual",
+                "e-mail duplicado, cobrança duplicada se o padrão se repetir em um consumidor de pagamento",
+                "escrita condicional que reserva o efeito colateral antes de executá-lo"
+              ],
+              [
+                "Fila sem alarme de profundidade ou idade",
+                "SQS \"parece\" autogerenciado, e a ausência de erro imediato passa a impressão de que nada precisa de observação",
+                "consumidor travado silenciosamente por dias, descoberto só pela reclamação do cliente",
+                "alarme de idade da mensagem mais antiga e de profundidade da DLQ, com ação que notifica alguém"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Erro 5xx em Pedidos, mas Pedidos e Catálogo passam no próprio health check",
+                "um elo mais à frente da cadeia síncrona está fora do ar ou degradado",
+                "trace de X-Ray da requisição que falhou, ponta a ponta",
+                "segmento do serviço mais interno na cadeia, não o mais externo",
+                "confirmar disponibilidade do elo apontado pelo trace, não do serviço que reportou o erro"
+              ],
+              [
+                "Cliente recebe dois ou mais e-mails de confirmação para o mesmo pedido",
+                "reentrega do SQS processada sem checagem de idempotência",
+                "CloudWatch Logs Insights agrupando envios por `pedidoId`",
+                "logs do `NotificacaoWorker` e a tabela de idempotência",
+                "reintroduzir a escrita condicional antes do envio"
+              ],
+              [
+                "Fila de notificação crescendo sem consumo perceptível",
+                "consumidor travado (exceção não tratada em loop) ou desligado (`desired_count = 0`)",
+                "`ApproximateAgeOfOldestMessage` combinado com `describe-services`",
+                "logs do worker no instante em que a idade começou a crescer",
+                "corrigir a exceção não tratada ou restaurar o `desired_count`"
+              ],
+              [
+                "DLQ acumulando mensagens sem que ninguém tenha sido avisado",
+                "alarme de profundidade da DLQ nunca foi criado ou está sem ação associada",
+                "conferir se o alarme existe e se `alarm_actions` aponta para um destino válido",
+                "configuração do `aws_cloudwatch_metric_alarm` da DLQ",
+                "criar ou corrigir o alarme com uma ação que efetivamente notifica alguém"
+              ],
+              [
+                "Latência de criação de pedido alta, mas nenhum serviço individualmente lento",
+                "timeout mal ordenado fazendo Pedidos esperar o teto de Catálogo mesmo quando a resposta real chegaria antes, por margem insuficiente entre os valores",
+                "comparar o tempo de resposta real de cada hop com o timeout configurado para ele",
+                "os valores de `per_request_timeout_seconds` e de `HttpClient.Timeout`",
+                "ajustar as margens seguindo a regra: timeout do chamador sempre maior que o do chamado"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Limpeza"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# A ordem importa: remova o que consome antes do que produz, para não deixar\n# mensagem presa apontando para um alvo que já não existe.\nterraform destroy \\\n  -target=aws_ecs_service.notificacoes \\\n  -target=aws_cloudwatch_event_target.para_fila_notificacao \\\n  -target=aws_cloudwatch_event_rule.roteia_pedido_criado\n\nterraform destroy   # o restante: Pedidos, Catálogo, Pagamento, fila, DLQ, tabela"
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Recurso",
+              "O `destroy` remove?",
+              "Observação"
+            ],
+            "rows": [
+              [
+                "Mensagens na fila principal e na DLQ",
+                "Sim, a fila inteira é removida",
+                "se houver mensagem não processada, o conteúdo se perde — confirme fila vazia antes"
+              ],
+              [
+                "Itens na tabela DynamoDB de idempotência",
+                "Sim, a tabela inteira é removida",
+                "nenhum custo residual: `PAY_PER_REQUEST` não cobra por capacidade parada"
+              ],
+              [
+                "Log groups do ECS e do worker",
+                "Não, por padrão",
+                "log group sem política de retenção definida guarda para sempre e cobra por isso"
+              ],
+              [
+                "Barramento customizado do EventBridge",
+                "Sim, se nenhuma regra de outro módulo o referenciar",
+                "confira se nenhum outro laboratório publica no mesmo `cadencia-eventos` antes de remover"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b21_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que o `destroy` não leva: log group sem retenção",
+            "content": "Assim como no L03, log group criado sem `retention_in_days` sobrevive ao `destroy` do serviço e continua sendo cobrado por armazenamento. Confira com `aws logs describe-log-groups` depois de destruir."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Resumo"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Motivo"
+            ],
+            "rows": [
+              [
+                "Corrente de 4 chamadas síncronas aninhadas",
+                "achatar Pedidos→Catálogo e Pedidos→Pagamento",
+                "remove um nível de aninhamento e de timeout dependente"
+              ],
+              [
+                "Cliente não precisa saber se o e-mail foi enviado",
+                "EventBridge + SQS",
+                "tira Notificações do cálculo de disponibilidade do pedido"
+              ],
+              [
+                "SQS entrega pelo menos uma vez, nunca exatamente uma",
+                "escrita condicional no DynamoDB",
+                "idempotência antes de qualquer efeito colateral"
+              ],
+              [
+                "Mensagem que falha sempre trava a fila em loop",
+                "DLQ com `maxReceiveCount`",
+                "isola o problema sem impedir o processamento das mensagens boas"
+              ],
+              [
+                "Timeout copiado sem relação com a posição na cadeia",
+                "timeout crescente da ponta para a raiz",
+                "garante que quem espera sempre espera mais que quem é esperado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Proteção"
+            ],
+            "rows": [
+              [
+                "Um serviço do meio da cadeia cai",
+                "achatamento reduz quantos vizinhos dependem dele diretamente"
+              ],
+              [
+                "Timeout mal ordenado",
+                "regra única aplicada em todos os hops: chamador > chamado"
+              ],
+              [
+                "Reentrega de mensagem",
+                "escrita condicional de idempotência"
+              ],
+              [
+                "Mensagem-veneno",
+                "redrive policy para DLQ após N tentativas"
+              ],
+              [
+                "Fila crescendo sem ninguém notar",
+                "alarme de idade e de profundidade de DLQ"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Cliente chama Pedidos.",
+              "Pedidos chama Catálogo, síncrono, aguarda item e preço.",
+              "Pedidos chama Pagamento, síncrono, aguarda autorização.",
+              "Pedidos publica evento PedidoCriado no EventBridge — não aguarda processamento.",
+              "Pedidos responde ao cliente: pedido criado.",
+              "EventBridge roteia o evento para a fila de notificação.",
+              "Notificações consome a fila no próprio ritmo.",
+              "Notificações checa idempotência por escrita condicional.",
+              "Notificações envia o e-mail e apaga a mensagem da fila.",
+              "Mensagem que falha 5 vezes vai para a DLQ, sem travar as seguintes."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que quatro serviços a 99,9% de disponibilidade não formam um sistema a 99,9%?",
+            "answer": "Porque a disponibilidade de uma cadeia síncrona é o produto das disponibilidades de cada elo, não a média nem o valor de um elo isolado: a requisição só é bem-sucedida se TODOS os elos responderem dentro do prazo. Com quatro serviços a 99,9% cada, a conta é 0,999⁴ ≈ 99,60% — quase quatro vezes mais indisponibilidade do que um único serviço, mesmo que nenhum deles, isolado, tenha piorado."
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Notificações precisa ficar fora do caminho síncrono mesmo sendo rápida hoje?",
+            "answer": "Sim, porque a necessidade de tirá-la do caminho não depende de quão rápida ela é hoje, e sim de o cliente não precisar da resposta dela para continuar. Notificações pode estar rápida agora e ainda assim sofrer uma degradação amanhã — um provedor de e-mail externo fora do controle da equipe — e nesse dia ela derrubaria pedidos que não têm relação de negócio nenhuma com o envio de e-mail."
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Qual timeout devo configurar primeiro numa cadeia de chamadas síncronas?",
+            "answer": "O do elo mais interno, porque todos os outros são derivados dele. Comece pelo serviço que não chama mais ninguém — ele define o piso da cadeia — e suba um nível de cada vez, sempre configurando o timeout do chamador acima do que o chamado promete, nunca igual. Inverter a ordem, definindo o timeout do topo primeiro e \"encaixando\" os de baixo depois, é o caminho mais comum para acabar com um timeout externo menor que um interno, o que quebra a garantia inteira."
+          }
+        },
+        {
+          "id": "b23_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "SQS garante que uma mensagem é processada só uma vez?",
+            "answer": "Não — a fila padrão do Amazon SQS garante entrega PELO MENOS uma vez, o que inclui a possibilidade real de reentrega da mesma mensagem. Isso acontece, por exemplo, quando o consumidor processa a mensagem mas falha ao apagá-la antes do visibility timeout expirar: ela volta a ficar visível e é processada de novo. É por isso que o consumidor precisa da própria idempotência — a garantia de entrega única não existe para ele confiar."
+          }
+        },
+        {
+          "id": "b23_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Circuit breaker resolve o problema de disponibilidade composta deste módulo?",
+            "answer": "Não sozinho — ele reduz o DANO de um serviço fora do ar, interrompendo chamadas para quem já se sabe indisponível e evitando desperdício de recursos, mas não muda a disponibilidade composta do caminho feliz nem remove o aninhamento entre chamadas. As duas técnicas são complementares: este módulo redesenha QUAIS chamadas são síncronas; o circuit breaker, tratado no laboratório seguinte da série, protege as que continuam sendo."
+          }
+        },
+        {
+          "id": "b23_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Por que o pagamento continua síncrono se assíncrono resolveria a disponibilidade?",
+            "answer": "Porque o requisito de negócio da Cadência exige que o cliente saiba, na própria resposta HTTP, se a cobrança foi autorizada — sair da tela sem essa informação não é aceitável numa compra com cartão. Tornar Pagamento assíncrono resolveria a matemática de disponibilidade às custas de quebrar exatamente o requisito que a cadeia existe para atender; a arquitetura assíncrona é a correta para métodos de pagamento que já são assíncronos por natureza, como boleto ou Pix com confirmação tardia."
+          }
+        },
+        {
+          "id": "b23_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "O que muda na disponibilidade se eu adicionar redundância em vez de achatar a cadeia?",
+            "answer": "Redundância — mais tasks por serviço, múltiplas AZs — melhora a disponibilidade de CADA elo individual, mas não muda o fato de a cadeia ainda multiplicar um fator a mais por elo. Achatar a cadeia e adicionar redundância são melhorias independentes e cumulativas: a primeira reduz o número de fatores na multiplicação, a segunda melhora cada fator — e este módulo aplica as duas, priorizando achatar porque custa menos infraestrutura nova."
+          }
+        },
+        {
+          "id": "b23_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Por que checar idempotência no DynamoDB em vez de usar fila FIFO?",
+            "answer": "Porque a fila padrão custa menos e suporta maior throughput do que a fila FIFO, e o volume da Cadência não exige a ordenação estrita que o FIFO garante — notificações de pedidos diferentes não precisam ser processadas em nenhuma ordem específica entre si. A deduplicação nativa do FIFO resolveria o mesmo problema, mas trocaria uma escrita condicional barata por uma restrição de throughput que este caso de uso não precisa pagar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b24_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Numa cadeia A→B→C, A espera até 20 s por B, e B espera até 15 s por C. O que acontece quando C está genuinamente lento e leva 18 s para responder?",
+            "options": [
+              "C é interrompido automaticamente aos 15 s, porque o timeout de B se propaga para dentro da chamada de C",
+              "B desiste de C aos 15 s e devolve erro a A, mas C continua processando os 18 s inteiros para um chamador que já foi embora",
+              "Nada de anormal: A ainda recebe a resposta de B dentro do próprio prazo de 20 s",
+              "A e B esperam juntos até 18 s, porque o maior timeout da cadeia sempre prevalece"
+            ],
+            "correctIndex": 1,
+            "explanation": "B tem timeout de 15 s ao chamar C, e como C leva 18 s para responder de verdade, B desiste antes de a resposta chegar e devolve erro para A — mas nada interrompe C: ele segue processando até completar os 18 s, gastando recursos a serviço de um chamador que já desistiu. É exatamente o cenário que a regra dos timeouts crescentes da ponta para a raiz existe para evitar.\n\nA primeira alternativa ignora que o timeout de B (15 s) decide o desfecho antes mesmo de chegar em A — A nunca teria a chance de usar seus 20 s, porque B já devolveu erro aos 15 s. A terceira atribui ao timeout do CHAMADOR um poder que ele não tem sobre o CHAMADO: expirar um timeout cancela a ESPERA de quem chamou, não a EXECUÇÃO de quem foi chamado, que segue rodando até terminar ou até a própria timeout dela — que aqui nem foi definida — agir. A quarta inverte a lógica da cadeia: não existe \"o maior timeout prevalece\"; cada elo aplica o SEU PRÓPRIO timeout de forma independente, e é a ORDEM entre eles, crescente da ponta para a raiz, que precisa ser respeitada, não um valor único compartilhado."
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Depois de migrar Notificações para consumir uma fila SQS, clientes começaram a receber o e-mail de confirmação duas vezes para o mesmo pedido, de forma esporádica. Qual é a causa mais provável?",
+            "options": [
+              "O EventBridge está publicando o evento duas vezes por padrão, para garantir entrega",
+              "O consumidor processa a mensagem, envia o e-mail, mas falha ao apagá-la antes do visibility timeout expirar, e a mensagem reentregue é processada de novo sem checagem de idempotência",
+              "A fila FIFO está configurada sem deduplicação, então toda mensagem é entregue duas vezes",
+              "O DynamoDB de idempotência está com capacidade insuficiente e rejeita a segunda escrita, deixando o e-mail ser enviado de novo"
+            ],
+            "correctIndex": 1,
+            "explanation": "SQS padrão garante entrega PELO MENOS uma vez, não exatamente uma: se o consumidor processa a mensagem mas não consegue apagá-la a tempo — crash, exceção depois do envio, timeout de rede na chamada de `DeleteMessage` — ela volta a ficar visível após o visibility timeout e é entregue de novo. Sem checagem de idempotência antes de reenviar o e-mail, a reentrega, que é comportamento NORMAL e documentado do serviço, vira e-mail duplicado.\n\nA primeira alternativa atribui ao EventBridge um comportamento que ele não tem: `PutEvents` publica uma vez por chamada, e reentrega dupla programada não é como o serviço funciona. A terceira erra o tipo de fila: o cenário descrito usa fila padrão, não FIFO — e mesmo com FIFO, a causa mais provável e mais comum continuaria sendo a ausência de idempotência do lado do consumidor, não a escolha do tipo de fila. A quarta inverte o papel da escrita condicional: se ela REJEITA a segunda tentativa por o item já existir, o efeito esperado é o consumidor PULAR o envio, não repeti-lo — capacidade insuficiente geraria erro de throttling, não um e-mail extra."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L03 (rollout confiável) e L31 (fronteira transacional) no ar, com Catálogo e Pagamento também extraídos pela mesma equipe"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "disponibilidade composta como produto, não média; a regra dos timeouts decrescentes numa cadeia aninhada; a pergunta \"o chamador precisa da resposta?\" aplicada por chamada; idempotência de consumidor assíncrono; DLQ e redrive policy"
+              ],
+              [
+                "Limitação que fica",
+                "não há transação entre autorizar o pagamento e publicar o evento — uma queda de Pedidos entre os dois deixa uma cobrança sem notificação correspondente, dívida registrada na seção de decisões"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L36 — circuit breaker para as chamadas síncronas que permaneceram na cadeia. Reutiliza os dois serviços irmãos deste módulo (Catálogo e Pagamento) e mede o efeito do disjuntor sobre a mesma carga usada aqui"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L33 (Service Connect ou VPC Lattice: quando a malha de serviço substitui timeout e retry centralizados por sidecar) parte do desenho de produção construído aqui"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Amazon ECS Service Connect — configuração de timeout",
+                "code": true
+              },
+              {
+                "text": " — os padrões de `idleTimeout` (5 min em HTTP, 1 h em TCP) e a existência de `perRequestTimeout` como configuração separada do cliente HTTP da aplicação; e "
+              },
+              {
+                "text": "Amazon SQS — visibility timeout e filas de mensagens não entregues",
+                "code": true
+              },
+              {
+                "text": " — o padrão de 30 s de visibility timeout e o mecanismo de redrive policy para DLQ, que fundamentam a seção de construção do caminho assíncrono. Nenhum valor de preço aparece neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve medir no seu ambiente",
+            "content": "As disponibilidades de 99,9% usadas nas contas deste módulo são um valor de exemplo — meta comum de SLO interno, não medição desta aplicação específica. Os valores de timeout (3 s, 5 s, 8 s, 10 s, 13 s, 16 s) seguem a REGRA correta (crescente da ponta para a raiz), mas os números exatos dependem da latência real de cada serviço no seu ambiente — derive-os do p99 medido de cada hop, não copie os valores deste texto. E o número de tentativas antes de mover uma mensagem para a DLQ (5, neste módulo) deve refletir quanto tempo um erro transitório do seu provedor de e-mail costuma durar, não um valor padrão."
+          }
+        }
+      ]
+    }
+  ]
+}

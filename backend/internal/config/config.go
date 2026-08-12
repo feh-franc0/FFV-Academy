@@ -39,6 +39,12 @@ type FeaturesConfig struct {
 	BillingEnabled   bool `envconfig:"FEATURE_BILLING_ENABLED" default:"false"`
 	TutorAIEnabled   bool `envconfig:"FEATURE_TUTOR_AI_ENABLED" default:"false"`
 	PhoneAuthEnabled bool `envconfig:"FEATURE_PHONE_AUTH_ENABLED" default:"false"`
+	// AuthDevBypassEnabled liga o código fixo "000000" (autentica qualquer email
+	// sem Redis) e o rate-limit alto de tentativas de magic link. Default false
+	// de propósito: o bypass NUNCA pode nascer ligado por env ausente — antes
+	// dependia de APP_ENV=="development", que é o próprio default de APP_ENV.
+	// validate() recusa o boot se esta flag for true fora de APP_ENV=development.
+	AuthDevBypassEnabled bool `envconfig:"AUTH_DEV_BYPASS_ENABLED" default:"false"`
 }
 
 type AppConfig struct {
@@ -244,6 +250,20 @@ func (c *Config) IsTest() bool { return c.App.Env == "test" }
 func (c *Config) validate() error {
 	if len(c.JWT.Secret) < 32 {
 		return fmt.Errorf("JWT_SECRET deve ter pelo menos 32 caracteres")
+	}
+	if c.Features.AuthDevBypassEnabled && c.App.Env != "development" {
+		return fmt.Errorf("AUTH_DEV_BYPASS_ENABLED=true fora de APP_ENV=development — bypass de login nunca pode ficar ligado fora de dev")
+	}
+	if c.Features.BillingEnabled {
+		if c.Stripe.SecretKey == "" {
+			return fmt.Errorf("FEATURE_BILLING_ENABLED=true requer STRIPE_SECRET_KEY")
+		}
+		if c.Stripe.WebhookSecret == "" {
+			return fmt.Errorf("FEATURE_BILLING_ENABLED=true requer STRIPE_WEBHOOK_SECRET")
+		}
+	}
+	if c.Features.TutorAIEnabled && c.Anthropic.APIKey == "" {
+		return fmt.Errorf("FEATURE_TUTOR_AI_ENABLED=true requer ANTHROPIC_API_KEY")
 	}
 	return nil
 }

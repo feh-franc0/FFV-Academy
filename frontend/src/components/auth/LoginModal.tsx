@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { requestToken, verifyToken, MOCK_TOKEN, type UserProfile } from '@/lib/auth';
 import { emailSchema, phoneBRSchema } from '@/lib/schemas';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 
 const IS_DEV = process.env.NODE_ENV !== 'production';
 
@@ -15,20 +16,29 @@ interface Props {
 }
 
 // 'email'    → apenas email (passo 1)
-// 'register' → nome + celular + consentimento + código (novo usuário)
-// 'code'     → apenas código (usuário retornante)
+// 'code'     → apenas código — TODO mundo passa por aqui primeiro, novo ou não
+// 'register' → nome + celular + consentimento, alcançado só quando o código já
+//              validado revela que o email é de conta nova (registrationRequired)
+//
+// Por quê nesta ordem (e não decidir 'register' vs 'code' pelo request-token):
+// o request-token é endpoint PÚBLICO e não prova posse do email — responder
+// "email novo" ali para qualquer um que só sabe o endereço é enumeração de
+// conta. A distinção só é revelada DEPOIS que o código certo é digitado
+// (prova de posse), então "novo usuário" sempre passa por 'code' primeiro.
 type Step = 'email' | 'register' | 'code';
 
 /**
  * Modal de login mágico — 3 passos:
- * 1. Email → verifica se é novo ou retornante.
- * 2a. Novo usuário: nome + celular + consentimento + código.
- * 2b. Retornante: apenas código.
+ * 1. Email.
+ * 2. Código — sempre, para todo mundo (nunca revela se é conta nova aqui).
+ * 3. Se o código validado indicar conta nova: nome + celular + consentimento,
+ *    reenviando o MESMO código (o backend não o consome até o registro chegar).
  */
 export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props) {
   const [step, setStep] = useState<Step>('email');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resendMessage, setResendMessage] = useState<string | null>(null);
 
   const [email, setEmail] = useState(initialEmail ?? '');
   const [name, setName] = useState('');
@@ -37,6 +47,9 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
   const [code, setCode] = useState('');
 
   const codeInputRef = useRef<HTMLInputElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, true);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -56,14 +69,15 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
     if (!emailSchema.safeParse(trimmed).success) return;
     setLoading(true);
     requestToken(trimmed)
-      .then(result => setStep(result.isNewUser ? 'register' : 'code'))
+      .then(() => setStep('code'))
       .catch(err => setError((err as Error).message))
       .finally(() => setLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // intencional: só executa uma vez ao montar
 
   useEffect(() => {
-    if (step === 'code' || step === 'register') codeInputRef.current?.focus();
+    if (step === 'code') codeInputRef.current?.focus();
+    if (step === 'register') nameInputRef.current?.focus();
   }, [step]);
 
   const normalizePhone = useCallback((raw: string): string => {
@@ -93,8 +107,8 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
 
     setLoading(true);
     try {
-      const result = await requestToken(email.trim());
-      setStep(result.isNewUser ? 'register' : 'code');
+      await requestToken(email.trim());
+      setStep('code');
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -132,8 +146,16 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
         : undefined;
 
       const result = await verifyToken(email.trim(), code, pendingRegistration);
+
+      if (result.registrationRequired) {
+        // O código foi VALIDADO (posse do email provada) — só falta cadastro.
+        // O mesmo código é reenviado no próximo submit; não foi consumido.
+        setError(null);
+        setStep('register');
+        return;
+      }
       if (!result.ok || !result.user) {
-        setError(IS_DEV ? `Código incorreto. Em dev use ${MOCK_TOKEN}.` : 'Código incorreto ou expirado. Tente novamente.');
+        setError(IS_DEV ? `Código incorreto. Em dev use ${MOCK_TOKEN}.` : 'Código incorreto ou expirado.');
         return;
       }
       onSuccess(result.user);
@@ -144,11 +166,28 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
     }
   }
 
+  async function handleResendCode() {
+    setError(null);
+    setResendMessage(null);
+    setLoading(true);
+    try {
+      await requestToken(email.trim());
+      setCode('');
+      setResendMessage('Novo código enviado — confira seu email.');
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label="Login"
+      tabIndex={-1}
       className="fixed inset-0 z-[100] flex items-center justify-center px-4"
       style={{
         background: 'rgba(0,0,0,0.7)',
@@ -204,9 +243,9 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
           )}
           {step === 'register' && (
             <>
-              <h2 className="text-2xl font-bold mb-1">Criar sua conta</h2>
+              <h2 className="text-2xl font-bold mb-1">Falta só o cadastro</h2>
               <p className="text-sm mb-6" style={{ color: 'var(--ffv-muted)' }}>
-                Primeira vez por aqui! Preencha os dados e use o código recebido.
+                Código confirmado! Primeira vez por aqui — complete seus dados para continuar.
               </p>
             </>
           )}
@@ -222,10 +261,11 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
           {step === 'email' && (
             <form onSubmit={handleSubmitEmail} className="flex flex-col gap-4">
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
+                <label htmlFor="login-email" className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
                   Email
                 </label>
                 <input
+                  id="login-email"
                   type="email"
                   autoComplete="email"
                   required
@@ -264,7 +304,7 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
                   type="submit"
                   disabled={loading}
                   className="flex-1 py-2.5 rounded-xl text-sm font-bold transition-opacity disabled:opacity-40"
-                  style={{ background: 'linear-gradient(135deg, var(--ffv-blue) 0%, #60a5fa 100%)', color: '#0d1117' }}
+                  style={{ background: 'linear-gradient(135deg, var(--ffv-blue) 0%, var(--ffv-purple) 100%)', color: 'var(--primary-foreground)' }}
                 >
                   {loading ? 'Verificando…' : 'Continuar →'}
                 </button>
@@ -274,26 +314,32 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
 
           {(step === 'register' || step === 'code') && (
             <form onSubmit={handleSubmitCode} className="flex flex-col gap-4">
-              {/* Banner de confirmação de envio */}
-              <div
-                className="flex items-start gap-2.5 px-3.5 py-3 rounded-xl text-xs"
-                style={{
-                  background: 'color-mix(in srgb, var(--ffv-green) 8%, transparent)',
-                  border: '1px solid color-mix(in srgb, var(--ffv-green) 20%, transparent)',
-                  color: 'var(--ffv-green)',
-                }}
-              >
-                <span className="shrink-0 mt-0.5 text-sm">✉️</span>
-                <span>Código enviado para <strong>{email}</strong>. Verifique sua caixa de entrada (e o spam).</span>
-              </div>
+              {/* Banner de confirmação de envio (só no passo do código — no
+                  passo de registro o código já foi validado, o banner
+                  perderia o sentido). */}
+              {step === 'code' && (
+                <div
+                  className="flex items-start gap-2.5 px-3.5 py-3 rounded-xl text-xs"
+                  style={{
+                    background: 'color-mix(in srgb, var(--ffv-green) 8%, transparent)',
+                    border: '1px solid color-mix(in srgb, var(--ffv-green) 20%, transparent)',
+                    color: 'var(--ffv-green)',
+                  }}
+                >
+                  <span className="shrink-0 mt-0.5 text-sm">✉️</span>
+                  <span>Código enviado para <strong>{email}</strong>. Verifique sua caixa de entrada (e o spam).</span>
+                </div>
+              )}
 
               {step === 'register' && (
                 <>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
+                    <label htmlFor="login-name" className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
                       Nome completo
                     </label>
                     <input
+                      id="login-name"
+                      ref={nameInputRef}
                       type="text"
                       autoComplete="name"
                       required
@@ -323,6 +369,7 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
                       </span>
                       <input
                         type="tel"
+                        aria-label="Telefone (DDD + número)"
                         autoComplete="tel-national"
                         required
                         value={phone}
@@ -360,36 +407,55 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
                 </div>
               )}
 
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
-                  Código de verificação
-                </label>
-                <input
-                  ref={codeInputRef}
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  pattern="[0-9]{6}"
-                  maxLength={6}
-                  value={code}
-                  onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  className="w-full text-center text-3xl font-mono tracking-[0.6em] px-4 py-4 rounded-xl outline-none transition-all"
-                  style={{
-                    background: 'var(--ffv-bg)',
-                    border: '1px solid var(--ffv-border)',
-                    color: 'var(--foreground)',
-                    letterSpacing: '0.6em',
-                  }}
-                  placeholder="· · · · · ·"
-                  onFocus={e => { e.currentTarget.style.borderColor = 'var(--ffv-blue)'; e.currentTarget.style.boxShadow = '0 0 0 3px color-mix(in srgb, var(--ffv-blue) 15%, transparent)'; }}
-                  onBlur={e => { e.currentTarget.style.borderColor = code.length === 6 ? 'var(--ffv-green)' : 'var(--ffv-border)'; e.currentTarget.style.boxShadow = 'none'; }}
-                />
-                {code.length > 0 && code.length < 6 && (
-                  <p className="text-xs text-center" style={{ color: 'var(--ffv-muted)' }}>
-                    {6 - code.length} dígito{6 - code.length !== 1 ? 's' : ''} restante{6 - code.length !== 1 ? 's' : ''}
-                  </p>
-                )}
-              </div>
+              {step === 'code' && (
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="login-code" className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
+                    Código de verificação
+                  </label>
+                  <input
+                    id="login-code"
+                    ref={codeInputRef}
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    pattern="[0-9]{6}"
+                    maxLength={6}
+                    value={code}
+                    onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    className="w-full text-center text-3xl font-mono tracking-[0.6em] px-4 py-4 rounded-xl outline-none transition-all"
+                    style={{
+                      background: 'var(--ffv-bg)',
+                      border: '1px solid var(--ffv-border)',
+                      color: 'var(--foreground)',
+                      letterSpacing: '0.6em',
+                    }}
+                    placeholder="· · · · · ·"
+                    onFocus={e => { e.currentTarget.style.borderColor = 'var(--ffv-blue)'; e.currentTarget.style.boxShadow = '0 0 0 3px color-mix(in srgb, var(--ffv-blue) 15%, transparent)'; }}
+                    onBlur={e => { e.currentTarget.style.borderColor = code.length === 6 ? 'var(--ffv-green)' : 'var(--ffv-border)'; e.currentTarget.style.boxShadow = 'none'; }}
+                  />
+                  {code.length > 0 && code.length < 6 && (
+                    <p className="text-xs text-center" style={{ color: 'var(--ffv-muted)' }}>
+                      {6 - code.length} dígito{6 - code.length !== 1 ? 's' : ''} restante{6 - code.length !== 1 ? 's' : ''}
+                    </p>
+                  )}
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      onClick={handleResendCode}
+                      disabled={loading}
+                      className="text-xs underline decoration-dotted disabled:opacity-40"
+                      style={{ color: 'var(--ffv-muted)' }}
+                    >
+                      Não recebeu? Reenviar código
+                    </button>
+                  </div>
+                  {resendMessage && (
+                    <p className="text-xs text-center" role="status" aria-live="polite" style={{ color: 'var(--ffv-green)' }}>
+                      {resendMessage}
+                    </p>
+                  )}
+                </div>
+              )}
 
               {error && (
                 <p className="text-xs px-3 py-2 rounded-lg" role="alert" aria-live="assertive"
@@ -411,9 +477,11 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
                   type="submit"
                   disabled={loading || code.length !== 6}
                   className="flex-1 py-2.5 rounded-xl text-sm font-bold transition-all disabled:opacity-40"
-                  style={{ background: 'linear-gradient(135deg, var(--ffv-blue) 0%, #60a5fa 100%)', color: '#0d1117' }}
+                  style={{ background: 'linear-gradient(135deg, var(--ffv-blue) 0%, var(--ffv-purple) 100%)', color: 'var(--primary-foreground)' }}
                 >
-                  {loading ? 'Validando…' : 'Entrar na conta'}
+                  {loading
+                    ? (step === 'register' ? 'Criando conta…' : 'Validando…')
+                    : (step === 'register' ? 'Criar conta' : 'Entrar na conta')}
                 </button>
               </div>
             </form>

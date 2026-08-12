@@ -20,6 +20,17 @@ import type { UserProfile } from '@/lib/auth';
 export interface AuthContextValue {
   user: UserProfile | null;
   isLoggedIn: boolean;
+  /**
+   * `true` enquanto a sessão ainda não foi restaurada — e `true` também no
+   * SERVIDOR e no primeiro render do cliente, de propósito.
+   *
+   * Existe porque `RequireAuth` decidia com `typeof window === 'undefined'`
+   * dentro do render: o servidor entregava o esqueleto e o primeiro render do
+   * cliente entregava a tela de login, o que é exatamente o primeiro item da
+   * mensagem de erro de hidratação do React. Estado real de carregamento faz os
+   * dois concordarem; ramo por ambiente nunca faz.
+   */
+  carregando: boolean;
   requireLogin: (reason?: string) => Promise<UserProfile>;
   refresh: () => Promise<void>;
   logout: () => Promise<void>;

@@ -69,14 +69,11 @@ export interface HubOption {
 }
 
 export const HUB_OPTIONS: readonly HubOption[] = [
-  { id: 'ia',                   label: 'Inteligência Artificial', icon: '🧠', description: 'Transformers, LLMs, RAG, agents, fine-tuning' },
-  { id: 'aws',                  label: 'AWS',                     icon: '☁️', description: 'EC2, S3, Lambda, certificações Cloud Practitioner/Developer' },
-  { id: 'engenharia',           label: 'Engenharia de Software',  icon: '⚙️', description: 'Arquitetura, sistemas distribuídos, SRE, testing' },
-  { id: 'claude',               label: 'Claude & Anthropic',      icon: '🪶', description: 'Claude Code, MCP, context engineering, safety' },
-  { id: 'fundamentos',          label: 'Fundamentos',             icon: '📐', description: 'CS, redes, banco de dados, algoritmos' },
-  { id: 'programacao',          label: 'Programação',             icon: '💻', description: 'TypeScript, Go, Python, frameworks' },
-  { id: 'dados',                label: 'Dados',                   icon: '📊', description: 'ETL, data warehouse, analytics, ML ops' },
-  { id: 'profissional-digital', label: 'Profissional Digital',    icon: '🚀', description: 'Carreira, comunicação, conteúdo, empreendedorismo' },
+  { id: 'ia-aws',               label: 'IA na AWS',               icon: '◈', description: 'Bedrock, Knowledge Bases, agents, AgentCore, Guardrails' },
+  { id: 'aws',                  label: 'Arquitetura AWS',         icon: '☁️', description: '100 laboratórios em Terraform, CLF, DVA, SAA e SAP' },
+  { id: 'ia',                   label: 'Fundamentos de IA',       icon: '🧠', description: 'Transformers, LLMs, RAG, agents, evals, fine-tuning' },
+  { id: 'engenharia',           label: 'Produção e Dados',        icon: '⚙️', description: 'SRE, distribuídos, FinOps, segurança, retrieval' },
+  { id: 'fundamentos',          label: 'Base técnica',            icon: '📐', description: 'Terminal, Git, HTTP, redes, SQL, Python/TS/Go' },
 ] as const;
 
 export interface CertificationOption {

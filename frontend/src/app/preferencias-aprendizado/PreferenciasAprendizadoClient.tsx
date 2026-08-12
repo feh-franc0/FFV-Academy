@@ -83,14 +83,18 @@ export function PreferenciasAprendizadoClient() {
 
   if (!isLoggedIn || status === 'loading') {
     return (
-      <main className="max-w-3xl mx-auto px-6 py-12 text-sm" style={{ color: 'var(--ffv-muted)' }}>
+      <div className="max-w-3xl mx-auto px-6 py-12 text-sm" style={{ color: 'var(--ffv-muted)' }}>
+        {/* Título fora da condição — ver a nota em ProgressoClient.tsx. */}
+        <h1 className="text-2xl font-bold mb-4" style={{ color: 'var(--foreground)' }}>
+          Preferências de aprendizado
+        </h1>
         Carregando preferências…
-      </main>
+      </div>
     );
   }
 
   return (
-    <main className="max-w-3xl mx-auto px-6 py-12">
+    <div className="max-w-3xl mx-auto px-6 py-12">
       <nav className="text-xs mb-6" style={{ color: 'var(--ffv-muted)' }}>
         <Link href="/" style={{ color: 'var(--ffv-muted)' }}>FFV Academy</Link>
         <span className="mx-1">/</span>
@@ -265,6 +269,6 @@ export function PreferenciasAprendizadoClient() {
           Voltar
         </Link>
       </div>
-    </main>
+    </div>
   );
 }

@@ -68,10 +68,23 @@ function dtoToProfile(dto: UserDTO): UserProfile {
 /**
  * Token fixo aceito no modo mock — visível intencionalmente em desenvolvimento.
  *
- * SEGURANÇA: Em build de produção (NODE_ENV=production), o bloco que usa
- * MOCK_TOKEN é dead code e o tree-shaker do webpack o remove do bundle final.
- * A verificação dupla (!hasBackend && !isProduction) garante que mesmo um
- * ambiente de staging sem NEXT_PUBLIC_API_BASE_URL não aceite o token mock.
+ * SEGURANÇA (corrigido 11/ago/2026, achado P-05 da auditoria): a alegação
+ * anterior aqui — "o tree-shaker remove esse bloco em produção" — era falsa.
+ * `hasBackend()` é uma checagem de RUNTIME (lê `NEXT_PUBLIC_API_BASE_URL`), não
+ * um `NODE_ENV` estático, então nenhum minificador elimina o bloco por DCE.
+ * O literal `'000000'` permanece no bundle de produção.
+ *
+ * A garantia real tem duas camadas independentes:
+ * 1. `deploy.yml` sempre injeta `NEXT_PUBLIC_API_BASE_URL` como build arg —
+ *    `hasBackend()` é `true` em todo deploy real, então este bloco nunca
+ *    executa em produção, apesar de presente no bundle.
+ * 2. Mesmo que (1) falhasse (staging mal configurado), `verifyToken` tem a
+ *    guarda explícita `if (IS_PRODUCTION || token !== MOCK_TOKEN)` — o token
+ *    mock nunca é aceito quando `NODE_ENV==='production'`, sem depender de
+ *    `hasBackend()`.
+ * Travado por `auth-backend.test.ts` — "MOCK_TOKEN não recebe tratamento
+ * especial": com backend configurado, o token é apenas repassado ao servidor
+ * real, que o rejeita como qualquer outro token inválido.
  */
 export const MOCK_TOKEN = '000000';
 
@@ -91,28 +104,30 @@ function delay(ms: number): Promise<void> {
 
 /**
  * Solicita o token de login por email.
- * Mock: simula envio (log + 400ms). Retorna isNewUser=true se não houver user salvo.
+ * Mock: simula envio (log + 400ms).
  * Real: POST /api/v1/auth/request-token → email via Resend.
+ *
+ * NÃO retorna isNewUser: este endpoint é público e não prova posse do email
+ * (só o endereço). A distinção "email novo" só é revelada por verifyToken,
+ * que exige o código correto (prova de posse) — ver ErrRegistrationRequired
+ * no backend. Responder diferente aqui para email cadastrado vs. não seria
+ * enumeração de conta.
  */
-export async function requestToken(email: string): Promise<{ ok: true; isNewUser: boolean }> {
+export async function requestToken(email: string): Promise<{ ok: true }> {
   if (!emailSchema.safeParse(email).success) throw new Error('email inválido');
 
   if (!hasBackend()) {
-    const existing = getUser();
-    const isNewUser = !existing || existing.email !== email;
     console.info(`[MOCK] token ${MOCK_TOKEN} enviado para ${email}`);
     await delay(400);
-    return { ok: true, isNewUser };
+    return { ok: true };
   }
 
   try {
-    const res = await apiPost<{ message: string; isNewUser: boolean }>(
-      '/api/v1/auth/request-token', { email }, false,
-    );
-    return { ok: true, isNewUser: res.isNewUser };
+    await apiPost<{ message: string }>('/api/v1/auth/request-token', { email }, false);
+    return { ok: true };
   } catch (err) {
     if (err instanceof ApiError && err.status === 429) {
-      throw new Error('Limite de tentativas atingido. Aguarde 15 minutos antes de tentar novamente.');
+      throw new Error('Limite de tentativas atingido. Aguarde 10 minutos antes de tentar novamente.');
     }
     throw err;
   }
@@ -130,12 +145,17 @@ interface PendingRegistration {
  * Verifica o token.
  * Mock: aceita apenas "000000".
  * Real: POST /api/v1/auth/verify → recebe accessToken + UserDTO.
+ *
+ * `registrationRequired: true` significa que o CÓDIGO foi validado (posse do
+ * email provada) mas o email é de conta nova sem nome/telefone — reenvie o
+ * MESMO código com `pendingRegistration` preenchido. O token não é queimado
+ * nesse caso (ver backend: Peek antes de Consume), então o retry funciona.
  */
 export async function verifyToken(
   email: string,
   token: string,
   pendingRegistration?: PendingRegistration,
-): Promise<{ ok: boolean; user?: UserProfile }> {
+): Promise<{ ok: boolean; user?: UserProfile; registrationRequired?: boolean }> {
   if (!emailSchema.safeParse(email).success) return { ok: false };
 
   if (!hasBackend()) {
@@ -146,7 +166,7 @@ export async function verifyToken(
 
     const existing = getUser();
     if (existing && existing.email === email) return { ok: true, user: existing };
-    if (!pendingRegistration) return { ok: false };
+    if (!pendingRegistration) return { ok: false, registrationRequired: true };
 
     const user: UserProfile = {
       id: `mock-${email}`,
@@ -181,6 +201,9 @@ export async function verifyToken(
     return { ok: true, user: profile };
 
   } catch (err) {
+    if (err instanceof ApiError && err.type === 'registration-required') {
+      return { ok: false, registrationRequired: true };
+    }
     if (err instanceof ApiError && err.status === 401) return { ok: false };
     throw err;
   }

@@ -1,9 +1,16 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { BASE, social } from '@/lib/metadata-social';
+
+/** Uma definição só: serve à meta description e ao cartão social. */
+const DESCRICAO_CARTAO =
+  'Cheatsheets imprimíveis (PDF) dos temas mais consultados. Conteúdo denso, sem hype, PT-BR.';
 
 export const metadata: Metadata = {
-  title: 'Cheatsheets profissionais — FFV Academy',
-  description: 'Cheatsheets imprimíveis (PDF) dos temas mais consultados. Conteúdo denso, sem hype, PT-BR.',
+  alternates: { canonical: `${BASE}/cheatsheets` },
+  ...social({ titulo: `Cheatsheets profissionais — FFV Academy`, descricao: DESCRICAO_CARTAO, caminho: '/cheatsheets' }),
+  title: 'Cheatsheets profissionais',
+  description: DESCRICAO_CARTAO,
   keywords: 'cheatsheet postgres, cheatsheet git, cheatsheet kubernetes, cheatsheet rust, cheatsheet system design',
 };
 

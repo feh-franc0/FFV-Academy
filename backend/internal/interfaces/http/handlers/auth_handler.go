@@ -94,15 +94,19 @@ func (h *AuthHandler) RequestToken(w http.ResponseWriter, r *http.Request) {
 	cmd := appidentity.RequestMagicLinkCommand{
 		Email: strings.TrimSpace(req.Email),
 	}
-	result, err := h.requestMagicLink.Execute(r.Context(), cmd)
+	_, err := h.requestMagicLink.Execute(r.Context(), cmd)
 	if err != nil {
 		HandleDomainError(w, err)
 		return
 	}
 
+	// NUNCA revela isNewUser aqui: este endpoint é público e não exige posse
+	// do email (só o endereço). Responder diferente para email cadastrado vs.
+	// não cadastrado é enumeração de conta. A distinção "email novo" só é
+	// revelada depois que o código é validado, em Verify — que já prova posse
+	// do email (ver shared.ErrRegistrationRequired).
 	WriteJSON(w, http.StatusAccepted, map[string]interface{}{
-		"message":   "token enviado",
-		"isNewUser": result.IsNewUser,
+		"message": "token enviado",
 	})
 }
 

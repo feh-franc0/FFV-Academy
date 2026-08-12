@@ -5,31 +5,20 @@
 package handlers
 
 import (
-	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	domcert "github.com/fernandofv/api/internal/domain/certificate"
 	domidentity "github.com/fernandofv/api/internal/domain/identity"
 	domsim "github.com/fernandofv/api/internal/domain/simulado"
+	"github.com/fernandofv/api/internal/interfaces/http/middleware"
 )
 
-// clientIPFromRequest extrai o IP do cliente considerando proxies.
-// Duplica a lógica do middleware.clientIP (não exportado) para uso em handlers.
+// clientIPFromRequest extrai o IP do cliente considerando proxies — delega a
+// middleware.ClientIP para não ter duas implementações que podem divergir (a
+// duplicação anterior confiava em X-Forwarded-For sem checar proxy confiável).
 func clientIPFromRequest(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		return strings.TrimSpace(parts[0])
-	}
-	if xr := r.Header.Get("X-Real-IP"); xr != "" {
-		return xr
-	}
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return ip
+	return middleware.ClientIP(r)
 }
 
 // UserDTO é a representação pública do usuário.
@@ -75,6 +64,36 @@ type AttemptDTO struct {
 	DeadlineAt  string            `json:"deadlineAt"`
 	FinishedAt  *string           `json:"finishedAt,omitempty"`
 	TimeLeftSec int64             `json:"timeLeftSec"`
+	Questions   []ExamQuestionDTO `json:"questions,omitempty"`
+}
+
+// ExamQuestionDTO é a questão como o cliente vê DURANTE a prova — sem
+// correctId e sem explanation. O gabarito só é revelado depois do finish
+// (ver Requirement "O gabarito não é entregue durante a prova" no pack
+// prova-integra-e-anti-fraude). Deliberadamente um tipo PRÓPRIO, não um
+// subconjunto de campos de DBQuestionDTO: assim um campo novo adicionado a
+// DBQuestionDTO no futuro (ex: mais um dado de explicação) não vaza para cá
+// por acidente — quem quiser expor algo aqui tem de fazer isso explicitamente.
+type ExamQuestionDTO struct {
+	ID         string              `json:"id"`
+	Stem       string              `json:"stem"`
+	Options    []QuestionOptionDTO `json:"options"`
+	Topic      string              `json:"topic"`
+	Difficulty string              `json:"difficulty"`
+}
+
+func dbQuestionToExamDTO(q *domsim.DBQuestion) ExamQuestionDTO {
+	opts := make([]QuestionOptionDTO, len(q.Options))
+	for i, o := range q.Options {
+		opts[i] = QuestionOptionDTO{ID: string(o.ID), Text: o.Text}
+	}
+	return ExamQuestionDTO{
+		ID:         q.ID,
+		Stem:       q.Stem,
+		Options:    opts,
+		Topic:      string(q.Topic),
+		Difficulty: string(q.Difficulty),
+	}
 }
 
 // ScoreDTO é a representação pública do score.
@@ -92,7 +111,10 @@ type TopicDTO struct {
 	Total   int `json:"total"`
 }
 
-func attemptToDTO(a *domsim.Attempt) AttemptDTO {
+// attemptToDTO converte o aggregate em DTO. `questions` é opcional (nil
+// omite o campo) — usado para carregar as questões sorteadas (sem gabarito)
+// junto da resposta de Start/Resume, poupando uma segunda chamada do cliente.
+func attemptToDTO(a *domsim.Attempt, questions []*domsim.DBQuestion) AttemptDTO {
 	answers := make(map[string]string, a.Answers().Count())
 	for qID, optID := range a.Answers().ToMap() {
 		answers[string(qID)] = string(optID)
@@ -139,16 +161,36 @@ func attemptToDTO(a *domsim.Attempt) AttemptDTO {
 		}
 	}
 
+	if len(questions) > 0 {
+		dto.Questions = make([]ExamQuestionDTO, len(questions))
+		for i, q := range questions {
+			dto.Questions[i] = dbQuestionToExamDTO(q)
+		}
+	}
+
 	return dto
 }
 
 // CertificateDTO é a representação pública de um certificado.
+//
+// `Score` foi acrescentado em ago/2026. O agregado sempre teve `Score()`, mas o
+// DTO não o expunha — e a tela `/verificar` é a que mais precisa dele: quem abre
+// aquela página é um terceiro conferindo o documento de outra pessoa, e "válido"
+// sem pontuação não diz se a pessoa passou. O cliente contornava lendo o score
+// do `localStorage`, o que só funciona no dispositivo que emitiu o certificado —
+// exatamente o caso que a verificação por terceiro não é.
+//
+// Pontuação de aprovação não é dado sensível: ela já está impressa no próprio
+// certificado que o titular compartilha. O que continua fora do DTO é o que não
+// pertence a um verificador — e `UserID` está aqui porque a rota autenticada de
+// listagem usa o mesmo tipo.
 type CertificateDTO struct {
 	Hash       string `json:"hash"`
 	UserID     string `json:"userId"`
 	SimuladoID string `json:"simuladoId"`
 	AttemptID  string `json:"attemptId"`
 	HolderName string `json:"holderName"`
+	Score      int    `json:"score"`
 	IssuedAt   string `json:"issuedAt"`
 	VerifyURL  string `json:"verifyUrl"`
 }
@@ -160,6 +202,7 @@ func certificateToDTO(c *domcert.Certificate, baseURL string) CertificateDTO {
 		SimuladoID: c.SimuladoID().String(),
 		AttemptID:  c.AttemptID().String(),
 		HolderName: c.HolderName(),
+		Score:      c.Score(),
 		IssuedAt:   c.IssuedAt().UTC().Format(time.RFC3339),
 		VerifyURL:  baseURL + "/certificates/" + c.Hash().String(),
 	}

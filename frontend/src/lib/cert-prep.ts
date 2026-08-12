@@ -218,39 +218,30 @@ export const CERTIFICATIONS: Certification[] = [
         name: 'Cluster Architecture, Installation & Configuration',
         weight: 25,
         moduleSlugs: [
-          'kubernetes-completo',
-          'docker-completo',
         ],
       },
       {
         name: 'Workloads & Scheduling',
         weight: 15,
         moduleSlugs: [
-          'kubernetes-completo',
-          'capstone-devops-plataforma-completa',
         ],
       },
       {
         name: 'Services & Networking',
         weight: 20,
         moduleSlugs: [
-          'kubernetes-completo',
-          'rancher-multicluster',
         ],
       },
       {
         name: 'Storage',
         weight: 10,
         moduleSlugs: [
-          'docker-completo',
         ],
       },
       {
         name: 'Troubleshooting',
         weight: 30,
         moduleSlugs: [
-          'capstone-devops-plataforma-completa',
-          'github-actions-cicd',
         ],
       },
     ],

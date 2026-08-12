@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { getDailyModule, type DailyModule } from '@/lib/dailyModule';
+import type { DailyModule } from '@/lib/dailyModule';
 import { useGameState } from '@/hooks/useGameState';
 
 /**
@@ -14,7 +14,16 @@ export function DailyModuleCard() {
   const { state } = useGameState();
 
   useEffect(() => {
-    setDaily(getDailyModule({ onlyBeginnerOrIntermediate: true }));
+    // Import dinâmico: `dailyModule.ts` importa `CURRICULUM` completo (~92 KB
+    // gz) porque `onlyBeginnerOrIntermediate` filtra por `Module.level`, campo
+    // ausente do índice leve. Este card renderiza na HOME, então estático ele
+    // levava o currículo inteiro para a rota de maior tráfego do site. Roda só
+    // depois do mount — SSR já não precisava do valor síncrono.
+    let ativo = true;
+    import('@/lib/dailyModule').then(({ getDailyModule }) => {
+      if (ativo) setDaily(getDailyModule({ onlyBeginnerOrIntermediate: true }));
+    });
+    return () => { ativo = false; };
   }, []);
 
   if (!daily) return null;

@@ -1,0 +1,2386 @@
+{
+  "slug": "lab-kms-envelope-cmk-rotacao",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência atravessou uma auditoria de um cliente enterprise para fechar contrato. Uma das perguntas do questionário de segurança era simples de escrever e impossível de responder direito: \"qual chave criptográfica protege a tabela de clientes, e quem pode usá-la?\". A resposta que o time deu — \"está tudo criptografado, é padrão da AWS\" — não satisfez o auditor, e o motivo técnico só ficou claro depois: todo RDS, todo S3 e todo Secrets Manager da conta usa a MESMA chave por serviço, a gerenciada pela AWS, compartilhada com qualquer outro produto que a empresa venha a rodar na mesma conta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O segredo do banco já saiu do código no "
+              },
+              {
+                "text": "L04",
+                "code": true
+              },
+              {
+                "text": ", e a aplicação já usa identidade de workload em vez de chave estática desde o "
+              },
+              {
+                "text": "L42",
+                "code": true
+              },
+              {
+                "text": ". Este laboratório não adiciona criptografia — ela já existia nos dois. Ele troca QUEM controla a chave que a faz funcionar, e mede a diferença que isso faz numa auditoria de verdade."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Há uma segunda motivação, mais concreta que compliance: o campo CPF do cliente vive numa tabela que qualquer credencial de leitura do Postgres consegue consultar em texto claro — a criptografia de armazenamento do RDS é transparente para conexão autenticada. Uma credencial vazada, ou uma injeção de SQL bem-sucedida, lê o CPF normalmente, mesmo com o volume inteiro cifrado. Fechar esse caminho específico exige cifrar o campo no código, não só no disco."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado — depende do L04 (segredo) e do L42 (identidade de workload)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L04 e L42 concluídos e no ar; Terraform e .NET 8"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 45 min · implementação 2 h a 2 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo e previsível: mensalidade fixa por CMK, mais chamadas de API que Bucket Keys reduz drasticamente"
+              },
+              {
+                "k": "Serviços",
+                "v": "KMS, RDS (Postgres), S3, Secrets Manager, CloudTrail"
+              },
+              {
+                "k": "Volume atual",
+                "v": "RDS com dados de ~9 mil pedidos/mês; S3 com uma nota fiscal por pedido"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "auditoria por classe de dado sensível, isolada por chave"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "dado de cliente (RDS + segredo) e documento fiscal (S3) são classes de sensibilidade DIFERENTES — é o que justifica duas CMKs"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "duas CMKs com política própria, rotação habilitada, o CPF cifrado em campo, e uma trilha de uso auditável por chave"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é classificação automática de dado sensível em escala, nem minimização de log — isso é o L49, e ele depende deste. Também não é controle de acesso por coluna dentro do lake (L69). Aqui a pergunta é mais estreita: dado o dado JÁ classificado como sensível, qual chave o protege, quem pode usá-la, e como isso se prova."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação, não com a sensação de ter entendido a diferença entre os dois tipos de chave."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que \"está criptografado\" com a chave gerenciada pela AWS não responde a uma pergunta de auditoria por recurso.",
+              "Nomear a diferença de POLÍTICA entre chave gerenciada pela AWS e CMK, e por que só a segunda funciona como uma trava independente do IAM.",
+              "Descrever a criptografia de envelope com precisão: o papel da chave de dados efêmera e o papel da CMK, e por que o segundo nunca cifra o payload diretamente.",
+              "Configurar a política de uma CMK restringindo o uso a um principal específico via `kms:ViaService`, e provar que isso bloqueia uso fora do serviço esperado.",
+              "Habilitar rotação automática e explicar, com precisão, o que ela troca e o que preserva.",
+              "Cifrar um campo sensível na aplicação com envelope explícito, usando contexto de cifragem para amarrar o ciphertext ao registro certo.",
+              "Provar, com CloudTrail, que o uso de cada CMK é filtrável isoladamente por ARN de chave.",
+              "Diagnosticar os dois defeitos mais comuns de política de chave: falta de `kms:ViaService` e ausência do principal raiz."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Criptografia de envelope",
+                "SAA-C03, DVA-C02, SCS-C02",
+                "chave de dados efêmera cifra o payload; a CMK só cifra a chave de dados",
+                "por que isso permite cifrar objetos grandes sem chamar o KMS por byte"
+              ],
+              [
+                "CMK vs chave gerenciada pela AWS",
+                "SAA-C03, SCS-C02",
+                "política própria e nomeada vs política fixada pelo serviço",
+                "que a chave gerenciada concede uso a qualquer principal já autorizado no serviço"
+              ],
+              [
+                "Política de chave e IAM: interseção",
+                "SAA-C03, SCS-C02",
+                "as duas políticas têm de concordar; nenhuma isolada basta",
+                "a mesma lógica de SCP+IAM, aplicada a `kms:` em vez de organização"
+              ],
+              [
+                "`kms:ViaService`",
+                "SAA-C03, DVA-C02, SCS-C02",
+                "restringe o uso da chave a um serviço e endpoint regional específico",
+                "que a condição bloqueia chamada direta fora do fluxo do serviço nomeado"
+              ],
+              [
+                "Rotação de chave",
+                "SAA-C03, SCS-C02",
+                "automática (CMK, opcional) vs obrigatória (chave gerenciada, anual, fixa)",
+                "que o KeyId nunca muda e o dado antigo continua decifrável após rotacionar"
+              ],
+              [
+                "Exclusão de chave",
+                "SAA-C03, SCS-C02",
+                "janela de espera cancelável, e o que acontece depois dela",
+                "que é a única operação deste catálogo verdadeiramente irreversível"
+              ],
+              [
+                "Encryption context",
+                "SCS-C02",
+                "campo extra que amarra o ciphertext a um contexto, verificado na decifragem",
+                "que não é segredo — é autenticação adicional, e aparece em claro no CloudTrail"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve uma política de Secrets Manager correta, com `GetSecretValue` liberado, e a leitura falha com acesso negado mesmo assim. A causa não está na política do segredo — está faltando `kms:Decrypt` na política ou no IAM do principal, porque ler um segredo cifrado por CMK exige as DUAS permissões, nunca só uma. Com a chave gerenciada pela AWS essa pegadinha não aparece, porque a política dela já concede o uso pelo serviço."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito não funcional sem marca no desenho é intenção. A coluna da direita é onde cada um vira Terraform."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Auditoria de uso por classe de dado",
+                "obrigatória, por classe",
+                "obriga CMK própria em vez da chave gerenciada — só ela tem trilha filtrável por ARN"
+              ],
+              [
+                "Isolamento entre classes de dado",
+                "dado de cliente ≠ documento fiscal",
+                "duas CMKs, não uma — cada classe com blast radius próprio"
+              ],
+              [
+                "Quem pode decifrar",
+                "só a task role da API, por serviço",
+                "política de chave com principal nomeado e `kms:ViaService`, não `Principal: \"*\"`"
+              ],
+              [
+                "Proteção contra credencial de leitura vazada",
+                "para o CPF, especificamente",
+                "envelope explícito no código, além da criptografia de armazenamento do RDS"
+              ],
+              [
+                "Rotação de material criptográfico",
+                "anual, auditável",
+                "rotação automática habilitada na CMK, com prova via `get-key-rotation-status`"
+              ],
+              [
+                "Recuperação de exclusão acidental",
+                "janela mínima",
+                "não deletar a chave: agendar com `deletion_window_in_days`, alarme em `ScheduleKeyDeletion`"
+              ],
+              [
+                "Custo de API previsível em alta escala",
+                "sem surpresa na fatura",
+                "S3 Bucket Keys habilitado; cache de chave de dados considerado para cifra de campo em volume"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: tudo cifrado, e nenhuma pergunta com resposta isolada"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o estado atual da Cadência, e ele não é negligente: cada serviço está cifrado por padrão, sem que ninguém tenha decidido nada. É exatamente essa ausência de decisão que o laboratório resolve — não a ausência de criptografia."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Três serviços, três chaves que ninguém escolheu",
+            "caption": "Toda peça deste desenho está cifrada — nenhuma exceção — e mesmo assim nenhuma pergunta de auditoria por recurso tem resposta isolada. A chave que protege o banco da Cadência é a MESMA que protege o de qualquer outro produto da mesma conta, porque \"criptografado\" aqui significa \"a chave padrão do serviço\", não uma decisão sua. Percorra os passos: o defeito não é a ausência de criptografia, é a ausência de uma segunda trava independente dela.",
+            "groups": [
+              {
+                "label": "Aplicação",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "ecs_app",
+                    "service": "fargate",
+                    "label": "Task .NET 8 — API de pedidos",
+                    "note": "chama três serviços e não decide chave nenhuma: cada um usa a que já vem por padrão"
+                  }
+                ]
+              },
+              {
+                "label": "Dados de cliente",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "rds_cadencia",
+                    "service": "rds",
+                    "label": "RDS Postgres — pedidos e clientes",
+                    "note": "volume cifrado por padrão com a chave gerenciada aws/rds, a mesma de toda a conta"
+                  }
+                ]
+              },
+              {
+                "label": "Outro produto, mesma conta",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "rds_outro",
+                    "service": "rds",
+                    "label": "RDS de um produto sem relação",
+                    "note": "usa a MESMA chave aws/rds — é o que \"chave compartilhada\" significa na prática"
+                  }
+                ]
+              },
+              {
+                "label": "Documentos",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3_notas",
+                    "service": "s3",
+                    "label": "S3 — notas fiscais em PDF",
+                    "note": "SSE com a chave gerenciada aws/s3, sem política própria configurável por você"
+                  }
+                ]
+              },
+              {
+                "label": "Segredo",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "secret",
+                    "service": "secretsmanager",
+                    "label": "Secrets Manager — credencial do Postgres",
+                    "note": "o segredo do L04, hoje sob a chave gerenciada aws/secretsmanager padrão da conta"
+                  }
+                ]
+              },
+              {
+                "label": "Chaves gerenciadas pela AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "kms_rds",
+                    "service": "kms",
+                    "label": "aws/rds",
+                    "note": "política fixada pelo serviço: você vê, não edita, e não pode restringir por recurso"
+                  },
+                  {
+                    "id": "kms_s3",
+                    "service": "kms",
+                    "label": "aws/s3",
+                    "note": "uma chave por conta e por serviço, nunca uma por bucket ou por classe de dado"
+                  },
+                  {
+                    "id": "kms_sm",
+                    "service": "kms",
+                    "label": "aws/secretsmanager",
+                    "note": "mesma chave de todo segredo da conta; revogar acesso a um não isola os outros"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "ecs_app",
+                "to": "rds_cadencia",
+                "label": "lê e grava o pedido do cliente",
+                "style": "solid"
+              },
+              {
+                "from": "ecs_app",
+                "to": "secret",
+                "label": "lê a credencial de conexão do Postgres",
+                "style": "solid"
+              },
+              {
+                "from": "ecs_app",
+                "to": "s3_notas",
+                "label": "grava o PDF da nota fiscal",
+                "style": "solid"
+              },
+              {
+                "from": "rds_cadencia",
+                "to": "kms_rds",
+                "label": "Decrypt do volume, chave aws/rds",
+                "style": "dashed"
+              },
+              {
+                "from": "rds_outro",
+                "to": "kms_rds",
+                "label": "Decrypt do volume, a MESMA chave aws/rds",
+                "style": "dashed"
+              },
+              {
+                "from": "s3_notas",
+                "to": "kms_s3",
+                "label": "GenerateDataKey por objeto, chave aws/s3",
+                "style": "dashed"
+              },
+              {
+                "from": "secret",
+                "to": "kms_sm",
+                "label": "Decrypt da chave de dados, chave aws/secretsmanager",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Três serviços, três \"está criptografado\"",
+                "detail": "O app fala com o banco, o segredo e o S3, e os três respondem \"cifrado\" se alguém perguntar. É verdade e é uma afirmação vazia: nenhuma delas diz COM QUAL chave, nem quem mais usa essa mesma chave.",
+                "nodes": [
+                  "ecs_app",
+                  "rds_cadencia",
+                  "secret",
+                  "s3_notas"
+                ],
+                "edges": [
+                  "ecs_app>rds_cadencia",
+                  "ecs_app>secret",
+                  "ecs_app>s3_notas"
+                ]
+              },
+              {
+                "label": "A mesma chave protege o banco da Cadência e o de outro produto",
+                "detail": "A chave gerenciada pela AWS é por CONTA e por SERVIÇO, não por recurso. Todo RDS da conta que não aponta uma CMK própria usa `aws/rds` — o mesmo objeto de chave, com a mesma política, para dados que não têm nada em comum.",
+                "nodes": [
+                  "rds_cadencia",
+                  "rds_outro",
+                  "kms_rds"
+                ],
+                "edges": [
+                  "rds_cadencia>kms_rds",
+                  "rds_outro>kms_rds"
+                ]
+              },
+              {
+                "label": "Você não edita a política desta chave",
+                "detail": "A AWS controla a política de uma chave gerenciada por ela: você pode VER, não pode MUDAR. Não existe como restringir o uso de `aws/rds` a um principal específico, nem como excluir um recurso dela — a chave inteira é tudo ou nada.",
+                "nodes": [
+                  "kms_rds"
+                ],
+                "edges": [
+                  "rds_cadencia>kms_rds"
+                ]
+              },
+              {
+                "label": "A rotação é obrigatória, e você não escolhe o prazo",
+                "detail": "Chave gerenciada pela AWS rotaciona automaticamente a cada ano, sem opção de desligar nem de customizar o período. Não é falha de configuração — é assim que ela funciona, e é a única alavanca que você não tem aqui.",
+                "nodes": [
+                  "kms_rds"
+                ],
+                "edges": [
+                  "rds_outro>kms_rds"
+                ]
+              },
+              {
+                "label": "A trava dupla nunca foi dupla",
+                "detail": "A política de `aws/secretsmanager` já concede uso a qualquer principal que a IAM autorizou a chamar o Secrets Manager. Então \"precisa de permissão no segredo E na chave\" colapsa em UMA trava só: quem passa pela primeira já passa pela segunda, porque as duas são a mesma decisão vista de dois lugares.",
+                "nodes": [
+                  "secret",
+                  "kms_sm"
+                ],
+                "edges": [
+                  "secret>kms_sm"
+                ]
+              },
+              {
+                "label": "Por que ninguém trocou isso antes",
+                "detail": "Porque funciona, é gratuito e não pede uma linha de Terraform a mais. O defeito só aparece quando alguém de fora — um auditor, um cliente enterprise — pergunta \"qual chave protege ESTA tabela, separada de todo o resto da conta\" e a resposta honesta é \"nenhuma, é a mesma de tudo\".",
+                "nodes": [
+                  "ecs_app",
+                  "rds_cadencia"
+                ],
+                "edges": [
+                  "ecs_app>rds_cadencia"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A trava dupla nunca foi dupla",
+            "content": "A política da chave gerenciada pela AWS já concede uso a QUALQUER principal que a IAM autorizou a chamar aquele serviço. Então \"preciso de permissão no recurso E na chave\" colapsa numa trava só: quem passa pela permissão de serviço já passa pela da chave, porque as duas são avaliações da MESMA decisão vista de dois lugares diferentes. Isso não é uma falha de configuração — é o comportamento documentado da chave gerenciada, e é exatamente o motivo por que ela não serve como segunda camada de controle."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A criptografia em si — o algoritmo, o AES-256, o envelope — é a mesma dos dois desenhos. O que muda é quem escreve a política, quem ela nomeia, e para onde a trilha de uso aponta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Uma CMK por classe de dado, com política, rotação e trilha próprias",
+            "caption": "A troca não foi \"ligar criptografia\" — já estava ligada nos dois desenhos. A troca foi dar a cada classe sensível uma chave com política PRÓPRIA, que nomeia o principal exato em vez de confiar em quem a IAM já deixa passar, e uma trilha de uso que finalmente responde à pergunta que o desenho anterior não respondia: quem usou ESTA chave, e quando. Repare que documento e dado de cliente foram para chaves DIFERENTES — vazar acesso a uma não expõe a outra.",
+            "groups": [
+              {
+                "label": "Aplicação",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "ecs_app",
+                    "service": "fargate",
+                    "label": "Task .NET 8 — API de pedidos",
+                    "note": "é o único principal nomeado nas políticas de chave abaixo, não \"qualquer role da conta\""
+                  }
+                ]
+              },
+              {
+                "label": "Dados de cliente",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "rds_cadencia",
+                    "service": "rds",
+                    "label": "RDS Postgres — pedidos e clientes",
+                    "note": "volume cifrado pela CMK de clientes, não mais pela chave compartilhada da conta"
+                  }
+                ]
+              },
+              {
+                "label": "Segredo",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "secret",
+                    "service": "secretsmanager",
+                    "label": "Secrets Manager — credencial do Postgres",
+                    "note": "entra no mesmo perímetro de chave do banco: as duas respondem \"quem é este cliente\""
+                  }
+                ]
+              },
+              {
+                "label": "Documentos",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3_notas",
+                    "service": "s3",
+                    "label": "S3 — notas fiscais em PDF",
+                    "note": "classe de dado diferente, chave diferente: vazar uma não expõe o dado de cliente"
+                  }
+                ]
+              },
+              {
+                "label": "Cofre — chaves próprias por classe",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cmk_clientes",
+                    "service": "kms",
+                    "label": "CMK — dados de cliente",
+                    "note": "política nomeia a task role via kms:ViaService; rotação automática habilitada"
+                  },
+                  {
+                    "id": "cmk_documentos",
+                    "service": "kms",
+                    "label": "CMK — documentos fiscais",
+                    "note": "chave separada por decisão de classificação de dado, não por capricho de organização"
+                  }
+                ]
+              },
+              {
+                "label": "Auditoria",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cloudtrail",
+                    "service": "cloudtrail",
+                    "label": "CloudTrail — trilha por ARN de chave",
+                    "note": "Decrypt e GenerateDataKey aparecem com o KeyId exato, filtrável por chave isoladamente"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "ecs_app",
+                "to": "rds_cadencia",
+                "label": "lê e grava o pedido do cliente",
+                "style": "solid"
+              },
+              {
+                "from": "ecs_app",
+                "to": "secret",
+                "label": "lê a credencial de conexão do Postgres",
+                "style": "solid"
+              },
+              {
+                "from": "ecs_app",
+                "to": "s3_notas",
+                "label": "grava o PDF da nota fiscal",
+                "style": "solid"
+              },
+              {
+                "from": "rds_cadencia",
+                "to": "cmk_clientes",
+                "label": "Decrypt/GenerateDataKey no armazenamento do cluster",
+                "style": "dashed"
+              },
+              {
+                "from": "secret",
+                "to": "cmk_clientes",
+                "label": "Decrypt da chave de dados do segredo",
+                "style": "dashed"
+              },
+              {
+                "from": "s3_notas",
+                "to": "cmk_documentos",
+                "label": "GenerateDataKey por objeto gravado com SSE-KMS",
+                "style": "dashed"
+              },
+              {
+                "from": "cmk_clientes",
+                "to": "cloudtrail",
+                "label": "Decrypt e GenerateDataKey, com o KeyId da CMK",
+                "style": "dashed"
+              },
+              {
+                "from": "cmk_documentos",
+                "to": "cloudtrail",
+                "label": "Decrypt e GenerateDataKey, com o KeyId da CMK",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Duas classes, duas chaves, dois blast radius",
+                "detail": "O dado de cliente (banco + o segredo que o abre) e o documento fiscal são classes de sensibilidade distintas, então cada uma recebe sua própria CMK. Comprometer a política ou o material de uma não dá acesso nenhum à outra — era exatamente essa separação que a chave única do desenho anterior não tinha.",
+                "nodes": [
+                  "rds_cadencia",
+                  "cmk_clientes",
+                  "s3_notas",
+                  "cmk_documentos"
+                ],
+                "edges": [
+                  "rds_cadencia>cmk_clientes",
+                  "s3_notas>cmk_documentos"
+                ]
+              },
+              {
+                "label": "O segredo do banco entra no perímetro do banco, não do documento",
+                "detail": "Segredo e dado de cliente respondem à mesma pergunta de identidade — \"quem é este cliente e como falo com o banco dele\" — então compartilham a MESMA CMK por decisão de classificação, não por economia de chave.",
+                "nodes": [
+                  "secret",
+                  "cmk_clientes"
+                ],
+                "edges": [
+                  "secret>cmk_clientes"
+                ]
+              },
+              {
+                "label": "A política de chave nomeia o principal, não \"qualquer um do serviço\"",
+                "detail": "A política da CMK lista o ARN da task role e exige `kms:ViaService`. Isso é a segunda trava que a chave gerenciada nunca teve: mesmo um principal com permissão de RDS na IAM não decifra nada aqui se não estiver nomeado ali.",
+                "nodes": [
+                  "ecs_app",
+                  "rds_cadencia"
+                ],
+                "edges": [
+                  "ecs_app>rds_cadencia"
+                ]
+              },
+              {
+                "label": "Rotação troca o material, não o ID",
+                "detail": "Com rotação automática ligada, a CMK troca a cada ~365 dias (customizável) o material criptográfico por trás do KeyId — e o KeyId, o que o código referencia, nunca muda. Dado cifrado com material antigo continua decifrável sem ação nenhuma.",
+                "nodes": [
+                  "cmk_clientes"
+                ],
+                "edges": [
+                  "rds_cadencia>cmk_clientes"
+                ]
+              },
+              {
+                "label": "A trilha de uso passa a ser filtrável por chave",
+                "detail": "Antes, perguntar \"quem usou a chave dos dados de cliente\" não tinha resposta isolada, porque a chave era de toda a conta. Agora o CloudTrail filtra por ARN de CMK, e todo evento que aparece ali é, por construção da política, do principal nomeado — nenhum outro consegue gerar esse evento.",
+                "nodes": [
+                  "cmk_clientes",
+                  "cmk_documentos",
+                  "cloudtrail"
+                ],
+                "edges": [
+                  "cmk_clientes>cloudtrail",
+                  "cmk_documentos>cloudtrail"
+                ]
+              },
+              {
+                "label": "A criptografia em si não mudou — o controle, sim",
+                "detail": "Os bytes do volume do RDS e do objeto do S3 são cifrados com AES-256 nos dois desenhos, pelo mesmo mecanismo de envelope. O que este desenho compra não é \"mais cifrado\" — é uma política que você escreve, um principal que você nomeia e uma trilha que você filtra.",
+                "nodes": [
+                  "ecs_app",
+                  "s3_notas"
+                ],
+                "edges": [
+                  "ecs_app>s3_notas"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "A prova de que a política realmente restringe",
+            "content": "Com `kms:ViaService`, um principal com permissão ampla de KMS na IAM — inclusive a própria task role — não consegue chamar `kms:Decrypt` diretamente na CMK fora do Secrets Manager ou do S3. A restrição vive na política da CHAVE, não depende de o IAM do chamador estar bem escrito. É a diferença entre confiar em uma política e confiar em duas que precisam concordar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de uma nota fiscal, e o envelope nas duas pontas"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A criptografia de envelope não é um conceito abstrato aqui: é o que acontece, chamada por chamada, todo `PutObject` e todo `GetObject` do bucket de notas fiscais. O S3 nunca manda o arquivo inteiro para o KMS cifrar — ele pede uma chave, cifra localmente, e descarta a chave em claro assim que termina."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "O caminho de uma nota fiscal, do upload à leitura — o envelope nas duas pontas",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1 · PutObject com SSE-KMS",
+                "desc": "O app grava o PDF no S3 apontando para a `cmk_documentos`. Nenhuma linha do código cifra o arquivo — o S3 faz isso, mas precisa pedir a chave certa primeiro."
+              },
+              {
+                "label": "2 · S3 pede uma chave de dados nova",
+                "desc": "Uma chamada `GenerateDataKey` à `cmk_documentos`, específica para ESTE objeto. A resposta traz duas cópias da mesma chave: uma em texto claro, outra cifrada pela CMK."
+              },
+              {
+                "label": "3 · O S3 cifra o objeto localmente, com a cópia em claro",
+                "desc": "A cifragem do PDF inteiro acontece FORA do KMS, com AES-256, usando a chave de dados. É por isso que envelope escala para objetos grandes: o KMS participa uma vez por objeto, não uma vez por byte."
+              },
+              {
+                "label": "4 · A cópia em claro é descartada, e só a cifrada fica",
+                "desc": "O S3 grava o objeto cifrado e a cópia CIFRADA da chave de dados lado a lado. A cópia em texto claro nunca é persistida — ela existiu só pela duração da operação."
+              },
+              {
+                "label": "5 · GetObject pede à CMK para decifrar a chave de dados",
+                "desc": "Na leitura, o S3 manda a cópia cifrada de volta ao KMS (`Decrypt`), que a devolve em texto claro só para aquela chamada. É aqui que a política da CMK é avaliada de novo."
+              },
+              {
+                "label": "6 · O objeto é decifrado, e as duas chamadas ficam na trilha",
+                "desc": "A cópia em claro decifra o PDF e é descartada outra vez. `GenerateDataKey` e `Decrypt` aparecem no CloudTrail com o KeyId da `cmk_documentos` e o contexto de cifragem — nunca com o material da chave em si."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que a chave de dados existe, e por que ela nunca é a CMK",
+            "content": "A operação de cifra direta do KMS aceita um payload pequeno — a ordem de poucos kilobytes, insuficiente para um objeto do S3 ou um arquivo de banco (confira o limite atual na referência da API antes de decidir com precisão o seu caso). Chamar o KMS uma vez por byte também não escalaria em latência. O envelope resolve isso: UMA chamada gera uma chave de dados, e a cifragem do payload inteiro acontece localmente, com AES. A CMK nunca toca no payload — ela só cifra e decifra a chave de dados, que é pequena por natureza."
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "A cópia em texto claro da chave de dados existe fora do KMS por um instante — o tempo de ela viajar de volta ao chamador pela conexão TLS e ser usada localmente — e depois é descartada. O que persiste ao lado do dado cifrado é só a cópia CIFRADA pela CMK. É por isso que o material da CMK em si \"nunca sai da AWS\": ele nunca precisa sair, porque quem sai e volta é a chave de dados, uma vez por objeto."
+              }
+            ]
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O que aparece no CloudTrail para a chamada do passo 2. Repare em duas coisas: o KeyId identifica QUAL CMK, e nao ha material de chave nenhum no evento — nem cifrado, nem em claro. O log prova USO, nunca expõe a chave."
+              }
+            ]
+          },
+          "position": 4
+        },
+        {
+          "id": "b6_4",
+          "type": "code_block",
+          "position": 5,
+          "data": {
+            "language": "json",
+            "filename": "evento-generatedatakey.json",
+            "code": "{\n  \"eventSource\": \"kms.amazonaws.com\",\n  \"eventName\": \"GenerateDataKey\",\n  \"awsRegion\": \"us-east-1\",\n  \"userIdentity\": {\n    \"type\": \"AWSService\",\n    \"invokedBy\": \"s3.amazonaws.com\"\n  },\n  \"requestParameters\": {\n    \"keyId\": \"arn:aws:kms:us-east-1:111122223333:key/1234abcd-clientes\",\n    \"keySpec\": \"AES_256\",\n    \"encryptionContext\": {\n      \"aws:s3:arn\": \"arn:aws:s3:::ffv-lab-notas-fiscais/2026/08/nf-000123.pdf\"\n    }\n  },\n  \"responseElements\": null\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "A Cadência precisa decidir o escopo da mudança: trocar TODAS as chaves gerenciadas pela AWS por CMKs próprias, em toda a conta, ou só onde a classificação de dado exige — dado de cliente (CPF, endereço) e o segredo que abre esse banco.",
+            "winner": "CMK própria só para as classes sensíveis — dado de cliente e documento fiscal — com política nomeando a task role; o resto da conta permanece na chave gerenciada padrão",
+            "why": "Cada CMK cobra mensalidade e pede manutenção de política: aplicar isso em recurso sem dado sensível é custo sem controle correspondente a proteger. O requisito real da Cadência — responder \"qual chave protege este dado, separado do resto\" — só existe onde há dado que justifica a pergunta. Classificar primeiro e depois isolar por classe entrega o mesmo controle com uma fração das chaves.",
+            "alternatives": [
+              {
+                "name": "CMK única compartilhada entre RDS e S3",
+                "downside": "Mistura duas classes de dado com perfil de risco diferente num único blast radius, contradizendo o motivo de ter chave própria: se o objetivo é isolar, uma chave para tudo isola de tudo, menos entre si."
+              },
+              {
+                "name": "Deixar tudo na chave gerenciada e confiar só no IAM",
+                "downside": "É exatamente o estado que gerou a pergunta do auditor sem resposta. A IAM decide o que um principal pode fazer; sem política de chave própria, não existe segunda camada — é o desenho mínimo deste laboratório."
+              },
+              {
+                "name": "Material de chave importado (BYOK)",
+                "downside": "Resolve uma exigência regulatória específica de controlar o material fora da geração da AWS, mas soma a operação de gerenciar um HSM externo e rotação manual — sobra aqui, porque a Cadência não tem esse requisito declarado."
+              },
+              {
+                "name": "Chave multi-região desde o início",
+                "downside": "Só se justifica com um requisito de disaster recovery entre regiões que este laboratório não tem. Adicionar sincronização de material entre regiões sem usar a réplica é complexidade sem retorno."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Escopo da mudança",
+                "CMK só nas classes sensíveis",
+                "CMK em toda a conta; manter tudo na chave gerenciada",
+                "controle sem pagar mensalidade por chave onde não há dado que a justifique",
+                "recurso novo criado sem classificação explícita nasce na chave padrão, por omissão"
+              ],
+              [
+                "Separação de CMK por classe",
+                "clientes ≠ documentos, duas chaves",
+                "uma CMK única para tudo sensível",
+                "blast radius separado: comprometer uma política não expõe a outra classe",
+                "duas políticas para manter em vez de uma; duas mensalidades"
+              ],
+              [
+                "Restrição de uso",
+                "`kms:ViaService` + principal nomeado",
+                "só o principal, sem `ViaService`; `Principal: \"*\"` com condição de conta",
+                "fecha o caminho de chamar o KMS diretamente com a mesma credencial de serviço",
+                "toda vez que um novo serviço legítimo precisar da chave, a condição tem que crescer"
+              ],
+              [
+                "Rotação",
+                "automática, período padrão",
+                "manual; sob demanda apenas quando exigido",
+                "não depende de alguém lembrar; roda sozinha e é auditável",
+                "mensalidade adicional na primeira e segunda rotação mantida (documentado pela AWS)"
+              ],
+              [
+                "Proteção do CPF",
+                "envelope explícito no código",
+                "confiar só na criptografia de armazenamento do RDS",
+                "fecha o gap de credencial vazada ou SQL injection lendo o campo em claro",
+                "toda leitura do campo custa uma chamada ao KMS a mais, e o código fica mais complexo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que o envelope de campo não paga sozinho",
+            "content": "Cifrar o CPF na aplicação protege contra leitura direta da tabela. Não protege contra um relatório, um log de depuração ou uma exportação que capturem o valor DEPOIS de a aplicação já o ter decifrado legitimamente — nesse ponto o dado está em claro na memória do processo, como qualquer variável. Minimizar onde o valor decifrado circula (nunca logar, nunca exportar em claro) é do L49, e ele depende deste."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: as duas CMKs, com política que nomeia o principal"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A política é o coração deste laboratório — mais até que o `enable_key_rotation`. É ela que transforma a chave de \"mais uma configuração cifrada\" em uma trava independente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "kms.tf",
+            "code": "# kms.tf — duas CMKs, uma por classe de dado, com politica propria\n\n# ── CMK 1: dado de cliente (RDS + o segredo que abre o banco) ────────────────\nresource \"aws_kms_key\" \"clientes\" {\n  description = \"Cadencia — dado de cliente: RDS de pedidos e o segredo do Postgres\"\n\n  # Janela de espera antes da exclusao FINAL, se um dia a chave for agendada\n  # para exclusao. Enquanto a janela corre, a operacao e CANCELAVEL; depois\n  # dela, nao. Ver a secao de Seguranca sobre por que isto e o unico risco\n  # verdadeiramente irreversivel deste laboratorio.\n  deletion_window_in_days = 30\n\n  # Rotacao automatica, periodo padrao de 365 dias a partir de quando foi\n  # HABILITADA (nao da criacao da chave). NAO VERIFICADO nesta versao do\n  # provider: se `rotation_period_in_days` esta disponivel no seu provider\n  # para customizar o periodo, confira a documentacao do provider antes de\n  # usar — aqui fica no padrao.\n  enable_key_rotation = true\n\n  policy = data.aws_iam_policy_document.chave_clientes.json\n  tags   = var.tags\n}\n\nresource \"aws_kms_alias\" \"clientes\" {\n  name          = \"alias/${var.projeto}-clientes\"\n  target_key_id = aws_kms_key.clientes.key_id\n}\n\n# A politica e um documento SEPARADO da politica IAM de quem usa a chave — os\n# dois precisam concordar (interseccao, nao uniao), mesma logica de SCP+IAM do\n# L43. Omitir o principal raiz da conta e o erro que mais custa: sem ele, uma\n# politica escrita errado pode tirar de TODO MUNDO — inclusive de quem\n# administra a conta — a capacidade de corrigir a propria politica da chave.\ndata \"aws_iam_policy_document\" \"chave_clientes\" {\n  statement {\n    sid       = \"PermiteAContaRaizAdministrarComoUltimoRecurso\"\n    effect    = \"Allow\"\n    actions   = [\"kms:*\"]\n    resources = [\"*\"]\n    principals {\n      type        = \"AWS\"\n      identifiers = [\"arn:aws:iam::${data.aws_caller_identity.atual.account_id}:root\"]\n    }\n    # \"kms:*\" e \"*\" aqui SO se justificam porque o principal e a conta raiz e\n    # o efeito e a rede de seguranca contra lockout — nao e o padrao de acesso\n    # do dia a dia, que vem nos statements abaixo, restritos por proposito.\n  }\n\n  statement {\n    sid       = \"PermiteAdministradoresDeChaveGerenciarem\"\n    effect    = \"Allow\"\n    actions = [\n      \"kms:Create*\", \"kms:Describe*\", \"kms:Enable*\", \"kms:List*\",\n      \"kms:Put*\", \"kms:Update*\", \"kms:Revoke*\", \"kms:Disable*\",\n      \"kms:Get*\", \"kms:Delete*\", \"kms:TagResource\", \"kms:UntagResource\",\n      \"kms:ScheduleKeyDeletion\", \"kms:CancelKeyDeletion\", \"kms:CreateGrant\",\n    ]\n    resources = [\"*\"]\n    principals {\n      type        = \"AWS\"\n      identifiers = [var.role_administrador_arn]\n    }\n    # CreateGrant entra aqui porque e o principal do PIPELINE (quem roda o\n    # terraform apply) quem precisa dele: e essa identidade que chama\n    # CreateDBInstance, e o RDS usa a permissao de QUEM CHAMOU para criar a\n    # concessao automatica que ele mesmo vai usar depois. A task role da\n    # aplicacao nunca chama kms:CreateGrant.\n  }\n\n  statement {\n    sid       = \"PermiteTaskRoleUsarViaSecretsManager\"\n    effect    = \"Allow\"\n    actions   = [\"kms:Decrypt\", \"kms:DescribeKey\"]\n    resources = [\"*\"]\n    principals {\n      type        = \"AWS\"\n      identifiers = [aws_iam_role.task.arn]\n    }\n    condition {\n      test     = \"StringEquals\"\n      variable = \"kms:ViaService\"\n      values   = [\"secretsmanager.${var.regiao}.amazonaws.com\"]\n    }\n    # Esta e a trava que a chave gerenciada pela AWS nunca teve: o principal e\n    # NOMEADO (o ARN da task role, nao \"qualquer um que a IAM deixar\"), e o\n    # uso e restrito a UM servico. Chamar kms:Decrypt fora do Secrets Manager\n    # com a mesma credencial e negado por esta politica, mesmo que a IAM do\n    # principal permita a acao.\n  }\n}\n\n# ── CMK 2: documentos fiscais (S3) — classe de dado diferente ────────────────\nresource \"aws_kms_key\" \"documentos\" {\n  description              = \"Cadencia — documentos fiscais em PDF no S3\"\n  deletion_window_in_days  = 30\n  enable_key_rotation      = true\n  policy                   = data.aws_iam_policy_document.chave_documentos.json\n  tags                     = var.tags\n}\n\nresource \"aws_kms_alias\" \"documentos\" {\n  name          = \"alias/${var.projeto}-documentos\"\n  target_key_id = aws_kms_key.documentos.key_id\n}\n\ndata \"aws_iam_policy_document\" \"chave_documentos\" {\n  statement {\n    sid       = \"PermiteAContaRaizAdministrarComoUltimoRecurso\"\n    effect    = \"Allow\"\n    actions   = [\"kms:*\"]\n    resources = [\"*\"]\n    principals {\n      type        = \"AWS\"\n      identifiers = [\"arn:aws:iam::${data.aws_caller_identity.atual.account_id}:root\"]\n    }\n  }\n\n  statement {\n    sid       = \"PermiteTaskRoleGravarELerViaS3\"\n    effect    = \"Allow\"\n    actions   = [\"kms:GenerateDataKey\", \"kms:Decrypt\", \"kms:DescribeKey\"]\n    resources = [\"*\"]\n    principals {\n      type        = \"AWS\"\n      identifiers = [aws_iam_role.task.arn]\n    }\n    condition {\n      test     = \"StringEquals\"\n      variable = \"kms:ViaService\"\n      values   = [\"s3.${var.regiao}.amazonaws.com\"]\n    }\n    # GenerateDataKey entra porque quem GRAVA precisa pedir a chave de dados;\n    # Decrypt entra porque quem LE precisa decifra-la de volta. Omitir\n    # GenerateDataKey e o defeito mais comum desta politica — ver a secao de\n    # \"Quebrar de proposito\".\n  }\n}\n\ndata \"aws_caller_identity\" \"atual\" {}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A operação que pode trancar a própria chave para sempre",
+            "content": "Se a política de uma CMK não incluir um statement que autorize a conta raiz (ou um administrador nomeado com `kms:PutKeyPolicy`), e a política aplicada não permitir mais ninguém corrigi-la, a chave fica permanentemente sem administrador — nem o dono da conta consegue mudar a política de volta pelo caminho normal. Diferente da exclusão (que tem janela e é cancelável), um lockout de política pode exigir abrir um caso de suporte com a AWS, sem garantia de reversão simples. É por isso que o statement da conta raiz vem primeiro no documento, sempre, mesmo parecendo redundante."
+          }
+        },
+        {
+          "id": "b8_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "O alias é um ponteiro mutável — o código deveria confiar nisso, com cautela",
+            "content": "Referenciar `alias/${var.projeto}-clientes` em vez do ARN da chave permite trocar qual CMK física está por trás do nome sem alterar código nem configuração — útil para uma troca planejada de chave. O outro lado da mesma moeda: quem tem permissão de `kms:UpdateAlias` pode redirecionar silenciosamente qual chave uma aplicação usa. A política de quem administra alias merece a mesma atenção que a política da própria CMK."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: RDS e o segredo apontando para a CMK de clientes"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A mudança no recurso do banco é uma linha — `kms_key_id`. O controle de acesso inteiro vive na política que a seção anterior escreveu, não aqui."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "rds.tf + segredo.tf",
+            "code": "# rds.tf e segredo.tf — apontando para a CMK de clientes, nao mais para aws/rds\n\nresource \"aws_db_instance\" \"principal\" {\n  identifier     = \"${var.projeto}-pedidos\"\n  engine         = \"postgres\"\n  engine_version = \"16\"\n  instance_class = \"db.t4g.medium\"\n\n  # Antes deste laboratorio: sem `kms_key_id`, o RDS usava `aws/rds`. A unica\n  # mudanca de configuracao no recurso do banco em si e esta linha — o resto\n  # do controle de acesso vive na POLITICA da chave, nao aqui.\n  storage_encrypted = true\n  kms_key_id         = aws_kms_key.clientes.arn\n\n  db_name  = \"cadencia\"\n  username = \"app_admin\"\n  # A senha inicial NAO fica em variavel nem em environment: o Secrets\n  # Manager gera e guarda, e o segredo abaixo referencia este banco.\n  manage_master_user_password   = false\n  password                      = random_password.senha_inicial.result\n\n  db_subnet_group_name   = aws_db_subnet_group.principal.name\n  vpc_security_group_ids = [aws_security_group.db.id]\n\n  skip_final_snapshot       = false\n  final_snapshot_identifier = \"${var.projeto}-pedidos-final\"\n  # O snapshot final HERDA a criptografia do banco de origem — continua sob a\n  # cmk_clientes, e continua contando para a fatura depois do destroy. Ver a\n  # secao de Limpeza.\n\n  tags = var.tags\n}\n\nresource \"random_password\" \"senha_inicial\" {\n  length  = 32\n  special = false # o driver do Postgres deste laboratorio nao escapa alguns especiais\n}\n\n# O segredo do L04, agora explicitamente sob a CMK de clientes em vez da\n# chave gerenciada padrao. E o mesmo objeto, so a chave que o protege mudou.\nresource \"aws_secretsmanager_secret\" \"banco\" {\n  name       = \"${var.projeto}/banco/app-rw\"\n  kms_key_id = aws_kms_key.clientes.arn\n  tags       = var.tags\n}\n\nresource \"aws_secretsmanager_secret_version\" \"banco\" {\n  secret_id = aws_secretsmanager_secret.banco.id\n  secret_string = jsonencode({\n    host     = aws_db_instance.principal.address\n    port     = 5432\n    dbname   = aws_db_instance.principal.db_name\n    username = aws_db_instance.principal.username\n    password = random_password.senha_inicial.result\n  })\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O engano mais comum ao dar permissão de KMS para a task role",
+            "content": "É tentador dar à task role `kms:Decrypt` \"para o RDS\", porque parece simétrico ao que se fez para o Secrets Manager. Mas a task role NUNCA chama o KMS para ler o banco: a decifragem do volume acontece na camada de armazenamento do RDS, usando uma concessão (grant) que o próprio serviço gerencia. Quem precisa de `kms:CreateGrant` na política da chave é o principal que CRIA o banco — o pipeline ou quem roda `terraform apply` — não quem consulta depois. Dar essa permissão à task role não quebra nada, mas é superfície de acesso que não corresponde a nenhum uso real: uma auditoria de menor privilégio vai perguntar por quê."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: S3 com SSE-KMS, Bucket Keys e política que recusa a chave errada"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Além de apontar para a CMK certa, o bucket recusa upload que declare outra chave — porque \"criptografado por padrão\" só vale enquanto ninguém enviar um cabeçalho diferente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "s3.tf",
+            "code": "# s3.tf — SSE-KMS com a CMK de documentos, e Bucket Keys ligado\n\nresource \"aws_s3_bucket\" \"notas_fiscais\" {\n  bucket = \"${var.projeto}-notas-fiscais-${data.aws_caller_identity.atual.account_id}\"\n  tags   = var.tags\n}\n\nresource \"aws_s3_bucket_server_side_encryption_configuration\" \"notas_fiscais\" {\n  bucket = aws_s3_bucket.notas_fiscais.id\n\n  rule {\n    apply_server_side_encryption_by_default {\n      sse_algorithm     = \"aws:kms\"\n      kms_master_key_id = aws_kms_key.documentos.arn\n    }\n    # Bucket Keys: o S3 gera UMA chave de dados por bucket (renovada\n    # periodicamente) em vez de uma por objeto, e a reusa para varios\n    # PutObject/GetObject. Isso corta a maior parte das chamadas ao KMS —\n    # e e a linha que mais separa \"poucos reais\" de \"linha visivel na\n    # fatura\" em alta escala. Ver Custo.\n    bucket_key_enabled = true\n  }\n}\n\nresource \"aws_s3_bucket_public_access_block\" \"notas_fiscais\" {\n  bucket                  = aws_s3_bucket.notas_fiscais.id\n  block_public_acls       = true\n  block_public_policy     = true\n  ignore_public_acls      = true\n  restrict_public_buckets = true\n}\n\n# Recusa qualquer PutObject que nao declare SSE-KMS com ESTA chave. Sem esta\n# politica, um upload sem cabecalho de criptografia caberia na configuracao\n# \"por padrao\" mesmo assim — mas um cliente que envia SSE-S3 explicitamente,\n# ou outra CMK, passaria por cima da intencao deste bucket.\ndata \"aws_iam_policy_document\" \"bucket_notas_fiscais\" {\n  statement {\n    sid    = \"NegaUploadForaDaCmkDeDocumentos\"\n    effect = \"Deny\"\n    principals {\n      type        = \"*\"\n      identifiers = [\"*\"]\n    }\n    actions   = [\"s3:PutObject\"]\n    resources = [\"${aws_s3_bucket.notas_fiscais.arn}/*\"]\n    condition {\n      test     = \"StringNotEquals\"\n      variable = \"s3:x-amz-server-side-encryption-aws-kms-key-id\"\n      values   = [aws_kms_key.documentos.arn]\n    }\n  }\n}\n\nresource \"aws_s3_bucket_policy\" \"notas_fiscais\" {\n  bucket = aws_s3_bucket.notas_fiscais.id\n  policy = data.aws_iam_policy_document.bucket_notas_fiscais.json\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Bucket Keys é a alavanca de custo deste módulo, não um detalhe",
+            "content": "Sem Bucket Keys, cada objeto gravado ou lido gera uma chamada nova ao KMS. Com Bucket Keys, o S3 mantém uma chave de dados no nível do BUCKET por um tempo e a reaproveita entre operações, cortando a maior parte dessas chamadas. A criptografia continua sendo por objeto — cada objeto tem sua própria chave de dados derivada — só a chamada ao KMS que deixa de se repetir a cada requisição."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: cifra de campo no código — o envelope explícito"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Até aqui, o envelope aconteceu por trás da cortina, dentro do RDS e do S3. Esta classe faz a MESMA coisa de propósito, no código, para um campo que precisa de proteção que a criptografia de armazenamento não dá: contra uma credencial de leitura vazada, não só contra o roubo do disco."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "CifraDeCampoCliente.cs",
+            "code": "// CifraDeCampo.cs — envelope explicito para o CPF, alem da cifra do volume do RDS\n//\n// A criptografia de armazenamento do RDS e transparente para qualquer conexao\n// AUTENTICADA: uma credencial valida — vazada, ou usada por uma injecao de SQL\n// bem sucedida — recebe o CPF em texto claro, porque a decifragem ja aconteceu\n// antes de o Postgres processar a consulta. Esta classe fecha ESSE gap\n// especifico: mesmo com a credencial do banco, quem le a linha sem a CMK de\n// clientes nao decifra o campo.\n\nusing Amazon.KeyManagementService;\nusing Amazon.KeyManagementService.Model;\nusing System.Security.Cryptography;\n\npublic sealed class CifraDeCampoCliente\n{\n    private readonly IAmazonKeyManagementService _kms;\n    private readonly string _cmkClientesArn;\n\n    public CifraDeCampoCliente(IAmazonKeyManagementService kms, string cmkClientesArn)\n    {\n        _kms = kms;\n        _cmkClientesArn = cmkClientesArn;\n    }\n\n    // O contexto de cifragem amarra o ciphertext ao REGISTRO. Sem ele, um\n    // ciphertext de CPF trocado entre duas linhas da mesma tabela decifraria\n    // sem erro nenhum — o KMS nao tem como saber que aquele valor pertence a\n    // outro cliente. Com contexto, decifrar com o ID errado falha alto.\n    private static Dictionary<string, string> ContextoDoRegistro(Guid clienteId) => new()\n    {\n        [\"cliente_id\"] = clienteId.ToString(),\n        [\"campo\"] = \"cpf\",\n    };\n\n    public async Task<byte[]> CifrarAsync(Guid clienteId, string cpfEmClaro)\n    {\n        // Uma chave de dados NOVA por operacao — nunca reaproveitada entre\n        // registros. E a mesma logica de \"uma vez, ou poucas vezes\" que\n        // justifica a rotacao da propria CMK, aplicada aqui ao nivel do campo.\n        var dataKey = await _kms.GenerateDataKeyAsync(new GenerateDataKeyRequest\n        {\n            KeyId = _cmkClientesArn,\n            KeySpec = DataKeySpec.AES_256,\n            EncryptionContext = ContextoDoRegistro(clienteId),\n        });\n\n        using var aes = new AesGcm(dataKey.Plaintext.ToArray(), AesGcm.TagByteSizes.MaxSize);\n        var nonce = RandomNumberGenerator.GetBytes(AesGcm.NonceByteSizes.MaxSize);\n        var textoClaro = System.Text.Encoding.UTF8.GetBytes(cpfEmClaro);\n        var ciphertext = new byte[textoClaro.Length];\n        var tag = new byte[AesGcm.TagByteSizes.MaxSize];\n        aes.Encrypt(nonce, textoClaro, ciphertext, tag);\n\n        // A copia em texto claro da chave de dados so existe ate aqui. Ela\n        // NUNCA e logada, nunca e persistida — so a copia CIFRADA (o\n        // CiphertextBlob) segue para o banco, ao lado do CPF cifrado.\n        Array.Clear(dataKey.Plaintext.ToArray());\n\n        // Formato gravado: [tamanho do blob da CMK][blob][nonce][tag][ciphertext].\n        // Cada linha carrega sua PROPRIA copia cifrada da chave de dados — nao\n        // ha uma chave de dados global para \"o campo CPF\" da tabela inteira.\n        using var saida = new MemoryStream();\n        using var w = new BinaryWriter(saida);\n        w.Write(dataKey.CiphertextBlob.ToArray().Length);\n        w.Write(dataKey.CiphertextBlob.ToArray());\n        w.Write(nonce);\n        w.Write(tag);\n        w.Write(ciphertext);\n        return saida.ToArray();\n    }\n\n    public async Task<string> DecifrarAsync(Guid clienteId, byte[] registroCifrado)\n    {\n        using var leitor = new BinaryReader(new MemoryStream(registroCifrado));\n        var tamanhoBlob = leitor.ReadInt32();\n        var blob = leitor.ReadBytes(tamanhoBlob);\n        var nonce = leitor.ReadBytes(AesGcm.NonceByteSizes.MaxSize);\n        var tag = leitor.ReadBytes(AesGcm.TagByteSizes.MaxSize);\n        var ciphertext = leitor.ReadBytes((int)(leitor.BaseStream.Length - leitor.BaseStream.Position));\n\n        // O contexto informado aqui tem de ser IDENTICO ao usado na cifragem.\n        // Se o clienteId nao bate com o registro (linha errada, migracao que\n        // moveu o valor), o KMS recusa decifrar — e essa recusa e a prova de\n        // que o contexto realmente amarra o dado ao dono certo.\n        DecryptResponse chaveDeDados;\n        try\n        {\n            chaveDeDados = await _kms.DecryptAsync(new DecryptRequest\n            {\n                CiphertextBlob = new MemoryStream(blob),\n                EncryptionContext = ContextoDoRegistro(clienteId),\n            });\n        }\n        catch (InvalidCiphertextException)\n        {\n            throw new InvalidOperationException(\n                \"contexto de cifragem nao confere: o registro pode pertencer a outro cliente\");\n        }\n\n        using var aes = new AesGcm(chaveDeDados.Plaintext.ToArray(), AesGcm.TagByteSizes.MaxSize);\n        var textoClaro = new byte[ciphertext.Length];\n        aes.Decrypt(nonce, ciphertext, tag, textoClaro);\n        Array.Clear(chaveDeDados.Plaintext.ToArray());\n\n        return System.Text.Encoding.UTF8.GetString(textoClaro);\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Duas formas de anular o envelope sem perceber",
+            "content": "A primeira é logar `dataKey.Plaintext` — mesmo \"só para depurar\" — porque isso é a chave de dados em claro indo parar num destino que ninguém trata como segredo, e pode ficar retido por meses num agregador de log. A segunda é decifrar SEM contexto de cifragem, ou aceitar qualquer contexto — nesse caso, um ciphertext de CPF trocado entre duas linhas da mesma tabela decifraria sem erro nenhum, porque nada amarra o valor ao dono certo. As duas falhas são silenciosas: nenhuma delas derruba a aplicação nem aparece em teste automatizado que não pense nelas de propósito."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar cada afirmação com número"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "implantar.sh",
+            "code": "#!/usr/bin/env bash\nset -euo pipefail\n\nPROJETO=\"${PROJETO:?defina PROJETO}\"\nREGIAO=\"${REGIAO:-us-east-1}\"\n\nterraform init -input=false\nterraform apply -auto-approve\n\nCMK_CLIENTES=$(terraform output -raw cmk_clientes_arn)\nCMK_DOCUMENTOS=$(terraform output -raw cmk_documentos_arn)\necho \"CMK de clientes: ${CMK_CLIENTES}\"\necho \"CMK de documentos: ${CMK_DOCUMENTOS}\"\n"
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma aceita \"parece que funcionou\": cada uma tem um comando, um resultado que aprova, e o significado do que reprova."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · A chave gerenciada é fixa",
+                "`aws kms put-key-policy` em `alias/aws/rds`",
+                "chamada recusada — você não é o dono da política",
+                "se passasse, a premissa inteira do módulo estaria errada: a AWS diz explicitamente que você não controla a política de uma chave gerenciada por ela"
+              ],
+              [
+                "2 · A CMK compartilhada some do RDS de clientes",
+                "`describe-db-instances --query \"[].[DBInstanceIdentifier,KmsKeyId]\"`",
+                "o banco da Cadência mostra o ARN da `cmk_clientes`, distinto do padrão `aws/rds`",
+                "se ainda mostrar `alias/aws/rds`, o `kms_key_id` não foi aplicado — recriação do banco é necessária, porque a chave de um RDS não muda em `apply` incremental"
+              ],
+              [
+                "3 · `kms:ViaService` bloqueia uso direto",
+                "assumir a task role e chamar `aws kms decrypt` diretamente, fora do Secrets Manager",
+                "AccessDeniedException",
+                "se decifrar, a condição `ViaService` não está na política, ou o ARN da chave errado está sendo usado em outro lugar"
+              ],
+              [
+                "4 · A rotação está ligada e ativa",
+                "`aws kms get-key-rotation-status --key-id $CMK_CLIENTES`",
+                "`KeyRotationEnabled: true`",
+                "se `false`, a rotação nunca foi habilitada — revise `enable_key_rotation` no recurso"
+              ],
+              [
+                "5 · O contexto de cifragem realmente amarra o registro",
+                "decifrar um CPF cifrado com `cliente_id` de OUTRO cliente no contexto",
+                "`InvalidCiphertextException`",
+                "se decifrar com o contexto errado, o código não está passando `EncryptionContext` na chamada de `Decrypt` — a proteção contra troca de linha não existe"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "filename": "prova-3-trilha-por-chave.sh",
+            "code": "# Prova adicional: a trilha filtra por chave, isoladamente.\naws cloudtrail lookup-events \\\n  --lookup-attributes AttributeKey=EventName,AttributeValue=Decrypt \\\n  --max-results 10 \\\n  --query \"Events[?contains(CloudTrailEvent, '$CMK_CLIENTES')].CloudTrailEvent\" \\\n  --output text | python3 -m json.tool\n# Esperado: todo evento retornado tem userIdentity apontando para a task role da\n# Cadencia — nenhum outro principal aparece, porque a politica so autoriza este.\n"
+          }
+        },
+        {
+          "id": "b12_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "Não dá para esperar um ano para testar a rotação — use a rotação sob demanda",
+            "content": "A rotação automática só troca o material no aniversário da habilitação, o que não ajuda a validar nada num laboratório. `aws kms rotate-key-on-demand --key-id $CMK_CLIENTES` força uma rotação imediata, sem alterar o calendário automático, e `aws kms list-key-rotations --key-id $CMK_CLIENTES` mostra o histórico resultante — com o mesmo KeyId em todas as entradas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três falhas acontecem de verdade, e as três reforçam o mesmo mecanismo por ângulos diferentes: permissão de recurso e permissão de chave são coisas distintas, e uma não substitui a outra."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Falta a metade do S3",
+                "remova `kms:GenerateDataKey` da política da task role para a CMK de documentos, mantendo `s3:PutObject` intacto",
+                "upload falha com AccessDenied mesmo com permissão de S3 correta",
+                "CloudTrail mostra `GenerateDataKey` negado logo após o `PutObject`",
+                "devolver `kms:GenerateDataKey` na política — é o mesmo padrão de duas permissões do L04"
+              ],
+              [
+                "Contexto de cifragem inconsistente",
+                "grave um CPF com `cliente_id` A e tente decifrar informando `cliente_id` B",
+                "`InvalidCiphertextException` na leitura, sem erro nenhum na gravação",
+                "comparar o contexto usado na gravação (auditável no CloudTrail) com o da leitura",
+                "usar sempre o identificador correto do registro como parte do contexto — nunca \"tentar sem contexto\" como atalho"
+              ],
+              [
+                "Credencial de leitura vazada",
+                "conceda a um script fora da aplicação a mesma credencial de leitura do Postgres, e consulte a tabela de clientes diretamente",
+                "o CPF aparece em texto claro na consulta direta, mesmo com o volume do RDS cifrado",
+                "não há \"onde olhar\" no RDS — o comportamento é o documentado; o gap é a ausência de cifra de campo",
+                "é exatamente o motivo de existir a seção \"Construir: cifra de campo\" — sem ela, este não é um bug, é uma lacuna conhecida"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A criptografia de armazenamento não é uma segunda camada contra credencial",
+            "content": "Isto é o achado central do laboratório, e vale repetir fora da tabela: a criptografia do RDS protege contra o roubo do DISCO ou de um SNAPSHOT sem a chave — não contra uma consulta autenticada. Qualquer credencial válida, obtida de forma legítima ou por uma injeção de SQL, recebe o dado já decifrado, porque a decifragem acontece na camada de armazenamento, antes de o Postgres processar a consulta. Quem promete a um auditor que \"o CPF está protegido porque o banco é criptografado\" está descrevendo proteção contra um cenário — disco roubado — e sendo ouvido como se tivesse descrito outro — credencial comprometida."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Por que trocar a chave gerenciada pela AWS por uma CMK própria muda o controle de acesso, se a criptografia já estava ligada nas duas?",
+        "options": [
+          "Porque a política da CMK é um documento que você controla e pode restringir a um principal específico, enquanto a política da chave gerenciada é fixada pelo serviço e concede uso a qualquer principal já autorizado no serviço",
+          "Porque a chave gerenciada pela AWS não gera registro nenhum no CloudTrail",
+          "Porque só a CMK usa criptografia de envelope; a chave gerenciada cifra o payload diretamente",
+          "Porque a CMK cifra os dados com um algoritmo mais forte que a chave gerenciada"
+        ],
+        "correctIndex": 0,
+        "explanation": "A política é a diferença real. A da CMK é escrita e mantida por você, e pode nomear um principal específico com `kms:ViaService`; a da chave gerenciada pela AWS é fixada pelo serviço e já concede uso a qualquer principal que a IAM autorizou a chamar aquele serviço — então ela nunca funciona como uma segunda trava independente da IAM.\n\nA primeira alternativa erra o mecanismo: o algoritmo de cifragem, AES-256, é o mesmo nos dois casos — a diferença nunca foi de força criptográfica. A terceira descreve um comportamento que não existe: chaves gerenciadas pela AWS SÃO auditáveis em CloudTrail, você só não controla a política delas. A quarta inverte o mecanismo de envelope: as duas, gerenciada e CMK, usam uma chave de dados efêmera para cifrar o payload — nenhuma das duas cifra o payload diretamente com a chave \"principal\"."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o risco que este laboratório introduz, e o único irreversível"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Trocar chave gerenciada por CMK reduz um tipo de risco (acesso sem trava independente) e introduz outro, específico de administrar chaves próprias: agora existe uma operação que, se descuidada, não tem volta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Exclusão da CMK usada em produção",
+                "baixa",
+                "catastrófico — todo dado cifrado por ela fica permanentemente irrecuperável após a janela",
+                "tag de produção + processo com dois aprovadores antes de `ScheduleKeyDeletion`",
+                "alarme do EventBridge no evento `ScheduleKeyDeletion`, disparado na hora",
+                "chamar `CancelKeyDeletion` ENQUANTO a janela ainda corre — depois dela, não há resposta"
+              ],
+              [
+                "Política sem statement de conta raiz",
+                "baixa",
+                "alto — lockout de administração da chave",
+                "sempre incluir a conta raiz como principal administrador, revisar antes de aplicar",
+                "`put-key-policy` recusado para todo administrador, inclusive o esperado",
+                "abrir caso de suporte com a AWS; nem sempre reversível pelo caminho normal"
+              ],
+              [
+                "`kms:ViaService` ausente na política",
+                "média",
+                "alto — decifragem fora do fluxo pretendido",
+                "sempre condicionar o uso a `kms:ViaService` e ao serviço exato",
+                "CloudTrail com `Decrypt` cujo `invokedBy` não é o serviço esperado",
+                "restringir a política e investigar todo uso anterior fora do padrão"
+              ],
+              [
+                "Chave de dados em claro logada por engano",
+                "baixa",
+                "alto — anula o envelope inteiro para todo registro cifrado com aquela chave de dados",
+                "nunca logar `Plaintext`; `Array.Clear` logo após o uso",
+                "varredura por padrão de chave de 32 bytes em base64 nos grupos de log",
+                "rotacionar a CMK e recifrar os registros protegidos pela chave de dados exposta"
+              ],
+              [
+                "Rotação desabilitada em CMK de produção",
+                "média",
+                "médio — falha de conformidade silenciosa",
+                "padrão do módulo Terraform com `enable_key_rotation = true`",
+                "regra gerenciada do AWS Config para rotação de chave, ou auditoria periódica",
+                "habilitar a rotação — ela não é retroativa, passa a valer da próxima janela"
+              ],
+              [
+                "Contexto de cifragem previsível demais",
+                "baixa",
+                "médio — não vaza o dado, mas enfraquece a amarração se o contexto for adivinhável e reconstruível por um atacante com acesso parcial",
+                "compor o contexto com identificador interno, não com dado público do cliente",
+                "revisão de código na criação de qualquer novo campo cifrado",
+                "ajustar o contexto e recifrar; a decifragem antiga permanece válida com o contexto antigo"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel de chaves tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um painel de KMS existe para uma função estreita: dizer se o uso de cada chave está dentro do esperado, e avisar antes de uma operação irreversível acontecer."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "Quantas vezes cada CMK foi usada, e por quem?",
+                "CloudTrail `Decrypt`/`GenerateDataKey` agrupado por KeyId e por `userIdentity`",
+                "principal novo aparecendo é uso não previsto",
+                "qualquer principal fora da lista esperada"
+              ],
+              [
+                "Alguém tentou usar a chave fora do serviço esperado?",
+                "CloudTrail com `invokedBy` divergente do `ViaService` da política",
+                "tentativa de contornar a restrição — mesmo negada, vale investigar",
+                "qualquer ocorrência, mesmo com resultado negado"
+              ],
+              [
+                "A rotação está habilitada e em dia?",
+                "`get-key-rotation-status`, ou a regra gerenciada do AWS Config para rotação",
+                "chave fora de conformidade",
+                "qualquer CMK de produção com `false`"
+              ],
+              [
+                "Alguma chave foi agendada para exclusão?",
+                "EventBridge no evento `ScheduleKeyDeletion`",
+                "início da única janela cancelável antes da perda permanente",
+                "qualquer ocorrência — alarme crítico, imediato"
+              ],
+              [
+                "A taxa de erro na decifragem de campo subiu?",
+                "métrica customizada de `InvalidCiphertextException` no log da aplicação",
+                "contexto de cifragem incompatível — dado errado ou migração mal-feita",
+                "acima da taxa de erro de base, qualquer aumento sustentado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "CloudTrail para KMS é evento de gerenciamento, e isso já basta aqui",
+            "content": "As chamadas `Decrypt`, `GenerateDataKey`, `Encrypt` e `CreateGrant` são registradas por padrão como eventos de gerenciamento — não é preciso configurar eventos de dados específicos do KMS para tê-las na trilha. O ponto que exige atenção é outro: um trail com retenção curta apaga o único registro de quem usou uma chave antes de uma investigação chegar a tempo. Retenção da trilha é decisão de conformidade, não de KMS."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: de dez registros a um milhão, e o que muda no KMS"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 pedidos/dia",
+                "poucas chamadas de API por dia, nenhuma cota chega perto",
+                "nada; é o cenário deste laboratório",
+                "nada"
+              ],
+              [
+                "10 mil pedidos/dia",
+                "ainda dentro da cota padrão, mas GenerateDataKey por CPF cifrado já soma milhares de chamadas",
+                "nada visível ainda, mas é o volume em que vale medir antes de prometer mais",
+                "medir a taxa real de chamadas por chave em Service Quotas antes de escalar"
+              ],
+              [
+                "1 milhão de registros/dia",
+                "cifra de campo por registro pode aproximar a cota de requisições por segundo DA CHAVE — a cota é compartilhada entre todos os chamadores",
+                "throttling em `GenerateDataKey`/`Decrypt` durante pico, sem relação com CPU ou memória da aplicação",
+                "cache de chave de dados por período curto (padrão de data key caching), em vez de uma chamada por registro"
+              ],
+              [
+                "Falha de AZ",
+                "o KMS é um serviço regional, gerenciado multi-AZ pela própria AWS — a chave em si não fica indisponível por uma AZ cair",
+                "o que pode falhar é o CAMINHO até o KMS, se o endpoint de interface da VPC existir só numa AZ",
+                "endpoint de interface do KMS redundante entre AZs, como qualquer outro endpoint deste catálogo"
+              ],
+              [
+                "Rotação durante pico de tráfego",
+                "a rotação — automática ou sob demanda — não interrompe cifragem nem decifragem",
+                "nada; o KMS usa a versão de material correta de forma transparente",
+                "nenhuma ação — não é um evento operacional que peça plantão"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A cota de requisições é por chave, não por conta — e o valor exato está em Service Quotas",
+            "content": "O KMS aplica um limite de requisições por segundo COMPARTILHADO entre todos os chamadores de uma mesma chave, e o valor varia por tipo de operação, tipo de chave e região. Não repita um número decorado aqui: confira o valor atual em Service Quotas antes de dimensionar um caminho de alto volume, e projete com folga."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que trocar de chave acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A criptografia em si não é o que muda de preço — ela já estava ligada nos dois desenhos. O que muda é a existência de chaves próprias e o padrão de chamadas de API."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "annotated_formula",
+          "position": 1,
+          "data": {
+            "title": "O que soma na fatura quando você troca a chave padrão por uma CMK",
+            "formula": "custo_kms ≈ (nº_de_CMKs × taxa_mensal_por_chave) + (chamadas_de_API × taxa_por_lote)",
+            "parts": [
+              {
+                "symbol": "nº_de_CMKs",
+                "name": "Cobrança fixa por chave, todo mês",
+                "description": "Existe ou não uso, cada CMK cobra a mensalidade. É por isso que a decisão deste laboratório é CMK só nas classes sensíveis, não em cada recurso da conta: cada chave a mais é uma linha fixa nova."
+              },
+              {
+                "symbol": "chamadas_de_API",
+                "name": "GenerateDataKey e Decrypt, por requisição",
+                "description": "Sem S3 Bucket Keys, cada gravação e cada leitura de objeto gera uma chamada ao KMS. Com Bucket Keys habilitado, uma chave de dados no nível do bucket é reaproveitada por um tempo, cortando a maior parte dessas chamadas — é a alavanca de custo deste módulo.",
+                "highlight": true
+              },
+              {
+                "symbol": "rotação",
+                "name": "Automática ou sob demanda",
+                "description": "Não soma chamada de API proporcional ao uso da aplicação — é operação de controle da chave, não de dado, e acontece independente do volume de tráfego."
+              },
+              {
+                "symbol": "grants",
+                "name": "Concessões que o RDS cria sozinho",
+                "description": "O RDS cria uma concessão (grant) automaticamente para usar a CMK; grant não tem cobrança própria, mas conta para a cota de grants por chave — vale saber que ela existe, não que ela custe."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "duas CMKs, uso esporádico",
+                "a mensalidade fixa de duas chaves; chamadas de API desprezíveis",
+                "baixa e previsível",
+                "nenhuma; é o piso do módulo"
+              ],
+              [
+                "Produção pequena",
+                "duas CMKs, ~9 mil pedidos/mês, uma nota fiscal por pedido",
+                "mensalidade das duas chaves + chamadas de `GenerateDataKey`/`Decrypt` do campo CPF, reduzidas no S3 por Bucket Keys",
+                "baixa, cresce com o volume de campos cifrados, não com o de objetos no S3",
+                "medir a proporção de chamadas por campo cifrado antes de estender a mais campos"
+              ],
+              [
+                "Alta escala",
+                "cifra de campo por registro em volume alto, sem cache de chave de dados",
+                "chamadas de API do KMS passam a ser linha visível, especialmente no caminho de leitura",
+                "cresce linearmente com o número de registros cifrados por segundo",
+                "cache de chave de dados com expiração curta corta a maior parte das chamadas repetidas"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "A mensalidade é por CHAVE existente, não por uso",
+            "content": "Uma CMK cobra a mensalidade mesmo em um mês sem uma única chamada de API. É a razão concreta, não só arquitetural, por trás da decisão deste módulo de criar CMK só para as classes sensíveis: cada chave a mais é uma linha fixa recorrente, independente de quanto ela é usada."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "política de chave e rotação como código, versionadas no Terraform",
+                "mudança de política feita fora do Terraform, direto no console, diverge do estado",
+                "checagem de drift periódica sobre `aws_kms_key` e suas políticas",
+                "média"
+              ],
+              [
+                "Segurança",
+                "CMK por classe, `kms:ViaService`, rotação, campo sensível cifrado com contexto",
+                "a criptografia de campo decifrado ainda circula em claro na memória do processo, em logs ou exportações se não houver disciplina de código",
+                "minimização de onde o valor decifrado aparece — é o L49",
+                "alta"
+              ],
+              [
+                "Confiabilidade",
+                "dado antigo continua decifrável após rotação; janela cancelável antes de exclusão",
+                "agendar exclusão de CMK em produção sem tag nem alarme é o único ponto sem rede",
+                "alarme obrigatório em `ScheduleKeyDeletion`, com aprovação dupla",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "Bucket Keys reduz chamadas do S3; envelope local evita cifrar o objeto inteiro no KMS",
+                "cifra de campo por registro, sem cache, pode aproximar a cota por chave em alta escala",
+                "data key caching para o caminho de leitura de campo",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "CMK só nas classes sensíveis, não em toda a conta",
+                "novo recurso criado sem classificação explícita nasce na chave gerenciada, por padrão",
+                "checklist de classificação de dado antes de provisionar recurso novo",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "poucas chaves, uso sob demanda, sem HSM dedicado (custom key store)",
+                "nenhum específico neste volume",
+                "nada adicional; revisar se o volume crescer o suficiente para justificar caching",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho — é a resposta a QUANDO trocar de patamar de controle sobre chave. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Da chave que ninguém escolheu à classificação automática — o risco que cada nível troca",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Tudo na chave gerenciada pela AWS: `aws/rds`, `aws/s3`, `aws/secretsmanager`. Zero configuração de KMS.",
+                "note": "Risco resolvido: nenhum. Novo risco: nenhuma trava independente por recurso, e nenhuma trilha de uso filtrável por classe de dado. Custo: zero adicional de KMS."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "CMK por classe sensível, política nomeando o principal, `kms:ViaService`, rotação automática, trilha por ARN de chave.",
+                "note": "Risco resolvido: acesso sem segunda trava e auditoria sem filtro por classe. Novo risco: agendar exclusão por engano é perda permanente após a janela; política mal escrita pode causar lockout. Custo: mensalidade por CMK mais chamadas de API."
+              },
+              {
+                "label": "Nível 3 — Cifra de campo na aplicação",
+                "instruction": "Envelope explícito no código para o campo mais sensível (CPF), além da criptografia de armazenamento, com contexto de cifragem por registro.",
+                "note": "Risco resolvido: credencial de leitura vazada ou SQL injection lendo o campo em claro. Novo risco: a complexidade de gerenciar contexto e chave de dados por registro vive no código, não só na infraestrutura. Custo: uma chamada de API por registro cifrado/decifrado, não por byte."
+              },
+              {
+                "label": "Nível 4 — Multi-região e material sob controle próprio",
+                "instruction": "Chave multi-região para recuperação entre regiões, ou AWS KMS External Key Store quando a exigência regulatória pede o material fora da geração padrão da AWS.",
+                "note": "Risco resolvido: dependência de uma única região para decifrar; conformidade que exige HSM fora da nuvem pública. Novo risco: sincronizar material entre regiões, e operar um HSM externo, é operação nova. Custo: cobrança por chave replicada e, no XKS, contrato com o provedor externo."
+              },
+              {
+                "label": "Nível 5 — Governança em escala",
+                "instruction": "Regra do AWS Config que exige CMK em todo recurso com tag de dado sensível; Security Hub agregando chaves sem rotação; Organizations vetando chave gerenciada pela AWS para dado classificado.",
+                "note": "Risco resolvido: depender de disciplina individual de quem cria o recurso. Novo risco: falso positivo de conformidade em recurso legitimamente de baixo risco. Custo: das ferramentas de governança, não do KMS em si."
+              },
+              {
+                "label": "Nível 6 — Dados e IA",
+                "instruction": "Classificação automática de dado sensível decidindo A QUAL classe uma tabela nova pertence — e portanto qual CMK ela deveria usar.",
+                "note": "Risco resolvido: tabela nova nascendo na chave errada por esquecimento humano de classificação. Novo risco: classificador errando a classe e recomendando a chave de menor controle. Custo: o de rodar a varredura sobre o volume de dado, proporcional ao volume — é o L49."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Governança em escala (nível 5) que exige CMK por tag só funciona se já existir a distinção entre classes do nível 2 — senão a regra não sabe qual CMK cobrar. E classificação automática (nível 6) só tem para onde apontar o resultado se as CMKs por classe já existirem. Pular direto para automação sem o nível 2 produz uma regra que aponta para chave nenhuma."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não resolve nada do mecanismo central. Política de chave, `kms:ViaService`, rotação e envelope são determinísticos — ou a condição bate, ou não bate; ou o contexto confere, ou a decifragem falha. Um modelo não melhora nenhuma dessas decisões, porque elas não são ambíguas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O lugar onde IA agregaria valor real, nesta trilha, não é aqui: é decidir A QUAL classe um dado NOVO pertence, antes de alguém lembrar de configurar a chave certa. Um classificador que varre uma tabela recém-criada e sinaliza \"isto parece CPF, isto parece endereço\" resolve um problema genuinamente ambíguo — reconhecer padrão em texto livre — que regra determinística cobre mal. É o Amazon Macie, e é o L49."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "reconhecer que um campo novo contém dado sensível, antes de alguém classificar manualmente"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "nome de coluna não é confiável — \"documento\", \"doc_id\" e \"cpf_cliente\" podem ou não conter CPF; reconhecer o PADRÃO do valor é o que o classificador faz e a regra de nome não faz"
+              ],
+              [
+                "De onde viriam os dados?",
+                "o próprio conteúdo das tabelas e buckets, varrido pelo Macie sobre amostras dos dados armazenados"
+              ],
+              [
+                "Qual o risco?",
+                "falso negativo (campo sensível não sinalizado) é pior que falso positivo aqui — por isso a varredura complementa, não substitui, a classificação declarada no design do sistema"
+              ],
+              [
+                "Por que não agora?",
+                "a Cadência tem duas tabelas e um bucket — classificação manual, feita uma vez, já resolve. Automatizar isso com um volume de dado tão pequeno é complexidade sem retorno"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"olhar a política de chave e dizer se está segura\" troca uma verificação determinística — a política bate com o padrão exigido, ou não bate — por uma probabilística, sujeita a alucinar uma condição que não existe no JSON. Política de IAM e de KMS têm ferramenta própria para isso: IAM Access Analyzer e o `simulate-policy` do próprio KMS avaliam a política de verdade, contra a semântica real do serviço."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Chave gerenciada pela AWS em todo dado classificado",
+                "é o padrão, zero configuração, \"já funciona\"",
+                "nenhuma trava independente por recurso, nenhuma trilha filtrável por classe",
+                "auditor pergunta \"qual chave protege X\" e a resposta é \"a mesma de tudo\"",
+                "CMK própria por classe de dado sensível",
+                "dado não classificado, ambiente de desenvolvimento"
+              ],
+              [
+                "Política de chave sem statement de conta raiz",
+                "parece redundante — o administrador já tem outra permissão",
+                "pode causar lockout permanente de administração da própria chave",
+                "ninguém, nem o dono da conta, consegue mais alterar a política",
+                "sempre incluir a conta raiz como principal administrador",
+                "nunca"
+              ],
+              [
+                "`kms:Decrypt` sem `kms:ViaService`",
+                "é mais rápido escrever, e \"já funciona no teste\"",
+                "qualquer chamada direta ao KMS com a mesma credencial decifra fora do fluxo pretendido",
+                "CloudTrail mostra `Decrypt` com `invokedBy` diferente do serviço esperado",
+                "condicionar toda permissão de uso a `ViaService` e ao endpoint exato",
+                "chave legitimamente usada por múltiplos serviços, com lista explícita de `ViaService`"
+              ],
+              [
+                "Logar o resultado de `GenerateDataKey` para depurar",
+                "debugar um problema de cifragem em produção, sob pressão",
+                "o campo `Plaintext` É a chave de dados em claro — logá-lo anula o envelope inteiro",
+                "chave de dados em claro aparece em log agregado, possivelmente retido por meses",
+                "logar só metadados — KeyId, contexto — nunca o material",
+                "nunca, nem com dado sintético em teste: o hábito é o risco, não o dado"
+              ],
+              [
+                "CMK única para todas as classes de dado",
+                "menos chaves para gerenciar, política mais simples de escrever uma vez",
+                "mistura blast radius de classes com perfil de risco diferente",
+                "investigar um incidente numa classe obriga revisar TODAS as outras que compartilham a chave",
+                "uma CMK por classe de dado com perfil de risco distinto",
+                "dados da mesma classe de sensibilidade e mesmo dono, por decisão explícita"
+              ],
+              [
+                "Cifra de campo sem contexto de cifragem",
+                "menos código, funciona no caminho feliz do teste",
+                "sem contexto, o KMS não amarra o ciphertext ao registro — um valor trocado entre linhas decifra sem erro nenhum",
+                "nenhum erro visível; o defeito é dado atribuído ao registro errado, silencioso",
+                "contexto derivado do identificador do próprio registro, verificado nas duas pontas",
+                "nunca, para dado com múltiplas linhas do mesmo tipo"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Log/métrica",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "AccessDenied em `PutObject`, mesmo com permissão de S3 correta",
+                "falta `kms:GenerateDataKey` na política da task role para a CMK de documentos",
+                "olhar o evento imediatamente anterior ao `PutObject` recusado",
+                "CloudTrail: `GenerateDataKey` com `errorCode: AccessDenied`",
+                "adicionar a permissão com `kms:ViaService = s3...`"
+              ],
+              [
+                "AccessDenied em `GetSecretValue`, com a policy do segredo correta",
+                "falta `kms:Decrypt` na CMK de clientes para a task role",
+                "mesma checagem: o evento de KMS logo antes da chamada recusada",
+                "CloudTrail: `Decrypt` com `errorCode: AccessDenied`",
+                "adicionar a permissão com `kms:ViaService = secretsmanager...`"
+              ],
+              [
+                "`InvalidCiphertextException` ao decifrar o campo CPF",
+                "contexto de cifragem não bate entre gravação e leitura",
+                "comparar o `encryptionContext` do evento de `GenerateDataKey` (gravação) com o de `Decrypt` (leitura) no CloudTrail",
+                "exceção da SDK + os dois eventos de CloudTrail lado a lado",
+                "reconstituir e usar o contexto original — nunca tentar decifrar sem contexto como atalho"
+              ],
+              [
+                "AccessDenied ao tentar alterar a política de uma chave",
+                "é uma chave gerenciada pela AWS (`aws/*`), que não aceita `PutKeyPolicy` de ninguém",
+                "`describe-key` mostra `KeyManager: AWS`",
+                "CloudTrail: `PutKeyPolicy` com `errorCode: AccessDenied`",
+                "não é bug — crie uma CMK própria se precisar de política customizada"
+              ],
+              [
+                "`terraform apply` falha ao criar o RDS: AccessDenied em `kms:CreateGrant`",
+                "o principal que roda o Terraform precisa de `kms:CreateGrant` na política da CMK",
+                "CloudTrail do principal do pipeline, não da task role",
+                "`CreateGrant` com `errorCode: AccessDenied`",
+                "adicionar o statement de administração ao principal correto na política da CMK"
+              ],
+              [
+                "Rotação automática \"parece\" não ter acontecido",
+                "confundir a data de HABILITAÇÃO com a data de próxima rotação",
+                "`get-key-rotation-status` e `list-key-rotations`",
+                "ausência de evento `RotateKey` no CloudTrail no período esperado",
+                "nada quebrado — confira o cálculo: 365 dias a partir de quando a rotação foi ligada, não da criação da chave"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "#!/usr/bin/env bash\nset -euo pipefail\n\n# Esvazie o bucket ANTES do destroy — objeto cifrado com SSE-KMS nao impede o\n# terraform destroy no bucket, mas um bucket nao vazio, sem force_destroy, faz o\n# destroy falhar na hora errada, no meio de uma cadeia de dependencias.\naws s3 rm \"s3://$(terraform output -raw bucket_notas_fiscais)\" --recursive\n\nterraform destroy -auto-approve\n\n# As duas CMKs NAO desaparecem aqui — elas entram em exclusao AGENDADA, com a\n# janela de deletion_window_in_days. Confirme:\naws kms list-keys --query \"Keys[].KeyId\" --output text | while read -r k; do\n  aws kms describe-key --key-id \"$k\" \\\n    --query \"KeyMetadata.[KeyId,KeyState,DeletionDate]\" --output text\ndone | grep PendingDeletion || echo \"nenhuma chave pendente de exclusao\"\n"
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Recurso",
+              "O que o destroy faz",
+              "O que fica cobrando ou pendente"
+            ],
+            "rows": [
+              [
+                "CMK (clientes e documentos)",
+                "agenda para exclusão, com a janela configurada",
+                "a chave continua existindo — e sujeita à mensalidade — até o fim da janela; ela pode ser cancelada com `CancelKeyDeletion` enquanto isso"
+              ],
+              [
+                "Alias da chave",
+                "removido imediatamente",
+                "nada — mas sem o alias, referenciar a chave pendente exige o Key ID, não o nome"
+              ],
+              [
+                "Secrets Manager",
+                "agenda para exclusão (7 a 30 dias, salvo `recovery_window_in_days = 0`)",
+                "o segredo continua existindo, e continua sob a CMK, até o fim da janela dele — independente da janela da própria chave"
+              ],
+              [
+                "Snapshot final do RDS",
+                "criado no destroy, se `skip_final_snapshot = false`",
+                "permanece cifrado pela CMK de clientes e continua cobrando armazenamento até ser removido manualmente"
+              ],
+              [
+                "Bucket S3",
+                "removido só se vazio",
+                "com `force_destroy` não usado, um bucket não vazio trava o destroy inteiro"
+              ],
+              [
+                "Grupo de log do CloudWatch",
+                "removido só se declarado como recurso Terraform",
+                "log criado implicitamente por outro serviço não some sozinho, e continua sob retenção"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A janela de exclusão da CMK é a única rede de segurança que este módulo tem",
+            "content": "Ela existe justamente porque `ScheduleKeyDeletion` é a operação irreversível deste catálogo inteiro. Trate a confirmação de \"nenhuma chave pendente de exclusão\" acima como parte da limpeza, não como opcional — uma CMK esquecida em `PendingDeletion` numa conta de estudo, se o prazo vencer, leva junto qualquer dado de teste que ainda dependa dela."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Motivo"
+            ],
+            "rows": [
+              [
+                "Auditor não consegue isolar uso de chave por recurso",
+                "CMK própria por classe de dado",
+                "política e trilha passam a ser por ARN de chave, não compartilhadas pela conta"
+              ],
+              [
+                "Qualquer principal com permissão de serviço decifra",
+                "`kms:ViaService` + principal nomeado na política da chave",
+                "fecha a segunda trava que a chave gerenciada pela AWS nunca teve de verdade"
+              ],
+              [
+                "Credencial vazada lê o CPF em claro, mesmo com RDS cifrado",
+                "envelope explícito no código, com contexto de cifragem",
+                "decifrar exige a CMK e o contexto certo — não só a credencial do banco"
+              ],
+              [
+                "Ninguém sabe se a chave rotaciona",
+                "`enable_key_rotation` + prova por `get-key-rotation-status`",
+                "rotação vira fato observável, com data e status, não uma afirmação"
+              ],
+              [
+                "Exclusão de chave por engano",
+                "janela de espera + tag + alarme em `ScheduleKeyDeletion`",
+                "única rede de segurança contra a única operação irreversível deste módulo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O fluxo, em oito passos: o app pede um recurso protegido → o serviço (RDS, S3 ou Secrets Manager) pede uma chave de dados nova à CMK correspondente → o KMS gera a chave, devolve as cópias em claro e cifrada → o serviço cifra ou decifra localmente com a cópia em claro e a descarta → só a cópia cifrada persiste ao lado do dado → a política da CMK avalia o principal e o `ViaService` a cada chamada → o CloudTrail registra o uso com o KeyId exato → a rotação troca o material por trás do mesmo KeyId, sem quebrar nada cifrado antes."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Se a chave gerenciada pela AWS já criptografa, por que trocar para uma CMK?",
+            "answer": "Porque criptografar não é o problema que falta resolver — já está ligado por padrão. O que falta é controle: a política da chave gerenciada é fixada pelo serviço e concede uso a qualquer principal que a IAM já autorizou para aquele serviço, então ela não funciona como uma segunda trava independente. Uma CMK própria tem política que você escreve, pode restringir a um principal específico com `kms:ViaService`, gera trilha de uso separável por ARN de chave, e você decide a rotação. A criptografia em si — o algoritmo, o AES-256 — é idêntica nas duas."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "`kms:ViaService` restringe o uso da chave a um serviço específico?",
+            "answer": "Sim, e a granularidade importa: a condição amarra o uso àquele serviço NAQUELE nome de endpoint regional — por exemplo `secretsmanager.us-east-1.amazonaws.com` — então uma chamada direta de `kms:Decrypt` fora desse serviço, mesmo com credencial válida do mesmo principal, é negada. É o que impede alguém com permissão de ler um segredo de usar a mesma credencial para decifrar qualquer outra coisa protegida pela chave fora do fluxo do Secrets Manager."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "A rotação automática de uma CMK muda o ID da chave?",
+            "answer": "Não. A rotação troca apenas o material criptográfico por trás do ID — o ARN e o KeyId continuam os mesmos durante toda a vida da chave. O KMS guarda as versões de material geradas e escolhe automaticamente a correta na hora de decifrar, então um dado cifrado com material de anos atrás continua decifrável sem nenhuma ação manual. É esse comportamento que permite usar a mesma referência de chave no código para sempre, mesmo com a rotação ligada."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "É possível rotacionar uma CMK com mais frequência do que uma vez por ano?",
+            "answer": "Sim: além da rotação automática — cujo período padrão é 365 dias e pode ser customizado — o KMS permite rotação sob demanda a qualquer momento, independentemente de a automática estar ligada, e sem alterar o calendário da automática. É o caminho para atender uma exigência de auditoria que pede rotação mais frequente do que o padrão anual, sem desligar a rotação programada."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "A criptografia de armazenamento do RDS protege contra uma credencial de banco vazada?",
+            "answer": "Não. A criptografia de armazenamento do RDS protege o disco físico e os snapshots — quem rouba o volume ou uma cópia de backup sem a chave não lê nada. Mas a decifragem é transparente para qualquer conexão autenticada: uma credencial válida, vazada ou usada por uma injeção de SQL, recebe o dado em texto claro, porque o mecanismo de armazenamento já decifrou antes de o Postgres processar a consulta. Proteger contra esse cenário exige cifrar o campo na aplicação, antes de gravar."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "O que é a chave de dados na criptografia de envelope, e por que ela nunca é a CMK?",
+            "answer": "É uma chave simétrica efêmera, gerada pelo KMS a pedido, usada uma única vez para cifrar o payload de verdade — o volume do RDS, o objeto do S3, o campo da aplicação. A CMK nunca cifra o payload diretamente: ela cifra e decifra essa chave de dados. A cópia em texto claro da chave de dados existe só pelo tempo da operação local e é descartada logo em seguida; o que permanece é a cópia cifrada, guardada ao lado do dado que ela protegeu."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Por que a operação de cifra direta do KMS não serve para cifrar um objeto do S3 inteiro?",
+            "answer": "Porque a API de cifra direta do serviço aceita só um payload pequeno — a ordem de poucos kilobytes, insuficiente para um objeto ou um arquivo de banco de qualquer tamanho real — e porque chamar o serviço uma vez por byte não escalaria em latência nem em custo. A criptografia de envelope resolve isso pedindo UMA chave de dados por objeto e cifrando localmente com ela, sem depender do KMS para os bytes do payload em si."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "A política de chave e a política IAM de quem usa a chave precisam dizer a mesma coisa?",
+            "answer": "Não precisam ser idênticas, mas as duas têm de AUTORIZAR: o acesso final é a interseção das duas, não a união. A política da chave decide quem pode, em princípio, usar aquela chave; a política IAM do principal decide o que aquele principal pode fazer. Se a chave nega por omissão e a IAM permite, o resultado é negado — e vice-versa. É a mesma lógica de duas políticas que precisam concordar que aparece em SCP e IAM na organização."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Depois que uma CMK com rotação automática troca o material criptográfico, o que acontece com o dado cifrado ANTES da rotação?",
+            "options": [
+              "Fica ilegível; é preciso recifrar manualmente todos os dados protegidos pela chave",
+              "Continua decifrável: o KMS guarda as versões de material e escolhe a correta automaticamente na decifragem; só o ID da chave permanece o mesmo",
+              "O ID da chave muda, e toda referência salva no código ou no banco quebra",
+              "A rotação automática só existe para chaves gerenciadas pela AWS; CMK nunca rotaciona sozinha"
+            ],
+            "correctIndex": 1,
+            "explanation": "O KMS foi desenhado para isto ser transparente. Cada rotação gera um novo material criptográfico por trás do mesmo KeyId, e o serviço guarda TODAS as versões anteriores; na hora de decifrar, ele escolhe automaticamente a versão que cifrou aquele dado específico. O KeyId e o ARN não mudam nunca, durante toda a vida da chave.\n\nA primeira alternativa descreve o comportamento oposto do documentado, e é o motivo de muita gente evitar rotação por medo infundado. A terceira inventa uma consequência que não existe: rotação não afeta identificador nenhum, só o material por trás dele. A quarta erra o fato central do módulo: rotação automática é OPCIONAL e configurável em CMK — é a chave gerenciada pela AWS que rotaciona de forma obrigatória e sem opção de escolha, o inverso do que a alternativa afirma."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "No laboratório, o CPF é cifrado no código antes de chegar ao Postgres, além da criptografia de armazenamento do RDS. Qual lacuna essa camada extra fecha?",
+            "options": [
+              "Protege contra o roubo do disco físico ou de um snapshot do banco",
+              "É uma exigência do PCI-DSS para todo campo de banco de dados, sem exceção",
+              "Protege contra uma credencial de leitura vazada ou uma injeção de SQL: mesmo com acesso válido à consulta, decifrar o campo exige a CMK e o contexto de cifragem corretos, algo que a credencial do banco sozinha não dá",
+              "Evita que a mesma chave precise ser compartilhada entre dois serviços diferentes"
+            ],
+            "correctIndex": 2,
+            "explanation": "É o achado central do módulo. A criptografia de armazenamento do RDS já cobre o cenário de disco ou snapshot roubado — decifrar o campo no código não acrescenta nada ali. O que ela fecha é o cenário que a criptografia de armazenamento NÃO cobre: decifragem transparente para qualquer conexão autenticada. Uma credencial vazada ou uma injeção de SQL bem-sucedida recebe o dado do jeito que o RDS o entrega — já decifrado — e só o envelope explícito no código, com o contexto certo, impede que esse acesso resulte no CPF em claro.\n\nA primeira alternativa erra o alvo: esse cenário já está coberto pela criptografia de armazenamento, que este módulo não questiona. A terceira descreve algo que o laboratório faz ao contrário — usa DUAS CMKs, uma por classe, exatamente para NÃO compartilhar. A quarta inventa uma exigência normativa específica que o módulo não verificou nem afirma; o motivo aqui é técnico e derivado do mecanismo, não uma citação de norma."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L04 (segredo fora do código, com rotação — inclui a introdução à criptografia de envelope que este módulo aprofunda) e L42 (identidade de workload, task role) no ar"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "a diferença de política entre chave gerenciada pela AWS e CMK; a criptografia de envelope em profundidade — chave de dados efêmera vs CMK; `kms:ViaService` como segunda trava; semântica exata de rotação (o que troca, o que preserva); a lacuna entre criptografia de armazenamento e proteção contra credencial vazada; contexto de cifragem como amarração do ciphertext ao registro"
+              ],
+              [
+                "Limitação que fica",
+                "o valor decifrado do campo ainda circula em claro na memória do processo depois de decifrado — minimizar onde ele aparece (log, exportação, relatório) é o L49"
+              ],
+              [
+                "Próximo módulo recomendado",
+                "L49 — dado pessoal: minimizar, mascarar, não logar. Parte das duas CMKs criadas aqui e trata classificação automática, mascaramento e retenção de log"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L69 (permissão por coluna no lake) depende da classificação que o L49 constrói sobre a base deste laboratório"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "AWS KMS keys — concepts",
+                "code": true
+              },
+              {
+                "text": " — a distinção entre customer managed key, AWS managed key e AWS owned key, política, cobrança e cota, que é a fonte da tabela de escopo de controle usada neste módulo; e "
+              },
+              {
+                "text": "Rotate AWS KMS keys",
+                "code": true
+              },
+              {
+                "text": " — como a rotação automática e sob demanda funcionam, o período padrão de 365 dias, e a confirmação de que o KeyId nunca muda entre rotações. Nenhum preço absoluto aparece neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O que não foi verificado nesta versão, e você deve conferir na sua conta",
+            "content": "O limite exato de payload da operação de cifra direta do KMS é citado aqui como \"poucos kilobytes\", sem um número fechado — confira o valor atual na referência da API antes de decidir se um payload específico cabe nela. O suporte a `rotation_period_in_days` para customizar o período de rotação também não foi verificado na versão do provedor Terraform usada neste laboratório; se você precisa de um período diferente do padrão de 365 dias, confira a documentação do provider antes de escrever o argumento."
+          }
+        }
+      ]
+    }
+  ]
+}

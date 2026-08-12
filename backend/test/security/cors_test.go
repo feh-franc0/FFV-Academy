@@ -23,13 +23,14 @@ func corsMiddleware(allowed []string) func(http.Handler) http.Handler {
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Add("Vary", "Origin")
 			origin := r.Header.Get("Origin")
 			if _, ok := origins[origin]; ok {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
 			}
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID")
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Max-Age", "86400")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
@@ -69,6 +70,34 @@ func Test_CORS_DisallowedOrigin_DoesNotReflect(t *testing.T) {
 
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("evil origin must NOT be reflected, got %q", got)
+	}
+}
+
+// Vary: Origin sempre, para cache intermediário não servir a resposta
+// computada pra origin A a um cliente da origin B (ACAO incluído).
+func Test_CORS_AlwaysSetsVaryOrigin(t *testing.T) {
+	h := corsHandler()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Origin", "https://evil.example.com") // mesmo origin não-permitida
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Vary"); got != "Origin" {
+		t.Errorf("expected Vary: Origin always, got %q", got)
+	}
+}
+
+// Allow-Credentials não pode ser emitido para origin fora da allowlist — só
+// faz sentido junto com um Allow-Origin que a reflete.
+func Test_CORS_DisallowedOrigin_DoesNotSetAllowCredentials(t *testing.T) {
+	h := corsHandler()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Origin", "https://evil.example.com")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Errorf("evil origin must NOT get Allow-Credentials, got %q", got)
 	}
 }
 

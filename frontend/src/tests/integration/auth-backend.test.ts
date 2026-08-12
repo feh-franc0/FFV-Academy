@@ -71,10 +71,10 @@ afterEach(() => {
 describe('Modo mock (sem NEXT_PUBLIC_API_BASE_URL)', () => {
   beforeEach(setupMock);
 
-  it('requestToken aceita email válido', async () => {
+  it('requestToken aceita email válido e não revela isNewUser', async () => {
     const r = await requestToken(VALID_EMAIL);
     expect(r.ok).toBe(true);
-    expect(typeof r.isNewUser).toBe('boolean');
+    expect('isNewUser' in r).toBe(false);
   });
 
   it('requestToken rejeita email malformado', async () => {
@@ -112,13 +112,15 @@ describe('Modo mock (sem NEXT_PUBLIC_API_BASE_URL)', () => {
 describe('Modo real (NEXT_PUBLIC_API_BASE_URL configurado)', () => {
   beforeEach(setupBackend);
 
-  it('requestToken chama POST /api/v1/auth/request-token', async () => {
-    const fetchMock = mockFetchResponse({ message: 'token enviado', isNewUser: true }, 202);
+  it('requestToken chama POST /api/v1/auth/request-token e não expõe isNewUser', async () => {
+    // O backend não manda mais isNewUser nesta resposta (era enumeração de
+    // conta) — o mock devolve só `message` para refletir o contrato real.
+    const fetchMock = mockFetchResponse({ message: 'token enviado' }, 202);
     vi.stubGlobal('fetch', fetchMock);
 
     const r = await requestToken(VALID_EMAIL);
     expect(r.ok).toBe(true);
-    expect(r.isNewUser).toBe(true);
+    expect('isNewUser' in r).toBe(false);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toContain('/api/v1/auth/request-token');
     expect(init.method).toBe('POST');
@@ -140,6 +142,47 @@ describe('Modo real (NEXT_PUBLIC_API_BASE_URL configurado)', () => {
     expect(r.user?.email).toBe(VALID_EMAIL);
     expect(r.user?.paidProducts).toContain('simulado-aws-practitioner');
     expect(getAccessToken()).toBe('tok_real');
+  });
+
+  // Achado P-05 da auditoria de segurança de 11/ago/2026: com backend
+  // configurado (a condição real de produção — NEXT_PUBLIC_API_BASE_URL
+  // sempre setado no deploy real), MOCK_TOKEN não tem tratamento especial
+  // nenhum — é só mais um valor de `token` forwardado pro backend real, que
+  // o rejeita como qualquer código errado. O bypass mock só existe dentro do
+  // branch `!hasBackend()`, nunca alcançado aqui.
+  it('MOCK_TOKEN não recebe tratamento especial — é forwardado pro backend real, que rejeita', async () => {
+    const fetchMock = mockFetchResponse(
+      { type: 'unauthorized', title: 'Token inválido', status: 401, detail: '' },
+      401,
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const r = await verifyToken(VALID_EMAIL, MOCK_TOKEN, {
+      name: 'Test User', phone: VALID_PHONE, marketingConsent: false,
+    });
+
+    expect(r.ok).toBe(false);
+    // Prova que o valor foi de fato ENVIADO ao backend (não interceptado
+    // localmente) — a chamada HTTP aconteceu com esse token no corpo.
+    expect(fetchMock).toHaveBeenCalled();
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/api/v1/auth/verify');
+    expect(JSON.parse(init.body as string)).toMatchObject({ token: MOCK_TOKEN });
+  });
+
+  it('verifyToken retorna registrationRequired quando o backend responde type "registration-required"', async () => {
+    // Código validado (posse do email provada), mas email é de conta nova
+    // sem registration — o backend responde 400 com esse `type` específico
+    // (ver shared.ErrRegistrationRequired), não um 401 genérico.
+    const fetchMock = mockFetchResponse(
+      { type: 'registration-required', title: 'Cadastro necessário', status: 400, detail: 'dados de registro obrigatórios para novo usuário' },
+      400,
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const r = await verifyToken(VALID_EMAIL, 'correct_code_no_registration');
+    expect(r.ok).toBe(false);
+    expect(r.registrationRequired).toBe(true);
   });
 
   it('verifyToken retorna ok:false em 401 do backend', async () => {

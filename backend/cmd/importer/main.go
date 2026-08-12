@@ -39,10 +39,17 @@ type SeedFile struct {
 }
 
 type Stats struct {
-	Articles  int
-	Blocks    int
-	Failed    int
-	Skipped   int
+	Articles int
+	Blocks   int
+	Failed   int
+	Skipped  int
+	// Changed/Unchanged é o número que revela o problema que o hash resolve:
+	// antes dele, TODO artigo era "atualizado" em toda execução — 427 de 427, o
+	// que fazia `updated_at` não distinguir nada. Um relatório com 427 mudados
+	// depois de uma importação sem edição é o sintoma de que a normalização do
+	// hash quebrou.
+	Changed   int
+	Unchanged int
 	StartTime time.Time
 }
 
@@ -51,6 +58,7 @@ func main() {
 	singleSlug := flag.String("slug", "", "importa só este slug")
 	dryRun := flag.Bool("dry-run", false, "não escreve no banco")
 	verbose := flag.Bool("verbose", false, "log de cada arquivo")
+	emitDatesTo := flag.String("emit-dates", "", "escreve o mapa slug→data de mudança real neste caminho (frontend/src/lib/content-dates.json)")
 	flag.Parse()
 
 	dbURL := os.Getenv("DATABASE_URL")
@@ -163,7 +171,7 @@ func main() {
 			title = *seed.Title
 		}
 
-		blockCount, err := importOne(ctx, pool, seed.Slug, title, seed.Blocks)
+		blockCount, mudou, err := importOne(ctx, pool, seed.Slug, title, seed.Blocks)
 		if err != nil {
 			log.Printf("[%d/%d] %s: FAIL: %v", i+1, len(jsonFiles), slug, err)
 			stats.Failed++
@@ -172,6 +180,11 @@ func main() {
 
 		stats.Articles++
 		stats.Blocks += blockCount
+		if mudou {
+			stats.Changed++
+		} else {
+			stats.Unchanged++
+		}
 
 		if *verbose || (i+1)%50 == 0 {
 			fmt.Printf("[%d/%d] %s: %d blocks ✓\n", i+1, len(jsonFiles), slug, blockCount)
@@ -187,6 +200,14 @@ func main() {
 		}
 	}
 
+	// FASE 3: exporta as datas de mudança real para o build do frontend. Roda
+	// DEPOIS da fase 2 porque ela também mexe em `curriculum_articles`.
+	if !*dryRun && *emitDatesTo != "" {
+		if err := emitDates(ctx, pool, *emitDatesTo); err != nil {
+			log.Printf("WARN: emit dates: %v", err)
+		}
+	}
+
 	elapsed := time.Since(stats.StartTime)
 	fmt.Printf("\n═══════════════════════════════════════════════\n")
 	fmt.Printf("  Import — sumário\n")
@@ -194,6 +215,8 @@ func main() {
 	fmt.Printf("Tempo total:       %s\n", elapsed.Round(time.Millisecond))
 	fmt.Printf("Artigos:           %d\n", stats.Articles)
 	fmt.Printf("Blocks:            %d\n", stats.Blocks)
+	fmt.Printf("Conteúdo mudou:    %d\n", stats.Changed)
+	fmt.Printf("Intacto:           %d\n", stats.Unchanged)
 	fmt.Printf("Pulados (vazios):  %d\n", stats.Skipped)
 	fmt.Printf("Falhas:            %d\n", stats.Failed)
 }
@@ -226,39 +249,58 @@ func countBlocks(blocks []Block) int {
 	return n
 }
 
-func importOne(ctx context.Context, pool *pgxpool.Pool, slug, title string, blocks []Block) (int, error) {
+func importOne(ctx context.Context, pool *pgxpool.Pool, slug, title string, blocks []Block) (int, bool, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	_, err = tx.Exec(ctx, `
+	novoHash := contentHash(title, blocks)
+
+	// `updated_at` só se move quando o CONTEÚDO se move.
+	//
+	// A versão anterior escrevia `updated_at = now()` incondicionalmente, e o
+	// efeito era invisível aqui e visível no sitemap: 427 URLs com a data do
+	// último deploy. Um campo que diz "tudo mudou hoje" a cada deploy não
+	// carrega informação, e o Google trata `lastmod` uniforme como ruído.
+	//
+	// `COALESCE` no lado esquerdo cobre o estado atual, em que os 427 artigos
+	// têm hash nulo: a primeira execução grava o hash e NÃO toca `updated_at`,
+	// para a data de hoje não ser lida como data de edição de tudo.
+	var mudou bool
+	err = tx.QueryRow(ctx, `
 		INSERT INTO curriculum_articles
-			(slug, title, trail_id, hub_id, content_md, xp, read_time, difficulty, "order", published, status, published_at, updated_at)
-		VALUES ($1, $2, 'legacy-auto', 'legacy', '', 10, 5, 'beginner', 0, true, 'published', now(), now())
+			(slug, title, trail_id, hub_id, content_md, xp, read_time, difficulty, "order", published, status, published_at, updated_at, content_hash)
+		VALUES ($1, $2, 'legacy-auto', 'legacy', '', 10, 5, 'beginner', 0, true, 'published', now(), now(), $3)
 		ON CONFLICT (slug) DO UPDATE
 			SET title = EXCLUDED.title,
-			    updated_at = now();
-	`, slug, title)
+			    content_hash = EXCLUDED.content_hash,
+			    updated_at = CASE
+			        WHEN curriculum_articles.content_hash IS NULL THEN curriculum_articles.updated_at
+			        WHEN curriculum_articles.content_hash <> EXCLUDED.content_hash THEN now()
+			        ELSE curriculum_articles.updated_at
+			    END
+		RETURNING (xmax = 0) OR (content_hash IS DISTINCT FROM $3);
+	`, slug, title, novoHash).Scan(&mudou)
 	if err != nil {
-		return 0, fmt.Errorf("upsert article: %w", err)
+		return 0, false, fmt.Errorf("upsert article: %w", err)
 	}
 
 	_, err = tx.Exec(ctx, `DELETE FROM module_blocks WHERE article_slug = $1`, slug)
 	if err != nil {
-		return 0, fmt.Errorf("delete old blocks: %w", err)
+		return 0, false, fmt.Errorf("delete old blocks: %w", err)
 	}
 
 	count, err := insertBlocks(ctx, tx, slug, nil, blocks)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("commit: %w", err)
+		return 0, false, fmt.Errorf("commit: %w", err)
 	}
-	return count, nil
+	return count, mudou, nil
 }
 
 // sanitizeJSONB remove escapes NUL que o JSONB do Postgres rejeita

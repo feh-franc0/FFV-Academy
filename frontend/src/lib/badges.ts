@@ -9,7 +9,16 @@
  * um novo badge = adicionar uma entrada. Nada mais precisa mudar.
  */
 
-import { CURRICULUM, BADGES_DEF, getHubForTrail } from './curriculum';
+// Import ESTREITO de propósito — `engine.ts` chama este módulo em toda rota
+// via GameHUD → useGameState. Nada aqui usa `desc`/`keywords`: só `.id` e
+// `.modules[].slug` de trilha, que é o que `CURRICULO_LEVE` carrega. Importar
+// o barril completo (`./curriculum`) — mesmo só por `getHubForTrail`, que nem
+// usa CURRICULO_LEVE — arrastava `queries.ts` inteiro, que importa as trilhas no
+// topo do arquivo para as OUTRAS consultas dele. Por isso a busca de hub é
+// feita direto em `HUBS` aqui, sem passar por `queries.ts`.
+import { CURRICULO_LEVE } from './curriculum/indice-leve';
+import { BADGES_DEF } from './curriculum/badges';
+import { HUBS } from './curriculum/hubs';
 import { daysBetween } from './srs';
 import { GAME_CONFIG } from './constants';
 import type { GameState } from './engine';
@@ -84,9 +93,9 @@ function runRules<Ctx extends { state: GameState }>(
 function getHubsSeen(state: GameState): Set<string> {
   const hubs = new Set<string>();
   for (const slug of state.completedModules) {
-    for (const trail of CURRICULUM) {
+    for (const trail of CURRICULO_LEVE) {
       if (trail.modules.some(m => m.slug === slug)) {
-        const hub = getHubForTrail(trail.id);
+        const hub = HUBS.find(h => h.trailIds.includes(trail.id));
         if (hub) hubs.add(hub.id);
         break;
       }
@@ -97,14 +106,14 @@ function getHubsSeen(state: GameState): Set<string> {
 
 function countCompletedTrails(state: GameState): number {
   let count = 0;
-  for (const trail of CURRICULUM) {
+  for (const trail of CURRICULO_LEVE) {
     if (trail.modules.every(m => state.completedModules.includes(m.slug))) count += 1;
   }
   return count;
 }
 
 function isTrailDone(trailId: string, completedModules: string[]): boolean {
-  const trail = CURRICULUM.find(t => t.id === trailId);
+  const trail = CURRICULO_LEVE.find(t => t.id === trailId);
   if (!trail) return false;
   return trail.modules.every(m => completedModules.includes(m.slug));
 }
@@ -180,13 +189,13 @@ export const MODULE_BADGES: readonly BadgeRule<ModuleBadgeContext>[] = [
   { id: 'polyglot', predicate: c => getHubsSeen(c.state).size >= GAME_CONFIG.POLYGLOT_HUBS },
 
   // Trilhas completadas — gera `trailN_done` dinamicamente
-  ...CURRICULUM.map(trail => ({
+  ...CURRICULO_LEVE.map(trail => ({
     id: `${trail.id}_done`,
     predicate: (c: ModuleBadgeContext) => isTrailDone(trail.id, c.state.completedModules),
   })),
 
   // Mastery (≥80% avg score)
-  ...CURRICULUM.map(trail => ({
+  ...CURRICULO_LEVE.map(trail => ({
     id: `${trail.id}_mastery`,
     predicate: (c: ModuleBadgeContext) => {
       if (!isTrailDone(trail.id, c.state.completedModules)) return false;
@@ -203,13 +212,13 @@ export const MODULE_BADGES: readonly BadgeRule<ModuleBadgeContext>[] = [
   // Múltiplas trilhas
   { id: 'two_trails_done',  predicate: c => countCompletedTrails(c.state) >= GAME_CONFIG.TWO_TRAILS },
   { id: 'five_trails_done', predicate: c => countCompletedTrails(c.state) >= GAME_CONFIG.FIVE_TRAILS },
-  { id: 'all_done', predicate: c => CURRICULUM.every(t => isTrailDone(t.id, c.state.completedModules)) },
+  { id: 'all_done', predicate: c => CURRICULO_LEVE.every(t => isTrailDone(t.id, c.state.completedModules)) },
 
   // Completionist: uma trilha inteira 100% perfect
   {
     id: 'completionist',
     predicate: c => {
-      for (const trail of CURRICULUM) {
+      for (const trail of CURRICULO_LEVE) {
         if (!isTrailDone(trail.id, c.state.completedModules)) continue;
         const withQuiz = trail.modules.filter(m => c.state.quizScores[m.slug]);
         if (withQuiz.length === 0) continue;
@@ -241,7 +250,7 @@ export const MODULE_BADGES: readonly BadgeRule<ModuleBadgeContext>[] = [
   {
     id: 'speedrun_trail',
     predicate: c => {
-      for (const trail of CURRICULUM) {
+      for (const trail of CURRICULO_LEVE) {
         if (!isTrailDone(trail.id, c.state.completedModules)) continue;
         const startedAt = c.state.trailStartedAt[trail.id];
         if (!startedAt) continue;

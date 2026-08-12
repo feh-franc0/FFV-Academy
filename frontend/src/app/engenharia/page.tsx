@@ -1,15 +1,22 @@
 import type { Metadata } from 'next';
 import { HubPageClient } from '@/components/HubPageClient';
 import { getHubBySlug } from '@/lib/curriculum';
+import { BASE, social } from '@/lib/metadata-social';
 
 const hub = getHubBySlug('engenharia')!;
 
 export const metadata: Metadata = {
-  title: `${hub.name} — FFV Academy`,
+  alternates: { canonical: `${BASE}/engenharia` },
+  // O cartão usa `tagline` do hub: frase curta feita para caber em cartão,
+  // enquanto `description` acima é a longa, para a meta tag.
+  ...social({ titulo: `${hub.name} — FFV Academy`, descricao: hub.tagline, caminho: hub.href }),
+  // Sem sufixo: o template `'%s — FFV Academy'` do layout raiz o aplica. Escrever
+  // à mão aqui produzia `<title>X — FFV Academy — FFV Academy</title>`.
+  title: hub.name,
   description:
-    'Hub de Engenharia de Software do FFV Academy: trilhas de DevOps & Containers (Docker, Kubernetes, CI/CD profissional) e Engenharia de Software Moderna (SDD, agents, testes, segurança, arquitetura).',
+    'O que sustenta uma solução de IA depois do deploy: MLOps, observabilidade e SRE, sistemas distribuídos, FinOps, segurança, e a camada de dados que alimenta o retrieval de todo RAG.',
   keywords:
-    'engenharia de software, devops, docker, kubernetes, ci cd, arquitetura de software, spec driven development, agents ia, testes profissionais',
+    'mlops, observabilidade sre, sistemas distribuidos, finops nuvem, security engineering, system design, postgres internals, vector database, data engineering',
 };
 
 export default function Page() {

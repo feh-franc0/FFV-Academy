@@ -51,6 +51,12 @@ func (m *mockHandlerTokenStore) Consume(_ context.Context, _ domidentity.Email) 
 	m.consumed = nil
 	return t, nil
 }
+func (m *mockHandlerTokenStore) Peek(_ context.Context, _ domidentity.Email) (domidentity.MagicToken, error) {
+	if m.consumed == nil {
+		return domidentity.MagicToken{}, shared.ErrNotFound
+	}
+	return *m.consumed, nil
+}
 func (m *mockHandlerTokenStore) IncrAttempts(_ context.Context, _ domidentity.Email) (int64, error) {
 	return 1, nil
 }

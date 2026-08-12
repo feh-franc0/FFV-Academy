@@ -51,6 +51,24 @@ func (m *mockAttemptRepo) ListByUser(_ context.Context, _ shared.UserID, _, _ in
 	return nil, 0, nil
 }
 
+func (m *mockAttemptRepo) UpsertAnswer(_ context.Context, attemptID shared.AttemptID, qID shared.QuestionID, opt domsim.OptionID, now time.Time) (bool, error) {
+	a, ok := m.byID[attemptID]
+	if !ok || a.IsFinished() || now.After(a.Deadline()) {
+		return false, nil
+	}
+	if err := a.AnswerQuestion(qID, opt, now); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+func (m *mockAttemptRepo) ClaimXPCredit(_ context.Context, _ shared.AttemptID, _ shared.UserID, _ time.Time) (bool, error) {
+	return true, nil
+}
+func (m *mockAttemptRepo) ListFinishedByUserAndSimulado(_ context.Context, _ shared.UserID, _ shared.SimuladoID) ([]*domsim.Attempt, error) {
+	return nil, nil
+}
+
 type mockCatalog struct {
 	sim *domsim.Simulado
 }
@@ -64,6 +82,23 @@ func (m *mockCatalog) GetSimulado(_ shared.SimuladoID) (*domsim.Simulado, error)
 
 func (m *mockCatalog) ListSimulados() ([]*domsim.Simulado, error) {
 	return []*domsim.Simulado{m.sim}, nil
+}
+
+// questionRepoFromStaticQuestions espelha, no banco "Postgres" mockado, as
+// mesmas questões que o catálogo estático declara — FinishAttempt busca por
+// ali agora, não mais em sim.Questions diretamente.
+func questionRepoFromStaticQuestions(questions []domsim.Question) *startAttemptMockQuestionRepo {
+	dbq := make([]*domsim.DBQuestion, len(questions))
+	for i, q := range questions {
+		dbq[i] = &domsim.DBQuestion{
+			ID:        string(q.ID),
+			Stem:      q.Stem,
+			Options:   q.Options,
+			CorrectID: q.CorrectID,
+			Topic:     q.Topic,
+		}
+	}
+	return newStartAttemptMockQuestionRepo(dbq...)
 }
 
 // --- Testes ---
@@ -84,7 +119,7 @@ func Test_FinishAttemptUseCase_Execute_ValidAttempt_CalculatesScore(t *testing.T
 		},
 	}
 
-	attempt := domsim.StartAttempt(attemptID, userID, simID, 90, now)
+	attempt := domsim.StartAttempt(attemptID, userID, simID, 90, []shared.QuestionID{"q1", "q2"}, now)
 	_ = attempt.AnswerQuestion(shared.QuestionID("q1"), domsim.OptionID("A"), now)
 	_ = attempt.AnswerQuestion(shared.QuestionID("q2"), domsim.OptionID("B"), now)
 
@@ -92,9 +127,10 @@ func Test_FinishAttemptUseCase_Execute_ValidAttempt_CalculatesScore(t *testing.T
 		byID: map[shared.AttemptID]*domsim.Attempt{attemptID: attempt},
 	}
 	catalog := &mockCatalog{sim: sim}
+	questionRepo := questionRepoFromStaticQuestions(sim.Questions)
 	clock := shared.FixedClock{T: now}
 
-	uc := appsim.NewFinishAttemptUseCase(repo, catalog, clock)
+	uc := appsim.NewFinishAttemptUseCase(repo, catalog, questionRepo, clock)
 	result, err := uc.Execute(context.Background(), appsim.FinishAttemptCommand{
 		UserID:    userID,
 		AttemptID: attemptID,
@@ -113,14 +149,15 @@ func Test_FinishAttemptUseCase_Execute_WrongOwner_ReturnsForbidden(t *testing.T)
 	simID := shared.SimuladoID("aws-clf")
 	attemptID := shared.NewAttemptID()
 
-	attempt := domsim.StartAttempt(attemptID, userID, simID, 90, now)
+	attempt := domsim.StartAttempt(attemptID, userID, simID, 90, []shared.QuestionID{"q1"}, now)
 	repo := &mockAttemptRepo{
 		byID: map[shared.AttemptID]*domsim.Attempt{attemptID: attempt},
 	}
 	catalog := &mockCatalog{sim: &domsim.Simulado{ID: simID, PassingScore: 70}}
+	questionRepo := newStartAttemptMockQuestionRepo()
 	clock := shared.FixedClock{T: now}
 
-	uc := appsim.NewFinishAttemptUseCase(repo, catalog, clock)
+	uc := appsim.NewFinishAttemptUseCase(repo, catalog, questionRepo, clock)
 	_, err := uc.Execute(context.Background(), appsim.FinishAttemptCommand{
 		UserID:    otherUserID,
 		AttemptID: attemptID,
@@ -150,9 +187,10 @@ func Test_FinishAttemptUseCase_Execute_AlreadyFinished_ReturnsWeakTopics(t *test
 			{ID: shared.QuestionID("q2"), CorrectID: "B", Topic: "Security"},
 		},
 	}
+	questionRepo := questionRepoFromStaticQuestions(sim.Questions)
 
 	// Cria attempt e a finaliza (q1 certa, q2 errada)
-	attempt := domsim.StartAttempt(attemptID, userID, simID, 90, now)
+	attempt := domsim.StartAttempt(attemptID, userID, simID, 90, []shared.QuestionID{"q1", "q2"}, now)
 	_ = attempt.AnswerQuestion(shared.QuestionID("q1"), domsim.OptionID("A"), now) // certa
 	_ = attempt.AnswerQuestion(shared.QuestionID("q2"), domsim.OptionID("X"), now) // errada
 
@@ -167,7 +205,7 @@ func Test_FinishAttemptUseCase_Execute_AlreadyFinished_ReturnsWeakTopics(t *test
 	catalog := &mockCatalog{sim: sim}
 	clock := shared.FixedClock{T: now}
 
-	uc := appsim.NewFinishAttemptUseCase(repo, catalog, clock)
+	uc := appsim.NewFinishAttemptUseCase(repo, catalog, questionRepo, clock)
 	// Segunda chamada — idempotente
 	result, err := uc.Execute(context.Background(), appsim.FinishAttemptCommand{
 		UserID:    userID,
@@ -179,4 +217,42 @@ func Test_FinishAttemptUseCase_Execute_AlreadyFinished_ReturnsWeakTopics(t *test
 	// WeakTopics NÃO deve estar vazio — Security teve 0% de acerto
 	assert.NotEmpty(t, result.WeakTopics, "idempotent call must return weak topics, not empty")
 	assert.Contains(t, result.WeakTopics, domsim.Topic("Security"))
+}
+
+// REGRESSÃO CENTRAL: o score tem de vir do banco REAL (Postgres, via
+// QuestionRepository), não do catálogo estático embutido no binário — que
+// ficou desatualizado assim que os bancos de questão passaram a viver no
+// Postgres. Este teste prova isso deixando o catálogo estático MENTIR (outro
+// gabarito) e confirmando que o resultado reflete o banco real.
+func Test_FinishAttemptUseCase_Execute_ScoresAgainstRealQuestionBank_NotStaticCatalog(t *testing.T) {
+	now := time.Now()
+	userID := shared.NewUserID()
+	simID := shared.SimuladoID("aws-saa")
+	attemptID := shared.NewAttemptID()
+
+	// Catálogo estático (desatualizado): diz que a resposta certa é B.
+	staleCatalog := &domsim.Simulado{
+		ID: simID, PassingScore: 70, TimeLimitMin: 90,
+		Questions: []domsim.Question{{ID: "q1", CorrectID: "B", Topic: "Cloud"}},
+	}
+	// Banco real (Postgres): a resposta certa é A.
+	realQuestionRepo := newStartAttemptMockQuestionRepo(&domsim.DBQuestion{
+		ID: "q1", CorrectID: "A", Topic: "Cloud",
+		Options: []domsim.QuestionOption{{ID: "A", Text: "a"}, {ID: "B", Text: "b"}},
+	})
+
+	attempt := domsim.StartAttempt(attemptID, userID, simID, 90, []shared.QuestionID{"q1"}, now)
+	_ = attempt.AnswerQuestion(shared.QuestionID("q1"), domsim.OptionID("A"), now)
+
+	repo := &mockAttemptRepo{byID: map[shared.AttemptID]*domsim.Attempt{attemptID: attempt}}
+	uc := appsim.NewFinishAttemptUseCase(repo, &mockCatalog{sim: staleCatalog}, realQuestionRepo, shared.FixedClock{T: now})
+
+	result, err := uc.Execute(context.Background(), appsim.FinishAttemptCommand{
+		UserID: userID, AttemptID: attemptID,
+	})
+
+	require.NoError(t, err)
+	// Se estivesse pontuando contra o catálogo estático (correto=B), a
+	// resposta A teria sido marcada errada e o score seria 0.
+	assert.Equal(t, 100, result.ScoreResult.Value, "deve pontuar contra o banco real (A correta), não o catálogo estático (que diz B)")
 }

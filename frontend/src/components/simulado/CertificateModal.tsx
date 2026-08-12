@@ -4,11 +4,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { issueCertificate, type CertificateRecord } from '@/lib/certificates';
 import type { Simulado } from '@/lib/simulados';
 import type { UserProfile } from '@/lib/auth';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 
 interface Props {
   simulado: Simulado;
   user: UserProfile;
   score: number;
+  attemptId: string;
   onClose: () => void;
 }
 
@@ -21,11 +23,13 @@ const H = 780;
  * - Desenha PDF via canvas → toDataURL (PNG, simples, evita dep extra)
  * - Botão "Baixar" exporta PNG; "Copiar link de verificação" copia URL
  */
-export function CertificateModal({ simulado, user, score, onClose }: Props) {
+export function CertificateModal({ simulado, user, score, attemptId, onClose }: Props) {
   const [name, setName] = useState(user.name);
   const [record, setRecord] = useState<CertificateRecord | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, true);
 
   useEffect(() => {
     issueCertificate({
@@ -33,8 +37,9 @@ export function CertificateModal({ simulado, user, score, onClose }: Props) {
       name: user.name,
       simuladoId: simulado.id,
       score,
+      attemptId,
     }).then(setRecord).catch(() => {});
-  }, [simulado.id, user.email, user.name, score]);
+  }, [simulado.id, user.email, user.name, score, attemptId]);
 
   const draw = useCallback(() => {
     if (!record || !canvasRef.current) return;
@@ -129,8 +134,11 @@ export function CertificateModal({ simulado, user, score, onClose }: Props) {
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
+      aria-label={`Certificado — ${simulado.certification}`}
+      tabIndex={-1}
       className="fixed inset-0 z-[100] flex items-center justify-center px-4 overflow-y-auto"
       style={{ background: 'rgba(0,0,0,0.6)' }}
       onClick={e => e.target === e.currentTarget && onClose()}
@@ -171,7 +179,7 @@ export function CertificateModal({ simulado, user, score, onClose }: Props) {
             onClick={handleDownload}
             disabled={!imageUrl}
             className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm disabled:opacity-50"
-            style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
+            style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
           >
             📥 Baixar PNG
           </button>

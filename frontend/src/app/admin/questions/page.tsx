@@ -145,7 +145,7 @@ function QuestionCard({ q, onEdit, onDelete, deleting }: QuestionCardProps) {
           <button
             onClick={() => onEdit(q)}
             className="px-3 py-1 rounded-lg text-xs font-semibold"
-            style={{ background: '#f7816622', color: '#f78166' }}
+            style={{ background: 'color-mix(in srgb, var(--ffv-red) 13%, transparent)', color: 'var(--ffv-red)' }}
           >
             Editar
           </button>
@@ -163,7 +163,7 @@ function QuestionCard({ q, onEdit, onDelete, deleting }: QuestionCardProps) {
                 onClick={() => { onDelete(q.id); setConfirmDelete(false); }}
                 disabled={deleting}
                 className="px-3 py-1 rounded-lg text-xs font-semibold disabled:opacity-50"
-                style={{ background: '#ef4444', color: 'white' }}
+                style={{ background: 'var(--ffv-red)', color: 'var(--primary-foreground)' }}
               >
                 {deleting ? '…' : 'Confirmar'}
               </button>
@@ -302,8 +302,9 @@ function QuestionForm({ initial, onSave, onCancel, saving, error }: QuestionForm
       {sectionTitle('Identificação')}
       <div className="grid grid-cols-3 gap-3">
         <div>
-          <label style={labelStyle()}>Simulado</label>
+          <label htmlFor="q-simulado" style={labelStyle()}>Simulado</label>
           <select
+            id="q-simulado"
             value={form.simuladoId}
             onChange={e => setForm(f => ({ ...f, simuladoId: e.target.value }))}
             style={inputStyle()}
@@ -312,8 +313,9 @@ function QuestionForm({ initial, onSave, onCancel, saving, error }: QuestionForm
           </select>
         </div>
         <div>
-          <label style={labelStyle()}>Domínio</label>
+          <label htmlFor="q-domain" style={labelStyle()}>Domínio</label>
           <select
+            id="q-domain"
             value={form.domain}
             onChange={e => setForm(f => ({ ...f, domain: e.target.value }))}
             style={inputStyle()}
@@ -322,8 +324,9 @@ function QuestionForm({ initial, onSave, onCancel, saving, error }: QuestionForm
           </select>
         </div>
         <div>
-          <label style={labelStyle()}>Dificuldade</label>
+          <label htmlFor="q-difficulty" style={labelStyle()}>Dificuldade</label>
           <select
+            id="q-difficulty"
             value={form.difficulty}
             onChange={e => setForm(f => ({ ...f, difficulty: e.target.value }))}
             style={inputStyle()}
@@ -335,8 +338,9 @@ function QuestionForm({ initial, onSave, onCancel, saving, error }: QuestionForm
 
       {sectionTitle('Questão')}
       <div>
-        <label style={labelStyle()}>Enunciado (stem)</label>
+        <label htmlFor="q-stem" style={labelStyle()}>Enunciado (stem)</label>
         <textarea
+          id="q-stem"
           required
           rows={4}
           value={form.stem}
@@ -349,8 +353,9 @@ function QuestionForm({ initial, onSave, onCancel, saving, error }: QuestionForm
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {form.options.map((opt, idx) => (
           <div key={opt.id}>
-            <label style={labelStyle()}>Opção {opt.id}</label>
+            <label htmlFor={`q-option-${opt.id}`} style={labelStyle()}>Opção {opt.id}</label>
             <input
+              id={`q-option-${opt.id}`}
               required
               type="text"
               value={opt.text}
@@ -363,8 +368,9 @@ function QuestionForm({ initial, onSave, onCancel, saving, error }: QuestionForm
       </div>
 
       <div>
-        <label style={labelStyle()}>Resposta correta</label>
+        <label htmlFor="q-correct-id" style={labelStyle()}>Resposta correta</label>
         <select
+          id="q-correct-id"
           value={form.correctId}
           onChange={e => setForm(f => ({ ...f, correctId: e.target.value }))}
           style={inputStyle({ width: 'auto' })}
@@ -375,8 +381,9 @@ function QuestionForm({ initial, onSave, onCancel, saving, error }: QuestionForm
 
       {sectionTitle('Explicação')}
       <div>
-        <label style={labelStyle()}>Resumo geral (summary)</label>
+        <label htmlFor="q-summary" style={labelStyle()}>Resumo geral (summary)</label>
         <textarea
+          id="q-summary"
           rows={3}
           value={form.explanation.summary}
           onChange={e => setForm(f => ({ ...f, explanation: { ...f.explanation, summary: e.target.value } }))}
@@ -385,8 +392,9 @@ function QuestionForm({ initial, onSave, onCancel, saving, error }: QuestionForm
         />
       </div>
       <div>
-        <label style={labelStyle()}>Por que a resposta correta está certa (whyCorrect)</label>
+        <label htmlFor="q-why-correct" style={labelStyle()}>Por que a resposta correta está certa (whyCorrect)</label>
         <textarea
+          id="q-why-correct"
           rows={3}
           value={form.explanation.whyCorrect}
           onChange={e => setForm(f => ({ ...f, explanation: { ...f.explanation, whyCorrect: e.target.value } }))}
@@ -398,8 +406,9 @@ function QuestionForm({ initial, onSave, onCancel, saving, error }: QuestionForm
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {(['A', 'B', 'C', 'D'] as const).filter(id => id !== form.correctId).map(id => (
           <div key={id}>
-            <label style={labelStyle()}>Por que opção {id} está errada (whyWrong.{id})</label>
+            <label htmlFor={`q-why-wrong-${id}`} style={labelStyle()}>Por que opção {id} está errada (whyWrong.{id})</label>
             <textarea
+              id={`q-why-wrong-${id}`}
               rows={2}
               value={form.explanation.whyWrong[id] ?? ''}
               onChange={e => setWhyWrong(id, e.target.value)}
@@ -411,8 +420,9 @@ function QuestionForm({ initial, onSave, onCancel, saving, error }: QuestionForm
       </div>
 
       <div>
-        <label style={labelStyle()}>Conceito-chave (keyConcept)</label>
+        <label htmlFor="q-key-concept" style={labelStyle()}>Conceito-chave (keyConcept)</label>
         <input
+          id="q-key-concept"
           type="text"
           value={form.explanation.keyConcept}
           onChange={e => setForm(f => ({ ...f, explanation: { ...f.explanation, keyConcept: e.target.value } }))}
@@ -423,8 +433,9 @@ function QuestionForm({ initial, onSave, onCancel, saving, error }: QuestionForm
 
       {sectionTitle('Metadados')}
       <div>
-        <label style={labelStyle()}>Tags (separadas por vírgula)</label>
+        <label htmlFor="q-tags" style={labelStyle()}>Tags (separadas por vírgula)</label>
         <input
+          id="q-tags"
           type="text"
           value={form.tagsInput}
           onChange={e => setForm(f => ({ ...f, tagsInput: e.target.value }))}
@@ -444,7 +455,7 @@ function QuestionForm({ initial, onSave, onCancel, saving, error }: QuestionForm
           type="submit"
           disabled={saving}
           className="px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60"
-          style={{ background: '#f78166', color: 'white' }}
+          style={{ background: 'var(--ffv-red)', color: 'var(--primary-foreground)' }}
         >
           {saving ? 'Salvando…' : initial ? 'Salvar alterações' : 'Criar questão'}
         </button>
@@ -628,7 +639,7 @@ export default function AdminQuestionsPage() {
         <button
           onClick={openCreate}
           className="px-4 py-2 rounded-xl text-sm font-semibold"
-          style={{ background: '#f78166', color: 'white' }}
+          style={{ background: 'var(--ffv-red)', color: 'var(--primary-foreground)' }}
         >
           + Criar questão
         </button>
@@ -638,6 +649,7 @@ export default function AdminQuestionsPage() {
       <div className="flex gap-2 flex-wrap">
         <input
           type="text"
+          aria-label="Buscar no enunciado"
           placeholder="Buscar no enunciado…"
           value={search}
           onChange={e => { setPage(0); setSearch(e.target.value); }}
@@ -645,6 +657,7 @@ export default function AdminQuestionsPage() {
           style={inputStyle()}
         />
         <select
+          aria-label="Filtrar por domínio"
           value={domain}
           onChange={e => { setPage(0); setDomain(e.target.value); }}
           style={inputStyle({ width: 'auto' })}
@@ -653,6 +666,7 @@ export default function AdminQuestionsPage() {
           {DOMAINS.map(d => <option key={d} value={d}>{d}</option>)}
         </select>
         <select
+          aria-label="Filtrar por dificuldade"
           value={difficulty}
           onChange={e => { setPage(0); setDifficulty(e.target.value); }}
           style={inputStyle({ width: 'auto' })}

@@ -1,0 +1,2158 @@
+{
+  "slug": "lab-retry-backoff-jitter-circuit-breaker-polly",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório continua de onde o "
+              },
+              {
+                "text": "L22",
+                "code": true
+              },
+              {
+                "text": " parou. A Cadência já resolveu perda de pedido sob pico (fila SQS como buffer) e cobrança duplicada por reentrega (chave de idempotência no DynamoDB). O que sobrou foi um incômodo menor, que virou um incidente maior."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O incômodo: quando o gateway de pagamento recusa uma cobrança, a mensagem só volta para a fila depois de 60 segundos — o "
+              },
+              {
+                "text": "visibility_timeout",
+                "code": true
+              },
+              {
+                "text": " configurado no L22. Para o cliente que está esperando saber se o pedido foi aceito, 60 segundos parece travado, mesmo a Cadência sabendo que é só a fila fazendo o trabalho dela."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Um engenheiro resolveu isso com a ferramenta mais curta: um laço de três tentativas imediatas dentro de "
+              },
+              {
+                "text": "CobrarCartaoAsync",
+                "code": true
+              },
+              {
+                "text": ", sem esperar nada entre elas. Em ambiente de desenvolvimento funcionou — o parceiro simulado local nunca falha. Na campanha seguinte, com tráfego dez vezes o normal, o gateway de pagamento começou a degradar sob a própria carga, e o retry ingênuo transformou uma degradação de alguns minutos numa indisponibilidade completa do checkout por vinte e dois minutos."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "O padrão tem nome: retry storm. Não é bug de lógica — a cada linha do código faz exatamente o que foi escrita para fazer. É o EFEITO AGREGADO de centenas de invocações concorrentes, cada uma \"só tentando de novo\", que multiplica carga exatamente no instante em que o downstream mais precisa de menos."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "key_value",
+          "position": 4,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado (★ essencial) — depende do L22 e pressupõe consumidor Lambda .NET 8 já no ar"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L22 concluído (fila, DLQ, idempotência), .NET 8, Terraform, noção de HttpClient"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 40 min · implementação 1 h 30 a 2 h"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Muito baixo: Polly é biblioteca, sem serviço novo cobrando hora ligada; o simulador de teste é a única infraestrutura nova, pequena e descartável"
+              },
+              {
+                "k": "Serviços",
+                "v": "Polly (biblioteca .NET), SQS (fila do L22), ALB, ECS Fargate (simulador de teste), CloudWatch, SNS"
+              },
+              {
+                "k": "Volume no pico de campanha",
+                "v": "800 invocações concorrentes, mesmo perfil medido no L22"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "degradação do parceiro não pode virar indisponibilidade total do checkout, e retry não pode duplicar cobrança"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "a capacidade do parceiro real (400 req/s) é a medida ao longo de meses de fatura da Cadência, não documentação pública dele — meça a sua"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "o retry storm reproduzido e medido antes e depois, com o circuito abrindo de forma visível nos logs e na métrica"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_5",
+          "type": "callout",
+          "position": 5,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é sobre CHAMAR o parceiro de pagamento real em teste de carga — isso violaria o limite de taxa contratual dele e é o tipo de coisa que gera ligação da equipe de parceria. O laboratório usa um simulador implantado na própria conta da Cadência, com comportamento calibrado para reproduzir o que foi observado do parceiro real. A distinção entre \"cliente resiliente\" e \"parceiro confiável\" importa: aqui você só controla o primeiro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Reproduzir um retry storm real, com número de requisições multiplicadas e queda de throughput medida.",
+              "Explicar por que backoff exponencial sozinho ainda sincroniza clientes que falharam juntos.",
+              "Configurar jitter decorrelacionado e citar a fórmula canônica que o justifica.",
+              "Distinguir o que retry resolve do que circuit breaker resolve, com uma frase para cada.",
+              "Calcular o orçamento de tempo do pipeline de retry e mantê-lo abaixo do timeout da função.",
+              "Nomear os três estados do disjuntor e o que decide a transição entre eles.",
+              "Provar, com contagem de chamadas de rede, que o circuito aberto realmente pula a chamada.",
+              "Explicar por que retry sem chave de idempotência duplica efeito em vez de corrigir falha."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Backoff exponencial",
+                "DVA-C02, SAP-C02",
+                "espera que dobra a cada tentativa, com teto",
+                "por que ele sozinho não basta contra sincronização"
+              ],
+              [
+                "Jitter",
+                "DVA-C02, SAP-C02",
+                "aleatoriedade que quebra a sincronização entre clientes",
+                "a diferença entre full jitter e jitter decorrelacionado"
+              ],
+              [
+                "Circuit breaker",
+                "DVA-C02, SAP-C02",
+                "os três estados e a transição entre eles",
+                "que ele impede chamada NOVA, não repete a antiga"
+              ],
+              [
+                "Retry storm / thundering herd",
+                "SAP-C02",
+                "a causa raiz que backoff+jitter+disjuntor previnem juntos",
+                "que retry sem espaçamento agrava, não alivia, degradação"
+              ],
+              [
+                "Idempotência e retry seguro",
+                "DVA-C02, SAP-C02",
+                "por que retry em operação não-idempotente duplica efeito",
+                "a chave de idempotência como pré-condição do retry, não opcional"
+              ],
+              [
+                "SQS como backoff grosseiro",
+                "DVA-C02",
+                "visibility timeout como segunda camada de espera, atrás do retry fino",
+                "que as duas camadas coexistem e servem propósitos diferentes"
+              ],
+              [
+                "Observabilidade de resiliência",
+                "SAP-C02, SOA-C02",
+                "métrica publicada a cada transição do disjuntor",
+                "que um circuito \"quieto\" no painel de erro pode estar aberto, não saudável"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve um sistema com retry e backoff exponencial que ainda assim derruba o downstream sob carga, e pede a causa. A resposta esperada não é \"aumentar o backoff\" — é que falta jitter: sem ele, clientes que falharam no mesmo instante continuam retentando em ondas sincronizadas, só que mais espaçadas. O erro de raciocínio mais comum é tratar \"backoff exponencial\" como sinônimo de \"resolvido\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito não funcional que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Degradação do parceiro não pode virar indisponibilidade total",
+                "obrigatório",
+                "circuit breaker: acima de 50% de falha numa janela de 10 s, para de chamar"
+              ],
+              [
+                "Retry não pode duplicar cobrança",
+                "obrigatório",
+                "a chave de idempotência do L22 é pré-condição — sem ela, nenhuma política de retry é segura"
+              ],
+              [
+                "Cliente não pode esperar 60 s inteiros por uma recusa",
+                "meta declarada pelo time",
+                "retry com backoff fino DENTRO da invocação, antes da reentrega grosseira da fila"
+              ],
+              [
+                "Chamadas concorrentes não podem sincronizar",
+                "obrigatório sob carga de campanha",
+                "jitter decorrelacionado em vez de backoff exponencial puro"
+              ],
+              [
+                "Pipeline de retry cabe no timeout da função",
+                "10 s (do L22)",
+                "timeout de 2 s por tentativa, no máximo 3 tentativas, teto de espera de 1,5 s"
+              ],
+              [
+                "Circuito aberto tem de ser visível sem abrir código",
+                "requisito operacional",
+                "métrica customizada publicada a cada OnOpened/OnClosed/OnHalfOpened"
+              ],
+              [
+                "Parceiro real não pode ser alvo de teste de carga",
+                "restrição contratual",
+                "simulador próprio, atrás de ALB, com capacidade calibrada pela fatura observada"
+              ],
+              [
+                "Circuito reabrindo repetidas vezes precisa de humano",
+                "requisito operacional",
+                "alarme no CloudWatch sobre a métrica do disjuntor, não só o disjuntor sozinho"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o retry que multiplica a carga"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que o \"conserto\" bem-intencionado produziu, e ele é legítimo como ponto de partida: reduz a espera percebida em todo teste que já foi feito. O laboratório começa medindo o que ele faz sob a carga que ainda não foi testada."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O retry que multiplica a carga no pior momento",
+            "caption": "Este laço de três tentativas parece resiliência — e passa em qualquer teste local, onde o parceiro nunca falha. Sob carga real ele faz o oposto: cada invocação que falha vira até três, no MESMO instante, contra um parceiro que está tentando se recuperar. Percorra os passos e repare que a multiplicação é aritmética, não imprevisível.",
+            "groups": [
+              {
+                "label": "Geração de carga",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "k6",
+                    "service": "servidor",
+                    "label": "Driver de carga",
+                    "note": "simula 800 invocações concorrentes, o perfil medido no pico de campanha do L22"
+                  }
+                ]
+              },
+              {
+                "label": "Fila existente, do L22",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "fila",
+                    "service": "sqs",
+                    "label": "Fila de pedidos",
+                    "note": "mensagem malsucedida some daqui e reaparece só após 60 s — um backoff grosseiro, mas backoff"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — consumidor",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "lambda",
+                    "service": "lambda",
+                    "label": "Lambda consumidor (Function.cs, do L22)",
+                    "note": "a concorrência escala com a profundidade da fila: mais mensagem parada, mais invocação simultânea"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — parceiro simulado, para reproduzir com segurança",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB do simulador",
+                    "note": "encaminha para o único alvo que representa o parceiro de pagamento sob carga"
+                  },
+                  {
+                    "id": "parceiro",
+                    "service": "fargate",
+                    "label": "Simulador do parceiro (instável)",
+                    "note": "acima de 400 req/s passa a atrasar e devolver 429 — o comportamento documentado do parceiro real"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "k6",
+                "to": "fila",
+                "label": "800 pedidos simulados, mesmo perfil do pico do L22",
+                "style": "solid"
+              },
+              {
+                "from": "fila",
+                "to": "lambda",
+                "label": "invocação em lote, até 10 mensagens por vez",
+                "style": "solid"
+              },
+              {
+                "from": "lambda",
+                "to": "alb",
+                "label": "até 3 tentativas imediatas, 0 ms de espera entre elas",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "parceiro",
+                "label": "encaminha para o alvo saudável",
+                "style": "solid"
+              },
+              {
+                "from": "parceiro",
+                "to": "lambda",
+                "label": "timeout ou 429 quando acima da capacidade",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A concorrência escala com a fila, não com o parceiro",
+                "detail": "Cada mensagem nova dispara uma invocação nova do Lambda. Numa campanha, a fila acumula centenas de mensagens em minutos, e o Lambda escala a concorrência para atendê-las — sem nenhuma noção de quanto o downstream aguenta.",
+                "nodes": [
+                  "fila",
+                  "lambda"
+                ],
+                "edges": [
+                  "fila>lambda"
+                ]
+              },
+              {
+                "label": "Sem espera, a tentativa seguinte começa no mesmo instante",
+                "detail": "O laço `for` de três tentativas do código ingênuo não tem `Task.Delay` nenhum entre elas. Uma chamada que falha por timeout já gastou o tempo inteiro do timeout — e a próxima começa imediatamente, sem dar ao parceiro um único milissegundo para se recuperar.",
+                "nodes": [
+                  "lambda",
+                  "alb"
+                ],
+                "edges": [
+                  "lambda>alb"
+                ]
+              },
+              {
+                "label": "A multiplicação é aritmética",
+                "detail": "800 invocações concorrentes × até 3 tentativas cada é até 2.400 requisições por segundo contra um parceiro cuja capacidade medida é de 400 req/s. A carga que o retry gera é seis vezes o que o parceiro suporta — e ela chega exatamente quando ele já estava degradando sozinho.",
+                "nodes": [
+                  "lambda",
+                  "parceiro"
+                ],
+                "edges": [
+                  "alb>parceiro"
+                ]
+              },
+              {
+                "label": "O parceiro reage do jeito que qualquer serviço com limite reage",
+                "detail": "Acima da capacidade, a latência sobe e uma fração das respostas vira 429 (limite de taxa). O retry ingênuo trata 429 exatamente como qualquer outro erro: tenta de novo, imediatamente — reforçando a mesma sobrecarga que gerou o 429.",
+                "nodes": [
+                  "parceiro",
+                  "lambda"
+                ],
+                "edges": [
+                  "parceiro>lambda"
+                ]
+              },
+              {
+                "label": "Quem esgota as tentativas ainda pagou o preço inteiro",
+                "detail": "Uma mensagem que falha as 5 entregas da fila (o `maxReceiveCount` do L22) vai para a DLQ — mas antes de desistir, ela já gerou até 15 requisições ao parceiro (5 entregas × 3 tentativas cada). O retry não evitou o abandono; só multiplicou o custo dele.",
+                "nodes": [
+                  "fila",
+                  "parceiro"
+                ],
+                "edges": [
+                  "lambda>alb"
+                ]
+              },
+              {
+                "label": "Por que alguém escreve o retry assim",
+                "detail": "Porque resolve um problema real — o cliente esperando até 60 s pela reentrega da fila para saber que o pagamento falhou — com a ferramenta mais curta de escrever, e porque em qualquer teste local, onde o parceiro nunca falha, o laço de 3 tentativas nunca é exercitado de verdade.",
+                "nodes": [
+                  "k6",
+                  "lambda"
+                ],
+                "edges": [
+                  "k6>fila"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O número que importa não é \"o retry existe\" — é a multiplicação. Meça antes de mudar qualquer coisa: é o que torna o defeito discutível, em vez de uma sensação de que \"a campanha passada foi ruim\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "filename": "carga-ingenua.sh",
+            "code": "#!/usr/bin/env bash\n# carga-ingenua.sh — 800 clientes concorrentes, cada um repetindo o laco de\n# 3 tentativas SEM espera do Function.cs ingenuo. E uma aproximacao em bash\n# do comportamento do Lambda sob carga (mesmo padrao de tentativas imediatas)\n# — NAO e o mesmo processo .NET. Para medir o pipeline Polly de verdade, use\n# o harness em C# da secao de provas.\nset -euo pipefail\n\nURL=\"http://$(terraform output -raw dominio_simulador)/cobrancas\"\n\ndisparar_um() {\n  local codigo\n  for tentativa in 1 2 3; do\n    codigo=$(curl -s -o /dev/null -w '%{http_code}' -X POST \"$URL\" \\\n      -H 'content-type: application/json' \\\n      -d '{\"pedidoId\":\"x\",\"valorCentavos\":1000}')\n    [ \"$codigo\" = \"200\" ] && { echo 200; return; }\n    # SEM sleep: a proxima tentativa comeca no mesmo instante — e exatamente\n    # o defeito que este laboratorio mede.\n  done\n  echo \"$codigo\"\n}\nexport -f disparar_um\nexport URL\n\ninicio=$(date +%s)\nseq 800 | xargs -P 800 -I{} bash -c disparar_um > /tmp/resultado-ingenuo.txt\nfim=$(date +%s)\n\nsucesso=$(grep -c '^200$' /tmp/resultado-ingenuo.txt || true)\necho \"duracao: $((fim - inicio)) s\"\necho \"sucesso: ${sucesso} de 800\"\n# Medido no ambiente de exemplo da Cadencia: 267 de 800 (33%) — o parceiro\n# simulado colapsa sob a propria multiplicacao do retry. Meca no seu ambiente.\n"
+          }
+        },
+        {
+          "id": "b4_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "Retry sem chave de idempotência não é retry — é duplicação automatizada",
+            "content": "Este laboratório é seguro porque a chave de idempotência do L22 (a escrita condicional no DynamoDB) já existe ANTES de qualquer política de retry ser adicionada. Se o seu sistema retenta uma operação que grava efeito — cobrar cartão, debitar estoque, enviar e-mail — sem uma chave que identifique \"isto já aconteceu\", cada retry que POR ACASO teve sucesso depois de a resposta anterior se perder na rede duplica o efeito. Backoff e jitter não resolvem isso: eles decidem QUANDO tentar de novo, não SE é seguro tentar de novo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A carga contra o simulador é a MESMA do desenho anterior — o que muda é o comportamento do cliente, e é isso que o teste compara."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A chamada que não acontece é mais barata que a que falha rápido",
+            "caption": "O que muda não é o parceiro — é a mesma carga contra o mesmo simulador. O que muda é que agora existe uma decisão ANTES de discar: com o circuito aberto, a chamada de rede simplesmente não ocorre, e essa decisão é publicada como métrica. Percorra os passos: cada peça nova rastreia a um requisito de operação sem vigília noturna.",
+            "groups": [
+              {
+                "label": "Geração de carga",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "k6",
+                    "service": "servidor",
+                    "label": "Driver de carga",
+                    "note": "mesma carga de 800 invocações, para comparar com o resultado do desenho anterior"
+                  }
+                ]
+              },
+              {
+                "label": "Fila existente, do L22",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "fila",
+                    "service": "sqs",
+                    "label": "Fila de pedidos",
+                    "note": "com o circuito aberto, a mensagem que falha rápido volta a ficar visível bem antes dos 60 s de antes"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — consumidor, agora com Polly",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "lambda",
+                    "service": "lambda",
+                    "label": "Lambda consumidor (pipeline de resiliência)",
+                    "note": "decide ANTES de discar: com o circuito aberto, falha em microssegundos sem tocar a rede"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — parceiro simulado",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB do simulador",
+                    "note": "mede o mesmo alvo do desenho anterior; o que muda é quantas vezes ele é de fato chamado"
+                  },
+                  {
+                    "id": "parceiro",
+                    "service": "fargate",
+                    "label": "Simulador do parceiro (instável)",
+                    "note": "a mesma capacidade de 400 req/s; agora recebe uma fração da carga que recebia antes"
+                  }
+                ]
+              },
+              {
+                "label": "Observação do disjuntor",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Métrica: estado do circuito",
+                    "note": "publicada a cada OnOpened/OnClosed/OnHalfOpened — sem isso o circuito abre e fecha em silêncio"
+                  },
+                  {
+                    "id": "sns",
+                    "service": "sns",
+                    "label": "Alerta: circuito reabrindo",
+                    "note": "dispara quando o circuito abre de novo em janelas seguidas — sinal de que o parceiro não voltou"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "k6",
+                "to": "fila",
+                "label": "mesma carga, 800 pedidos, para comparar com a Figura 1",
+                "style": "solid"
+              },
+              {
+                "from": "fila",
+                "to": "lambda",
+                "label": "invocação em lote, até 10 mensagens por vez",
+                "style": "solid"
+              },
+              {
+                "from": "lambda",
+                "to": "alb",
+                "label": "tentativa com backoff exponencial e jitter — só com o circuito fechado",
+                "style": "dashed"
+              },
+              {
+                "from": "alb",
+                "to": "parceiro",
+                "label": "encaminha para o alvo saudável",
+                "style": "solid"
+              },
+              {
+                "from": "parceiro",
+                "to": "lambda",
+                "label": "resposta ou timeout, dentro do teto de tentativas configurado",
+                "style": "dashed"
+              },
+              {
+                "from": "lambda",
+                "to": "cw",
+                "label": "publica a transição do circuito",
+                "style": "solid"
+              },
+              {
+                "from": "cw",
+                "to": "sns",
+                "label": "alarme quando o circuito soma 3 janelas abertas",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O jitter decorrelacionado quebra a sincronização que o backoff sozinho não quebra",
+                "detail": "Backoff exponencial puro faz todo cliente que falhou no mesmo segundo esperar o mesmo tempo — e tentar de novo no mesmo segundo seguinte. O jitter usado aqui (`UseJitter = true` com backoff exponencial, que aciona o `DecorrelatedJitterBackoffV2` do Polly) distribui a próxima tentativa num intervalo que depende da espera anterior, e é isso que impede as 800 invocações de convergirem no mesmo instante outra vez.",
+                "nodes": [
+                  "lambda",
+                  "alb"
+                ],
+                "edges": [
+                  "lambda>alb"
+                ]
+              },
+              {
+                "label": "O disjuntor conta falhas numa janela deslizante",
+                "detail": "Com `FailureRatio`, `SamplingDuration` e `MinimumThroughput` configurados, o circuito só decide abrir depois de observar um número mínimo de chamadas reais numa janela de tempo — abrir com uma amostra pequena demais confundiria uma falha isolada com uma tendência.",
+                "nodes": [
+                  "alb",
+                  "parceiro"
+                ],
+                "edges": [
+                  "alb>parceiro"
+                ]
+              },
+              {
+                "label": "Circuito ABERTO: a chamada de rede simplesmente não acontece",
+                "detail": "É a distinção central deste laboratório. Retry tenta de novo a MESMA chamada; circuit breaker impede uma chamada NOVA de sequer ser discada. Com o circuito aberto, `ExecuteAsync` lança `BrokenCircuitException` sem nunca invocar o delegate — o parceiro não recebe nem sabe que existiu uma tentativa.",
+                "nodes": [
+                  "lambda",
+                  "parceiro"
+                ],
+                "edges": [
+                  "parceiro>lambda"
+                ]
+              },
+              {
+                "label": "Toda transição é publicada, ou ninguém sabe que o circuito abriu",
+                "detail": "Sem os callbacks `OnOpened`/`OnClosed`/`OnHalfOpened` escrevendo uma linha estruturada, o efeito observável de um circuito aberto é só a AUSÊNCIA de chamadas ao parceiro — que, num painel que só mede erro, parece sucesso.",
+                "nodes": [
+                  "lambda",
+                  "cw"
+                ],
+                "edges": [
+                  "lambda>cw"
+                ]
+              },
+              {
+                "label": "Meio-aberto: uma chamada de teste decide o próximo estado",
+                "detail": "Depois do `BreakDuration`, o disjuntor libera exatamente UMA chamada real. Se ela tiver sucesso, o circuito fecha e o tráfego volta ao normal; se falhar, ele reabre e o teto de paciência recomeça.",
+                "nodes": [
+                  "parceiro",
+                  "lambda"
+                ],
+                "edges": [
+                  "parceiro>lambda"
+                ]
+              },
+              {
+                "label": "O alarme cobre o caso em que o disjuntor sozinho não é suficiente",
+                "detail": "Um circuito que abre uma vez e fecha é o sistema funcionando. Um circuito que abre, meio-abre, falha e reabre repetidamente por vários minutos é sinal de que o parceiro não está voltando — e essa distinção exige alguém olhar, não mais um retry automático.",
+                "nodes": [
+                  "cw",
+                  "sns"
+                ],
+                "edges": [
+                  "cw>sns"
+                ]
+              },
+              {
+                "label": "O resultado sob a MESMA carga é o oposto do storm",
+                "detail": "Enquanto o circuito está aberto, o throughput efetivo contra o parceiro cai para perto de zero — dando exatamente o espaço que ele precisa para se recuperar, em vez de receber seis vezes a carga normal no pior momento possível.",
+                "nodes": [
+                  "k6",
+                  "parceiro"
+                ],
+                "edges": [
+                  "k6>fila"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural não é um nó a mais: é uma DECISÃO nova antes de discar (circuito fechado ou aberto?) e um caminho de observação que não existia — sem ele, o circuito abre e fecha em silêncio, e a única evidência seria a ausência de erro no painel, que parece sucesso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "annotated_formula",
+          "position": 3,
+          "data": {
+            "title": "O pior caso do pipeline tem de caber no timeout da função — e a conta é explícita",
+            "formula": "pior_caso ≈ tentativas × timeout_por_tentativa + Σ espera_entre_tentativas",
+            "parts": [
+              {
+                "symbol": "tentativas",
+                "name": "3 no total: 1 inicial + 2 retentativas",
+                "description": "Cada uma pode gastar o timeout inteiro antes de contar como falha. Mais tentativas parece mais resiliente e, sem refazer esta conta, é o jeito mais direto de estourar o orçamento."
+              },
+              {
+                "symbol": "timeout_por_tentativa",
+                "name": "2 s por chamada HTTP",
+                "description": "Reduzido dos 5 s do L22 de propósito: agora existe retry, então uma única espera longa vale menos do que falhar rápido e deixar o Polly decidir a próxima tentativa."
+              },
+              {
+                "symbol": "espera_entre_tentativas",
+                "name": "backoff exponencial com jitter, teto de 1,5 s",
+                "description": "O pior caso das duas esperas entre as 3 tentativas soma cerca de 3 s. É aleatório por desenho — o teto de 1,5 s por espera é o que mantém o pior caso previsível apesar do jitter.",
+                "highlight": true
+              },
+              {
+                "symbol": "orçamento",
+                "name": "timeout da função Lambda: 10 s (declarado no L22)",
+                "description": "O pior caso deste pipeline soma cerca de 9 s, com por volta de 1 s de folga. Subir `MaxRetryAttempts` sem refazer esta conta faz a função morrer com `SIGKILL` no meio de uma tentativa, sem log de erro — porque o processo não chegou a decidir que falhou."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "success",
+            "title": "O que o disjuntor entrega que o retry sozinho não entrega",
+            "content": "Com retry e jitter mas sem circuit breaker, uma degradação SUSTENTADA do parceiro (não uma falha isolada) continua recebendo tentativa após tentativa, espaçadas mas infinitas. O disjuntor é quem decide \"chega, vamos parar de tentar por um tempo\" — e essa decisão é o que dá ao parceiro o espaço real para se recuperar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de uma cobrança, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "flow_diagram",
+          "position": 0,
+          "data": {
+            "title": "Uma cobrança, do disparo à decisão do disjuntor",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1. Mensagem sai da fila, invocação começa",
+                "desc": "O Lambda lê até 10 mensagens do lote e processa cada `PedidoRecebido` de forma independente, como no L22."
+              },
+              {
+                "label": "2. `ProcessarPedidoAsync` grava a marca de idempotência",
+                "desc": "A escrita condicional no DynamoDB (`attribute_not_exists(PedidoId)`) — do L22 — decide se este é o primeiro processamento ou uma reentrega. Só reentrega ignorada não gera nova cobrança."
+              },
+              {
+                "label": "3. O pipeline de resiliência decide: o circuito está fechado?",
+                "desc": "Se estiver ABERTO, pula direto para o passo 7 sem tocar a rede. Se estiver FECHADO ou MEIO-ABERTO, a chamada ao parceiro acontece."
+              },
+              {
+                "label": "4. Tentativa 1 ao parceiro de pagamento",
+                "desc": "Timeout de 2 s por tentativa. Se `IsSuccessStatusCode`, a cobrança terminou com sucesso e a função retorna."
+              },
+              {
+                "label": "5. Falhou: o disjuntor registra e o retry calcula a espera",
+                "desc": "A falha entra na janela deslizante do circuito. Se o circuito ainda estiver fechado, o retry calcula a próxima espera com backoff exponencial e jitter — nunca a mesma espera duas vezes, mesmo para duas invocações que falharam no mesmo milissegundo."
+              },
+              {
+                "label": "6. Tentativa 2, e no máximo tentativa 3",
+                "desc": "Até `MaxRetryAttempts` retentativas. Cada falha alimenta a mesma janela do disjuntor — é assim que falhas de invocações DIFERENTES, na prática, decidem juntas quando o circuito abre."
+              },
+              {
+                "label": "7. Esgotadas as tentativas ou circuito aberto: falha é reportada",
+                "desc": "A mensagem entra em `batchItemFailures` (do L22) e volta para a fila depois do `visibility_timeout` — agora um SEGUNDO nível de espera, mais grosseiro, atrás do backoff fino que já rodou dentro da invocação."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O log estruturado abaixo é o que o `OnOpened` do disjuntor escreve. É texto de log, não chamada de API adicional — o metric filter do Terraform (seção de construção) é quem o transforma em número."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "json",
+            "filename": "evento-circuito-aberto.json",
+            "code": "{\n  \"evento\": \"CIRCUITO_ABERTO\",\n  \"timestamp\": \"2026-08-07T14:12:03.418Z\",\n  \"motivo\": \"TaskCanceledException: timeout apos 2000ms\",\n  \"pedidoId\": \"8f1c2a90-...\",\n  \"requestId\": \"3e7a9c10-...\",\n  \"_comentario\": \"Log estruturado escrito pelo OnOpened do Polly. O metric filter do Terraform casa em '$.evento = CIRCUITO_ABERTO' e vira contagem no CloudWatch — nenhuma chamada de API extra, so uma linha de log bem formatada.\"\n}\n"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "A fila já era um backoff — só que grosseiro",
+            "content": "O `visibility_timeout` de 60 s do L22 sempre foi uma forma de espaçar reentregas. O que este laboratório acrescenta é uma camada de espera MAIS FINA, dentro da própria invocação, antes de recorrer à reentrega grosseira da fila. As duas camadas coexistem: a fina resolve degradação de segundos; a grossa é quem ainda protege contra o caso em que o pipeline inteiro (retry + circuito) já desistiu."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "O consumidor de pedidos da Cadência (L22) depende de um parceiro de pagamento que degrada sob a própria carga durante campanhas — e a equipe, sem vigília noturna, precisa que essa degradação não vire indisponibilidade completa do checkout nem cobrança duplicada.",
+            "winner": "Polly: retry com backoff exponencial e jitter (`UseJitter = true`) combinado a circuit breaker, dentro do processo, sem infraestrutura nova",
+            "why": "O par retry+circuit breaker resolve dois problemas DIFERENTES que este cenário tem ao mesmo tempo: o retry com jitter dá a cada falha isolada uma segunda chance sem sincronizar com as outras; o circuit breaker impede que uma degradação sustentada do parceiro continue recebendo tráfego enquanto tenta se recuperar. Nenhum dos dois sozinho basta — retry sem disjuntor, sob degradação sustentada, continua martelando o parceiro para sempre; disjuntor sem retry desiste de falhas isoladas que uma segunda tentativa resolveria. Custa uma dependência de NuGet e algumas linhas de configuração, não um serviço novo.",
+            "alternatives": [
+              {
+                "name": "Rate limiting no lado do cliente (limitar requisições/s antes de discar)",
+                "downside": "Protege o parceiro de excesso de volume, mas não resolve o problema declarado: quando o parceiro está genuinamente fora, um limitador de taxa ainda deixa passar chamadas destinadas a falhar, sem o benefício de aprender que já sabe que vão falhar."
+              },
+              {
+                "name": "Fila de prioridade com atraso fixo (delay queue)",
+                "downside": "Dá espaçamento, mas fixo — não se adapta a quanto o parceiro já está degradado, e não distingue \"falha isolada\" de \"parceiro fora\". É um backoff sem circuit breaker, com a mesma limitação do parágrafo acima."
+              },
+              {
+                "name": "Bulkhead (isolar o pool de conexões deste parceiro dos demais)",
+                "downside": "Resolve um problema adjacente e real — este parceiro degradado não pode esgotar conexões que outra chamada da mesma função precisa — mas não reduz a carga que chega até ELE. É complementar ao retry+circuit breaker, não substituto; fica registrado como extensão possível, não como este laboratório."
+              },
+              {
+                "name": "Aumentar o timeout da função e confiar só na reentrega da fila (60 s)",
+                "downside": "Era o desenho anterior ao problema que motivou este laboratório: funciona, mas o cliente espera até 60 s para saber que o pagamento falhou — a razão declarada pela qual alguém escreveu o retry ingênuo em primeiro lugar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Fonte da aleatoriedade na espera",
+                "jitter decorrelacionado (`UseJitter=true` + `Exponential`)",
+                "full jitter manual; backoff fixo sem jitter",
+                "quebra a sincronização entre invocações que falharam juntas, sem exigir cálculo próprio",
+                "o algoritmo do Polly usa fatores de escala próprios — não é uma cópia literal da fórmula do artigo da AWS"
+              ],
+              [
+                "Timeout por tentativa",
+                "2 s (reduzido dos 5 s do L22)",
+                "5 s (original); 500 ms (agressivo)",
+                "com retry disponível, falhar rápido e deixar o Polly decidir vale mais que uma única espera longa",
+                "uma resposta legítima que leva 3 s é tratada como falha e desperdiça uma tentativa"
+              ],
+              [
+                "Limiar do disjuntor",
+                "50% de falha em janela de 10 s, mínimo de 20 chamadas",
+                "10% (agressivo); sem mínimo de amostra",
+                "não abre por causa de uma falha isolada; exige uma tendência real",
+                "em tráfego calmo, 20 chamadas em 10 s pode nunca acontecer — o disjuntor fica inerte fora de pico"
+              ],
+              [
+                "Duração da pausa",
+                "15 s antes de testar recuperação",
+                "5 s (padrão do Polly); 60 s",
+                "dá tempo real ao parceiro sem manter o checkout bloqueado por minutos",
+                "se o parceiro precisar de mais que 15 s para respirar, o disjuntor testa cedo demais e reabre"
+              ],
+              [
+                "Alvo do teste de carga",
+                "simulador próprio, atrás de ALB",
+                "chamar o parceiro real; usar `WireMock` local sem rede",
+                "reproduz throttling e latência sob carga sem violar o limite de taxa contratual",
+                "o simulador é uma APROXIMAÇÃO calibrada, não o comportamento exato do parceiro real"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este laboratório não paga",
+            "content": "O disjuntor aqui é local a UMA invocação do Lambda — cada execução concorrente tem a própria instância do `ResiliencePipeline` em memória, porque campos estáticos em Lambda são por ambiente de execução, não globais entre todos eles. Sob alta concorrência, isso significa várias \"opiniões\" independentes sobre o estado do circuito, convergindo apenas pela métrica compartilhada no CloudWatch. Um disjuntor compartilhado de verdade (estado centralizado) é material do L57."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: o retry ingênuo que \"conserta\" e piora"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o código que qualquer revisão de PR aprovaria: compila, resolve o teste local, e \"obviamente\" tenta de novo antes de desistir. É o ponto de partida deste laboratório, não o destino."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Function.cs (antes)",
+            "code": "// Function.cs — o \"conserto\" que piora tudo sob carga (NÃO faça isto)\n//\n// Ponto de partida: o L22 termina com uma única tentativa em CobrarCartaoAsync,\n// deixando a fila reentregar depois de 60 s quando falha. Um engenheiro,\n// incomodado com o cliente esperando ate 60 s por uma recusa, adiciona este\n// laco — e e exatamente esta mudanca que faz uma degradacao do parceiro virar\n// uma queda completa sob carga de campanha.\n\nprivate static async Task CobrarCartaoAsync(PedidoRecebido pedido)\n{\n    HttpResponseMessage? ultimaResposta = null;\n\n    // Tres tentativas, SEM Task.Delay nenhum entre elas. Cada chamada que\n    // falha por timeout ja gastou o tempo inteiro do timeout — e a proxima\n    // comeca no MESMO instante, sem dar ao parceiro um unico milissegundo\n    // para se recuperar. Sob 800 invocacoes concorrentes, isto multiplica a\n    // carga contra o parceiro por ate 3x exatamente quando ele mais precisa\n    // de MENOS carga, nao mais.\n    for (var tentativa = 1; tentativa <= 3; tentativa++)\n    {\n        ultimaResposta = await _gatewayPagamento.PostAsJsonAsync(\n            \"https://gateway.exemplo/cobrancas\",\n            new { pedido.PedidoId, pedido.ValorCentavos });\n\n        if (ultimaResposta.IsSuccessStatusCode) return;\n\n        // Um 429 (limite de taxa do parceiro) e tratado IGUAL a qualquer\n        // outro erro: tenta de novo, imediatamente. E o proprio sinal que o\n        // parceiro usa para pedir menos carga sendo respondido com mais.\n    }\n\n    ultimaResposta!.EnsureSuccessStatusCode(); // lanca; o item entra em batchItemFailures\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que este código passa despercebido",
+            "content": "Em qualquer ambiente de desenvolvimento, o parceiro simulado local responde em milissegundos e nunca falha — então o laço de 3 tentativas simplesmente nunca executa a segunda iteração. O defeito só aparece sob duas condições simultâneas: o parceiro degradando E concorrência suficiente para a multiplicação importar. Nenhuma das duas aparece em teste unitário."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o pipeline Polly — retry, jitter e circuit breaker"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O pipeline é construído UMA VEZ, como campo estático — não a cada invocação. Reconstruir a cada chamada descartaria o estado acumulado do disjuntor, que só faz sentido observando várias chamadas ao longo do tempo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Function.cs (depois)",
+            "code": "// Function.cs — retry com backoff + jitter, e circuit breaker, como campos\n// estaticos construidos UMA VEZ (fora do handler — Polly nao foi feito para\n// ser reconstruido a cada invocacao, e reconstruir descartaria o estado do\n// disjuntor entre chamadas).\n\nusing Polly;\nusing Polly.CircuitBreaker;\nusing Polly.Retry;\n\nprivate static readonly HttpClient _gatewayPagamento = new()\n{\n    // Reduzido dos 5 s do L22 de proposito: com retry disponivel, uma unica\n    // espera longa vale menos do que falhar rapido e deixar o Polly decidir\n    // a proxima tentativa. Ver a formula do orcamento na secao ao lado.\n    Timeout = TimeSpan.FromSeconds(2),\n};\n\nprivate static readonly ResiliencePipeline<HttpResponseMessage> _resiliencia =\n    new ResiliencePipelineBuilder<HttpResponseMessage>()\n        .AddRetry(new RetryStrategyOptions<HttpResponseMessage>\n        {\n            ShouldHandle = new PredicateBuilder<HttpResponseMessage>()\n                .Handle<HttpRequestException>()\n                .Handle<TaskCanceledException>() // timeout do HttpClient vira esta excecao\n                .HandleResult(r => !r.IsSuccessStatusCode),\n            MaxRetryAttempts = 2, // 1 tentativa inicial + 2 retentativas = 3 no total\n            BackoffType = DelayBackoffType.Exponential,\n            // O PONTO CENTRAL deste laboratorio. Sem jitter, todo invocacao\n            // que falhou no mesmo segundo espera o MESMO tempo e tenta de\n            // novo no mesmo segundo seguinte — o backoff exponencial sozinho\n            // ainda sincroniza. Com UseJitter=true e backoff exponencial, o\n            // Polly aciona o DecorrelatedJitterBackoffV2: cada espera depende\n            // da anterior de forma nao-deterministica, quebrando a\n            // sincronizacao entre as 800 invocacoes concorrentes.\n            UseJitter = true,\n            Delay = TimeSpan.FromMilliseconds(200),\n            MaxDelay = TimeSpan.FromSeconds(1.5), // teto: mantem o pior caso previsivel\n            OnRetry = args =>\n            {\n                Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new\n                {\n                    evento = \"RETRY_TENTATIVA\",\n                    tentativa = args.AttemptNumber + 1,\n                    espera_ms = args.RetryDelay.TotalMilliseconds,\n                }));\n                return default;\n            },\n        })\n        .AddCircuitBreaker(new CircuitBreakerStrategyOptions<HttpResponseMessage>\n        {\n            ShouldHandle = new PredicateBuilder<HttpResponseMessage>()\n                .Handle<HttpRequestException>()\n                .Handle<TaskCanceledException>()\n                .HandleResult(r => !r.IsSuccessStatusCode),\n            // Numa janela de 10 s, com pelo menos 20 chamadas reais, abre se\n            // metade delas falhar. MinimumThroughput existe para nao abrir o\n            // circuito com base numa amostra pequena demais — mas isso tem\n            // um efeito colateral que a secao de troubleshooting trata: em\n            // trafego calmo (fora de campanha), 20 chamadas em 10 s pode\n            // nunca acontecer, e o disjuntor nunca abre, mesmo com o parceiro\n            // genuinamente fora.\n            FailureRatio = 0.5,\n            SamplingDuration = TimeSpan.FromSeconds(10),\n            MinimumThroughput = 20,\n            BreakDuration = TimeSpan.FromSeconds(15),\n            OnOpened = args =>\n            {\n                // Log ESTRUTURADO, nao chamada de API — o metric filter do\n                // Terraform ao lado transforma esta linha em metrica, sem\n                // exigir nenhuma permissao nova para a funcao.\n                Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new\n                {\n                    evento = \"CIRCUITO_ABERTO\",\n                    motivo = args.Outcome.Exception?.Message ?? \"limiar de falha atingido\",\n                }));\n                return default;\n            },\n            OnClosed = args =>\n            {\n                Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(\n                    new { evento = \"CIRCUITO_FECHADO\" }));\n                return default;\n            },\n            OnHalfOpened = args =>\n            {\n                Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(\n                    new { evento = \"CIRCUITO_MEIO_ABERTO\" }));\n                return default;\n            },\n        })\n        .Build();\n\nprivate static async Task CobrarCartaoAsync(PedidoRecebido pedido)\n{\n    try\n    {\n        var resposta = await _resiliencia.ExecuteAsync(async ct =>\n            await _gatewayPagamento.PostAsJsonAsync(\n                \"https://gateway.exemplo/cobrancas\",\n                new { pedido.PedidoId, pedido.ValorCentavos }, ct));\n\n        resposta.EnsureSuccessStatusCode();\n    }\n    catch (BrokenCircuitException)\n    {\n        // O circuito estava ABERTO: nenhuma chamada de rede foi feita. Isto\n        // e DIFERENTE de esgotar as tentativas de retry — aqui a decisao foi\n        // tomada ANTES de discar. A mensagem volta para a fila e sera\n        // reentregue quando (e se) o circuito tiver fechado de novo.\n        throw;\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem das estratégias importa",
+            "content": "`AddRetry` antes de `AddCircuitBreaker` significa que o Polly tenta as retentativas primeiro, e é o RESULTADO FINAL dessa sequência (sucesso ou falha depois de esgotar as tentativas) que alimenta a contagem do disjuntor. Invertida a ordem, cada tentativa individual dentro do retry passaria pelo disjuntor separadamente — um desenho válido para outro caso, mas que abriria o circuito muito mais cedo aqui."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o simulador do parceiro, para reproduzir com segurança"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Chamar o parceiro de pagamento real num teste de carga não é uma opção disponível: ele tem limite de taxa contratual, e o objetivo é medir o comportamento do CLIENTE, não estressar a infraestrutura de um terceiro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "simulador/Program.cs",
+            "code": "// simulador/Program.cs — alvo controlado para reproduzir o storm com seguranca.\n// Chamar o parceiro de pagamento REAL num teste de carga nao e uma opcao: ele\n// tem limite de taxa contratual, e o objetivo aqui e medir o CLIENTE, nao\n// incomodar um parceiro de producao. Este simulador reage como o parceiro\n// documentado reage sob carga, com a capacidade como premissa declarada.\n\nvar builder = WebApplication.CreateBuilder(args);\nvar app = builder.Build();\n\n// Capacidade medida do parceiro real ao longo de meses de fatura da\n// Cadencia — NAO confirmada por documentacao publica dele. E a premissa que\n// autoriza este numero especifico; ajuste-o se o seu parceiro for diferente.\nconst int CAPACIDADE_RPS = 400;\nvar emVoo = 0;\n\napp.MapPost(\"/cobrancas\", async (HttpContext ctx) =>\n{\n    Interlocked.Increment(ref emVoo);\n    try\n    {\n        if (emVoo > CAPACIDADE_RPS)\n        {\n            // Acima da capacidade declarada: latencia alta e boa parte das\n            // respostas vira 429, como o parceiro real sob throttling.\n            await Task.Delay(Random.Shared.Next(800, 2500));\n            if (Random.Shared.NextDouble() < 0.6)\n                return Results.StatusCode(429);\n        }\n        else\n        {\n            await Task.Delay(Random.Shared.Next(80, 180)); // latencia normal do parceiro\n        }\n        return Results.Ok(new { status = \"aprovado\" });\n    }\n    finally\n    {\n        Interlocked.Decrement(ref emVoo);\n    }\n});\n\napp.MapGet(\"/saude\", () => Results.Ok());\n\napp.Run();\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "hcl",
+            "filename": "simulador.tf",
+            "code": "# simulador.tf — alvo controlado, atras de ALB, para o teste de carga\n# Reaproveita o cluster e a VPC ja criados no L01/L22 — so a task e o alvo\n# sao novos.\n\nresource \"aws_lb_target_group\" \"simulador\" {\n  name        = \"${var.projeto}-simulador-parceiro\"\n  port        = 8080\n  protocol    = \"HTTP\"\n  vpc_id      = aws_vpc.principal.id\n  target_type = \"ip\"\n\n  health_check {\n    path                = \"/saude\"\n    interval            = 10\n    healthy_threshold   = 2\n    unhealthy_threshold = 2\n  }\n}\n\nresource \"aws_ecs_task_definition\" \"simulador_parceiro\" {\n  family                   = \"${var.projeto}-simulador-parceiro\"\n  requires_compatibilities = [\"FARGATE\"]\n  network_mode             = \"awsvpc\"\n  cpu                      = 256\n  memory                   = 512\n  execution_role_arn       = aws_iam_role.execucao.arn\n\n  container_definitions = jsonencode([{\n    name         = \"simulador\"\n    image        = \"${aws_ecr_repository.simulador.repository_url}:${var.sha_do_simulador}\"\n    essential    = true\n    portMappings = [{ containerPort = 8080, protocol = \"tcp\" }]\n    logConfiguration = {\n      logDriver = \"awslogs\"\n      options = {\n        \"awslogs-group\"         = aws_cloudwatch_log_group.simulador.name\n        \"awslogs-region\"        = var.regiao\n        \"awslogs-stream-prefix\" = \"simulador\"\n      }\n    }\n  }])\n}\n\nresource \"aws_ecs_service\" \"simulador_parceiro\" {\n  name            = \"${var.projeto}-simulador-parceiro\"\n  cluster         = aws_ecs_cluster.principal.id\n  task_definition = aws_ecs_task_definition.simulador_parceiro.arn\n  desired_count   = 2\n  launch_type     = \"FARGATE\"\n\n  network_configuration {\n    subnets          = aws_subnet.privada[*].id\n    security_groups  = [aws_security_group.simulador.id]\n    assign_public_ip = false\n  }\n\n  load_balancer {\n    target_group_arn = aws_lb_target_group.simulador.arn\n    container_name   = \"simulador\"\n    container_port   = 8080\n  }\n}\n\noutput \"dominio_simulador\" {\n  value       = aws_lb.simulador.dns_name\n  description = \"endpoint HTTP do simulador; e contra ele que os dois testes de carga rodam\"\n}\n"
+          }
+        },
+        {
+          "id": "b10_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O simulador é uma aproximação, declare isso ao ler os números",
+            "content": "A capacidade de 400 req/s e a distribuição de latência do simulador vêm da fatura observada da Cadência ao longo de meses — não de documentação pública do parceiro. Os números absolutos das provas desta seção valem para ESTE simulador; o padrão (retry sincroniza, jitter quebra, disjuntor limita) generaliza — os números não."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: observabilidade do disjuntor"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Sem esta seção, o circuito abre e fecha de forma correta e ninguém percebe — o único efeito observável seria a ausência de chamadas ao parceiro, que num painel que só mede taxa de erro parece exatamente como sucesso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "observabilidade-circuito.tf",
+            "code": "# observabilidade-circuito.tf — a transicao do disjuntor, visivel sem abrir codigo\n# O SNS (aws_sns_topic.alertas) e o mesmo do L22; nao ha topico novo aqui.\n\nresource \"aws_cloudwatch_log_metric_filter\" \"circuito_aberto\" {\n  name = \"${var.projeto}-circuito-pagamento-aberto\"\n  # O log group padrao que o Lambda ja escreve — nao exige nenhuma permissao\n  # nova para a funcao, porque e so texto de log, nao chamada de API.\n  log_group_name = \"/aws/lambda/${aws_lambda_function.consumidor.function_name}\"\n\n  # Casa a linha estruturada que o OnOpened escreve. E TEXTO de log: o metric\n  # filter e quem transforma isso em numero.\n  pattern = \"{ $.evento = \\\"CIRCUITO_ABERTO\\\" }\"\n\n  metric_transformation {\n    name      = \"CircuitoAbertoPagamento\"\n    namespace = \"${var.projeto}/resiliencia\"\n    value     = \"1\"\n    unit      = \"Count\"\n  }\n}\n\n# NAO dispara na primeira abertura — isso e o disjuntor fazendo o trabalho\n# dele. Dispara quando ele soma 3 janelas de 1 minuto com nova abertura,\n# sinal de que o parceiro nao esta voltando dentro do tempo que o disjuntor\n# sozinho tolera.\nresource \"aws_cloudwatch_metric_alarm\" \"circuito_reabrindo\" {\n  alarm_name          = \"${var.projeto}-circuito-pagamento-reabrindo\"\n  namespace           = \"${var.projeto}/resiliencia\"\n  metric_name         = \"CircuitoAbertoPagamento\"\n  statistic           = \"Sum\"\n  period              = 60\n  evaluation_periods  = 3\n  threshold           = 1\n  comparison_operator = \"GreaterThanOrEqualToThreshold\"\n  treat_missing_data  = \"notBreaching\"\n\n  alarm_actions = [aws_sns_topic.alertas.arn]\n}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar que o circuito realmente evita a chamada"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco medições. Nenhuma conclusão vem de \"o teste passou\" sem um número atrelado — é a diferença entre demonstrar e afirmar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "CargaTeste/Program.cs",
+            "code": "// CargaTeste/Program.cs — dispara 800 chamadas concorrentes reutilizando o\n// MESMO codigo de producao (ingenuo OU Polly, por variavel de ambiente), e\n// conta quantas chamadas de rede de fato aconteceram — a prova de que o\n// circuito aberto realmente pula a rede, nao so espera mais para tentar de\n// novo.\n\nvar usaPolly = Environment.GetEnvironmentVariable(\"USA_POLLY\") == \"true\";\nvar url = Environment.GetEnvironmentVariable(\"URL_SIMULADOR\")!;\nvar chamadasDeRede = 0;\n\nusing var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };\n\nasync Task<bool> TentarIngenuo()\n{\n    for (var t = 0; t < 3; t++)\n    {\n        Interlocked.Increment(ref chamadasDeRede);\n        try\n        {\n            var r = await http.PostAsJsonAsync(url, new { pedidoId = \"x\", valorCentavos = 1000 });\n            if (r.IsSuccessStatusCode) return true;\n        }\n        catch (TaskCanceledException) { /* timeout: proxima tentativa imediata */ }\n    }\n    return false;\n}\n\nasync Task<bool> TentarComPolly()\n{\n    try\n    {\n        var r = await Resiliencia.Pipeline.ExecuteAsync(async ct =>\n        {\n            Interlocked.Increment(ref chamadasDeRede); // so incrementa quando a rede E tocada\n            return await http.PostAsJsonAsync(url, new { pedidoId = \"x\", valorCentavos = 1000 }, ct);\n        });\n        return r.IsSuccessStatusCode;\n    }\n    catch { return false; }\n}\n\nvar relogio = System.Diagnostics.Stopwatch.StartNew();\nvar tarefas = Enumerable.Range(0, 800)\n    .Select(_ => usaPolly ? TentarComPolly() : TentarIngenuo());\nvar resultados = await Task.WhenAll(tarefas);\nrelogio.Stop();\n\nConsole.WriteLine($\"modo: {(usaPolly ? \"polly\" : \"ingenuo\")}\");\nConsole.WriteLine($\"duracao: {relogio.Elapsed.TotalSeconds:F1} s\");\nConsole.WriteLine($\"sucesso: {resultados.Count(r => r)} de 800\");\nConsole.WriteLine($\"chamadas de rede reais: {chamadasDeRede}\");\n// Medido no ambiente de exemplo: ingenuo faz ate 2.400 chamadas de rede para\n// 800 pedidos (3x); com Polly e o circuito abrindo, o total fica pertode\n// 1.000 — a diferenca E o numero de chamadas que o disjuntor evitou.\n"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Prova 1 — retry storm reproduzido: rode `carga-ingenua.sh` contra o simulador. Esperado, medido no ambiente de exemplo: 267 de 800 (33%) de sucesso, com o simulador claramente saturado.",
+              "Prova 2 — o mesmo teste, protegido: rode `CargaTeste` com `USA_POLLY=true` contra a mesma carga. Esperado: sucesso substancialmente maior que a Prova 1, porque menos chamadas concorrentes chegam ao simulador ao mesmo tempo.",
+              "Prova 3 — o circuito realmente pula a chamada: compare `chamadasDeRede` do modo ingênuo (até 2.400, teto de 3× 800) com o modo Polly. Uma diferença grande é a prova de que o disjuntor aberto evita rede, não só espera mais.",
+              "Prova 4 — jitter quebra a sincronização: rode `grep RETRY_TENTATIVA` nos logs e calcule o desvio padrão dos timestamps de retentativa dentro do mesmo segundo de falha. Timestamps concentrados no mesmo instante indicam jitter ausente ou mal configurado.",
+              "Prova 5 — a transição do circuito aparece na métrica: confira `aws cloudwatch get-metric-statistics --namespace \"${var.projeto}/resiliencia\" --metric-name CircuitoAbertoPagamento` durante o teste. Ausência de dado aqui, com o teste rodando, significa que o `OnOpened` não está sendo chamado — o disjuntor pode estar configurado com `MinimumThroughput` alto demais para a carga do teste."
+            ]
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi medido em produção real",
+            "content": "Os números de sucesso e de chamadas de rede desta seção vêm de uma execução de exemplo contra o simulador local, não de uma campanha real da Cadência. Rode as cinco provas no seu ambiente antes de decidir os limiares de produção — o padrão generaliza, o número absoluto não."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Falha provocada",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Reduzir `MinimumThroughput` para 2 em produção",
+                "circuito abre com uma única falha isolada, tráfego legítimo é rejeitado sem necessidade",
+                "métrica `CircuitoAbertoPagamento` sobe mesmo com taxa de erro real baixa",
+                "suba o limiar para uma amostra que represente tendência, não ruído — 20 foi calibrado para o volume de pico da Cadência"
+              ],
+              [
+                "Remover `UseJitter` mantendo só o backoff exponencial",
+                "sob carga sincronizada, o throughput ainda oscila em ondas, só que mais espaçadas",
+                "timestamps de retentativa concentrados em picos regulares, não distribuídos",
+                "reative `UseJitter = true`; backoff exponencial sozinho não resolve sincronização, só adia"
+              ],
+              [
+                "Desabilitar o circuit breaker, manter só o retry",
+                "sob degradação SUSTENTADA do parceiro, o retry martela indefinidamente, sem nunca decidir parar",
+                "chamadas de rede reais continuam altas mesmo com taxa de sucesso baixa por minutos seguidos",
+                "reative `AddCircuitBreaker`; retry resolve falha isolada, não substitui a decisão de parar de tentar"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "danger",
+            "title": "Desabilitar o disjuntor sob carga sustentada custa dinheiro dos dois lados",
+            "content": "Sem circuit breaker, um parceiro cobrado por chamada (mesmo as que falham) continua recebendo tráfego pelo tempo inteiro da degradação — e o seu próprio Lambda continua gastando tempo de execução faturado em chamadas que, estatisticamente, sabem que vão falhar. É a combinação mais cara: pagar duas vezes por um resultado que já era previsível."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Um serviço usa backoff exponencial (sem jitter) em todas as chamadas a um downstream que ficou instável às 14h00. Às 14h03 o time nota que o tráfego contra o downstream ainda chega em picos regulares, espaçados, em vez de distribuído. Qual é a causa mais provável?",
+        "options": [
+          "O downstream está aplicando rate limiting, o que sempre gera picos regulares",
+          "Sem jitter, clientes que falharam no mesmo instante calculam a mesma espera e retentam juntos, só que mais espaçados",
+          "O backoff exponencial está configurado com um teto (`MaxDelay`) baixo demais",
+          "O circuit breaker está desabilitado, então nada limita a taxa de chamadas"
+        ],
+        "correctIndex": 1,
+        "explanation": "É exatamente o comportamento que o artigo canônico da AWS sobre backoff e jitter demonstra: backoff exponencial puro é determinístico — toda invocação que falhou no instante T calcula a MESMA espera e tenta de novo no MESMO instante T+espera. O crescimento exponencial afasta os picos no tempo, mas não os elimina; eles continuam sincronizados entre si. A correção é jitter: uma aleatoriedade na espera que faz cada cliente convergir num instante diferente.\n\nA primeira alternativa erra o mecanismo: um teto baixo faria os picos ficarem mais FREQUENTES (menos tempo de espera entre eles), não mudaria o fato de eles serem sincronizados. A terceira confunde disjuntor com espaçamento — circuit breaker decide SE uma chamada nova acontece, não distribui QUANDO as chamadas permitidas ocorrem; um circuito desabilitado geraria mais chamadas, não necessariamente em picos regulares. A quarta inverte causa e efeito: rate limiting é uma REAÇÃO do downstream à sincronização do cliente, não a causa dela — o padrão de picos já existia na forma como o cliente retenta, antes de qualquer throttling responder."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o que um cliente HTTP mal configurado expõe"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Retry duplica cobrança em operação não-idempotente",
+                "média sob degradação do parceiro",
+                "alto — cliente cobrado duas vezes",
+                "chave de idempotência (L22) como pré-condição de qualquer retry em escrita",
+                "reconciliação entre pedidos gravados e cobranças no gateway",
+                "estorno automatizado quando a contagem diverge"
+              ],
+              [
+                "Circuito nunca abre por `MinimumThroughput` alto demais em tráfego calmo",
+                "alta fora de campanha",
+                "médio — degradação vira lentidão perceptível, não indisponibilidade",
+                "calibrar o limiar pelo volume de tráfego FORA de pico, não só no pico",
+                "alarme de latência p99 do checkout, independente da métrica do disjuntor",
+                "ajustar `MinimumThroughput` e `SamplingDuration` para o perfil real"
+              ],
+              [
+                "Timeout por tentativa configurado maior que o orçamento total permite",
+                "baixa, mas grave quando ocorre",
+                "alto — função morre por `SIGKILL` sem log de erro",
+                "a fórmula do orçamento (`tentativas × timeout + esperas < timeout da função`) revisada a cada mudança de parâmetro",
+                "duração de invocação próxima do timeout configurado, sem exceção capturada",
+                "reduzir tentativas ou timeout por chamada até a conta fechar com folga"
+              ],
+              [
+                "Retentativa em erro 4xx que não é 429 (ex.: 400 de payload inválido)",
+                "baixa",
+                "baixo a médio — desperdiça tentativas em erro que nunca vai ter sucesso",
+                "`ShouldHandle` distinguindo erro transitório de erro permanente",
+                "proporção alta de retentativas terminando no mesmo código de erro",
+                "excluir 4xx permanentes do `ShouldHandle`, deixando passar só timeout e 429/5xx"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "list",
+          "position": 0,
+          "data": {
+            "ordered": false,
+            "items": [
+              "O circuito está aberto agora, e há quanto tempo?",
+              "Quantas chamadas de rede reais foram evitadas pelo disjuntor na última hora?",
+              "A distribuição das esperas de retry está de fato espalhada, ou concentrada em picos?",
+              "O circuito abriu e fechou uma vez (normal) ou está oscilando (parceiro instável)?",
+              "A taxa de sucesso do checkout caiu mais do que a taxa de sucesso do gateway sozinho — sinal de disjuntor calibrado errado?"
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Alarme",
+              "Métrica",
+              "Limiar inicial",
+              "Por que esse limiar"
+            ],
+            "rows": [
+              [
+                "Circuito reabrindo",
+                "soma de `CIRCUITO_ABERTO` (custom)",
+                "≥ 1 em 3 janelas de 1 min seguidas",
+                "não dispara na primeira abertura — isso é o disjuntor funcionando; dispara quando ele não fica fechado"
+              ],
+              [
+                "5xx do checkout",
+                "proporção de falha reportada em `batchItemFailures`",
+                "> 5% em 5 min",
+                "separa \"alguns pedidos atrasaram\" de \"o checkout parou de processar\""
+              ],
+              [
+                "Tempo de invocação perto do timeout",
+                "p99 de duração do Lambda",
+                "> 8 s (do orçamento de 10 s)",
+                "avisa ANTES do `SIGKILL` silencioso, com margem para investigar"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão, e falha de AZ"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Cenário",
+              "O que muda",
+              "Onde a arquitetura sente primeiro"
+            ],
+            "rows": [
+              [
+                "10 pedidos/dia",
+                "o disjuntor quase nunca atinge `MinimumThroughput`",
+                "proteção efetiva vem quase só do retry com jitter, não do circuito"
+              ],
+              [
+                "10 mil pedidos/dia (pico de campanha)",
+                "concorrência do Lambda escala com a fila",
+                "é exatamente o cenário medido neste laboratório — o disjuntor entra em ação em segundos"
+              ],
+              [
+                "1 milhão de pedidos/dia",
+                "mesmo um circuito bem calibrado não substitui capacidade real do parceiro",
+                "a conversa muda de \"cliente resiliente\" para \"contrato de capacidade com o parceiro\" — outro problema"
+              ],
+              [
+                "Falha de AZ do simulador (ou do parceiro real)",
+                "o circuito abre e permanece aberto além do esperado",
+                "o alarme de \"circuito reabrindo\" é quem distingue isso de instabilidade passageira"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Polly é biblioteca: zero custo de infraestrutura por si só. As dimensões que pesam são indiretas — use o AWS Pricing Calculator para o seu volume; nenhum valor absoluto aqui envelhece bem."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Dimensões que pesam",
+              "Custo oculto"
+            ],
+            "rows": [
+              [
+                "Sem retry nem disjuntor (linha de base do L22)",
+                "tempo de execução do Lambda por invocação",
+                "reentregas da fila cobram nova invocação inteira a cada tentativa — mais grosseiro, mas não gratuito"
+              ],
+              [
+                "Com retry e jitter, sem disjuntor",
+                "tempo de execução × até 3 tentativas por invocação",
+                "sob degradação sustentada, o tempo gasto em tentativas fadadas ao fracasso é o custo oculto"
+              ],
+              [
+                "Com disjuntor",
+                "tempo de execução cai perto do mínimo quando o circuito está aberto",
+                "o custo evitado é proporcional a quanto tempo o parceiro fica degradado — difícil de prever, fácil de medir depois"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O custo que ninguém mede: chamadas cobradas pelo PARCEIRO",
+            "content": "Se o contrato do gateway de pagamento cobra por chamada (mesmo as que falham), o retry storm da arquitetura mínima paga até 3x pela mesma tentativa fadada ao fracasso — em cima do que já se pagaria pela tentativa original."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação",
+              "Risco",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "circuito abre e fecha sem métrica visível na mínima",
+                "ninguém sabe que o parceiro degradou até o cliente reclamar",
+                "métrica customizada + alarme de circuito reabrindo",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "nenhuma credencial nova neste laboratório",
+                "baixo — o gateway é chamado por URL pública, sem segredo embutido no código",
+                "confirmar que a URL real do parceiro usa TLS e que nenhum log grava payload de cartão",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "retry ingênuo agrava degradação em vez de absorvê-la",
+                "indisponibilidade total do checkout durante picos de campanha",
+                "backoff exponencial + jitter + circuit breaker, como este laboratório constrói",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "timeout por tentativa mal calibrado desperdiça tempo de invocação",
+                "função mais lenta que o necessário quando o parceiro está saudável",
+                "timeout de 2 s validado contra a latência normal medida (80–180 ms)",
+                "média"
+              ],
+              [
+                "Otimização de custo",
+                "retry sem disjuntor paga tentativas fadadas ao fracasso",
+                "fatura do parceiro e tempo de Lambda gastos em chamadas que já se sabia que falhariam",
+                "circuit breaker interrompe o gasto assim que a tendência fica clara",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "retry storm desperdiça capacidade computacional dos dois lados sem gerar valor",
+                "baixo isoladamente, mas soma com todos os outros clientes do mesmo parceiro",
+                "circuit breaker reduz o trabalho descartado no agregado do ecossistema, não só localmente",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "layer_stack",
+          "position": 0,
+          "data": {
+            "title": "De retry ingênuo a resiliência observada por dado — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Uma tentativa só, sem retry. É o ponto de partida do L22: falha visível na primeira tentativa, cliente espera a reentrega da fila.",
+                "note": "Risco resolvido: nenhum. Novo risco: qualquer falha transitória vira reentrega de 60 s, sentida como lentidão. Custo: o mais baixo — uma chamada por invocação."
+              },
+              {
+                "label": "Nível 2 — Retry ingênuo (o \"conserto\" que piora)",
+                "instruction": "Laço de tentativas imediatas, sem espera. Resolve a lentidão percebida em teste local; não resolve — e piora — sob carga real.",
+                "note": "Risco resolvido: nenhum de verdade — parece resolver a lentidão. Novo risco: retry storm sob concorrência e downstream degradado. Custo: até 3x a chamada por invocação, mesmo quando desnecessário."
+              },
+              {
+                "label": "Nível 3 — Este laboratório",
+                "instruction": "Backoff exponencial com jitter decorrelacionado e circuit breaker, com métrica publicada a cada transição.",
+                "note": "Risco resolvido: retry storm e sincronização entre clientes. Novo risco: parâmetros mal calibrados (limiar, janela) rejeitam tráfego legítimo ou nunca abrem quando deveriam. Custo: desprezível — é lógica de aplicação."
+              },
+              {
+                "label": "Nível 4 — Disjuntor compartilhado entre execuções",
+                "instruction": "Estado do circuito centralizado (ex.: ElastiCache/Redis) em vez de local a cada instância do Lambda, para que todas as execuções concorrentes decidam junto.",
+                "note": "Risco resolvido: instâncias divergindo sobre se o circuito está aberto. Novo risco: o próprio armazenamento de estado compartilhado vira dependência crítica — e precisa da mesma disciplina de resiliência. Custo: uma dependência nova, pequena, mas constante."
+              },
+              {
+                "label": "Nível 5 — Múltiplos parceiros e fallback",
+                "instruction": "Mais de um gateway de pagamento, com fallback automático quando o principal tem o circuito aberto (L40).",
+                "note": "Risco resolvido: indisponibilidade do parceiro único vira degradação, não parada total. Novo risco: reconciliação financeira entre dois parceiros, e a decisão de fallback vira ela própria um ponto de falha. Custo: contrato com um segundo parceiro."
+              },
+              {
+                "label": "Nível 6 — Dados e IA",
+                "instruction": "Modelo prevendo degradação do parceiro ANTES do limiar de falha ser cruzado, a partir de padrão histórico de latência — ajustando o disjuntor preventivamente.",
+                "note": "Risco resolvido: reação tardia de um disjuntor puramente reativo. Novo risco: previsão errada abre o circuito sem necessidade, rejeitando tráfego saudável por decisão de um modelo. Custo: baixo — o dado (latência, taxa de erro) já existe nas métricas atuais."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "Aqui, IA não agrega — e forçá-la seria o antipadrão que a FFV Academy existe para evitar",
+            "content": "Backoff, jitter e circuit breaker são mecanismos determinísticos, bem estudados desde o artigo canônico da AWS de 2015, e resolvem o problema deste laboratório sem nenhum modelo. \"Usar IA para prever o melhor tempo de espera\" substituiria uma fórmula auditável e previsível por uma caixa-preta, sem ganho mensurado — e um disjuntor que decide com base em previsão errada é mais perigoso que um que decide com base numa janela de contagem simples."
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O ponto de entrada legítimo de IA neste domínio é o Nível 6 da escada de evolução acima: prever degradação a partir de padrão histórico, para ajustar o disjuntor ANTES do limiar reativo ser cruzado — não para substituir o mecanismo determinístico que este laboratório constrói, mas para adiantar a decisão dele. É material do L57, não deste módulo."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Antipadrão",
+              "Por que alguém faz",
+              "Sintoma em produção",
+              "Forma correta"
+            ],
+            "rows": [
+              [
+                "Retry imediato sem nenhuma espera",
+                "é a implementação mais curta que \"parece\" resiliente, e passa em teste local",
+                "retry storm sob carga real e downstream degradado",
+                "backoff exponencial com jitter, nunca espera zero entre tentativas"
+              ],
+              [
+                "Backoff exponencial sem jitter",
+                "parece suficiente — a espera cresce, então \"deve estar espaçando\"",
+                "clientes que falharam juntos continuam retentando juntos, só que mais devagar",
+                "`UseJitter = true`; a aleatoriedade é o que quebra a sincronização, não o crescimento da espera"
+              ],
+              [
+                "Retry em toda exceção, incluindo erro de payload (400)",
+                "generaliza o `catch` para \"qualquer coisa que falhou, tenta de novo\"",
+                "tentativas desperdiçadas em erro que nunca terá sucesso, mascarando um bug real de payload",
+                "`ShouldHandle` distinguindo erro transitório (timeout, 429, 5xx) de erro permanente (4xx de validação)"
+              ],
+              [
+                "Retry sem chave de idempotência na operação retentada",
+                "a chave de idempotência parece um passo extra opcional",
+                "cobrança duplicada, estoque debitado duas vezes, e-mail enviado duas vezes",
+                "chave de idempotência como PRÉ-CONDIÇÃO do retry em qualquer escrita, não como melhoria posterior"
+              ],
+              [
+                "Circuit breaker sem métrica de transição",
+                "o disjuntor \"funciona sozinho\", parece não precisar de observação",
+                "circuito aberto por minutos sem ninguém perceber, porque a ausência de erro parece sucesso",
+                "publicar `OnOpened`/`OnClosed`/`OnHalfOpened` como métrica, sempre"
+              ],
+              [
+                "Calibrar o disjuntor só pelo volume de pico",
+                "é o cenário mais visível e mais discutido em reunião de campanha",
+                "fora de pico, o `MinimumThroughput` nunca é atingido e o disjuntor fica inerte mesmo com o parceiro fora",
+                "calibrar considerando o volume MÍNIMO esperado, não só o máximo"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Log/métrica",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Circuito nunca abre mesmo com o parceiro claramente fora",
+                "`MinimumThroughput` não atingido na `SamplingDuration`",
+                "compare o volume de chamadas no período com o `MinimumThroughput` configurado",
+                "contagem de invocações vs. `CircuitoAbertoPagamento` ausente",
+                "reduza `MinimumThroughput` ou aumente `SamplingDuration` para o volume real fora de pico"
+              ],
+              [
+                "Função morre sem exceção capturada, sem log de erro",
+                "pipeline de retry estourou o timeout da função (`SIGKILL`)",
+                "compare a duração da invocação (CloudWatch Logs) com o timeout configurado e a fórmula do orçamento",
+                "duração de invocação próxima ou igual ao timeout, sem `catch` acionado",
+                "reduza `MaxRetryAttempts`, `MaxDelay` ou o timeout por tentativa até a conta fechar com folga"
+              ],
+              [
+                "Circuito abre e fecha repetidamente em rajadas curtas",
+                "`BreakDuration` curto demais para o tempo real de recuperação do parceiro",
+                "meça o tempo entre `CIRCUITO_ABERTO` e a chamada de teste do meio-aberto que falhou de novo",
+                "sequência `CIRCUITO_ABERTO` → `CIRCUITO_MEIO_ABERTO` → `CIRCUITO_ABERTO` repetida",
+                "aumente `BreakDuration`; o disjuntor está testando recuperação antes dela acontecer de verdade"
+              ],
+              [
+                "Throughput cai mesmo com o parceiro saudável",
+                "timeout por tentativa mais curto que a latência normal em alguns momentos",
+                "compare a distribuição de latência normal do parceiro com o timeout configurado",
+                "proporção alta de `TaskCanceledException` sem o parceiro estar de fato degradado",
+                "aumente o timeout por tentativa, ou investigue por que a latência normal variou"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "#!/usr/bin/env bash\nset -euo pipefail\n\n# A ordem importa: o simulador nao tem dependente, mas o log group e o alarme\n# sobrevivem ao destroy se nao estiverem no mesmo state.\nterraform destroy \\\n  -target=aws_ecs_service.simulador_parceiro \\\n  -target=aws_ecs_task_definition.simulador_parceiro \\\n  -target=aws_lb_target_group.simulador \\\n  -auto-approve\n\nterraform destroy -auto-approve\n\necho \"Confira manualmente: log group /aws/lambda/<projeto>-consumidor-pedidos\"\necho \"nao e removido por este destroy — ele pertence ao L22.\"\n"
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "O que o destroy NÃO leva",
+            "content": "O log group do consumidor (criado pelo L22, reaproveitado aqui) não é removido por este `destroy` — ele pertence ao módulo anterior. O metric filter e o alarme deste laboratório são removidos, mas as linhas de log estruturado (`CIRCUITO_ABERTO`) já escritas continuam contando para a retenção configurada do log group até expirarem. Nenhum recurso deste laboratório cobra hora ligada parada — Polly é biblioteca, e o simulador Fargate é o único recurso de infraestrutura, coberto pelo `destroy` acima."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Motivo"
+            ],
+            "rows": [
+              [
+                "Clientes que falharam juntos retentam juntos",
+                "jitter decorrelacionado (`UseJitter=true`)",
+                "quebra a sincronização que backoff exponencial sozinho preserva"
+              ],
+              [
+                "Retry sozinho nunca decide parar",
+                "circuit breaker com janela deslizante",
+                "impede chamada NOVA quando a tendência de falha já está clara"
+              ],
+              [
+                "Circuito abre e ninguém sabe",
+                "métrica publicada em `OnOpened`/`OnClosed`/`OnHalfOpened`",
+                "transforma um estado interno do processo em dado observável"
+              ],
+              [
+                "Retry pode duplicar efeito",
+                "chave de idempotência do L22, como pré-condição",
+                "separa \"é seguro tentar de novo\" de \"quando tentar de novo\""
+              ],
+              [
+                "Pipeline de retry pode estourar o timeout da função",
+                "orçamento explícito (tentativas × timeout + esperas)",
+                "torna o limite verificável em vez de descoberto em produção"
+              ],
+              [
+                "Não dá para testar contra o parceiro real",
+                "simulador próprio atrás de ALB",
+                "reproduz o comportamento sob carga sem violar limite de taxa contratual"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Uma mensagem sai da fila do L22 e o Lambda a processa.",
+              "A chave de idempotência decide se é processamento novo ou reentrega.",
+              "O pipeline Polly verifica: o circuito está fechado?",
+              "Se sim, tenta a chamada — com timeout curto e, se falhar, backoff com jitter antes da próxima.",
+              "Cada falha alimenta a janela do disjuntor, compartilhada entre invocações diferentes.",
+              "Se o limiar é cruzado, o circuito abre: chamadas seguintes falham em microssegundos, sem tocar a rede.",
+              "A transição é publicada como métrica — visível sem abrir código ou log.",
+              "Depois do `BreakDuration`, uma chamada de teste decide: fecha (recuperou) ou reabre (ainda fora).",
+              "Se tudo falhou, a mensagem volta para a fila e a reentrega de 60 s do L22 é a rede de segurança final."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "lab-retr-des1",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Desafio — sem roteiro"
+      },
+      "children": [
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "O requisito",
+            "content": "Force a dependência downstream a falhar 100% das chamadas por 30 segundos (um endpoint de teste que sempre devolve 500) e observe o circuit breaker reagir."
+          },
+          "id": "lab-retr-des2",
+          "position": 0
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "Critério de aceite — executável, não \"verifique se funciona\"",
+            "content": "Nos logs, depois de um número configurado de falhas seguidas, o circuito ABRE (chamadas seguintes falham IMEDIATAMENTE, sem sequer tentar a rede) — e depois do tempo de espera configurado, ele entra em half-open e testa a recuperação sozinho."
+          },
+          "id": "lab-retr-des3",
+          "position": 1
+        },
+        {
+          "type": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "Dica 1: A política do Polly precisa de threshold de falha e duração de quebra configurados explicitamente (`CircuitBreakerPolicy` com `handledEventsAllowedBeforeBreaking` e `durationOfBreak`) — sem isso o padrão não existe, só o retry existe.",
+              "Dica 2: Circuito aberto deve levantar uma exceção RÁPIDA e específica (`BrokenCircuitException`), não a mesma exceção de timeout de rede — é assim que se prova, no log, que o circuito agiu e não foi só mais uma falha de rede.",
+              "Dica 3: Depois que o endpoint de teste voltar a responder 200, o circuito só fecha de novo depois de UMA chamada de teste bem-sucedida no estado half-open — se ele fechar antes disso, a implementação está pulando o estado intermediário."
+            ]
+          },
+          "id": "lab-retr-des4",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "success",
+            "title": "Lembrete de limpeza",
+            "content": "Todo recurso que este desafio criar entra no mesmo `terraform destroy` do laboratório — nada fica para trás cobrando sozinho."
+          },
+          "id": "lab-retr-des5",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que meu retry com backoff exponencial ainda derruba o serviço sob carga?",
+            "answer": "Porque backoff exponencial sozinho ainda sincroniza clientes que falharam no mesmo instante: todos esperam o mesmo tempo e tentam de novo juntos, só que mais tarde — as ondas de tráfego continuam existindo, apenas mais espaçadas. A correção é adicionar jitter: uma aleatoriedade na espera que faz cada cliente escolher um instante diferente para tentar de novo, quebrando a sincronização que o crescimento exponencial da espera, por si só, não resolve. No Polly, isso é `UseJitter = true` combinado com `BackoffType.Exponential`, que aciona o `DecorrelatedJitterBackoffV2`."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Qual é a diferença real entre retry e circuit breaker?",
+            "answer": "Retry tenta de novo a MESMA chamada que falhou; circuit breaker decide se uma chamada NOVA deve sequer ser feita. São mecanismos complementares para problemas diferentes: retry resolve falha isolada e transitória, tentando de novo com espera crescente; circuit breaker resolve degradação SUSTENTADA, interrompendo completamente o tráfego para um downstream que já demonstrou, numa janela de observação, que está fora — poupando tempo do cliente e capacidade do downstream que está tentando se recuperar. Usar só um dos dois deixa metade do problema descoberto: retry sem disjuntor nunca para de martelar um parceiro genuinamente fora; disjuntor sem retry desiste de falhas isoladas que uma segunda tentativa resolveria sem custo."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Qual é a fórmula do jitter decorrelacionado?",
+            "answer": "A referência canônica, do artigo \"Exponential Backoff and Jitter\" da AWS, é `espera = min(teto, aleatorio(base, espera_anterior × 3))` — cada espera depende da anterior de forma não-determinística, em vez de depender só do número da tentativa como no backoff exponencial puro. É importante declarar uma diferença: o `DecorrelatedJitterBackoffV2` do próprio Polly é INSPIRADO nessa fórmula, mas usa fatores de escala próprios para suavizar a distribuição das esperas — não é uma implementação literal do artigo, e tratar as duas como idênticas é impreciso."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Por que reduzir o timeout por tentativa em vez de manter 5 segundos?",
+            "answer": "Porque, com retry disponível, uma única espera longa vale menos do que falhar rápido e deixar o Polly decidir a próxima tentativa dentro do orçamento total. Antes de existir retry, esperar mais por tentativa era a única forma de dar chance a uma resposta lenta; com 3 tentativas disponíveis, cortar mais cedo e tentar de novo ocupa o mesmo tempo total de forma mais produtiva — desde que o timeout escolhido ainda cubra a latência NORMAL do parceiro, que na Cadência foi medida entre 80 e 180 ms, bem abaixo dos 2 s configurados."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "O disjuntor protege contra qualquer degradação do downstream?",
+            "answer": "Não — ele só reage depois de observar um número mínimo de chamadas reais (`MinimumThroughput`) dentro de uma janela de tempo (`SamplingDuration`). Em tráfego calmo, fora de pico de campanha, esse mínimo pode nunca ser atingido dentro da janela configurada, e o disjuntor simplesmente não tem amostra suficiente para decidir — mesmo que o parceiro esteja genuinamente fora. Nesse cenário, a proteção que resta é só o retry com jitter, chamada a chamada, sem a decisão agregada do circuito. Calibrar o `MinimumThroughput` pelo volume mínimo esperado, não só pelo pico, é o que evita esse ponto cego."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Por que retry pode duplicar uma cobrança, se cada tentativa é a mesma chamada?",
+            "answer": "Porque \"a mesma chamada\" não garante \"o mesmo resultado do lado do servidor\" quando a resposta se perde na rede depois de o efeito já ter acontecido. Se a primeira tentativa cobra o cartão com sucesso mas a resposta HTTP nunca chega ao cliente (timeout na rede, não no processamento), o cliente não sabe que teve sucesso e tenta de novo — e sem uma chave que identifique \"isto é a mesma operação\", o servidor processa a segunda tentativa como uma cobrança nova. A chave de idempotência (como a escrita condicional no DynamoDB do L22) é o que torna esse cenário seguro: a segunda tentativa é reconhecida como repetição e não gera novo efeito, independentemente de quantas vezes o retry aconteça."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Preciso de circuit breaker se já tenho retry com backoff e jitter?",
+            "answer": "Depende de quanto tempo a degradação do seu downstream costuma durar. Se as falhas são quase sempre isoladas e transitórias (um pacote perdido, uma instância reiniciando), retry com jitter sozinho já resolve a maior parte do problema com menos peça para calibrar. O circuit breaker se torna necessário quando a degradação é SUSTENTADA — minutos, não milissegundos — porque aí o retry, mesmo espaçado, continua gerando tráfego constante contra um downstream que precisaria de alívio total para se recuperar. Neste laboratório, a campanha de tráfego 10× produziu exatamente esse cenário sustentado, o que torna o disjuntor necessário, não opcional."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Por que o simulador de teste não pode simplesmente ser o parceiro de pagamento real?",
+            "answer": "Porque o parceiro real tem um limite de taxa contratual, e gerar 800 requisições concorrentes contra ele — de propósito, para observar o colapso — violaria esse limite e é exatamente o tipo de tráfego que um contrato de parceria existe para proibir. O simulador, implantado na própria conta da Cadência atrás de um ALB, reproduz o padrão de degradação sob carga (latência crescente, respostas 429 acima de uma capacidade declarada) sem nenhum risco para a relação comercial — ao custo de ser uma aproximação calibrada, não o comportamento exato do parceiro real."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "O circuito de um cliente Polly está no estado OPEN. A próxima chamada da aplicação ao downstream é disparada. O que acontece?",
+            "options": [
+              "A chamada é feita, mas o resultado é ignorado independentemente da resposta",
+              "A chamada é feita normalmente, mas com um timeout reduzido",
+              "Nenhuma chamada de rede é feita; uma exceção é lançada imediatamente",
+              "A chamada é enfileirada e tentada novamente quando o circuito fechar"
+            ],
+            "correctIndex": 2,
+            "explanation": "Esse é o mecanismo central que distingue circuit breaker de retry. Com o circuito ABERTO, o Polly nunca invoca o delegate da chamada — `ExecuteAsync` lança `BrokenCircuitException` de forma síncrona e imediata, sem tocar a rede. É essa ausência de chamada, não uma resposta rápida de erro, que poupa recursos dos dois lados: o cliente não gasta tempo de execução esperando um timeout, e o downstream não recebe uma requisição a mais enquanto tenta se recuperar.\n\nA primeira alternativa descreve o comportamento do RETRY sob timeout curto, não do circuito aberto — e mistura os dois mecanismos que este laboratório trata como distintos. A segunda inventa um comportamento de fila que o Polly não tem: o circuit breaker não enfileira chamadas para tentar depois, ele as rejeita imediatamente, e é responsabilidade de quem chama decidir o que fazer com a exceção (como devolver a mensagem para a fila, no caso deste laboratório). A quarta descreve um comportamento de fire-and-forget que não existe aqui: não há chamada nenhuma para ter resultado ignorado."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Uma função Lambda com timeout de 10 s processa uma chamada a um gateway de pagamento com `MaxRetryAttempts = 4`, timeout de 3 s por tentativa e backoff com teto de 4 s por espera. Nenhuma exceção aparece nos logs quando a função falha sob degradação do gateway. Qual é a explicação mais provável?",
+            "options": [
+              "O pipeline de retry não está configurado com `UseJitter`, então o Polly ignora as tentativas silenciosamente",
+              "O pior caso do pipeline (5 tentativas × 3 s + 4 esperas × 4 s = 31 s) excede os 10 s do timeout da função, que é morta por SIGKILL antes de qualquer exceção ser lançada",
+              "O gateway está retornando um código de sucesso mesmo em falha, e o bug está na validação da resposta",
+              "O circuit breaker está em estado HalfOpen, que suprime exceções por padrão"
+            ],
+            "correctIndex": 1,
+            "explanation": "É uma conta de orçamento, não um bug de lógica. Com `MaxRetryAttempts = 4` (1 tentativa inicial + 4 retentativas = 5 no total), timeout de 3 s cada e até 4 esperas de até 4 s entre elas, o pior caso soma até 31 s — muito acima do timeout de 10 s da função. A plataforma mata a função por `SIGKILL` assim que o timeout é atingido, e esse tipo de encerramento não passa pelo `catch` do código: não há exceção .NET para logar, porque o processo é interrompido de fora. É exatamente o ponto que a fórmula do orçamento deste laboratório existe para prevenir.\n\nA primeira alternativa é uma causa possível em geral, mas não explica a AUSÊNCIA de log — uma resposta de sucesso falsa positiva geraria comportamento incorreto silencioso, não ausência de exceção sob timeout de função. A segunda inverte o papel do `UseJitter`: ele afeta o TEMPO de espera entre tentativas, não se elas são executadas — sem jitter, o retry continua acontecendo, só que sincronizado. A quarta inventa um comportamento que não existe: o estado `HalfOpen` do circuito não suprime exceção nenhuma, ele decide se libera uma chamada de teste, e uma falha nessa chamada de teste gera exceção normalmente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 29,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L22 no ar (fila, DLQ, consumidor Lambda idempotente), .NET 8, noção de HttpClient e de exceções assíncronas"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "por que backoff exponencial sozinho ainda sincroniza; a fórmula do jitter decorrelacionado; a distinção entre o que retry resolve e o que circuit breaker resolve; como orçar o pior caso de um pipeline de retry contra o timeout da função; por que retry exige idempotência como pré-condição"
+              ],
+              [
+                "Limitação que fica",
+                "o estado do disjuntor é local a cada instância de execução do Lambda, não compartilhado — instâncias concorrentes convergem só pela métrica, não por uma decisão única"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L40 — múltiplos parceiros de pagamento com fallback automático quando o circuito principal abre. Reutiliza o pipeline Polly deste módulo como a base do disjuntor por parceiro"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L57 (previsão de degradação com dados históricos, ajustando o disjuntor preventivamente) depende do mecanismo reativo construído aqui; o padrão de orçamento de timeout se aplica a qualquer outra integração síncrona instável da Cadência"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Polly — pollydocs.org",
+                "code": true
+              },
+              {
+                "text": " (estratégias Retry e Circuit Breaker, API `ResiliencePipelineBuilder`, `RetryStrategyOptions`, `CircuitBreakerStrategyOptions`, os quatro estados do disjuntor — Closed, Open, HalfOpen e Isolated — e o comportamento de `UseJitter` acionando o `DecorrelatedJitterBackoffV2`); e "
+              },
+              {
+                "text": "AWS Architecture Blog — \"Exponential Backoff and Jitter\" (Marc Brooker)",
+                "code": true
+              },
+              {
+                "text": ", a referência canônica das três estratégias de jitter (full, equal, decorrelacionado) e da demonstração de que backoff exponencial sozinho ainda sincroniza clientes. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "A capacidade de 400 req/s atribuída ao parceiro simulado, os números de sucesso das provas (267 de 800; até 2.400 chamadas de rede no modo ingênuo) e a latência normal de 80–180 ms são medições de exemplo no ambiente da Cadência, não constantes universais nem documentação do parceiro real. Da mesma forma, o algoritmo interno do `DecorrelatedJitterBackoffV2` do Polly usa fatores de escala próprios do projeto — declarado como incerteza não resolvida pela documentação oficial, não como equivalência exata com a fórmula do artigo da AWS. Meça os limiares do disjuntor e o orçamento de timeout no SEU ambiente antes de levar para produção."
+          }
+        }
+      ]
+    }
+  ]
+}

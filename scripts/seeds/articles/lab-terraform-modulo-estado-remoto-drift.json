@@ -1,0 +1,2526 @@
+{
+  "slug": "lab-terraform-modulo-estado-remoto-drift",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Órbita tem dois squads — Pedidos e Pagamentos — que mantêm, cada um, uma cópia do padrão ECS + ALB + RDS do "
+              },
+              {
+                "text": "L01",
+                "code": true
+              },
+              {
+                "text": ". Nenhum dos dois usa CI/CD ainda: o laboratório anterior, o "
+              },
+              {
+                "text": "L54",
+                "code": true
+              },
+              {
+                "text": ", resolveu como o pipeline se autentica na AWS sem chave estática. O que ainda não existe é ONDE o Terraform grava o que aplicou, e QUEM garante que dois applies não colidam."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Hoje cada squad roda "
+              },
+              {
+                "text": "terraform apply",
+                "code": true
+              },
+              {
+                "text": " do próprio notebook, com `terraform.tfstate` gravado ao lado do código, sem versionamento e sem lock. Duas vezes nos últimos dois meses, dois engenheiros aplicaram quase ao mesmo tempo — uma delas corrompeu o estado do squad Pagamentos, e a correção levou uma tarde de `terraform import` recurso por recurso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O outro incidente não veio de concorrência: durante uma indisponibilidade, um engenheiro de plantão subiu a classe da instância RDS pelo console para aguentar o pico, resolveu o problema e seguiu para o próximo alerta. Ninguém atualizou o HCL. Três semanas depois, um `apply` de rotina tentou baixar a instância de volta para a classe antiga — e quase reduziu a capacidade de produção no meio do expediente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Básico — depende do L54 (pipeline com OIDC) e do padrão de infraestrutura do L01"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L54 concluído e no ar, Terraform básico, um squad com pelo menos duas pessoas aplicando"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 40 min · implementação 2 h a 2 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Muito baixo: S3 e DynamoDB em uso leve custam centavos; o que já cobra é a infraestrutura do L01 duplicada por squad"
+              },
+              {
+                "k": "Serviços",
+                "v": "S3 (estado + versionamento + SSE-KMS), DynamoDB (lock), EventBridge (agendamento), SNS (alerta)"
+              },
+              {
+                "k": "Volume atual",
+                "v": "2 squads, 1 ambiente cada, cerca de 15 applies por semana somados"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "zero corrupção de estado por apply concorrente, e drift visível em até 1 dia útil"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "os dois squads continuam pequenos (até ~5 pessoas cada); a partir disso, contenção de lock passa a doer e entra o L56"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "estado remoto versionado, lock funcionando sob prova, um módulo chamado por dois ambientes, e um `plan` de drift rodando sozinho no relógio do pipeline"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é o pipeline em si — o papel federado por OIDC, o build e a esteira de aprovação já foram resolvidos no L54, e este módulo roda DENTRO dele. Também não é gestão de múltiplas contas: três ambientes do mesmo código com paridade garantida é o L56, e ele depende deste. Misturar as duas coisas aqui faria você depurar promoção de ambiente enquanto tenta entender por que um lock trava."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que dois `terraform apply` simultâneos corrompem o estado sem lock, e como o lock impede isso.",
+              "Definir drift com precisão: a diferença entre o estado GRAVADO e o que a API REAL devolve agora — e só nesse momento.",
+              "Configurar backend S3 com versionamento e lock em DynamoDB, e justificar cada atributo do bucket.",
+              "Extrair um padrão repetido (ECS + ALB + RDS) para um módulo Terraform com variáveis e validação.",
+              "Chamar o mesmo módulo a partir de dois ambientes distintos, com uma `key` de estado por ambiente.",
+              "Agendar um `plan -detailed-exitcode` que roda sozinho, sem depender de alguém lembrar.",
+              "Distinguir os três códigos de saída do `-detailed-exitcode` e o que cada um deve disparar.",
+              "Provar, com número, que perder um notebook não exige reconstruir a infraestrutura."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Estado remoto e por que ele existe",
+                "DOP-C02, SAP-C02",
+                "backend S3 versionado, substituindo o notebook",
+                "que o estado é a fonte da verdade do Terraform, não a infraestrutura em si"
+              ],
+              [
+                "Lock de estado",
+                "DOP-C02",
+                "item condicional no DynamoDB com chave `LockID`",
+                "que o lock impede escrita concorrente, não leitura, e tem timeout configurável"
+              ],
+              [
+                "Drift",
+                "DOP-C02, SAP-C02",
+                "plan agendado com `-detailed-exitcode`",
+                "que drift só é detectado quando alguém roda `plan` — nunca automaticamente"
+              ],
+              [
+                "Módulo reutilizável",
+                "DOP-C02",
+                "padrão ECS + ALB + RDS extraído com `source` e `variable`",
+                "a diferença entre copiar HCL e reutilizar módulo, e o que cada uma custa em manutenção"
+              ],
+              [
+                "Idempotência",
+                "DOP-C02, SAP-C02",
+                "reaplicar o mesmo módulo não recria recurso já correto",
+                "por que Terraform compara estado, não reexecuta comandos"
+              ],
+              [
+                "Códigos de saída de automação",
+                "DOP-C02",
+                "0 / 1 / 2 do `-detailed-exitcode` decidindo o próximo passo do pipeline",
+                "não confundir erro de execução (1) com mudança detectada (2)"
+              ],
+              [
+                "Criptografia de estado em repouso",
+                "SAP-C02, SCS-C02",
+                "SSE-KMS no bucket do backend",
+                "por que o estado pode conter dado sensível e precisa do mesmo cuidado que um segredo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve dois engenheiros aplicando ao mesmo tempo sem lock e pede o resultado. A resposta não é \"o Terraform detecta e recusa\" — sem lock, não há nada detectando nada: as duas chamadas de API correm e o estado de quem não gravou por último fica desatualizado, sem erro nenhum no momento do apply."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito não funcional que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Zero corrupção de estado por apply concorrente",
+                "obrigatório",
+                "exige lock com escrita condicional — DynamoDB (`LockID`) neste módulo"
+              ],
+              [
+                "Estado sobrevive à perda de um notebook",
+                "obrigatório",
+                "estado sai do disco local para um backend S3 versionado"
+              ],
+              [
+                "Drift visível em até 1 dia útil",
+                "hipótese declarada",
+                "exige execução AGENDADA de `plan`, não o plan manual do próximo apply"
+              ],
+              [
+                "Dois squads reutilizam a mesma definição de infraestrutura",
+                "obrigatório",
+                "extrai o padrão repetido em módulo com `variable`, chamado por `source`"
+              ],
+              [
+                "Sem produto novo na fatura",
+                "restrição de orçamento",
+                "descarta backend gerenciado de terceiro; usa S3 e DynamoDB, que a conta já paga por outro motivo"
+              ],
+              [
+                "Deploy e drift sem chave estática",
+                "herdado do L54",
+                "apply e plan de drift rodam sob o papel federado OIDC, nunca de notebook"
+              ],
+              [
+                "Estado pode conter dado sensível",
+                "assumido por padrão",
+                "SSE-KMS no bucket do backend, e acesso restrito ao papel do pipeline"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: dois notebooks, uma corrida"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Órbita tem hoje, e ele é legítimo como ponto de partida: sobe infraestrutura de verdade, com poucas linhas. O laboratório começa medindo o problema, porque um número torna a corrida discutível — \"às vezes dá erro\" não é."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Dois notebooks aplicando contra a mesma conta",
+            "caption": "Este desenho sobe de verdade com poucas linhas, e é por isso que sobrevive: cada squad roda `terraform apply` do próprio notebook, contra o mesmo padrão ECS + ALB + RDS do L01. O defeito não está em nenhuma linha errada — está em duas ausências. Percorra os passos e repare que a corrida entre os dois applies não é hipótese: é aritmética de quem grava por último.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "dev_a",
+                    "service": "ide",
+                    "label": "Notebook — squad Pedidos",
+                    "note": "guarda o único `terraform.tfstate` que descreve o que este squad acredita existir"
+                  },
+                  {
+                    "id": "dev_b",
+                    "service": "ide",
+                    "label": "Notebook — squad Pagamentos",
+                    "note": "tem sua PRÓPRIA cópia do mesmo módulo, colada à mão a partir do L01"
+                  },
+                  {
+                    "id": "console_eng",
+                    "service": "user",
+                    "label": "Engenheiro de plantão",
+                    "note": "resolve incidente pelo console; a mudança não passa por nenhum dos dois notebooks"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB",
+                    "note": "criado pelo apply de quem chegou primeiro; o segundo squad nem sabe que existe"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "svc",
+                    "service": "ecs",
+                    "label": "Serviço ECS",
+                    "note": "alvo dos dois applies concorrentes; quem grava por último decide o desiredCount final"
+                  },
+                  {
+                    "id": "rds",
+                    "service": "rds",
+                    "label": "RDS",
+                    "note": "a classe da instância muda pelo console durante o incidente, sem nenhum HCL sabendo"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "dev_a",
+                "to": "svc",
+                "label": "apply, sem lock",
+                "style": "solid"
+              },
+              {
+                "from": "dev_b",
+                "to": "svc",
+                "label": "apply concorrente, mesmo recurso",
+                "style": "solid"
+              },
+              {
+                "from": "console_eng",
+                "to": "rds",
+                "label": "muda a classe da instância no console",
+                "style": "dashed"
+              },
+              {
+                "from": "alb",
+                "to": "svc",
+                "label": "encaminha tráfego",
+                "style": "solid"
+              },
+              {
+                "from": "svc",
+                "to": "rds",
+                "label": "string de conexão",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Dois notebooks, dois arquivos de estado",
+                "detail": "Cada apply lê e grava um `terraform.tfstate` LOCAL, no disco de quem o roda. Não existe uma fonte única de verdade: existem duas crenças sobre o mesmo recurso, e elas divergem no instante em que um dos dois aplica algo que o outro não viu.",
+                "nodes": [
+                  "dev_a",
+                  "dev_b"
+                ],
+                "edges": [
+                  "dev_a>svc",
+                  "dev_b>svc"
+                ]
+              },
+              {
+                "label": "Apply concorrente não espera — ele corrompe",
+                "detail": "Sem lock, as duas chamadas de API correm ao mesmo tempo. A AWS aplica a última que chegou; mas o `terraform.tfstate` de quem NÃO chegou por último continua descrevendo um recurso que já não existe daquele jeito. O próximo apply desse squad vai tentar \"corrigir\" a realidade de volta para uma crença desatualizada.",
+                "nodes": [
+                  "dev_a",
+                  "dev_b",
+                  "svc"
+                ],
+                "edges": [
+                  "dev_a>svc",
+                  "dev_b>svc"
+                ]
+              },
+              {
+                "label": "O notebook é o backup — de uma pessoa só",
+                "detail": "Se o notebook do squad Pagamentos for perdido, roubado ou simplesmente formatado, o `terraform.tfstate` some com ele. Ninguém mais consegue rodar `plan` ou `destroy` com segurança: o único jeito de continuar é importar cada recurso, um por um, torcendo para lembrar todos os IDs.",
+                "nodes": [
+                  "dev_b"
+                ],
+                "edges": [
+                  "dev_b>svc"
+                ]
+              },
+              {
+                "label": "Mudança no console não deixa rastro nenhum",
+                "detail": "O engenheiro de plantão resolve o incidente mudando a classe do RDS pelo console — decisão correta sob pressão. O problema não é a mudança: é que ela não aparece em nenhum HCL, em nenhum estado, em nenhum lugar que alguém vá olhar depois. É aqui que o drift nasce.",
+                "nodes": [
+                  "console_eng",
+                  "rds"
+                ],
+                "edges": [
+                  "console_eng>rds"
+                ]
+              },
+              {
+                "label": "Nada roda `plan` sozinho",
+                "detail": "A única forma de alguém notar a mudança do console é rodar `terraform plan` e comparar com a API real. Mas ninguém agendou isso: o plan só roda, por acaso, quando um dos dois squads decide aplicar de novo — e mesmo aí, só contra o estado (desatualizado) daquele squad.",
+                "nodes": [
+                  "dev_a",
+                  "svc"
+                ],
+                "edges": [
+                  "dev_a>svc"
+                ]
+              },
+              {
+                "label": "Por que os dois squads operam assim",
+                "detail": "Porque é o caminho mais curto entre \"preciso de infraestrutura\" e \"está no ar\": copiar o Terraform do L01, ajustar dois nomes, rodar `apply` do próprio notebook. Funciona perfeitamente enquanto for uma pessoa, uma vez. A segunda pessoa é quem paga a conta.",
+                "nodes": [
+                  "dev_a",
+                  "dev_b"
+                ],
+                "edges": [
+                  "dev_a>svc",
+                  "dev_b>svc"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "O `terraform.tfstate` pode conter segredo em texto claro",
+            "content": "Se algum recurso do módulo tiver um atributo sensível sem `sensitive = true` declarado no provider, ele é gravado no estado sem cifra. Comitar esse arquivo no Git — algo que `git add .` faz por engano com facilidade — expõe esse segredo para sempre no histórico do repositório, mesmo que o arquivo seja removido depois. É exposição, não corrupção: não tem \"desfazer\"."
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "Antes de mudar qualquer coisa, meça a corrida. Rode dois applies contra o mesmo ambiente quase ao mesmo tempo e registre o resultado — sem lock, os dois \"terminam com sucesso\", e é isso que engana."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. Se você não conseguir apontar o requisito, a peça é adorno — e este desenho não tem nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Estado no S3, lock no DynamoDB, drift no relógio do pipeline",
+            "caption": "A diferença estrutural não é uma caixa a mais: é o estado saindo do notebook para o S3, o lock saindo da honra para o DynamoDB, e a pergunta sobre drift saindo da memória de alguém para o relógio do EventBridge. Percorra os passos: cada peça nova resolve uma das ausências do desenho anterior — nenhuma é adorno.",
+            "groups": [
+              {
+                "label": "Gatilhos",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "commit",
+                    "service": "ide",
+                    "label": "Commit no módulo ou no ambiente",
+                    "note": "é o ÚNICO jeito de mudar infraestrutura; não existe mais apply de notebook"
+                  },
+                  {
+                    "id": "scheduler",
+                    "service": "eventbridge",
+                    "label": "Regra agendada (cron)",
+                    "note": "dispara o plano de drift sozinho — sem isso, drift nunca é perguntado"
+                  }
+                ]
+              },
+              {
+                "label": "Pipeline (L54 — papel federado por OIDC)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "apply_run",
+                    "service": "codepipeline",
+                    "label": "Execução: push → apply",
+                    "note": "roda sob o papel federado do L54; nenhuma chave de longa duração no ambiente"
+                  },
+                  {
+                    "id": "drift_run",
+                    "service": "drift",
+                    "label": "Execução: agendada → plan de drift",
+                    "note": "roda `plan -detailed-exitcode`, sem `apply`; só compara e reporta"
+                  }
+                ]
+              },
+              {
+                "label": "Estado e coordenação (regionais)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "state_bucket",
+                    "service": "s3",
+                    "label": "S3 — estado remoto",
+                    "note": "versionado e cifrado; sobrevive à perda de qualquer notebook do time"
+                  },
+                  {
+                    "id": "lock_table",
+                    "service": "dynamodb",
+                    "label": "DynamoDB — LockID",
+                    "note": "chave de partição LockID; escrita condicional impede dois donos ao mesmo tempo"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — infraestrutura do módulo reutilizável",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB",
+                    "note": "criado pelo módulo `servico-web`, chamado igual pelos dois squads"
+                  },
+                  {
+                    "id": "svc",
+                    "service": "ecs",
+                    "label": "Serviço ECS",
+                    "note": "mesma definição do módulo; o que muda entre squads são variáveis, não HCL"
+                  },
+                  {
+                    "id": "rds",
+                    "service": "rds",
+                    "label": "RDS",
+                    "note": "classe e engine agora só mudam por variável do módulo, nunca pelo console"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "alerta",
+                    "service": "sns",
+                    "label": "Notificação de drift",
+                    "note": "só dispara quando `-detailed-exitcode` volta 2; silêncio quando volta 0"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "commit",
+                "to": "apply_run",
+                "label": "push aciona o pipeline",
+                "style": "solid"
+              },
+              {
+                "from": "apply_run",
+                "to": "state_bucket",
+                "label": "lê e grava terraform.tfstate",
+                "style": "dashed"
+              },
+              {
+                "from": "apply_run",
+                "to": "lock_table",
+                "label": "adquire e libera o LockID",
+                "style": "dashed"
+              },
+              {
+                "from": "apply_run",
+                "to": "svc",
+                "label": "aplica o módulo reutilizável",
+                "style": "solid"
+              },
+              {
+                "from": "scheduler",
+                "to": "drift_run",
+                "label": "dispara plan sozinho, sem apply",
+                "style": "solid"
+              },
+              {
+                "from": "drift_run",
+                "to": "state_bucket",
+                "label": "compara estado gravado × API real",
+                "style": "dashed"
+              },
+              {
+                "from": "drift_run",
+                "to": "lock_table",
+                "label": "também adquire lock, mesmo sem aplicar",
+                "style": "dashed"
+              },
+              {
+                "from": "drift_run",
+                "to": "alerta",
+                "label": "publica achado quando há diferença",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "svc",
+                "label": "encaminha tráfego",
+                "style": "solid"
+              },
+              {
+                "from": "svc",
+                "to": "rds",
+                "label": "string de conexão",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O push aciona o apply — o notebook não aciona nada",
+                "detail": "A única forma de mudar infraestrutura é uma alteração comitada que passa pelo papel federado do L54. Não existe mais `terraform apply` rodado à mão contra a conta de produção.",
+                "nodes": [
+                  "commit",
+                  "apply_run"
+                ],
+                "edges": [
+                  "commit>apply_run"
+                ]
+              },
+              {
+                "label": "O estado mora no S3, não no disco de ninguém",
+                "detail": "Perder qualquer notebook deixa de ser incidente de infraestrutura. O bucket é versionado, então um `apply` ruim também tem um \"antes\" recuperável — algo que o notebook nunca ofereceu.",
+                "nodes": [
+                  "apply_run",
+                  "state_bucket"
+                ],
+                "edges": [
+                  "apply_run>state_bucket"
+                ]
+              },
+              {
+                "label": "O lock é o que torna dois applies simultâneos seguros",
+                "detail": "Antes de tocar no estado, o pipeline escreve um item condicional no DynamoDB com a chave `LockID`. Quem chega segundo não sobrescreve: recebe erro, com o nome de quem já segura o lock, e espera ou desiste.",
+                "nodes": [
+                  "apply_run",
+                  "lock_table"
+                ],
+                "edges": [
+                  "apply_run>lock_table"
+                ]
+              },
+              {
+                "label": "O módulo aplica a mesma infraestrutura com variáveis",
+                "detail": "Pedidos e Pagamentos chamam o MESMO módulo `servico-web`, com `source` apontando para um único lugar. Uma correção de segurança no módulo se propaga para os dois squads no próximo apply — em vez de exigir duas correções coladas à mão.",
+                "nodes": [
+                  "apply_run",
+                  "svc"
+                ],
+                "edges": [
+                  "apply_run>svc"
+                ]
+              },
+              {
+                "label": "Drift não avisa sozinho — o agendamento pergunta por ele",
+                "detail": "Terraform não sincroniza estado em segundo plano. A regra do EventBridge é o que transforma \"será que alguém mudou algo\" numa pergunta que É feita, com frequência conhecida, em vez de depender de alguém lembrar.",
+                "nodes": [
+                  "scheduler",
+                  "drift_run"
+                ],
+                "edges": [
+                  "scheduler>drift_run"
+                ]
+              },
+              {
+                "label": "O plano de drift compara, e não aplica nada",
+                "detail": "A execução agendada roda `terraform plan -detailed-exitcode` — nunca `apply`. Ela ainda precisa do lock, porque também lê o estado com consistência, mas não muda um único recurso.",
+                "nodes": [
+                  "drift_run",
+                  "state_bucket",
+                  "lock_table"
+                ],
+                "edges": [
+                  "drift_run>state_bucket",
+                  "drift_run>lock_table"
+                ]
+              },
+              {
+                "label": "Divergência vira alerta — não vira crença",
+                "detail": "Código de saída 2 publica no tópico; código 0 não publica nada. Ninguém precisa \"lembrar de checar\": o silêncio do canal É a informação de que não houve drift desde a última execução.",
+                "nodes": [
+                  "drift_run",
+                  "alerta"
+                ],
+                "edges": [
+                  "drift_run>alerta"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação ao desenho anterior não é o S3 e o DynamoDB aparecendo: é a existência de DUAS execuções do mesmo pipeline — uma que aplica, disparada por push, e outra que só pergunta, disparada por agendamento. Nenhuma delas depende de um notebook estar ligado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "A pergunta que o desenho de produção torna respondível",
+            "content": "\"O que está realmente no ar agora, e bate com o que o Terraform acha que aplicou?\" No desenho mínimo essa pergunta não tem dono. Aqui, ela tem: a execução agendada é a única responsável por fazê-la, com frequência conhecida."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O ciclo de um apply e o ciclo de um drift, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os dois ciclos são a MESMA cadeia de comandos até o passo 5. A diferença inteira do módulo mora em o que acontece depois: um aplica, o outro só compara e avisa."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "O ciclo de um apply e o ciclo de um plan de drift — a mesma cadeia até o passo 5",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1 · push",
+                "desc": "O commit aciona a execução do pipeline, autenticada pelo papel federado do L54 (OIDC, sem chave de longa duração no ambiente de execução)."
+              },
+              {
+                "label": "2 · terraform init",
+                "desc": "O backend S3 é lido da configuração. O Terraform baixa o estado REMOTO atual — não existe mais estado local para inicializar."
+              },
+              {
+                "label": "3 · lock",
+                "desc": "Uma escrita condicional grava um item com chave de partição `LockID` no DynamoDB. Se o item já existir, a operação espera (até `-lock-timeout`) ou falha com o nome de quem segura o lock — nunca sobrescreve."
+              },
+              {
+                "label": "4 · refresh",
+                "desc": "Antes de comparar qualquer coisa, o Terraform consulta a API real de cada recurso gerenciado (a menos que `-refresh=false`). É AQUI, e só aqui, que uma mudança feita pelo console se torna visível."
+              },
+              {
+                "label": "5 · plan",
+                "desc": "Compara três fontes: o HCL declarado, o estado gravado, e o que a API real acabou de devolver. O diff impresso é a diferença entre a terceira e as duas primeiras."
+              },
+              {
+                "label": "6a · apply (só na execução de deploy)",
+                "desc": "Grava as mudanças na AWS, escreve o novo estado no S3, libera o lock. É o único passo que a execução de drift NUNCA executa."
+              },
+              {
+                "label": "6b · -detailed-exitcode (só na execução agendada)",
+                "desc": "Em vez de aplicar, a execução de drift lê o código de saída do plan: 0 sem mudança, 2 com mudança, 1 erro real. Só o código 2 é drift — o código 1 é falha de execução e não deve ser interpretado como divergência."
+              },
+              {
+                "label": "7 · alerta condicional",
+                "desc": "Código 2 publica no SNS com o resumo do diff. A decisão de reconciliar — aplicar, importar o que mudou, ou aceitar com `ignore_changes` explícito — fica com uma pessoa, não com o pipeline."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O refresh é onde a mudança do console vira visível",
+            "content": "Antes do passo 4, o Terraform não sabe de nada que aconteceu fora dele. Ele não monitora a conta continuamente — a consulta à API real acontece SOB DEMANDA, dentro de um `plan` ou `apply`. É por isso que a resposta a \"há quanto tempo esse drift existe?\" é sempre \"desde a última vez que alguém rodou plan\", nunca \"desde que aconteceu\"."
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "O texto abaixo não é ilustrativo: é a saída real do Terraform quando o segundo apply encontra o lock ocupado. Vale reconhecer, porque é exatamente isto que aparece no log do pipeline quando dois squads colidem."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_4",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "text",
+            "filename": "erro-de-lock.txt",
+            "code": "# Saída real do Terraform quando o segundo apply encontra o lock ocupado.\n# Não é uma mensagem inventada: é o texto padrão do provider ao falhar em\n# adquirir o lock — vale reconhecer, porque é isto que aparece no log do\n# pipeline quando dois squads colidem.\n\nError: Error acquiring the state lock\n\nError message: ConditionalCheckFailedException: The conditional request failed\nLock Info:\n  ID:        7f3a2e10-8c4b-4a1f-9e2d-1b6c5a8f0d33\n  Path:      vetor-orbita-terraform-state/ambientes/pagamentos/terraform.tfstate\n  Operation: OperationTypeApply\n  Who:       squad-pedidos@runner-ci-04\n  Version:   1.9.x\n  Created:   2026-08-08 14:22:31.618418 +0000 UTC\n  Info:\n\nTerraform acquires a state lock to protect the state from being written by\nmultiple users at the same time. Please resolve the issue above and try\nagain. For most commands, you can disable locking with the \"-lock=false\"\nflag, but this is not recommended.\n"
+          }
+        },
+        {
+          "id": "b6_5",
+          "type": "callout",
+          "position": 5,
+          "data": {
+            "variant": "warning",
+            "title": "O `Info:` vazio no Lock Info não é bug",
+            "content": "O campo existe para uma mensagem opcional que o operador pode anexar ao lock; a maioria das execuções de CI não a preenche, então ele aparece em branco. O que importa para diagnosticar é `Who` (identidade de quem segura o lock) e `Created` (há quanto tempo) — se `Created` for de horas atrás, é lock órfão, não colisão real."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Dois squads (Pedidos e Pagamentos) da Órbita aplicam Terraform contra a mesma conta AWS, cada um com sua cópia colada à mão do padrão ECS + ALB + RDS do L01, sem orçamento para contratar um produto novo de gestão de estado.",
+            "winner": "Backend S3 com lock em DynamoDB, módulo Terraform reutilizável e plano de drift agendado dentro do pipeline OIDC do L54",
+            "why": "Resolve as duas ausências reais — corrida entre applies e notebook como ponto único de falha — com dois serviços que a conta já paga por outro motivo (S3 e DynamoDB), sem produto novo na fatura. O módulo reutilizável reduz onde o drift pode nascer: em vez de duas cópias de HCL divergindo em silêncio, existe uma definição, chamada duas vezes com variáveis diferentes. E como o apply já roda no pipeline do L54, agendar uma segunda execução — só de `plan` — custa uma regra de EventBridge, não infraestrutura nova.",
+            "alternatives": [
+              {
+                "name": "Terraform Cloud / HCP Terraform (gerenciado)",
+                "downside": "Resolve estado, lock e execução agendada de drift com um produto pronto, mas é uma conta e um login novos, com custo por usuário. Vale a pena quando o número de squads justificar não manter a esteira própria — e está fora do orçamento deste laboratório."
+              },
+              {
+                "name": "CloudFormation / CDK com drift detection nativo",
+                "downside": "CloudFormation tem `detect-stack-drift` embutido, sem precisar de nenhum agendamento externo — é uma vantagem real da ferramenta. Mas os dois squads já investiram no módulo Terraform; reescrever para CFN é o custo mais alto entre as opções, para resolver um problema que o agendamento já resolve."
+              },
+              {
+                "name": "OpenTofu com o mesmo backend S3",
+                "downside": "É compatível com boa parte do HCL usado aqui e reaproveitaria backend e módulo quase sem alteração. Trocar de ferramenta é uma decisão de outra escala — de organização, não deste laboratório — e não muda nada do raciocínio sobre estado, lock e drift."
+              },
+              {
+                "name": "Convenção de \"só uma pessoa aplica por vez\"",
+                "downside": "É o desenho mínimo deste módulo. Funciona até o dia em que alguém esquece a convenção, ou a pessoa que sabia disso sai de férias com o notebook que tem o único estado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Mecanismo de lock",
+                "DynamoDB, chave `LockID`",
+                "lock nativo do S3 (`use_lockfile`); nenhum lock",
+                "é o padrão ainda dominante nas bases existentes e o que a certificação testa",
+                "HashiCorp já marcou este caminho como legado — backend novo deveria avaliar `use_lockfile`"
+              ],
+              [
+                "Onde roda o drift",
+                "agendado dentro do pipeline do L54",
+                "produto gerenciado (Terraform Cloud); cron num servidor à parte",
+                "reaproveita o papel federado e a esteira que já existem, sem infraestrutura nova",
+                "acoplado à disponibilidade do pipeline; se ele cair, o drift também para de ser perguntado"
+              ],
+              [
+                "Modelagem do módulo",
+                "um módulo, duas chamadas com `variable`",
+                "copiar e colar por ambiente; um módulo por squad",
+                "uma correção se propaga para os dois squads no próximo apply",
+                "squads perdem a liberdade de divergir infraestrutura sem negociar a interface do módulo"
+              ],
+              [
+                "Billing mode da tabela de lock",
+                "PAY_PER_REQUEST",
+                "capacidade provisionada fixa",
+                "tráfego de lock é em rajada — vários applies no mesmo minuto, depois nada por horas",
+                "custo por requisição pode superar capacidade provisionada em volume muito alto e constante"
+              ],
+              [
+                "Chave de estado por ambiente",
+                "uma `key` distinta por squad, mesmo bucket",
+                "um bucket por squad; um estado único para todos",
+                "isola o lock e o raio de impacto de um apply ruim sem multiplicar infraestrutura de backend",
+                "nada crítico aqui — é o desenho recomendado; só exige disciplina de nunca reusar a mesma key"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este módulo cria, e que ele não paga",
+            "content": "Os dois squads ainda compartilham o mesmo bucket e a mesma tabela de lock, sem fronteira de conta. Um squad com acesso de escrita ao backend pode, em teoria, ler o estado do outro. Isolar por conta é o L56, e ele depende deste."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: o backend, aplicado antes de existir backend"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "É um paradoxo de partida, e vale nomear: você precisa de um lugar para guardar o estado, e esse lugar TAMBÉM é Terraform. A saída é aplicar o bootstrap com estado LOCAL, uma única vez, e nunca mais tocar nele por esse caminho."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "bootstrap/estado.tf",
+            "code": "# bootstrap/estado.tf — aplicado UMA vez, com estado local, antes de existir\n# backend remoto para guardar o resto. É o paradoxo de partida: você precisa de\n# infraestrutura para guardar o estado, e essa infraestrutura também é Terraform.\n\nresource \"aws_s3_bucket\" \"estado\" {\n  bucket = \"vetor-orbita-terraform-state\"\n\n  # Sem isto, um apply ruim sobrescreve o estado anterior sem deixar rastro.\n  # Com isto, \"restaurar a versão de ontem do estado\" é um comando do S3, não\n  # uma reconstrução.\n  lifecycle {\n    prevent_destroy = true\n  }\n}\n\nresource \"aws_s3_bucket_versioning\" \"estado\" {\n  bucket = aws_s3_bucket.estado.id\n  versioning_configuration {\n    status = \"Enabled\"\n  }\n}\n\n# O estado pode conter dado sensível em texto claro — segredo passado como\n# atributo de um recurso, ARN completo, endpoint interno. Cifrar em repouso não\n# é opcional aqui.\nresource \"aws_s3_bucket_server_side_encryption_configuration\" \"estado\" {\n  bucket = aws_s3_bucket.estado.id\n  rule {\n    apply_server_side_encryption_by_default {\n      sse_algorithm     = \"aws:kms\"\n      kms_master_key_id = aws_kms_key.estado.arn\n    }\n  }\n}\n\nresource \"aws_s3_bucket_public_access_block\" \"estado\" {\n  bucket                  = aws_s3_bucket.estado.id\n  block_public_acls       = true\n  block_public_policy     = true\n  ignore_public_acls      = true\n  restrict_public_buckets = true\n}\n\n# A tabela de lock. O nome do atributo de chave é fixo pelo backend do\n# Terraform: TEM de se chamar `LockID`, do tipo String — não é escolha de\n# estilo, é contrato do provider.\nresource \"aws_dynamodb_table\" \"lock\" {\n  name         = \"vetor-orbita-terraform-lock\"\n  billing_mode = \"PAY_PER_REQUEST\" # trafego de lock e em rajada, nao constante;\n                                    # capacidade provisionada baixa gera throttling\n                                    # justamente no pico em que varios squads aplicam juntos\n  hash_key     = \"LockID\"\n\n  attribute {\n    name = \"LockID\"\n    type = \"S\"\n  }\n}\n\noutput \"bucket_estado\" {\n  value = aws_s3_bucket.estado.bucket\n}\n\noutput \"tabela_lock\" {\n  value = aws_dynamodb_table.lock.name\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que o bootstrap não migra para o próprio backend que cria",
+            "content": "Seria elegante fazer o bootstrap apontar para o backend que ele mesmo criou — mas isso reintroduz o problema original: quem aplica o bootstrap de novo (para adicionar um squad, por exemplo) precisaria já ter o estado remoto configurado para gerenciar o recurso que O CRIA. Manter o bootstrap com estado local, aplicado raramente e por poucas pessoas, é a exceção deliberada à regra do resto do módulo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o backend de cada ambiente, e o módulo reutilizável"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O arquivo abaixo não cria nada: ele diz ao Terraform ONDE ler e gravar o estado deste ambiente específico. A `key` é o que separa o lock de Pedidos do lock de Pagamentos dentro do mesmo bucket."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "ambientes/pagamentos/backend.tf",
+            "code": "# backend.tf — vive em CADA ambiente (ambientes/pedidos, ambientes/pagamentos).\n# Os valores de conta e regiao NAO ficam fixos aqui: entram via\n# `-backend-config` no pipeline, para o mesmo HCL nao carregar o ID da conta\n# de exemplo para dentro de producao por engano.\n\nterraform {\n  backend \"s3\" {\n    bucket = \"vetor-orbita-terraform-state\"\n    key    = \"ambientes/pagamentos/terraform.tfstate\" # UMA key por ambiente —\n                                                        # e o que isola o lock de um\n                                                        # squad do lock do outro\n    region = \"us-east-1\"\n\n    # Lock via DynamoDB. NOTA DE ATUALIZACAO: versoes recentes do Terraform\n    # tambem oferecem lock nativo do S3 com `use_lockfile = true`, sem\n    # DynamoDB — a HashiCorp marcou o lock via DynamoDB como caminho legado.\n    # Este modulo ensina DynamoDB porque e o que a maioria das bases hoje usa\n    # e o que a certificacao ainda cobra; ao criar um backend NOVO, avalie\n    # `use_lockfile` no lugar desta linha.\n    dynamodb_table = \"vetor-orbita-terraform-lock\"\n    encrypt        = true\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O módulo é o padrão ECS + ALB + RDS do L01, com os valores fixos virando `variable`. A interface — o arquivo de variáveis — é o contrato entre os dois squads e a infraestrutura que eles compartilham conceitualmente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "hcl",
+            "filename": "modules/servico-web/variables.tf",
+            "code": "# modules/servico-web/variables.tf — a interface do modulo. Cada squad passa\n# valores; nenhum squad copia recurso.\n\nvariable \"projeto\" {\n  type        = string\n  description = \"Nome curto do squad; vira prefixo de todo recurso.\"\n}\n\nvariable \"vpc_id\" {\n  type = string\n}\n\nvariable \"subnets_publicas\" {\n  type = list(string)\n}\n\nvariable \"subnets_privadas\" {\n  type = list(string)\n}\n\nvariable \"instance_class_rds\" {\n  type    = string\n  default = \"db.t4g.medium\"\n\n  # `validation` existe desde o Terraform 0.13: recusa um valor claramente\n  # errado ANTES do plan, em vez de deixar a AWS rejeitar na hora do apply.\n  validation {\n    condition     = can(regex(\"^db\\\\.[a-z0-9]+\\\\.[a-z]+$\", var.instance_class_rds))\n    error_message = \"instance_class_rds precisa seguir o formato db.<familia>.<tamanho>, ex.: db.t4g.medium.\"\n  }\n}\n\nvariable \"desired_count\" {\n  type    = number\n  default = 2\n}\n"
+          }
+        },
+        {
+          "id": "b9_4",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "hcl",
+            "filename": "modules/servico-web/main.tf",
+            "code": "# modules/servico-web/main.tf — o padrao ECS + ALB + RDS do L01, extraido UMA\n# vez. Antes deste modulo, Pedidos e Pagamentos tinham 312 linhas de HCL quase\n# identico, cada copia divergindo um pouco mais a cada mudanca manual.\n\nresource \"aws_lb\" \"principal\" {\n  name               = \"${var.projeto}-alb\"\n  load_balancer_type = \"application\"\n  subnets            = var.subnets_publicas\n  security_groups    = [aws_security_group.alb.id]\n}\n\nresource \"aws_ecs_service\" \"api\" {\n  name            = \"${var.projeto}-api\"\n  cluster         = aws_ecs_cluster.principal.id\n  task_definition = aws_ecs_task_definition.api.arn\n  desired_count   = var.desired_count\n  launch_type     = \"FARGATE\"\n\n  network_configuration {\n    subnets          = var.subnets_privadas\n    security_groups  = [aws_security_group.task.id]\n    assign_public_ip = false\n  }\n\n  load_balancer {\n    target_group_arn = aws_lb_target_group.api.arn\n    container_name   = \"api\"\n    container_port   = 8080\n  }\n}\n\nresource \"aws_db_instance\" \"principal\" {\n  identifier     = \"${var.projeto}-db\"\n  instance_class = var.instance_class_rds\n  engine         = \"postgres\"\n\n  # A classe vem de VARIAVEL agora. Mudar em producao passa por um plan\n  # revisado, nao por um clique no console — e e exatamente isso que fecha o\n  # buraco por onde o drift deste laboratorio nasceu.\n  db_subnet_group_name = aws_db_subnet_group.principal.name\n  vpc_security_group_ids = [aws_security_group.rds.id]\n\n  skip_final_snapshot = false\n  final_snapshot_identifier = \"${var.projeto}-final\"\n}\n\noutput \"endpoint_rds\" {\n  value     = aws_db_instance.principal.endpoint\n  sensitive = true\n}\n\noutput \"dns_alb\" {\n  value = aws_lb.principal.dns_name\n}\n"
+          }
+        },
+        {
+          "id": "b9_5",
+          "type": "callout",
+          "position": 5,
+          "data": {
+            "variant": "success",
+            "title": "O que a validação de variável evita",
+            "content": "Sem o bloco `validation`, um valor como `instance_class_rds = \"grande\"` só falha na hora em que a AWS rejeita a chamada de API — depois do plan já ter sido revisado e aprovado no pipeline. Com a validação, o erro aparece antes, com uma mensagem que diz exatamente o formato esperado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: dois squads, uma definição"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Nada aqui é recurso de ECS, ALB ou RDS — é só a chamada ao módulo, com os valores que realmente diferem entre os dois squads. Antes deste arquivo, essa diferença estava espalhada dentro de 150 linhas de HCL quase idênticas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "ambientes/pagamentos/main.tf",
+            "code": "# ambientes/pagamentos/main.tf — o squad Pagamentos chama o MESMO modulo que\n# Pedidos chama, so muda a variavel. Nao ha um unico recurso de ECS, ALB ou RDS\n# escrito aqui: tudo vem de `source`.\n\nmodule \"servico\" {\n  source = \"../../modules/servico-web\"\n\n  projeto             = \"pagamentos\"\n  vpc_id              = data.aws_vpc.compartilhada.id\n  subnets_publicas    = data.aws_subnets.publicas.ids\n  subnets_privadas    = data.aws_subnets.privadas.ids\n  instance_class_rds  = \"db.t4g.large\" # Pagamentos processa mais volume; a\n                                        # UNICA diferenca de infraestrutura\n                                        # entre os dois squads e esta linha\n  desired_count       = 3\n}\n\noutput \"dns_pagamentos\" {\n  value = module.servico.dns_alb\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "csharp",
+            "filename": "Program.cs (trecho)",
+            "code": "// appsettings lido no Program.cs — o app consome a saida do modulo, nao um\n// valor fixo. Quando um squad muda a classe do RDS pela VARIAVEL (nao pelo\n// console), o pool de conexao pode ser recalculado no proximo deploy, em vez\n// de continuar dimensionado para uma instancia que ja nao existe daquele jeito.\n\nvar builder = WebApplication.CreateBuilder(args);\n\n// TAMANHO_POOL_DB vem do pipeline, que le a saida `dns_alb` / atributos do\n// modulo no momento do deploy — nao e um numero fixo no codigo-fonte.\nvar tamanhoPool = builder.Configuration.GetValue(\"TAMANHO_POOL_DB\", 20);\n\nbuilder.Services.AddNpgsqlDataSource(\n    builder.Configuration.GetConnectionString(\"Padrao\")!,\n    dataSourceBuilder =>\n    {\n        // Pool dimensionado pela classe da instancia DECLARADA no modulo. Se\n        // alguem mudar a classe pelo console (o antipadrao do desenho minimo),\n        // este numero fica errado e ninguem percebe ate saturar conexao —\n        // mais um sintoma de drift que nao aparece como erro do Terraform.\n        dataSourceBuilder.ConnectionStringBuilder.MaxPoolSize = tamanhoPool;\n    });\n\nvar app = builder.Build();\n\napp.MapGet(\"/health/ready\", async (NpgsqlDataSource db) =>\n{\n    await using var conn = await db.OpenConnectionAsync();\n    return Results.Ok(new { pool = tamanhoPool });\n});\n\napp.Run();\n"
+          }
+        },
+        {
+          "id": "b10_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "Por que o C# aparece num laboratório de Terraform",
+            "content": "A aplicação não muda de comportamento por causa deste módulo — mas ela CONSOME um valor que só existe porque a infraestrutura agora é declarada, não editada no console. Antes, o tamanho do pool de conexão era um número fixo no código, dimensionado para uma classe de instância que podia mudar sem aviso. Agora ele acompanha a variável que também dimensiona o banco."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: a pergunta que roda sozinha"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este workflow é quase idêntico ao de deploy do L54 — a diferença inteira está no gatilho (`schedule` em vez de `push`) e no passo final (nunca chama `terraform apply`)."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "yaml",
+            "filename": ".github/workflows/drift.yml",
+            "code": "# .github/workflows/drift.yml — roda no papel federado do L54 (OIDC), sem\n# chave de longa duracao armazenada no GitHub. So difere do workflow de deploy\n# em duas linhas: o gatilho e o comando final.\n\nname: plano-de-drift\n\non:\n  schedule:\n    - cron: '0 8 * * 1-5' # 08:00 UTC, dias uteis — NAO verificado contra o\n                            # horario de pico real da Orbita; ajuste ao seu.\n  workflow_dispatch: {}\n\npermissions:\n  id-token: write   # exigido para o OIDC assumir o papel do L54\n  contents: read\n\njobs:\n  drift:\n    strategy:\n      matrix:\n        ambiente: [pedidos, pagamentos]\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n\n      - uses: aws-actions/configure-aws-credentials@v4\n        with:\n          role-to-assume: arn:aws:iam::111122223333:role/orbita-terraform-drift\n          aws-region: us-east-1\n\n      - uses: hashicorp/setup-terraform@v3\n\n      - name: init\n        working-directory: ambientes/${{ matrix.ambiente }}\n        run: terraform init -input=false\n\n      - name: plan (sem apply) e captura do codigo de saida\n        id: plano\n        working-directory: ambientes/${{ matrix.ambiente }}\n        run: |\n          set +e\n          terraform plan -input=false -detailed-exitcode -out=plano.tfplan\n          echo \"codigo=$?\" >> \"$GITHUB_OUTPUT\"\n          exit 0\n\n      # 0 = sem mudanca; 2 = drift encontrado; 1 = erro real do plan.\n      # So o 2 e drift — o 1 NAO deve virar alerta de drift, e sim de pipeline quebrado.\n      - name: publica alerta se houve drift\n        if: steps.plano.outputs.codigo == '2'\n        working-directory: ambientes/${{ matrix.ambiente }}\n        run: |\n          RESUMO=$(terraform show -no-color plano.tfplan | head -c 3000)\n          aws sns publish \\\n            --topic-arn arn:aws:sns:us-east-1:111122223333:orbita-drift-${{ matrix.ambiente }} \\\n            --subject \"Drift encontrado em ${{ matrix.ambiente }}\" \\\n            --message \"$RESUMO\"\n\n      - name: falha o job se o plan deu erro de verdade\n        if: steps.plano.outputs.codigo == '1'\n        run: exit 1\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Confundir código 1 com código 2 transforma erro de pipeline em falso positivo",
+            "content": "Um `-detailed-exitcode` que devolve 1 significa que o `plan` FALHOU — por exemplo, credencial OIDC expirada ou permissão insuficiente. Tratar esse código como \"drift encontrado\" produz um alerta de drift enganoso, e a equipe passa a investigar mudança de infraestrutura que não existe, enquanto o problema real — o pipeline quebrado — fica sem ninguém olhando."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar que o lock e o estado remoto fazem o prometido"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "aplicar.sh",
+            "code": "#!/usr/bin/env bash\n# aplicar.sh — roda DENTRO do pipeline do L54, nunca de um notebook.\nset -euo pipefail\n\nAMBIENTE=\"${1:?uso: aplicar.sh <ambiente>}\"\ncd \"ambientes/${AMBIENTE}\"\n\nterraform init -input=false\n\n# -lock-timeout explicito: se outro squad segura o lock, espera ate 5 min em\n# vez de falhar na hora. Sem isto, o padrao e falhar imediatamente.\nterraform plan -input=false -lock-timeout=5m -out=plano.tfplan\n\n# Em pipeline, o plan revisado (nao um auto-approve cego) e o que separa\n# \"aplicar o que foi decidido\" de \"aplicar o que aconteceu de ser gerado\".\nterraform apply -input=false -lock-timeout=5m plano.tfplan\n\necho \"aplicado: ${AMBIENTE}\"\n"
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma aceita \"parece que aplicou\" como resultado — cada uma tem um número, e a quarta é a que mais evidencia o ganho do módulo reutilizável."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medicoes; nenhuma aceita \"parece que aplicou\" como resultado.\n\n# Prova 1: o lock bloqueia apply concorrente — nao deixa passar silenciosamente.\n# Dispare dois applies quase juntos contra o MESMO ambiente e conte falhas.\n( cd ambientes/pagamentos && terraform apply -auto-approve -lock-timeout=2s & )\nsleep 1\ncd ambientes/pagamentos && terraform apply -auto-approve -lock-timeout=2s\n# Esperado: um dos dois processos termina com \"Error acquiring the state lock\"\n# e o Lock Info (ver LOCK_ERRO). Zero applies concorrentes bem-sucedidos.\n\n# Prova 2: o numero de recursos a IMPORTAR depois de perder o notebook.\n# No desenho MINIMO (estado local), simule perda apagando o estado local e\n# conte quantos `terraform import` sao necessarios para recuperar:\nrm -f terraform.tfstate\nterraform plan | grep -c \"will be created\"\n# Na Orbita: 3 recursos (ALB, servico ECS, instancia RDS) — 3 comandos de\n# import, cada um exigindo o ID exato do recurso na AWS.\n# No desenho de PRODUCAO (estado no S3), o mesmo comando sem `rm` no S3:\ncd ambientes/pagamentos && terraform init && terraform plan\n# Esperado: \"No changes.\" — o notebook perdido nao tirou nada do estado.\n\n# Prova 3: drift detectado pela execucao agendada, com numero no diff.\naws rds modify-db-instance --db-instance-identifier pagamentos-db \\\n  --db-instance-class db.t4g.xlarge --apply-immediately\nterraform plan -input=false -detailed-exitcode; echo \"codigo de saida: $?\"\n# Esperado: codigo 2, e o plan lista \"1 to change\" na linha do RDS.\n\n# Prova 4: linhas de HCL antes e depois do modulo — a duplicacao removida.\nwc -l ambientes/pedidos/*.tf.bak ambientes/pagamentos/*.tf.bak 2>/dev/null | tail -1\nwc -l modules/servico-web/*.tf\n# Na Orbita: 312 linhas duplicadas entre as duas copias antigas viraram 140\n# linhas no modulo, chamado 2 vezes com 6 linhas de variavel cada.\n\n# Prova 5: lock-timeout realmente expira, e nao fica preso para sempre.\ntime terraform apply -lock-timeout=10s -auto-approve || true\n# Esperado: falha em ~10s (nao em 0s, nem em minutos) quando o lock esta\n# ocupado — o valor configurado e o teto, nao uma sugestao.\n"
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Lock impede apply concorrente",
+                "dois `apply` quase simultâneos",
+                "um dos dois falha com \"Error acquiring the state lock\"",
+                "os dois terminarem com sucesso significa que o backend não está com `dynamodb_table` configurado"
+              ],
+              [
+                "2 · Notebook perdido não exige reconstrução",
+                "apagar estado local vs. remoto, depois `plan`",
+                "local: \"3 will be created\"; remoto: \"No changes.\"",
+                "se o remoto também pedir criação, o backend não está apontando para o bucket certo"
+              ],
+              [
+                "3 · Drift é detectado com número",
+                "mudar RDS no console, depois `plan -detailed-exitcode`",
+                "código de saída 2, com \"1 to change\" na linha do RDS",
+                "código 0 significa que o `refresh` não viu a API real — confira se `-refresh=false` não está setado"
+              ],
+              [
+                "4 · Duplicação removida pelo módulo",
+                "contagem de linhas antes/depois",
+                "redução de centenas de linhas duplicadas para um módulo único chamado 2×",
+                "se as linhas do módulo cresceram tanto quanto as cópias antigas, a extração não capturou o padrão real"
+              ],
+              [
+                "5 · O timeout do lock é um teto de verdade",
+                "`apply` com `-lock-timeout=10s` contra lock ocupado",
+                "falha perto de 10 s, não imediatamente nem em minutos",
+                "falha imediata sugere que o valor não foi lido; nunca falhar sugere lock nunca disputado no teste"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três parecem, de longe, o mesmo problema — \"o Terraform não fez o que eu esperava\". O que as separa é onde a causa realmente mora."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Lock órfão",
+                "mate o processo do `apply` no meio (Ctrl+C forçado) sem deixar liberar o lock",
+                "todo `apply` seguinte falha com o mesmo Lock Info, minutos ou horas depois",
+                "`Created` no Lock Info muito mais antigo que qualquer apply em andamento",
+                "confira que ninguém está aplicando de verdade, e só então `terraform force-unlock <ID>`, com o ID exato"
+              ],
+              [
+                "Estado divergente entre ambientes por `key` errada",
+                "copie o `backend.tf` de um ambiente para outro sem trocar a `key`",
+                "o `apply` de um squad some ou sobrescreve recurso do outro",
+                "compare a `key` em cada `backend.tf` com o nome do ambiente",
+                "uma `key` distinta por ambiente, nunca reaproveitada"
+              ],
+              [
+                "Drift \"fantasma\" por atributo computado",
+                "rode `plan` num recurso com atributo que a AWS recalcula sozinha (ex.: um timestamp)",
+                "o plan mostra mudança a cada execução, mesmo sem ninguém mexer em nada",
+                "o mesmo atributo aparece como \"diff\" em execuções consecutivas sem mudança real",
+                "`lifecycle { ignore_changes = [...] }` no atributo específico, nunca no recurso inteiro"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Force-unlock sem conferir o dono pode corromper um apply legítimo em andamento",
+            "content": "`terraform force-unlock` remove o item do DynamoDB independentemente de quem o criou. Se outro apply está genuinamente em andamento — não travado, só demorado — destravar na marra libera um SEGUNDO processo para escrever o mesmo estado ao mesmo tempo que o primeiro. É a mesma corrida que o lock existe para impedir, causada pela ferramenta que existe para corrigir lock. Confira `Created` e `Who` antes, sempre."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Dois engenheiros rodam `terraform apply` quase ao mesmo tempo contra o mesmo estado, com backend S3 e lock em DynamoDB configurado. O que acontece?",
+        "options": [
+          "A segunda falha ao adquirir o lock e recebe \"Error acquiring the state lock\", com informação de quem já o segura",
+          "Apenas o `apply` usa lock; como as duas rodam `apply`, o Terraform ignora a segunda chamada silenciosamente",
+          "As duas aplicam normalmente, e quem terminar por último define o estado final",
+          "O S3 detecta a escrita simultânea pelo versionamento do objeto e mescla as duas mudanças automaticamente"
+        ],
+        "correctIndex": 0,
+        "explanation": "O lock existe exatamente para este cenário: antes de tocar no estado, cada execução grava um item condicional com a chave `LockID` no DynamoDB. Quem chega primeiro consegue escrever o item; quem chega segundo tenta a mesma escrita condicional, ela falha, e o Terraform devolve o erro de aquisição de lock — com `Who` e `Created` informando quem já segura, para investigação. Nada é aplicado por engano; a segunda execução para antes de tocar em qualquer recurso.\n\nA primeira alternativa descreve exatamente o que acontece SEM lock — que é o desenho mínimo deste módulo, não o de produção. A terceira confunde duas ferramentas com propósitos diferentes: versionamento de objeto no S3 preserva histórico de revisões, mas não coordena escrita concorrente nem mescla conteúdo — merge de estado não é algo que o Terraform faça. A quarta inverte o comportamento observado: o Terraform não ignora silenciosamente uma segunda chamada — ele falha em voz alta, com uma mensagem de erro específica, e é justamente essa falha visível que evita a corrupção silenciosa."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o estado é tão sensível quanto um segredo"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O `terraform.tfstate` guarda, em texto claro salvo declaração explícita de `sensitive`, todo atributo de todo recurso que ele gerencia — o que inclui, com alguns providers, dado que você não esperaria ver ali."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Segredo em texto claro no estado",
+                "média",
+                "alto",
+                "SSE-KMS no bucket; nunca comitar `.tfstate` no Git (`.gitignore` + regra no pipeline)",
+                "CloudTrail em `GetObject` no bucket de estado, fora do papel do pipeline",
+                "rotacionar o segredo exposto; o dado já vazou, cifrar depois não desfaz"
+              ],
+              [
+                "Lock órfão trava toda a equipe",
+                "média",
+                "médio",
+                "timeout de lock explícito nos scripts de apply",
+                "alarme sobre item no DynamoDB mais antigo que o maior apply esperado",
+                "`force-unlock` só após confirmar `Who` e `Created`"
+              ],
+              [
+                "Backend parcial aponta para conta errada",
+                "baixa",
+                "alto",
+                "`-backend-config` explícito por ambiente; `aws sts get-caller-identity` antes do apply",
+                "CloudTrail cross-conta com identidade inesperada",
+                "reverter pelo estado versionado no S3; revisar quem tinha a credencial"
+              ],
+              [
+                "Bucket de estado sem versionamento perde histórico",
+                "baixa",
+                "alto",
+                "`versioning_configuration` habilitado no bootstrap",
+                "checagem do status de versionamento no console",
+                "restaurar a versão anterior do objeto — só existe se versionamento estava ligado"
+              ],
+              [
+                "Papel do pipeline com permissão além do módulo",
+                "média",
+                "médio",
+                "política derivada dos recursos reais do módulo, não `*`",
+                "IAM Access Analyzer sobre uso real do papel",
+                "restringir a política e reaplicar — é o L41"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O `*` que aparece na política do backend, e por que ele se justifica",
+            "content": "`dynamodb:DescribeTable` sobre a tabela específica não precisa de `*` — mas algumas ações de bootstrap inicial (criar o próprio bucket, antes de ele existir) rodam com um papel humano mais amplo, uma única vez. A política do PIPELINE, que roda depois, é restrita ao bucket e à tabela nomeados; o papel amplo do bootstrap não é reutilizado para nada além da criação inicial."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "Existe lock preso agora?",
+                "idade do item `LockID` no DynamoDB",
+                "apply travado ou processo morto sem liberar",
+                "> 15 min sem apply conhecido em execução"
+              ],
+              [
+                "O último plan agendado encontrou drift?",
+                "código de saída do job de drift",
+                "infraestrutura divergiu do declarado",
+                "qualquer execução com código 2"
+              ],
+              [
+                "Quantos ambientes compartilham a mesma `key` por engano?",
+                "auditoria do `backend.tf` de cada ambiente",
+                "dois squads escrevendo no mesmo estado sem saber",
+                "0 esperado — cada ambiente com `key` própria"
+              ],
+              [
+                "Quanto tempo um apply espera pelo lock?",
+                "duração do passo \"lock\" no log do pipeline",
+                "contenção crescente entre squads",
+                "p95 subindo mês a mês"
+              ],
+              [
+                "Alguém aplicou fora do pipeline?",
+                "CloudTrail `PutObject` no bucket de estado",
+                "apply rodado de notebook, contornando o L54",
+                "qualquer identidade que não seja o papel do pipeline"
+              ],
+              [
+                "O módulo mudou de versão sem os squads saberem?",
+                "referência de `source` em cada ambiente",
+                "módulos divergindo silenciosamente entre squads",
+                "qualquer diferença entre ambientes que deveriam estar pareados"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que confunde drift com erro de execução",
+            "content": "Um painel que conta \"execuções de drift com código != 0\" mistura duas coisas diferentes: código 2 é infraestrutura divergente, código 1 é o pipeline quebrado. Contar os dois juntos faz um problema de permissão OIDC parecer um problema de infraestrutura desalinhada, e a investigação começa no lugar errado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 2 squads, 20 squads, a organização inteira"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece com o backend",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "2 squads, 1 ambiente cada",
+                "poucos applies por dia; lock raramente disputado",
+                "nada; é o cenário deste laboratório",
+                "nada"
+              ],
+              [
+                "20 squads, 1-2 ambientes cada",
+                "dezenas de applies concorrentes possíveis por hora",
+                "fila de espera pelo lock em horário de pico; o timeout de 5 min passa a ser atingido",
+                "reduzir o escopo de cada `key` (menos recursos por estado) para encurtar o tempo que cada apply segura o lock"
+              ],
+              [
+                "Organização inteira, centenas de estados",
+                "um único bucket concentra TODO o tráfego de leitura/escrita de estado",
+                "o bucket compartilhado vira ponto de contenção observável, não só teórico",
+                "múltiplos backends por domínio, em vez de um bucket gigante — é parte do que o L56 e o L98 tratam"
+              ],
+              [
+                "Falha de AZ",
+                "S3 e DynamoDB são serviços regionais, com redundância multi-AZ nativa",
+                "o backend do estado sobrevive; a infraestrutura APLICADA (ECS, RDS) pode não",
+                "nada a fazer no backend; a resiliência da infraestrutura gerenciada é assunto de cada módulo, não deste"
+              ],
+              [
+                "Pico de applies simultâneos (ex.: deploy de sexta à tarde de todos os squads)",
+                "fila de lock cresce rápido, mesmo com backend saudável",
+                "tempo de fila vira o gargalo real do pipeline, não a AWS",
+                "escalonar horário de deploy por squad, ou aceitar a fila como comportamento esperado e dimensionar timeout para ela"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O que NÃO escala neste desenho, e por quê",
+            "content": "O bucket e a tabela são regionais e escalam sozinhos — não é aí que a dor aparece. O gargalo é humano e organizacional: mais squads compartilhando o MESMO backend sem fronteira de conta significa mais gente que PODE ler o estado de infraestrutura que não é sua. Isso não é um limite de capacidade da AWS; é um limite de governança, e o L43 e o L56 são onde ele se resolve."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "É um dos laboratórios mais baratos da série: nenhum recurso novo fica ligado por hora. O que existe é tráfego — de requisição ao S3, de leitura/escrita no DynamoDB, e de minutos de execução do pipeline."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "2 squads, poucos applies por dia",
+                "centavos em requisições S3 e DynamoDB; minutos de CI para o job de drift",
+                "desprezível",
+                "nenhuma; otimizar aqui é atenção gasta onde não há dinheiro"
+              ],
+              [
+                "Produção pequena",
+                "5-10 squads, dezenas de applies por dia",
+                "requisições S3/DynamoDB crescem linearmente com applies; execuções de drift diárias por ambiente",
+                "baixa e previsível",
+                "agrupar ambientes pequenos num único job de drift com matriz, em vez de um job por ambiente"
+              ],
+              [
+                "Alta escala",
+                "organização inteira, centenas de estados",
+                "volume de requisições ao bucket compartilhado vira linha visível; minutos de CI de drift multiplicam por ambiente × frequência",
+                "cresce com o número de estados, não com o tamanho de cada um",
+                "múltiplos backends por domínio reduzem contenção, mas NÃO reduzem custo total de requisição — é otimização de governança, não de fatura"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "S3 (estado)",
+                "requisições GET/PUT + GB-mês armazenado",
+                "versionamento mantém toda revisão anterior do estado — arquivo pequeno, mas cresce sem lifecycle"
+              ],
+              [
+                "DynamoDB (lock)",
+                "leitura/escrita sob demanda (PAY_PER_REQUEST)",
+                "tráfego é em rajada; provisionar capacidade fixa tende a custar mais ou throttlar no pico"
+              ],
+              [
+                "Minutos de pipeline (drift agendado)",
+                "minuto de execução × frequência × número de ambientes",
+                "agendar de hora em hora \"para garantir\" multiplica custo sem multiplicar valor — 1 dia útil já era o requisito declarado"
+              ],
+              [
+                "SNS (alerta de drift)",
+                "por notificação publicada",
+                "valor pequeno; não é onde se otimiza"
+              ],
+              [
+                "KMS (cifra do bucket)",
+                "por chamada de API + por chave-mês",
+                "cada leitura/escrita do estado é uma chamada ao KMS — pequena, mas soma em alta frequência de apply"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho de custo que não está em nenhuma linha da AWS",
+            "content": "A tarde perdida reconstruindo o estado corrompido do squad Pagamentos, e o quase-incidente de reduzir a capacidade do RDS em produção por drift não visto, não aparecem em nenhuma fatura da AWS. Apareciam na folha de pagamento e no risco assumido sem ninguém decidir assumi-lo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "estado versionado, lock sob prova, drift perguntado com frequência conhecida",
+                "ainda um backend compartilhado entre squads sem fronteira de conta",
+                "estado e conta por ambiente (L56)",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "estado cifrado em repouso, acesso restrito ao papel do pipeline",
+                "segredo pode acabar em texto claro no estado se um provider não marcar o atributo como sensível",
+                "auditoria periódica do estado por padrão conhecido de segredo",
+                "alta"
+              ],
+              [
+                "Confiabilidade",
+                "perda de notebook deixou de ser incidente de infraestrutura",
+                "lock órfão ainda exige intervenção manual para destravar",
+                "alarme automático sobre item de lock além de um teto de idade",
+                "média"
+              ],
+              [
+                "Eficiência de performance",
+                "módulo reutilizável reduz superfície de divergência entre squads",
+                "bucket único pode virar gargalo de contenção em escala maior",
+                "múltiplos backends por domínio (L56/L98) quando o volume justificar",
+                "baixa"
+              ],
+              [
+                "Otimização de custos",
+                "nenhum recurso novo cobrando por hora ligada",
+                "execução de drift por ambiente pode ficar redundante em escala",
+                "agrupar ambientes pequenos num job de drift com matriz",
+                "baixa"
+              ],
+              [
+                "Sustentabilidade",
+                "sem excedente de computação — o que existe é requisição, não instância ociosa",
+                "histórico de versões do estado cresce sem lifecycle configurado",
+                "política de expiração de versões antigas do objeto de estado, mantendo um piso mínimo",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco e compra outro — e a segunda coluna é a que raramente se escreve."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do notebook ao pipeline que sabe o que está no ar — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Estado local, sem lock, um squad, um notebook. É onde a Órbita estava, e continua legítimo para uma pessoa em ambiente de teste.",
+                "note": "Risco resolvido: nenhum. Novo risco: corrupção por apply concorrente e perda total se o notebook sumir. Custo: o mais baixo — sem infraestrutura de backend."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Backend S3 versionado, lock em DynamoDB, módulo reutilizável, plan de drift agendado dentro do pipeline do L54.",
+                "note": "Risco resolvido: corrida de apply e notebook como ponto único de falha. Novo risco: bucket e tabela de lock compartilhados entre squads, sem fronteira de conta. Custo: centavos de requisição S3/DynamoDB e minutos de CI."
+              },
+              {
+                "label": "Nível 3 — Produção com paridade de ambiente",
+                "instruction": "Conta separada por ambiente, promoção de mudança entre `dev` e `prod` com o mesmo módulo (L56).",
+                "note": "Risco resolvido: dois squads lendo o mesmo backend sem fronteira. Novo risco: paridade entre ambientes exige disciplina — divergir uma variável sem rastrear quebra a promessa de \"mesmo código, ambientes diferentes\". Custo: recursos fixos duplicados por conta."
+              },
+              {
+                "label": "Nível 4 — Política como código sobre o plano",
+                "instruction": "Um estágio adicional no pipeline avalia o JSON do `plan` contra regras antes de liberar o `apply` — por exemplo, recusar remoção de instância com dado de produção sem aprovação explícita.",
+                "note": "Risco resolvido: plano perigoso aplicado sem revisão humana suficiente. Novo risco: regra falso-positiva bloqueia mudança legítima e vira atrito que a equipe aprende a contornar. Custo: um estágio a mais de execução no pipeline."
+              },
+              {
+                "label": "Nível 5 — Plataforma com módulos publicados e cota",
+                "instruction": "Módulos internos versionados num registro privado; Organizations e Identity Center controlando quem pode aplicar o quê, em qual conta (L43, L98).",
+                "note": "Risco resolvido: cada squad reinventando módulo, e acesso amplo demais a quem só deveria aplicar o seu domínio. Novo risco: time de plataforma vira gargalo central para qualquer mudança de módulo. Custo: overhead de um time dedicado."
+              },
+              {
+                "label": "Nível 6 — Dados e IA sobre o próprio pipeline de IaC",
+                "instruction": "O histórico de plans, applies e drifts — quais recursos mais divergem, quais squads geram mais drift, quais mudanças historicamente precederam incidente — vira dado; um modelo aprende a priorizar revisão humana nos planos de maior risco.",
+                "note": "Risco resolvido: tratar todo plan como igualmente arriscado, quando o histórico mostra que não são. Novo risco: um modelo treinado em poucos incidentes aprova mudança ruim ou barra mudança boa — precisa de avaliação com dado retido e caminho manual sempre disponível. Custo: baixo; o dado já existe no CloudTrail e nos logs do pipeline."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Política como código sobre o plano (nível 4) depende de o plano já vir de um pipeline confiável, com estado remoto e lock — que é o nível 2. Aplicar regra sobre um plan gerado do notebook de alguém, sem estado compartilhado, avalia uma decisão que outro apply concorrente pode invalidar no minuto seguinte."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não resolve o problema central, e forçá-la seria o antipadrão que a própria série critica. \"Há corrida entre applies?\" e \"há drift?\" têm resposta determinística: o próprio Terraform já calcula as duas, com `lock` e `plan -detailed-exitcode`. Um modelo não melhora nenhuma dessas duas perguntas — elas são comparação exata entre estado, HCL e API."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar onde IA acrescentaria valor real, e ele aparece só depois de o volume de drift crescer: nem todo drift importa igualmente. Uma tag alterada no console pesa diferente de uma classe de instância reduzida em produção. Um classificador sobre o histórico de plans — recurso, atributo, squad, se precedeu incidente — poderia priorizar QUAL drift alguém olha primeiro, numa organização com centenas de estados."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "priorizar qual drift merece atenção humana primeiro, quando há muitos"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "uma regra bastaria para começar: \"drift em atributo de rede ou capacidade → alta prioridade\" cobre a maior parte. IA só se justifica depois que a regra simples mostrar seu limite"
+              ],
+              [
+                "De onde viriam os dados?",
+                "o próprio histórico de execuções de `plan` no pipeline, mais o CloudTrail de quem mudou o quê pelo console"
+              ],
+              [
+                "Qual o risco?",
+                "aprender de poucos incidentes e classificar drift crítico como rotina, ou o inverso; exige avaliação com dado retido e caminho manual sempre disponível"
+              ],
+              [
+                "Por que não agora?",
+                "a Órbita tem 2 squads e um punhado de drifts por mês. Modelo sobre esse volume é superstição com aparência de estatística"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"ler o `terraform plan` e decidir se pode aplicar sozinho\" troca um sinal determinístico — o diff exato entre estado e API real — por um probabilístico, no exato ponto em que a exatidão é o requisito. O `plan` já diz, com precisão total, o que vai mudar; a decisão de aplicar automaticamente é de política (nível 4 da evolução), não de inferência."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "`terraform.tfstate` comitado no Git",
+                "parece prático versionar tudo junto, e `git add .` pega o arquivo sem ninguém perceber",
+                "expõe qualquer segredo em texto claro no estado — para sempre no histórico, mesmo depois de removido",
+                "segredo encontrado em auditoria de repositório, meses depois do commit",
+                "backend remoto + `.gitignore` cobrindo `*.tfstate` + regra de bloqueio no pipeline",
+                "nunca em ambiente com credencial real; em laboratório isolado, com dado descartável, o risco é outro"
+              ],
+              [
+                "`apply` sempre com `-auto-approve`, sem revisar o plan",
+                "economiza um passo manual no dia a dia",
+                "aplica mudança não revisada; a única defesa contra plano errado é justamente o olho humano no plan",
+                "recurso destruído ou recriado sem ninguém ter dito \"sim\" para aquilo especificamente",
+                "plan revisado e aprovado antes do apply, mesmo em pipeline — a aprovação pode ser automática SE o diff bater com o esperado",
+                "pipeline com política automatizada que já reprova diff fora do esperado (nível 4 da evolução); nunca por padrão manual"
+              ],
+              [
+                "Copiar e colar o módulo em vez de usar `source`",
+                "parece mais simples que aprender a interface de variáveis do módulo",
+                "duas cópias divergem silenciosamente a cada ajuste feito em só uma delas",
+                "dois ambientes que deveriam ser iguais respondem diferente ao mesmo incidente",
+                "`source` apontando para um único módulo, versionado, chamado com variáveis distintas",
+                "nunca como padrão; cópia isolada pode ser aceitável num experimento que será descartado"
+              ],
+              [
+                "Ignorar mudança de emergência feita no console, \"só dessa vez\"",
+                "incidente urgente, sem tempo para abrir PR revisando Terraform",
+                "vira drift permanente; o próximo apply de rotina tenta reverter a mudança que salvou o incidente",
+                "capacidade reduzida sem aviso, no meio do expediente, por um apply \"normal\"",
+                "codificar a mudança assim que o incidente for contido, antes do próximo apply de qualquer squad",
+                "a mudança emergencial em si é aceitável; deixar de codificá-la depois, não"
+              ],
+              [
+                "Tabela de lock com capacidade provisionada baixa",
+                "parece mais barato que `PAY_PER_REQUEST` à primeira vista",
+                "throttling justamente no pico — vários squads aplicando ao mesmo tempo",
+                "`ProvisionedThroughputExceededException` em vez de um lock limpo",
+                "`PAY_PER_REQUEST` para tráfego em rajada e imprevisível como o de lock",
+                "organização com centenas de applies constantes e previsíveis, onde o padrão de tráfego já é conhecido"
+              ],
+              [
+                "Ignorar o aviso de depreciação do lock em DynamoDB",
+                "\"funciona, não mexe\" — e o lock continua funcionando hoje",
+                "quando o suporte for removido, backends que dependem só dele quebram sem aviso prévio planejado",
+                "apply falhando em atualização futura do Terraform, sem mudança nenhuma no código",
+                "avaliar `use_lockfile` em backend NOVO; migrar backend existente com planejamento, não em pânico",
+                "manter DynamoDB em backend já estável, com plano de migração registrado — não como decisão permanente"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "\"Error acquiring the state lock\" persistente",
+                "lock órfão — processo morto sem liberar",
+                "confira `Created` no Lock Info contra qualquer apply genuinamente em andamento",
+                "`aws dynamodb get-item` na tabela de lock",
+                "`terraform force-unlock <ID>` só após confirmar que não há apply real rodando"
+              ],
+              [
+                "`terraform init` reclama de backend não migrado",
+                "mudança no `backend.tf` sem `-migrate-state`",
+                "compare a configuração de backend anterior com a nova",
+                "saída do `terraform init`",
+                "`terraform init -migrate-state` (ou `-reconfigure`, se não deve copiar o estado antigo)"
+              ],
+              [
+                "`plan` mostra recriação de RDS inesperada",
+                "atributo imutável (ex.: engine_version) mudou fora do Terraform",
+                "compare `terraform show` com `describe-db-instances` campo a campo",
+                "diff do plan na linha da instância",
+                "decidir entre `terraform import`/ajustar o HCL para bater com a realidade, ou aceitar a recriação"
+              ],
+              [
+                "Squad aplica variável errada e afeta o outro squad",
+                "os dois ambientes compartilham a mesma `key` de estado por engano",
+                "confira a `key` em cada `backend.tf`",
+                "arquivo `backend.tf` de cada ambiente",
+                "uma `key` distinta por ambiente — nunca reaproveitada entre squads"
+              ],
+              [
+                "Job de drift nunca dispara",
+                "regra do EventBridge/`schedule` desabilitada ou expressão cron errada",
+                "`aws events describe-rule`, ou o histórico de execuções do workflow",
+                "estado da regra agendada",
+                "habilitar a regra; validar a expressão cron contra o horário esperado"
+              ],
+              [
+                "`-detailed-exitcode` retorna 1 em vez de 2",
+                "erro real de execução — ex.: credencial OIDC expirada — não é drift",
+                "log completo da execução do `plan`, não só o código de saída",
+                "saída de erro do Terraform no job",
+                "corrigir a causa do erro; só reinterpretar como drift depois de o plan rodar sem falha"
+              ],
+              [
+                "`terraform import` feito, mas `plan` ainda mostra mudança",
+                "algum atributo aplicado depois manualmente não foi coberto pelo import",
+                "diff campo a campo do plan pós-import",
+                "saída do `plan` logo após o `import`",
+                "ajustar o HCL para bater exatamente com o real, ou aceitar com `ignore_changes` explícito e documentado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em qualquer configuração, pergunte: isto é o Terraform reagindo a algo que mudou DE VERDADE na AWS, ou o Terraform e o real nunca bateram para começar? A primeira categoria se resolve ajustando infraestrutura ou HCL; a segunda quase sempre é `key` errada, import incompleto, ou atributo computado que nunca deveria ter entrado na comparação."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy de cada ambiente não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O backend em si — bucket e tabela de lock — não pertence a nenhum ambiente: ele é o que GUARDA o estado dos ambientes. Destruí-lo antes deles apaga a única cópia de como desfazer o resto."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "#!/usr/bin/env bash\n# limpar.sh — o que o destroy de cada AMBIENTE nao leva.\nset -euo pipefail\n\nfor AMBIENTE in pedidos pagamentos; do\n  ( cd \"ambientes/${AMBIENTE}\" && terraform destroy -auto-approve )\ndone\n\n# O BACKEND (bucket + tabela de lock) NAO faz parte do estado de nenhum\n# ambiente — ele e o que guarda o estado dos outros. Destruir por ultimo, e so\n# se voce nao vai criar mais ambiente nenhum.\necho \"Backend do estado continua de pe: bucket vetor-orbita-terraform-state\"\necho \"e tabela vetor-orbita-terraform-lock. Isto e intencional.\"\necho \"Para remover de verdade (ordem importa: esvaziar antes de destruir):\"\necho \"  aws s3 rm s3://vetor-orbita-terraform-state --recursive\"\necho \"  cd bootstrap && terraform destroy -auto-approve\"\n\n# Snapshot final do RDS: `skip_final_snapshot = false` no modulo GARANTE um\n# snapshot na hora do destroy — e ele sobrevive ao destroy e cobra por GB-mes.\naws rds describe-db-snapshots \\\n  --query \"DBSnapshots[?contains(DBSnapshotIdentifier, 'orbita')].DBSnapshotIdentifier\" \\\n  --output table\n\n# Prova final: nada com a tag do projeto de pe, exceto o backend (esperado).\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=orbita \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table\n"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Snapshot final do RDS sobrevive ao destroy e cobra por GB-mês para sempre",
+            "content": "O módulo grava `skip_final_snapshot = false` de propósito — é a rede de segurança contra um `destroy` acidental em produção. O preço dessa segurança é que o snapshot NÃO desaparece com o `terraform destroy`: ele fica, cobrando armazenamento, até alguém apagá-lo manualmente. Some à sua lista de limpeza sempre que o módulo for usado contra dado real."
+          }
+        },
+        {
+          "id": "b23_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy do ambiente?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "ALB, serviço ECS",
+                "sim",
+                "sim, por hora, enquanto de pé",
+                "gerenciados pelo módulo dentro do ambiente"
+              ],
+              [
+                "Instância RDS",
+                "sim",
+                "não, após removida",
+                "gerenciada pelo módulo; o snapshot final é o que sobrevive, não a instância"
+              ],
+              [
+                "Snapshot final do RDS",
+                "não — é criado justamente NO destroy",
+                "sim, GB-mês",
+                "`skip_final_snapshot = false` por desenho"
+              ],
+              [
+                "Bucket de estado (backend)",
+                "não faz parte do estado de nenhum ambiente",
+                "sim, GB-mês do histórico versionado",
+                "guarda o estado dos outros ambientes; destruir junto apaga o \"como desfazer\""
+              ],
+              [
+                "Tabela de lock (backend)",
+                "idem",
+                "centavos",
+                "compartilhada por todos os ambientes que ainda existirem"
+              ],
+              [
+                "Versões antigas do objeto de estado",
+                "não, mesmo com o bucket esvaziado sem `--recursive` completo",
+                "sim, GB-mês",
+                "versionamento mantém cada revisão até exclusão explícita"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Dois applies concorrentes corrompem o estado",
+                "lock via DynamoDB, chave `LockID`",
+                "escrita condicional impede que o segundo apply sobrescreva sem saber do primeiro"
+              ],
+              [
+                "Notebook perdido é infraestrutura sem estado",
+                "backend S3 versionado",
+                "o estado sobrevive a qualquer notebook, e o versionamento dá um \"antes\" recuperável"
+              ],
+              [
+                "Mudança no console some sem rastro",
+                "módulo com `variable`, mudança só por HCL",
+                "a classe do RDS deixa de ser algo que se muda clicando"
+              ],
+              [
+                "Ninguém percebe drift entre um apply e o próximo",
+                "plan agendado com `-detailed-exitcode`",
+                "transforma \"espero que alguém note\" numa pergunta que roda sozinha, com frequência conhecida"
+              ],
+              [
+                "Dois squads mantêm HCL quase idêntico e divergente",
+                "módulo reutilizável com `source`",
+                "uma correção se propaga para os dois no próximo apply, em vez de duas correções manuais"
+              ],
+              [
+                "Deploy e drift exigem chave estática",
+                "papel federado OIDC herdado do L54",
+                "nenhuma credencial de longa duração no ambiente que aplica ou que verifica drift"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Apply concorrente corrompendo estado",
+                "lock com escrita condicional",
+                "drift causado por mudança fora do Terraform — o lock não vê o console"
+              ],
+              [
+                "Perda de notebook",
+                "estado remoto versionado",
+                "perda de acesso ao bucket em si — é por isso que ele tem seu próprio backup/versionamento"
+              ],
+              [
+                "Drift nunca percebido",
+                "plan agendado",
+                "drift entre a última execução agendada e agora — a frequência do agendamento é o limite de detecção"
+              ],
+              [
+                "Duplicação de infraestrutura entre squads",
+                "módulo reutilizável",
+                "divergência de VALORES intencional entre squads — o módulo padroniza a definição, não a decisão de negócio"
+              ],
+              [
+                "Lock preso para sempre",
+                "nada automático neste desenho",
+                "é a lacuna que fica; force-unlock continua manual, e o nível 3+ é onde alarme automático entra"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "O commit muda o módulo ou um ambiente, e o push aciona o pipeline pelo papel federado do L54.",
+              "O Terraform inicializa contra o backend S3 e baixa o estado remoto do ambiente específico.",
+              "Uma escrita condicional grava o `LockID` no DynamoDB antes de qualquer leitura de estado prosseguir.",
+              "O refresh consulta a API real de cada recurso — é aqui que uma mudança de console se torna visível.",
+              "O plan compara HCL, estado gravado e API real, e mostra o diff resultante.",
+              "Se é a execução de deploy, o apply grava a mudança, atualiza o estado no S3 e libera o lock.",
+              "Se é a execução agendada, nada é aplicado: só o código de saída do plan é lido.",
+              "Código 2 publica um alerta com o resumo do diff; código 0 não publica nada.",
+              "Uma pessoa decide como reconciliar — aplicar, importar, ou aceitar com `ignore_changes` — nunca o pipeline sozinho."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que dois `terraform apply` ao mesmo tempo corrompem a infraestrutura?",
+            "answer": "Porque, sem lock, as duas chamadas de API correm em paralelo e a AWS aplica a última que chegou, sem avisar ninguém. O problema não é o recurso final na AWS — é que o `terraform.tfstate` de quem não gravou por último continua descrevendo algo que já não existe daquele jeito. O próximo apply dessa pessoa lê um estado desatualizado e tenta \"corrigir\" a realidade de volta para uma crença antiga, o que pode significar destruir ou recriar um recurso que estava correto. O lock resolve isso obrigando o segundo apply a esperar ou falhar, em vez de escrever por cima."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "DynamoDB para lock ainda é necessário, ou o backend S3 já resolve sozinho?",
+            "answer": "Não mais exclusivamente: versões recentes do Terraform oferecem lock nativo no próprio backend S3, com o atributo `use_lockfile`, e a HashiCorp já marcou o caminho via DynamoDB como legado. Este módulo ensina DynamoDB porque é o padrão que a maioria das bases existentes ainda usa e o que a certificação continua testando — mas ao criar um backend NOVO hoje, vale avaliar `use_lockfile` no lugar da tabela. A semântica do lock — escrita condicional que impede dois donos simultâneos — é a mesma nos dois caminhos."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "O que exatamente é \"drift\" em Terraform, e como ele é detectado?",
+            "answer": "Drift é a diferença entre o que o `terraform.tfstate` diz que existe e o que a API real da AWS devolve quando consultada agora. Ele é detectado pelo comando `plan` (ou pela etapa de refresh dentro do `apply`), que consulta cada recurso gerenciado e compara com o estado gravado antes de mostrar qualquer diff. Fora desse momento, o Terraform não sabe de nada: ele não monitora a conta continuamente, então a resposta a \"desde quando existe esse drift\" é sempre \"desde a última vez que alguém rodou plan\", nunca \"desde que a mudança aconteceu\"."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "O Terraform atualiza o estado sozinho quando alguém muda algo pelo console?",
+            "answer": "Não — o Terraform só sincroniza estado quando um comando como `plan` ou `apply` é executado, e mesmo assim só para os recursos que aquele comando toca. Uma mudança feita no console fica invisível para sempre até alguém rodar um desses comandos contra o mesmo estado. É exatamente essa ausência de sincronização automática que torna uma execução AGENDADA de `plan` necessária: sem ela, a única chance de notar a mudança é o próximo apply de rotina, que pode demorar semanas."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Por que extrair um módulo reutilizável em vez de copiar e colar o Terraform entre squads?",
+            "answer": "Porque cópia colada diverge silenciosamente, e módulo reutilizável não. Quando dois squads têm HCL quase idêntico em arquivos separados, uma correção de segurança ou um ajuste de configuração feito em um lado não chega ao outro a menos que alguém lembre de replicar manualmente — e é exatamente esse esquecimento que produz dois ambientes que deveriam se comportar igual e não se comportam. Um módulo com `variable` custa uma interface a mais para desenhar, mas garante que a MESMA definição seja usada por todos os squads, com só os valores realmente diferentes entre variáveis."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "O que `-detailed-exitcode` retorna, e como isso vira um alerta de drift?",
+            "answer": "Ele retorna três códigos distintos: 0 quando o plan não encontrou nenhuma mudança, 2 quando encontrou (drift real), e 1 quando o próprio comando falhou por erro — credencial expirada, permissão insuficiente, erro de sintaxe. Um pipeline de drift lê esse código depois de rodar `terraform plan -detailed-exitcode`: só o código 2 deve disparar um alerta de divergência de infraestrutura. Tratar o código 1 como drift é um erro comum que transforma \"o pipeline quebrou\" em uma investigação de mudança de infraestrutura que nunca aconteceu."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Perder o notebook do dev que aplicou o Terraform destrói a infraestrutura?",
+            "answer": "Não, se o backend for remoto — e destrói, se não for. Com o estado gravado no disco local, perder o notebook significa perder a única fonte que sabe quais recursos o Terraform gerencia; recuperar exige `terraform import` de cada recurso, um por um, com o ID exato de cada um. Com backend S3, o estado nunca esteve no notebook: qualquer outra máquina com acesso ao bucket e às credenciais certas roda `terraform init` e segue exatamente de onde a última execução parou, sem perder nada."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Um `terraform.tfstate` comitado no Git é um problema de segurança real?",
+            "answer": "Sim, e é irreversível mesmo depois de removido. O estado grava, em texto claro salvo atributo explicitamente marcado como sensível pelo provider, todo valor de todo recurso que gerencia — o que pode incluir segredo, endpoint interno ou ARN completo. Uma vez comitado, esse conteúdo entra no histórico do Git, e remover o arquivo num commit posterior não apaga a versão anterior do histórico: qualquer pessoa com acesso ao repositório ainda consegue recuperá-lo. A prevenção é `.gitignore` cobrindo `*.tfstate` e, mais importante, nunca ter estado local para começar — é o que o backend remoto resolve estruturalmente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Um engenheiro muda a classe de uma instância RDS pelo console durante um incidente, sem atualizar o Terraform. Duas semanas depois, ninguém percebeu a mudança. Por quê?",
+            "options": [
+              "O Terraform roda `plan` automaticamente em segundo plano e teria alertado, mas o alarme não foi configurado",
+              "O DynamoDB de lock também guarda o histórico de drift, e como o lock não foi acionado, a mudança não foi registrada",
+              "A mudança não é drift de verdade, porque o Terraform ignora por padrão qualquer atributo alterado fora de um apply",
+              "Ninguém rodou `terraform plan` (ou um job agendado) desde a mudança; drift só aparece quando alguém pergunta pela API real"
+            ],
+            "correctIndex": 3,
+            "explanation": "O Terraform não monitora a conta continuamente — ele só consulta a API real de um recurso quando um comando como `plan` ou `apply` roda contra o estado que o gerencia. Sem uma execução AGENDADA de `plan`, a única chance de notar a mudança seria o próximo apply de rotina daquele ambiente, o que pode levar semanas. É por isso que o desenho de produção deste módulo agenda um `plan -detailed-exitcode` sozinho: ele transforma \"espero que alguém rode plan\" numa pergunta que É feita, com frequência conhecida.\n\nA primeira alternativa atribui ao Terraform uma capacidade que ele não tem: não existe verificação em segundo plano, com ou sem alarme configurado — a consulta é sempre sob demanda. A terceira confunde a função da tabela de lock: ela guarda um único item por chave de estado, representando quem segura o lock agora, e nada de histórico de drift. A quarta inventa um comportamento que contraria o propósito do `plan`: o Terraform não ignora mudança externa por padrão — ele a mostra como diff; só ignora atributos explicitamente listados em `lifecycle { ignore_changes = [...] }`."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Dois squads usam o mesmo módulo Terraform, mas apontam para chaves de estado (`key`) diferentes no mesmo bucket S3. Um deles aplica uma mudança de variável que aumenta o `desired_count`. O que acontece com o outro squad?",
+            "options": [
+              "Nada diretamente: estados com `key` diferente são independentes; a mudança só afeta o squad que aplicou",
+              "O outro squad recebe drift automaticamente, porque o módulo usado é o mesmo",
+              "O lock do DynamoDB bloqueia o segundo squad até o primeiro terminar, mesmo em ambientes diferentes",
+              "O apply falha, porque dois ambientes não podem compartilhar o mesmo bucket S3"
+            ],
+            "correctIndex": 0,
+            "explanation": "A `key` é o que isola um estado do outro dentro do mesmo bucket — cada uma aponta para um objeto S3 distinto, com seu próprio conteúdo e, no lock em DynamoDB, sua própria entrada de `LockID` (tipicamente derivada do caminho do estado). Reutilizar o mesmo MÓDULO não acopla os ESTADOS: módulo é a definição de HCL; estado é o registro de quais recursos existem para cada chamada específica. Os dois squads podem aplicar variáveis diferentes sobre o mesmo módulo sem nenhuma interferência entre si, exatamente porque cada um tem sua própria `key`.\n\nA segunda alternativa é o erro de raciocínio mais comum aqui: confundir \"mesmo código-fonte do módulo\" com \"mesmo estado\" — são conceitos diferentes, e só o segundo gera drift entre ambientes. A terceira erra o escopo do lock: ele protege um ÚNICO item de estado (uma `key`) por vez, não o bucket inteiro; dois `applies` em `keys` diferentes rodam em paralelo sem esperar um pelo outro. A quarta inverte a prática recomendada: compartilhar um bucket com `keys` distintas por ambiente é exatamente o desenho deste laboratório, e não há nada no backend S3 que proíba isso."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L54 concluído (pipeline com papel federado OIDC), Terraform básico (resource, variable, output), o padrão ECS + ALB + RDS do L01"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "como lock com escrita condicional impede corrupção por apply concorrente; a definição precisa de drift e por que ele exige pergunta agendada, não notificação automática; como extrair módulo reutilizável com variável validada; os três códigos de `-detailed-exitcode` e o que cada um deve disparar"
+              ],
+              [
+                "Limitação que fica",
+                "bucket e tabela de lock ainda compartilhados entre squads, sem fronteira de conta; lock órfão ainda exige `force-unlock` manual, sem alarme automático"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L56 — um ambiente por conta, sem copiar e colar. Reutiliza o módulo e o backend deste laboratório, e é onde a fronteira de conta entre squads se resolve"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L98 (plataforma multi-time com cota) depende de módulo publicado e estado isolado por domínio, construídos aqui"
+              ],
+              [
+                "Data da última validação técnica",
+                "8 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Terraform language — Backend Type: s3",
+                "code": true
+              },
+              {
+                "text": " — a existência dos dois mecanismos de lock (DynamoDB, com o schema exato da chave `LockID`; e o lock nativo `use_lockfile`), com a nota de depreciação do caminho via DynamoDB, e as permissões de IAM exigidas em cada um; e "
+              },
+              {
+                "text": "Terraform CLI — comando plan",
+                "code": true
+              },
+              {
+                "text": " — a natureza sob demanda do refresh de estado (não há sincronização automática em segundo plano) e os três códigos de `-detailed-exitcode`. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "O tempo de propagação de uma mudança de console até ela aparecer num `plan` é IMEDIATO por natureza (a próxima consulta à API já vê o estado real) — o que NÃO é imediato é a FREQUÊNCIA com que alguém pergunta. O cron de exemplo (`0 8 * * 1-5`) não foi validado contra o padrão real de incidentes da sua organização; ajuste a frequência ao seu apetite de risco, não copie o valor. Da mesma forma, a contagem de \"312 linhas duplicadas viraram 140\" é a medida do exemplo da Órbita, não uma constante — meça a duplicação real da sua base antes de prometer o ganho para o seu time."
+          }
+        }
+      ]
+    }
+  ]
+}

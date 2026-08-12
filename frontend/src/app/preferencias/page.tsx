@@ -1,7 +1,7 @@
 import { PreferenciasClient } from './PreferenciasClient';
 
 export const metadata = {
-  title: 'Preferências — FFV Academy',
+  title: 'Preferências',
   description: 'Gerencie seus dados, consentimentos e produtos pagos.',
   robots: { index: false, follow: false },
 };

@@ -1,0 +1,2642 @@
+{
+  "slug": "lab-eks-quando-ecs-nao-basta",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência tem sete serviços em produção, todos em ECS Fargate — o de Notificações, extraído no "
+              },
+              {
+                "text": "L31",
+                "code": true
+              },
+              {
+                "text": ", é um deles. O novo VP de Engenharia veio de uma empresa onde tudo rodava em Kubernetes, e a primeira frase dele numa reunião de arquitetura foi \"vamos de Kubernetes\". Nenhum requisito acompanhou a frase."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Na mesma semana, o parceiro de detecção de fraude que a Cadência acabou de contratar — a Aegis — informa que o produto é distribuído apenas como um Helm chart com um Operator próprio, que observa um recurso customizado (`AegisPolicy`) para aplicar política de risco por pedido. Não existe pacote para ECS. Essa é a única frase da semana com um requisito dentro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O papel deste laboratório não é decidir entre ECS e EKS de forma abstrata: é pegar UM serviço que já existe nos dois mundos possíveis — o mesmo binário, os dois orquestradores — e medir, com número, o que muda. A pergunta que a Cadência precisa responder para o VP não é \"Kubernetes é bom?\". É \"o que ele custa em operação, e onde esse custo se paga?\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Especialista — depende do L30 (limites do serverless) e do L33 (descoberta e malha)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L30 e L33 lidos; L31 no ar (serviço de Notificações em ECS Fargate); noção de pod/deployment/service ajuda, mas não é assumida"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 55 min · implementação 3 h 30 a 4 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Médio: a taxa do control plane do EKS corre 24 h por dia, independente de tráfego — o primeiro custo deste laboratório que o ECS não tinha"
+              },
+              {
+                "k": "Serviços",
+                "v": "ECS Fargate, EKS (perfil Fargate), IAM (IRSA), ALB / AWS Load Balancer Controller, ECR, CloudWatch"
+              },
+              {
+                "k": "Volume atual",
+                "v": "60 lojas, cerca de 600 pedidos pagos por dia, mesmo volume de e-mails de confirmação via fila (herdado do L31)"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "decidir com número medido se a plataforma migra para Kubernetes, não com preferência de quem pediu"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "um piloto de um mês com um serviço já estável é amostra suficiente para decidir a direção — não é estatística robusta, é o que o orçamento de uma pessoa-mês permite"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "o mesmo serviço de Notificações rodando em ECS e em EKS, com as horas de operação de cada um registradas e comparadas"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é um laboratório de Kubernetes do zero — não ensina `kubectl`, conceitos de pod ou o modelo de objetos do Kubernetes como currículo geral. O que ele ensina é a fronteira exata onde o EKS acrescenta operação sobre o que o ECS já resolvia, usando um serviço real como régua. Se você nunca viu um manifesto Kubernetes, os comentários do YAML cobrem o necessário para acompanhar — mas não substituem um curso de Kubernetes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando ou uma tabela preenchida na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Nomear os três motivos legítimos que justificam EKS sobre ECS, e testar o caso da Cadência contra os três.",
+              "Explicar por que o papel de execução do Fargate Pod NÃO concede permissão ao contêiner, e o que concede.",
+              "Implantar o mesmo serviço em ECS Fargate e em EKS com perfil Fargate, a partir da mesma imagem.",
+              "Configurar IRSA para uma ServiceAccount e provar, com CloudTrail, que a credencial foi assumida por federação OIDC.",
+              "Instalar o AWS Load Balancer Controller e explicar por que ele é uma peça a mais que o ECS não tem.",
+              "Diagnosticar uma falha de IRSA silenciosa e uma falha de agendamento por perfil Fargate mal configurado.",
+              "Medir a taxa fixa do control plane do EKS e decidir se ela se paga para o seu caso.",
+              "Recomendar, com dado medido, se a Cadência deve migrar tudo, nada, ou só a fatia que o parceiro Aegis exige."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "ECS vs. EKS: quando cada um se justifica",
+                "SAP-C02, DOP-C02",
+                "a tabela de requisitos e a decision box",
+                "os três motivos legítimos — portabilidade real, ecossistema que o time já usa, profundidade de equipe — e por que \"é o padrão do mercado\" não é um deles"
+              ],
+              [
+                "Taxa do control plane do EKS",
+                "SAP-C02",
+                "custo fixo por cluster-hora, cobrado independente de pods",
+                "que ele existe mesmo com o cluster vazio, e que suporte estendido custa mais"
+              ],
+              [
+                "Papel de execução do Fargate Pod",
+                "DVA-C02, SAP-C02",
+                "a Identidade 1 do desenho EKS",
+                "que ele autoriza só kubelet, pull de imagem e log — nunca a aplicação"
+              ],
+              [
+                "IAM roles for service accounts (IRSA)",
+                "SAP-C02, SOA-C02",
+                "a Identidade 2, ligada por OIDC a uma ServiceAccount",
+                "o papel do provedor OIDC e da condição `sub` no trust policy"
+              ],
+              [
+                "RBAC do Kubernetes",
+                "SAP-C02",
+                "camada de permissão dentro do cluster, separada do IAM",
+                "que ela responde \"quem no cluster pode o quê\", não \"quem na AWS pode o quê\""
+              ],
+              [
+                "Add-ons gerenciados (VPC CNI, CoreDNS)",
+                "SAP-C02, DOP-C02",
+                "citados como custo operacional oculto",
+                "que versão de add-on incompatível com a versão do cluster quebra sem erro claro"
+              ],
+              [
+                "AWS Load Balancer Controller",
+                "DVA-C02, SAP-C02",
+                "observa Ingress/Service e provisiona ALB",
+                "que ele é um POD, com sua própria IRSA, e não parte do control plane gerenciado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica dá um pod Running que não consegue chamar S3 ou SQS, com o papel de execução do Fargate Pod aparentemente correto, e pede a causa. Quem responde \"faltou anexar a política ao papel de execução\" erra o alvo: esse papel nunca é herdado pelo contêiner, então anexar qualquer política nele não muda nada para a aplicação. A resposta é IRSA — uma role separada, ligada à ServiceAccount."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito sem coluna de desenho é intenção, não decisão. Repare que só um dos seis abaixo é o que de fato obriga Kubernetes — os outros cinco governam COMO o piloto é conduzido, não SE ele acontece."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Distribuição do parceiro Aegis",
+                "somente Helm chart + Operator (CRD `AegisPolicy`)",
+                "é o único requisito que obriga ALGUM cluster Kubernetes a existir — nenhum outro serviço da Cadência tem requisito equivalente"
+              ],
+              [
+                "Profundidade de Kubernetes do time",
+                "2 de 7 engenheiros usaram em projeto pessoal",
+                "decide que o piloto tem de ser um serviço pequeno e reversível, não a plataforma inteira"
+              ],
+              [
+                "Orçamento do piloto",
+                "uma pessoa-mês para provar ou descartar",
+                "decide o escopo: comparar UM serviço nos dois desenhos, não migrar sete"
+              ],
+              [
+                "SLA de Notificações",
+                "99,9%, inalterado pelo piloto",
+                "decide que o EKS roda EM PARALELO ao ECS durante a medição — nunca substitui antes de provar"
+              ],
+              [
+                "Nenhuma chave estática",
+                "obrigatório nos dois desenhos",
+                "decide que o EKS usa IRSA para tudo; nenhuma credencial de longa duração em variável de ambiente ou Secret"
+              ],
+              [
+                "Custo operacional mensurável",
+                "número, não opinião",
+                "decide que o piloto registra horas de engenharia gastas em operação — não só a fatura da AWS"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b3_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O requisito que mais se confunde com preferência",
+            "content": "\"O time gosta de Kubernetes\" e \"o time já opera Kubernetes com profundidade que gera produtividade real\" são frases parecidas e decisões opostas. A segunda é um dos três motivos legítimos da decision box adiante; a primeira não é motivo nenhum — é gosto, e gosto não aparece em nenhuma linha desta tabela."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o serviço em ECS Fargate"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência já tem, desde o L31. Ele entra aqui como a linha de base porque o resto do laboratório o compara, peça por peça, com o desenho seguinte — e a defeito nenhum: continua sendo uma arquitetura legítima e implantável."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O serviço de Notificações em ECS Fargate — a linha de base",
+            "caption": "É o mesmo serviço extraído no L31, sem nenhuma peça nova. Percorra os passos contando quantos objetos você precisa entender para explicar este desenho a alguém: essa contagem é o número que o desenho seguinte vai dobrar.",
+            "groups": [
+              {
+                "label": "Peças que já existem (L31/L33)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sqs",
+                    "service": "sqs",
+                    "label": "Fila de pedidos pagos",
+                    "note": "existe desde o L31; cada mensagem é um pedido pago aguardando confirmação por e-mail"
+                  }
+                ]
+              },
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "suporte",
+                    "service": "user",
+                    "label": "Time de suporte",
+                    "note": "única audiência humana do serviço; usa a rota administrativa para reenviar e-mail perdido"
+                  }
+                ]
+              },
+              {
+                "label": "Registro de imagem",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ecr",
+                    "service": "ecr",
+                    "label": "ECR",
+                    "note": "mesma imagem que o desenho EKS vai puxar — o binário não muda entre os dois"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB interno",
+                    "note": "expõe só a rota administrativa; não recebe tráfego de cliente final nenhum"
+                  },
+                  {
+                    "id": "tg",
+                    "service": "targetgroup",
+                    "label": "Grupo de destino",
+                    "note": "decide quem recebe o tráfego administrativo; health check aponta para a task"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "svc",
+                    "service": "ecs",
+                    "label": "Serviço ECS Fargate",
+                    "note": "agenda a task, substitui a que morre, e é a peça inteira de orquestração deste desenho"
+                  },
+                  {
+                    "id": "task",
+                    "service": "fargate",
+                    "label": "Task de Notificações",
+                    "note": "um binário .NET 8: lê a fila em segundo plano e serve as duas rotas HTTP administrativas"
+                  }
+                ]
+              },
+              {
+                "label": "Identidade",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "role",
+                    "service": "iam",
+                    "label": "Papel de tarefa (task role)",
+                    "note": "única identidade AWS do contêiner: sqs:ReceiveMessage/DeleteMessage e ses:SendEmail, nada além"
+                  }
+                ]
+              },
+              {
+                "label": "Efeito e observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ses",
+                    "service": "ses",
+                    "label": "SES",
+                    "note": "envia o e-mail de confirmação; é o efeito colateral que a mensagem da fila dispara"
+                  },
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "CloudWatch Logs",
+                    "note": "único destino de log e métrica; não existe um segundo sistema de observabilidade aqui"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "sqs",
+                "to": "task",
+                "label": "poll em long-polling",
+                "style": "solid"
+              },
+              {
+                "from": "suporte",
+                "to": "alb",
+                "label": "HTTPS administrativo",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "tg",
+                "label": "encaminha",
+                "style": "solid"
+              },
+              {
+                "from": "tg",
+                "to": "task",
+                "label": "health check + /admin",
+                "style": "solid"
+              },
+              {
+                "from": "ecr",
+                "to": "task",
+                "label": "pull da imagem",
+                "style": "dashed"
+              },
+              {
+                "from": "role",
+                "to": "task",
+                "label": "concede sqs+ses, uma credencial só",
+                "style": "dashed"
+              },
+              {
+                "from": "svc",
+                "to": "task",
+                "label": "agenda e substitui",
+                "style": "solid"
+              },
+              {
+                "from": "task",
+                "to": "ses",
+                "label": "SendEmail",
+                "style": "solid"
+              },
+              {
+                "from": "task",
+                "to": "cw",
+                "label": "logs e métricas",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A fila e o parceiro de e-mail já existem; só a orquestração é nova aqui",
+                "detail": "Este laboratório não mexe no L31 nem no L33: a fila continua entregando o mesmo evento, e o SES continua sendo o efeito colateral. O que este passo isola é a pergunta que o resto do módulo responde — o que roda o contêiner, e o que isso custa em operação.",
+                "nodes": [
+                  "sqs",
+                  "task"
+                ],
+                "edges": [
+                  "sqs>task"
+                ]
+              },
+              {
+                "label": "Uma única identidade, injetada pelo metadata do Fargate",
+                "detail": "O papel de tarefa é a única credencial AWS que o contêiner tem, e ele a recebe automaticamente pelo endpoint de metadados do Fargate — sem cofre, sem variável de ambiente. Duas ações, um papel: guarde este número, porque o desenho seguinte dobra ele.",
+                "nodes": [
+                  "role",
+                  "task"
+                ],
+                "edges": [
+                  "role>task"
+                ]
+              },
+              {
+                "label": "O agendador do ECS decide onde a task roda — e é só isso",
+                "detail": "O serviço ECS é a peça de orquestração inteira: agenda a task, substitui a que morre, e não exige mais nada do operador para isso acontecer. Não há plano de controle separado para gerenciar, nem add-on para atualizar.",
+                "nodes": [
+                  "svc",
+                  "task"
+                ],
+                "edges": [
+                  "svc>task"
+                ]
+              },
+              {
+                "label": "A rota administrativa é o único tráfego HTTP que existe",
+                "detail": "O serviço não atende cliente final: a única audiência humana é o time de suporte, reenviando um e-mail perdido. O ALB existe por causa dessa rota, e só dela.",
+                "nodes": [
+                  "suporte",
+                  "alb"
+                ],
+                "edges": [
+                  "suporte>alb"
+                ]
+              },
+              {
+                "label": "O grupo de destino decide quem recebe esse tráfego",
+                "detail": "Mesmo com um volume pequeno de chamadas administrativas, o grupo de destino continua sendo quem verifica saúde e encaminha — a mesma peça que o L03 ensinou, sem nenhuma variação neste desenho.",
+                "nodes": [
+                  "tg",
+                  "task"
+                ],
+                "edges": [
+                  "tg>task"
+                ]
+              },
+              {
+                "label": "O efeito observável: e-mail enviado, log gravado",
+                "detail": "Do ponto de vista de quem recebe o e-mail, nada neste laboratório muda nada. É a frase que vale guardar até o próximo desenho: a diferença inteira entre os dois é operacional, não funcional.",
+                "nodes": [
+                  "task",
+                  "ses"
+                ],
+                "edges": [
+                  "task>ses"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Conte as peças antes de continuar",
+            "content": "Um serviço, uma task definition, um grupo de destino, um papel de tarefa. Quatro objetos de orquestração e identidade para explicar o desenho inteiro a alguém novo. Guarde esse número — a seção seguinte não troca nenhum deles por outro; ela ACRESCENTA."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção: o mesmo serviço em EKS"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo existe por um motivo nomeado nos passos do diagrama — se você não conseguir apontar o motivo, ela é adorno, e este desenho não pretende ter nenhum. A topologia é estruturalmente diferente da anterior: não é \"ECS mais um nó\", é uma segunda camada inteira de operação por cima da mesma capacidade de computação."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O mesmo serviço em EKS — o segundo plano de operação, peça por peça",
+            "caption": "Conte de novo os objetos que alguém precisa entender para explicar este desenho. A capacidade de computação é a mesma do anterior (Fargate). O que multiplicou foi a operação — e cada peça nova existe por um motivo específico, não por hábito.",
+            "groups": [
+              {
+                "label": "Peças que já existem (L31/L33)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sqs",
+                    "service": "sqs",
+                    "label": "Fila de pedidos pagos",
+                    "note": "mesma fila do desenho ECS; este laboratório não duplica o produtor"
+                  }
+                ]
+              },
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "suporte",
+                    "service": "user",
+                    "label": "Time de suporte",
+                    "note": "mesma audiência, mesma rota administrativa — o usuário não percebe a troca"
+                  }
+                ]
+              },
+              {
+                "label": "Plano de controle EKS (gerenciado pela AWS, cobra por hora)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "eks",
+                    "service": "eks",
+                    "label": "Cluster EKS",
+                    "note": "API do Kubernetes; cobra taxa fixa por cluster-hora, presente antes de existir um pod"
+                  }
+                ]
+              },
+              {
+                "label": "Registro de imagem",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ecr",
+                    "service": "ecr",
+                    "label": "ECR",
+                    "note": "mesmo repositório do desenho ECS; a imagem que os dois orquestradores puxam é idêntica"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB provisionado pelo controller",
+                    "note": "não nasce do Terraform aqui: nasce de um laço de reconciliação dentro do próprio cluster"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada, perfil Fargate",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "task",
+                    "service": "fargate",
+                    "label": "Pod de Notificações",
+                    "note": "o mesmo binário .NET 8 do desenho ECS, sem uma linha de código alterada"
+                  },
+                  {
+                    "id": "lbctrl",
+                    "service": "fargate",
+                    "label": "AWS Load Balancer Controller",
+                    "note": "é um pod: observa Ingress e Service e chama a API da AWS para criar o ALB — o ECS não tinha isto"
+                  },
+                  {
+                    "id": "aegis",
+                    "service": "fargate",
+                    "label": "Operator do Aegis (CRD AegisPolicy)",
+                    "note": "o motivo real deste cluster existir: o parceiro só distribui como Operator, sem pacote para ECS"
+                  }
+                ]
+              },
+              {
+                "label": "Identidade — duas camadas, não uma",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "podexec",
+                    "service": "iam",
+                    "label": "Papel de execução do Fargate Pod",
+                    "note": "só deixa o kubelet registrar o pod e puxar imagem/log — o contêiner NUNCA herda isto"
+                  },
+                  {
+                    "id": "irsa",
+                    "service": "iam",
+                    "label": "Role via IRSA",
+                    "note": "vinculada a uma ServiceAccount por OIDC; é a permissão real que o contêiner de fato usa"
+                  }
+                ]
+              },
+              {
+                "label": "Efeito e observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ses",
+                    "service": "ses",
+                    "label": "SES",
+                    "note": "mesmo destino final do desenho ECS; o e-mail que sai é indistinguível de lá"
+                  },
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "CloudWatch Logs",
+                    "note": "recebe log do pod e do controller — agora são duas fontes, não uma"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "sqs",
+                "to": "task",
+                "label": "poll em long-polling",
+                "style": "solid"
+              },
+              {
+                "from": "suporte",
+                "to": "alb",
+                "label": "HTTPS administrativo",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "task",
+                "label": "roteia por IP do pod (target-type ip)",
+                "style": "solid"
+              },
+              {
+                "from": "lbctrl",
+                "to": "alb",
+                "label": "cria e atualiza via Ingress + Service",
+                "style": "dashed"
+              },
+              {
+                "from": "eks",
+                "to": "task",
+                "label": "agenda no perfil Fargate",
+                "style": "dashed"
+              },
+              {
+                "from": "eks",
+                "to": "lbctrl",
+                "label": "agenda como pod do sistema",
+                "style": "dashed"
+              },
+              {
+                "from": "eks",
+                "to": "aegis",
+                "label": "agenda no mesmo perfil Fargate",
+                "style": "dashed"
+              },
+              {
+                "from": "podexec",
+                "to": "task",
+                "label": "só pull de imagem e log — não chega no contêiner",
+                "style": "dashed"
+              },
+              {
+                "from": "irsa",
+                "to": "task",
+                "label": "concede sqs+ses via ServiceAccount",
+                "style": "dashed"
+              },
+              {
+                "from": "irsa",
+                "to": "lbctrl",
+                "label": "concede permissão de ELB via ServiceAccount própria",
+                "style": "dashed"
+              },
+              {
+                "from": "ecr",
+                "to": "task",
+                "label": "pull da imagem",
+                "style": "dashed"
+              },
+              {
+                "from": "task",
+                "to": "ses",
+                "label": "SendEmail",
+                "style": "solid"
+              },
+              {
+                "from": "aegis",
+                "to": "task",
+                "label": "aplica política de fraude (CRD observado)",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O cluster cobra antes do primeiro pod existir",
+                "detail": "A taxa do control plane é por cluster-hora, e ela corre independente de quantos pods rodam — mesmo com o cluster vazio. É o primeiro custo deste desenho que não tem equivalente no ECS, onde o plano de controle não é faturado à parte.",
+                "nodes": [
+                  "eks",
+                  "task"
+                ],
+                "edges": [
+                  "eks>task"
+                ]
+              },
+              {
+                "label": "Duas identidades onde o ECS tinha uma",
+                "detail": "O papel de execução do Fargate Pod só autoriza o kubelet a registrar o pod e a puxar imagem e log — o contêiner NUNCA assume essa permissão. A permissão que o app de fato usa vem de uma role separada, ligada por OIDC a uma ServiceAccount específica: é IRSA. Confundir os dois papéis é a armadilha central deste laboratório.",
+                "nodes": [
+                  "podexec",
+                  "irsa",
+                  "task"
+                ],
+                "edges": [
+                  "podexec>task",
+                  "irsa>task"
+                ]
+              },
+              {
+                "label": "O ALB nasce de um controlador, não do Terraform",
+                "detail": "No desenho ECS, o `aws_lb` e o `load_balancer {}` do serviço criam o balanceador de forma declarativa e direta. Aqui, um Ingress e um Service descrevem a INTENÇÃO, e um pod que fica rodando dentro do cluster — o AWS Load Balancer Controller — observa essa intenção e chama a API da AWS para provisionar o ALB. É uma peça a mais que pode ficar para trás, travar ou perder permissão sem que o Terraform veja nada de errado.",
+                "nodes": [
+                  "lbctrl",
+                  "alb"
+                ],
+                "edges": [
+                  "lbctrl>alb"
+                ]
+              },
+              {
+                "label": "O controller também precisa da própria identidade",
+                "detail": "Ele chama `elasticloadbalancing:CreateLoadBalancer` e ações vizinhas em nome do cluster inteiro, então também recebe uma role por IRSA — com o alcance errado, ela cria ou apaga balanceador de qualquer serviço na conta, não só do seu.",
+                "nodes": [
+                  "irsa",
+                  "lbctrl"
+                ],
+                "edges": [
+                  "irsa>lbctrl"
+                ]
+              },
+              {
+                "label": "O Operator existe porque o parceiro só distribui assim",
+                "detail": "É o motivo real, e não hipotético, deste cluster existir: o Aegis publica um CRD (`AegisPolicy`) e um Operator que o observa. Não há Helm chart nem Operator para ECS — o modelo de distribuição do parceiro pressupõe a API do Kubernetes.",
+                "nodes": [
+                  "aegis",
+                  "eks"
+                ],
+                "edges": [
+                  "eks>aegis"
+                ]
+              },
+              {
+                "label": "RBAC é uma segunda camada de permissão, por cima do IAM",
+                "detail": "IRSA resolve QUEM o contêiner é para a AWS. Continua existindo uma pergunta separada: quem, dentro do cluster, pode ler ou alterar aquela ServiceAccount e o Secret do token OIDC associado a ela. Essa pergunta é respondida pelo RBAC do Kubernetes, e ele não tem equivalente no ECS — lá, IAM já é a única resposta.",
+                "nodes": [
+                  "irsa",
+                  "task"
+                ],
+                "edges": [
+                  "irsa>task"
+                ]
+              },
+              {
+                "label": "O mesmo e-mail sai no fim, pelas duas topologias",
+                "detail": "Apesar de toda a máquina nova, o comportamento observável por quem recebe o e-mail é idêntico ao do desenho anterior. O custo deste desenho é inteiramente operacional — é essa a distinção que a seção de custo mede com número, não com opinião.",
+                "nodes": [
+                  "task",
+                  "ses"
+                ],
+                "edges": [
+                  "task>ses"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "O erro que produz AccessDenied silencioso",
+            "content": "Dar ao papel de execução do Fargate Pod a permissão de `sqs:ReceiveMessage` ou `ses:SendEmail`, achando que isso resolve o acesso do contêiner, não resolve nada — e não gera erro nenhum na hora de aplicar. O pod sobe, fica Running, passa no health check. Só quando o código tenta de fato falar com a AWS é que o SDK devolve `AccessDenied`, porque a credencial que ele resolveu não é a do papel de execução: é a ausência de credencial nenhuma, já que a ServiceAccount não estava vinculada a nada."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de uma notificação, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O código da aplicação não sabe qual dos dois desenhos o hospeda, e é exatamente essa a prova de que a diferença entre eles é operacional. O que muda são as três primeiras etapas — quem decide onde o contêiner roda, e com qual identidade ele nasce."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Da mensagem na fila ao e-mail entregue — onde os dois desenhos divergem",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1 · A mensagem chega — igual nos dois",
+                "desc": "O evento de pedido pago entra na mesma fila SQS do L31/L33. Nenhum dos dois orquestradores muda o produtor nem o formato da mensagem."
+              },
+              {
+                "label": "2 · Alguém decide ONDE o contêiner roda — aqui os dois divergem pela primeira vez",
+                "desc": "No ECS, o serviço nativo agenda a task. No EKS, o kube-scheduler consulta o perfil Fargate, confirma que o namespace e os rótulos do pod combinam com o seletor do perfil, e só então agenda — uma verificação a mais que o ECS não faz."
+              },
+              {
+                "label": "3 · O contêiner sobe com uma identidade — e aqui está a maior divergência",
+                "desc": "No ECS, o papel de tarefa é injetado direto. No EKS, o pod puxa imagem e log com o papel de execução, mas só ganha permissão de negócio se a ServiceAccount estiver corretamente vinculada por IRSA — um passo extra que falha em silêncio quando esquecido."
+              },
+              {
+                "label": "4 · O binário consome a mensagem — código idêntico",
+                "desc": "A partir daqui, é o mesmo processo .NET 8 fazendo long-polling na fila, sem nenhuma diferença de comportamento entre os dois desenhos."
+              },
+              {
+                "label": "5 · Chama o SES — código idêntico",
+                "desc": "O SDK da AWS resolve a credencial pela cadeia padrão nos dois casos: metadata do Fargate no ECS, variáveis injetadas pelo webhook de identidade no EKS. A chamada `SendEmail` não sabe qual dos dois a hospeda."
+              },
+              {
+                "label": "6 · A rota administrativa responde — mesmo contrato HTTP",
+                "desc": "O time de suporte chama a mesma rota `/admin/reenviar/{pedidoId}` nos dois ambientes. O que muda por trás é só o caminho até o pod: no ECS, ALB → grupo de destino → task; no EKS, ALB → Service (ClusterIP) → pod, com o Ingress descrevendo essa cadeia para o controller."
+              },
+              {
+                "label": "7 · O log chega ao CloudWatch — uma fonte a mais no EKS",
+                "desc": "No ECS, só a task loga. No EKS, o AWS Load Balancer Controller também loga — é observabilidade adicional que existe porque existe uma peça a mais para observar."
+              }
+            ]
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O evento que a fila entrega, herdado do L31/L33. Nenhum campo muda entre os dois orquestradores — e e por isso que o payload nao aparece nos diagramas deste modulo: ele nao e o objeto de estudo aqui."
+              }
+            ]
+          },
+          "position": 2
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "json",
+            "filename": "evento-fila.json",
+            "code": "{\n  \"source\": \"cadencia.pedidos\",\n  \"detail-type\": \"PedidoPago\",\n  \"detail\": {\n    \"pedidoId\": \"b7e4b8b0-1c2d-4e3f-9a1b-8f7c6d5e4a3b\",\n    \"tentativa\": 1,\n    \"ocorridoEm\": \"2026-08-07T13:04:11Z\"\n  }\n}"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "Por que o SDK não sabe onde está rodando",
+            "content": "A cadeia padrão de resolução de credencial do SDK da AWS consulta, nesta ordem, variáveis de ambiente, depois o arquivo de configuração, depois o endpoint de metadados do ambiente. No Fargate do ECS, é o metadados que responde. No EKS, o webhook de identidade de pod injeta `AWS_ROLE_ARN` e `AWS_WEB_IDENTITY_TOKEN_FILE` como variáveis de ambiente ANTES de o SDK ser inicializado — então a mesma cadeia padrão encontra a resposta num lugar diferente, sem que o código precise saber disso."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "A Cadência opera sete serviços em ECS Fargate em produção. O novo VP de Engenharia, vindo de uma empresa que usava Kubernetes para tudo, pede \"vamos de Kubernetes\" sem apontar um requisito específico. Ao mesmo tempo, o parceiro de detecção de fraude Aegis anuncia que só distribui o produto como Helm chart com um Operator.",
+            "winner": "Manter os sete serviços em ECS e abrir UM cluster EKS pequeno, só para o que o Aegis exige — não migrar a plataforma inteira",
+            "why": "O requisito real está isolado numa única peça: o Operator do Aegis. Nenhum dos outros seis serviços tem um motivo escrito para sair do ECS — nem portabilidade multi-nuvem genuína, nem dependência de um ecossistema de Helm charts que o time já usa, nem profundidade de equipe em Kubernetes que devolveria produtividade (dois de sete engenheiros usaram Kubernetes só em projeto pessoal). Abrir um cluster pequeno resolve o bloqueio real — o parceiro — sem pagar a segunda camada de operação (RBAC, add-ons, IRSA, upgrade de versão) nos seis serviços que não precisam dela. O piloto medido neste laboratório é exatamente essa peça isolada.",
+            "alternatives": [
+              {
+                "name": "Migrar a plataforma inteira para EKS",
+                "downside": "Multiplica RBAC, add-ons e upgrade de versão por sete serviços que não têm nenhum requisito que o ECS não atenda. O ganho de \"padronizar em Kubernetes\" é organizacional, não técnico — e não aparece na tabela de requisitos deste módulo."
+              },
+              {
+                "name": "Recusar Kubernetes e negociar outro fornecedor de detecção de fraude",
+                "downside": "É uma saída legítima, mas troca um problema técnico por um de contrato e migração de dados de fraude acumulados — fora do escopo deste laboratório, e não necessariamente mais barato."
+              },
+              {
+                "name": "Kubernetes autogerenciado em EC2, sem o plano de controle gerenciado da AWS",
+                "downside": "Evita a taxa fixa do control plane e adiciona exatamente o oposto do que se quer: agora o próprio plano de controle também é operado pelo time. É mais operação, não menos."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Escopo do piloto",
+                "um serviço, em paralelo ao ECS existente",
+                "migração completa da plataforma; nenhum piloto, decisão só por opinião",
+                "mede custo operacional real com risco reversível",
+                "não testa efeito de múltiplos times no mesmo cluster — isso é nível 3 da evolução"
+              ],
+              [
+                "Identidade do contêiner",
+                "IRSA por ServiceAccount",
+                "permissão no papel de execução do pod (não funciona); credencial estática num Secret",
+                "é a única forma que concede permissão de negócio ao contêiner sem chave de longa duração",
+                "uma role IAM a mais para gerenciar por serviço, contra uma única task role no ECS"
+              ],
+              [
+                "Exposição do control plane",
+                "endpoint privado, sem acesso público",
+                "endpoint público com lista de IP liberado; público sem restrição",
+                "a API do Kubernetes administra o cluster inteiro — expô-la é o equivalente a expor o plano de controle do ECS, que a AWS nunca expõe",
+                "acesso à API exige estar na VPC ou atrás de VPN/bastion"
+              ],
+              [
+                "Provisionamento do ALB",
+                "AWS Load Balancer Controller via Ingress",
+                "Terraform criando o ALB direto, como no ECS; NLB pelo Service type LoadBalancer",
+                "é o padrão do ecossistema Kubernetes para este caso, e mantém a definição do balanceador junto do manifesto da aplicação",
+                "uma peça a mais rodando dentro do cluster, com sua própria IRSA e seu próprio log"
+              ],
+              [
+                "Escopo do namespace",
+                "um namespace só, `notificacoes`",
+                "compartilhar o namespace `default`; um namespace por ambiente",
+                "isola o RBAC deste serviço do resto do cluster desde o primeiro dia",
+                "nenhuma; é o mínimo aceitável mesmo num piloto de um serviço só"
+              ],
+              [
+                "Suporte da versão do cluster",
+                "padrão, com upgrade planejado",
+                "suporte estendido, aceitando a taxa maior; deixar vencer sem plano",
+                "a taxa padrão é a mais barata das duas, e o upgrade é a alternativa real a ela",
+                "exige janela de upgrade periódica — é hora de engenharia, não fatura"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este piloto cria, e que este módulo não paga",
+            "content": "Rodar dois desenhos do mesmo serviço em paralelo por um mês significa duas filas de log, dois alarmes de 5xx, duas superfícies para o time de suporte confundir. Isso é aceitável para um piloto de escopo pequeno e prazo definido — não é um estado estável. Ao final da medição, um dos dois desenhos é desligado; manter os dois é o próprio antipadrão que a seção de anti-padrões nomeia adiante."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: o binário que não muda entre os dois desenhos"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Esta é a prova mais direta de que a diferença é de operação, não de aplicação: o mesmo `Program.cs`, a mesma imagem de contêiner, rodam sem alteração nos dois ambientes. O que muda inteiramente está do lado de fora do binário."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Program.cs",
+            "code": "// Program.cs — o mesmo binário nos dois desenhos, sem um `#if` sequer\n\nvar builder = WebApplication.CreateBuilder(args);\n\n// A cadeia de credencial padrão do SDK da AWS resolve para os dois casos sem\n// nenhuma configuração explícita: no ECS ela lê o endpoint de metadados do\n// Fargate; no EKS ela lê AWS_ROLE_ARN e AWS_WEB_IDENTITY_TOKEN_FILE, que o\n// webhook de identidade de pod injeta quando a ServiceAccount está anotada.\n// É por isso que este arquivo não muda entre os dois desenhos.\nbuilder.Services.AddDefaultAWSOptions(builder.Configuration.GetAWSOptions());\nbuilder.Services.AddAWSService<IAmazonSQS>();\nbuilder.Services.AddAWSService<IAmazonSimpleEmailServiceV2>();\nbuilder.Services.AddHostedService<ConsumidorDeFila>();\n\nbuilder.Services.AddHealthChecks()\n    .AddCheck(\"self\", () => HealthCheckResult.Healthy(), tags: [\"live\"])\n    .AddCheck<FilaAcessivelCheck>(\"fila\", tags: [\"ready\"]); // valida sqs:GetQueueAttributes\n\nvar app = builder.Build();\n\napp.MapHealthChecks(\"/health/live\", new HealthCheckOptions { Predicate = r => r.Tags.Contains(\"live\") });\napp.MapHealthChecks(\"/health/ready\", new HealthCheckOptions { Predicate = r => r.Tags.Contains(\"ready\") });\n\n// Única rota administrativa que existe. O time de suporte é a única audiência\n// humana deste serviço nos dois desenhos.\napp.MapPost(\"/admin/reenviar/{pedidoId:guid}\", async (Guid pedidoId, IAmazonSimpleEmailServiceV2 ses, AppDb db) =>\n{\n    var pedido = await db.Pedidos.FindAsync(pedidoId);\n    if (pedido is null) return Results.NotFound();\n    await EnviarConfirmacao.Executar(ses, pedido);\n    return Results.Accepted();\n});\n\napp.Run();\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "O teste que prova isso, antes de qualquer Terraform",
+            "content": "Rode a mesma imagem localmente com Docker, apontando `AWS_ROLE_ARN` para uma role assumível via `sts:AssumeRole` comum (sem OIDC) e compare com rodá-la em Fargate puro. Se o comportamento diverge, a divergência está em configuração de ambiente, nunca no código — e é isso que orienta onde procurar quando algo falha só num dos dois desenhos."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: a infraestrutura ECS — a linha de base"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Quatro objetos: papel de tarefa, task definition, serviço, grupo de destino. É o mesmo padrão do L03, aplicado ao serviço de Notificações."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "ecs.tf",
+            "code": "# ecs.tf — a linha de base: papel de tarefa, grupo de destino, serviço\n\n# Uma identidade só, e ela é explícita: duas ações, dois recursos, nenhum \"*\"\n# que não se justifique.\ndata \"aws_iam_policy_document\" \"notificacoes_task\" {\n  statement {\n    sid       = \"ConsumirFila\"\n    effect    = \"Allow\"\n    actions   = [\"sqs:ReceiveMessage\", \"sqs:DeleteMessage\", \"sqs:GetQueueAttributes\"]\n    resources = [aws_sqs_queue.pedidos_pagos.arn] # a fila do L31/L33, por ARN\n  }\n  statement {\n    sid       = \"EnviarConfirmacao\"\n    effect    = \"Allow\"\n    actions   = [\"ses:SendEmail\", \"ses:SendRawEmail\"]\n    resources = [aws_sesv2_email_identity.dominio.arn] # restrito à identidade verificada\n  }\n}\n\nresource \"aws_iam_role\" \"notificacoes_task\" {\n  name               = \"${var.projeto}-notificacoes-task\"\n  assume_role_policy  = data.aws_iam_policy_document.confianca_ecs_tasks.json\n}\n\nresource \"aws_iam_role_policy\" \"notificacoes_task\" {\n  role   = aws_iam_role.notificacoes_task.id\n  policy = data.aws_iam_policy_document.notificacoes_task.json\n}\n\nresource \"aws_lb_target_group\" \"notificacoes_admin\" {\n  name        = \"${var.projeto}-notif-admin\"\n  port        = 8080\n  protocol    = \"HTTP\"\n  vpc_id      = aws_vpc.principal.id\n  target_type = \"ip\"\n\n  health_check {\n    path                = \"/health/ready\"\n    interval            = 10\n    timeout             = 5\n    healthy_threshold   = 2\n    unhealthy_threshold = 2\n  }\n}\n\nresource \"aws_ecs_task_definition\" \"notificacoes\" {\n  family                   = \"${var.projeto}-notificacoes\"\n  requires_compatibilities = [\"FARGATE\"]\n  network_mode             = \"awsvpc\"\n  cpu                      = 256\n  memory                   = 512\n  execution_role_arn       = aws_iam_role.execucao.arn   # ECR + logs — mesmo papel do L03\n  task_role_arn             = aws_iam_role.notificacoes_task.arn\n\n  container_definitions = jsonencode([{\n    name         = \"notificacoes\"\n    image        = \"${aws_ecr_repository.notificacoes.repository_url}:${var.sha_da_imagem}\"\n    essential    = true\n    portMappings = [{ containerPort = 8080, protocol = \"tcp\" }]\n    environment = [\n      { name = \"FILA_URL\", value = aws_sqs_queue.pedidos_pagos.url },\n    ]\n    logConfiguration = {\n      logDriver = \"awslogs\"\n      options = {\n        \"awslogs-group\"         = aws_cloudwatch_log_group.notificacoes.name\n        \"awslogs-region\"        = var.regiao\n        \"awslogs-stream-prefix\" = \"notificacoes\"\n      }\n    }\n  }])\n}\n\nresource \"aws_ecs_service\" \"notificacoes\" {\n  name            = \"${var.projeto}-notificacoes\"\n  cluster         = aws_ecs_cluster.principal.id\n  task_definition = aws_ecs_task_definition.notificacoes.arn\n  desired_count   = 2\n  launch_type     = \"FARGATE\"\n\n  network_configuration {\n    subnets         = aws_subnet.privada[*].id\n    security_groups = [aws_security_group.notificacoes.id]\n  }\n\n  load_balancer {\n    target_group_arn = aws_lb_target_group.notificacoes_admin.arn\n    container_name    = \"notificacoes\"\n    container_port    = 8080\n  }\n}\n\n# O objeto inteiro de orquestração deste desenho: um serviço, uma task\n# definition, um grupo de destino, um papel de tarefa. Conte com a seção\n# \"Implantar, e provar\" — é o número 1 da segunda prova.\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que ses:SendEmail não precisa de `*`",
+            "content": "Diferente do `ecr:GetAuthorizationToken` do L03, que é operação de conta e não aceita recurso, `ses:SendEmail` aceita o ARN da identidade verificada como recurso. Restringir a ele é possível e é o que a política faz — não há justificativa para `*` aqui."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o cluster EKS — onde a segunda camada de operação começa"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O mesmo resultado final pede um objeto de cluster, um perfil Fargate, um provedor OIDC e TRÊS papéis IAM novos — contra um só no desenho ECS. Cada role tem um comentário explicando por que ela existe e o que ela NÃO faz."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "eks.tf",
+            "code": "# eks.tf — o cluster, o perfil Fargate, e as DUAS identidades novas\n\nresource \"aws_iam_role\" \"cluster\" {\n  name               = \"${var.projeto}-eks-cluster\"\n  assume_role_policy = data.aws_iam_policy_document.confianca_eks.json\n}\n\nresource \"aws_iam_role_policy_attachment\" \"cluster\" {\n  role       = aws_iam_role.cluster.name\n  policy_arn = \"arn:aws:iam::aws:policy/AmazonEKSClusterPolicy\"\n}\n\nresource \"aws_eks_cluster\" \"principal\" {\n  name     = \"${var.projeto}-eks\"\n  role_arn = aws_iam_role.cluster.arn\n\n  vpc_config {\n    subnet_ids              = concat(aws_subnet.privada[*].id, aws_subnet.publica[*].id)\n    endpoint_public_access  = false # o painel de administração acessa via VPN/bastion\n    endpoint_private_access = true\n  }\n\n  # Cobra por hora a partir daqui, ANTES de existir um perfil Fargate ou um\n  # pod. Suporte padrão e suporte estendido têm taxas diferentes — confira o\n  # valor atual no Pricing Calculator; o que não muda é que a cobrança é por\n  # cluster-hora, não por uso.\n}\n\n# ── Identidade 1: o papel de execução do Fargate Pod ─────────────────────────\n# Só deixa o kubelet se registrar no cluster e puxar imagem/log. O contêiner\n# NUNCA herda isto — é a distinção que a seção de construção do manifesto\n# reforça, porque é onde mais gente erra.\ndata \"aws_iam_policy_document\" \"confianca_fargate_pod\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sts:AssumeRole\"]\n    principals {\n      type        = \"Service\"\n      identifiers = [\"eks-fargate-pods.amazonaws.com\"]\n    }\n    condition {\n      test     = \"ArnLike\"\n      variable = \"aws:SourceArn\"\n      values   = [\"arn:aws:eks:${var.regiao}:${var.conta}:fargateprofile/${var.projeto}-eks/*\"]\n    }\n  }\n}\n\nresource \"aws_iam_role\" \"fargate_pod_execution\" {\n  name               = \"${var.projeto}-eks-fargate-pod-execution\"\n  assume_role_policy = data.aws_iam_policy_document.confianca_fargate_pod.json\n}\n\nresource \"aws_iam_role_policy_attachment\" \"fargate_pod_execution\" {\n  role       = aws_iam_role.fargate_pod_execution.name\n  policy_arn = \"arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy\"\n}\n\nresource \"aws_eks_fargate_profile\" \"notificacoes\" {\n  cluster_name           = aws_eks_cluster.principal.name\n  fargate_profile_name   = \"notificacoes\"\n  pod_execution_role_arn = aws_iam_role.fargate_pod_execution.arn\n  subnet_ids              = aws_subnet.privada[*].id\n\n  # Seletor por namespace + rótulo. Pod fora deste par não é agendado no\n  # Fargate — fica Pending, e é a Falha 3 da seção de quebrar de propósito.\n  selector {\n    namespace = \"notificacoes\"\n  }\n}\n\n# ── OIDC: a ponte que faz uma ServiceAccount virar identidade AWS ───────────\ndata \"tls_certificate\" \"oidc\" {\n  url = aws_eks_cluster.principal.identity[0].oidc[0].issuer\n}\n\nresource \"aws_iam_openid_connect_provider\" \"cluster\" {\n  client_id_list  = [\"sts.amazonaws.com\"]\n  thumbprint_list = [data.tls_certificate.oidc.certificates[0].sha1_fingerprint]\n  url             = aws_eks_cluster.principal.identity[0].oidc[0].issuer\n}\n\n# ── Identidade 2: IRSA — a permissão que o contêiner de fato usa ────────────\n# Mesmas duas ações do papel de tarefa do ECS. A DIFERENÇA não é o que ela\n# autoriza — é a QUEM ela confia: aqui é uma ServiceAccount específica,\n# amarrada pelo `sub` do token OIDC, não uma task inteira.\ndata \"aws_iam_policy_document\" \"confianca_irsa_notificacoes\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sts:AssumeRoleWithWebIdentity\"]\n    principals {\n      type        = \"Federated\"\n      identifiers = [aws_iam_openid_connect_provider.cluster.arn]\n    }\n    condition {\n      test     = \"StringEquals\"\n      variable = \"${replace(aws_iam_openid_connect_provider.cluster.url, \"https://\", \"\")}:sub\"\n      values   = [\"system:serviceaccount:notificacoes:notificacoes-sa\"]\n    }\n  }\n}\n\nresource \"aws_iam_role\" \"irsa_notificacoes\" {\n  name               = \"${var.projeto}-irsa-notificacoes\"\n  assume_role_policy = data.aws_iam_policy_document.confianca_irsa_notificacoes.json\n}\n\nresource \"aws_iam_role_policy\" \"irsa_notificacoes\" {\n  role   = aws_iam_role.irsa_notificacoes.id\n  policy = data.aws_iam_policy_document.notificacoes_task.json # mesma policy do ECS, reaproveitada\n}\n\n# ── Identidade 3: IRSA do próprio Load Balancer Controller ──────────────────\n# Ele age em nome do CLUSTER inteiro — por isso a política dele é sobre\n# elasticloadbalancing, não sobre sqs/ses. Ver a seção de manifestos para a\n# versão completa e a ressalva sobre a política oficial.\ndata \"aws_iam_policy_document\" \"confianca_irsa_lbcontroller\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sts:AssumeRoleWithWebIdentity\"]\n    principals {\n      type        = \"Federated\"\n      identifiers = [aws_iam_openid_connect_provider.cluster.arn]\n    }\n    condition {\n      test     = \"StringEquals\"\n      variable = \"${replace(aws_iam_openid_connect_provider.cluster.url, \"https://\", \"\")}:sub\"\n      values   = [\"system:serviceaccount:kube-system:aws-load-balancer-controller\"]\n    }\n  }\n}\n\nresource \"aws_iam_role\" \"irsa_lbcontroller\" {\n  name               = \"${var.projeto}-irsa-lb-controller\"\n  assume_role_policy = data.aws_iam_policy_document.confianca_irsa_lbcontroller.json\n}\n\n# Conte os recursos IAM deste arquivo contra os dois do ecs.tf: é a Prova 2\n# da seção de implantação.\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Identidade",
+              "Quem a assume",
+              "O que ela concede",
+              "Existe no ECS?"
+            ],
+            "rows": [
+              [
+                "Papel do cluster",
+                "o serviço EKS em si",
+                "gerenciar recursos do control plane em nome da conta",
+                "não — é equivalente ao papel que a própria AWS usa para operar o ECS, e lá não é seu"
+              ],
+              [
+                "Papel de execução do Fargate Pod",
+                "o kubelet, ao registrar o pod",
+                "pull de imagem do ECR e escrita de log",
+                "sim — é o equivalente direto do papel de EXECUÇÃO do ECS"
+              ],
+              [
+                "IRSA de Notificações",
+                "a ServiceAccount `notificacoes-sa`",
+                "sqs:ReceiveMessage/DeleteMessage, ses:SendEmail",
+                "sim — é o equivalente direto do papel de TAREFA do ECS"
+              ],
+              [
+                "IRSA do Load Balancer Controller",
+                "a ServiceAccount `aws-load-balancer-controller`",
+                "criar/atualizar ALB em nome do cluster inteiro",
+                "não — o ECS não tem um controlador de balanceador rodando como carga de trabalho"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b10_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "A role que, com o escopo errado, vira o maior risco deste desenho",
+            "content": "A IRSA do Load Balancer Controller age em nome do CLUSTER inteiro, não de um serviço. Com uma condição de confiança larga demais no OIDC — por exemplo, sem restringir o `sub` a uma ServiceAccount específica — qualquer pod no cluster capaz de ler aquele token pode assumi-la e criar, alterar ou apagar balanceador de QUALQUER carga na conta, não só de Notificações. É o equivalente, em impacto, a uma credencial de administrador de rede vazada — e é por isso que ele aparece de novo na seção de segurança."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: os manifestos Kubernetes e o Load Balancer Controller"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Nada aqui declara recurso da AWS diretamente — os manifestos descrevem INTENÇÃO, e quem transforma intenção em recurso é o controller instalado a seguir. É a inversão central deste desenho em relação ao Terraform do ECS."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "yaml",
+            "filename": "notificacoes.yaml",
+            "code": "# notificacoes.yaml — os manifestos Kubernetes; o binário não muda, só a moldura\n\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: notificacoes # tem de bater com o `selector.namespace` do perfil Fargate\n---\napiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: notificacoes-sa\n  namespace: notificacoes\n  annotations:\n    # É esta linha que liga a ServiceAccount à role IRSA. Sem ela, o pod sobe\n    # com a mesma identidade fraca de qualquer outro no namespace, e a\n    # aplicação recebe AccessDenied de todas as chamadas de negócio.\n    eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/ffv-lab-irsa-notificacoes\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: notificacoes\n  namespace: notificacoes\nspec:\n  replicas: 2\n  selector:\n    matchLabels: { app: notificacoes }\n  template:\n    metadata:\n      labels: { app: notificacoes }\n    spec:\n      serviceAccountName: notificacoes-sa # sem isto, IRSA não se aplica ao pod\n      containers:\n        - name: notificacoes\n          image: 111122223333.dkr.ecr.us-east-1.amazonaws.com/ffv-lab-notificacoes:SHA_DA_IMAGEM\n          ports: [{ containerPort: 8080 }]\n          env:\n            - name: FILA_URL\n              value: https://sqs.us-east-1.amazonaws.com/111122223333/ffv-lab-pedidos-pagos\n          readinessProbe:\n            httpGet: { path: /health/ready, port: 8080 }\n            periodSeconds: 5\n          livenessProbe:\n            httpGet: { path: /health/live, port: 8080 }\n            periodSeconds: 10\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: notificacoes\n  namespace: notificacoes\nspec:\n  type: ClusterIP # o ALB não fala com o pod direto; fala com este Service\n  selector: { app: notificacoes }\n  ports: [{ port: 80, targetPort: 8080 }]\n---\napiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: notificacoes-admin\n  namespace: notificacoes\n  annotations:\n    kubernetes.io/ingress.class: alb\n    alb.ingress.kubernetes.io/scheme: internal        # equivalente ao ALB interno do desenho ECS\n    alb.ingress.kubernetes.io/target-type: ip          # aponta direto ao IP do pod, não a um nó\n    alb.ingress.kubernetes.io/healthcheck-path: /health/ready\nspec:\n  rules:\n    - http:\n        paths:\n          - path: /admin\n            pathType: Prefix\n            backend:\n              service: { name: notificacoes, port: { number: 80 } }\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A anotação que, esquecida, não gera erro nenhum",
+            "content": "Se `eks.amazonaws.com/role-arn` estiver ausente ou com o ARN errado na ServiceAccount, o `kubectl apply` é aceito, o Deployment sobe, os pods ficam `Running`. Nada no caminho de implantação verifica se a anotação aponta para uma role que existe ou que confia na ServiceAccount certa — a única forma de descobrir é a aplicação tentar chamar a AWS e falhar, ou a Prova 3 da seção de implantação, feita de propósito."
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "filename": "instalar-lb-controller.sh",
+            "code": "# instalar-lb-controller.sh — a peça que o ECS não tem, instalada uma vez por cluster\n\nhelm repo add eks https://aws.github.io/eks-charts\nhelm repo update\n\nhelm install aws-load-balancer-controller eks/aws-load-balancer-controller \\\n  --namespace kube-system \\\n  --set clusterName=\"${PROJETO}-eks\" \\\n  --set serviceAccount.create=false \\\n  --set serviceAccount.name=aws-load-balancer-controller\n\n# A ServiceAccount `aws-load-balancer-controller` já existe (criada à parte,\n# com a mesma anotação de IRSA do manifesto de Notificações) e aponta para a\n# role `irsa_lbcontroller` do Terraform. A política ANEXADA a essa role é a\n# oficial do projeto — ela é longa (dezenas de ações de elasticloadbalancing,\n# ec2, acm, wafv2, shield) e não está reproduzida aqui por completo: use o\n# `iam_policy.json` publicado no repositório do AWS Load Balancer Controller,\n# porque uma versão resumida daria à role menos — ou mais — do que ela precisa.\n"
+          }
+        },
+        {
+          "id": "b11_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "Por que a política do controller não está reproduzida por inteiro aqui",
+            "content": "A política oficial cobre dezenas de ações em `elasticloadbalancing`, `ec2`, `acm`, `wafv2` e `shield`, porque o controller pode gerenciar ALB, NLB, grupo de segurança, certificado e WAF a partir de anotações do Ingress. Reproduzir uma versão resumida aqui daria à role menos permissão do que ela precisa — quebrando o controller — ou mais do que o mínimo necessário, sem que o motivo apareça em nenhum comentário. Use o `iam_policy.json` publicado no repositório oficial do projeto."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar o que cada desenho custa de verdade"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. As quatro primeiras confirmam que cada peça faz o que os comentários dizem; a quinta é o motivo de este laboratório existir — nenhuma opinião sobre \"Kubernetes ser mais difícil\" substitui um número medido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medições; a quinta é a que este laboratório existe para fazer\n\nPROJETO=ffv-lab; REGIAO=us-east-1\n\n# ── Prova 1: tempo até o cluster ficar ACTIVE ─────────────────────────────────\n# NAO verificado na documentacao — e a medicao do ambiente de exemplo, e serve\n# so como ordem de grandeza. Meca no seu ambiente: o tempo varia por regiao e\n# por versao do Kubernetes.\ninicio=$(date +%s)\nterraform apply -target=aws_eks_cluster.principal -auto-approve\naws eks wait cluster-active --name \"${PROJETO}-eks\" --region \"$REGIAO\"\necho \"cluster ACTIVE em $(( $(date +%s) - inicio )) s\"\n# Na Cadencia: 11 min 42 s. O servico ECS equivalente ficou pronto em segundos.\n\n# ── Prova 2: quantos objetos IAM para o MESMO resultado ──────────────────────\necho \"-- ECS --\"; grep -c 'resource \"aws_iam_role\"' ecs.tf\necho \"-- EKS --\"; grep -c 'resource \"aws_iam_role\"' eks.tf\n# Esperado: 1 no ECS (o papel de tarefa; o de execucao ja existe desde o L03).\n# 4 no EKS (cluster, execucao do pod, IRSA de Notificacoes, IRSA do controller).\n\n# ── Prova 3: IRSA está de fato injetando credencial no pod ───────────────────\nkubectl exec -n notificacoes deploy/notificacoes -- env | grep AWS_ROLE_ARN\n# Esperado: a variavel aparece, apontando para a role irsa_notificacoes. Se\n# vier vazia, a ServiceAccount nao esta anotada ou o Deployment nao a referencia.\naws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity \\\n  --query 'Events[0].EventName' --output text\n# Esperado: AssumeRoleWithWebIdentity aparece no CloudTrail apos o pod subir.\n\n# ── Prova 4: o ALB nasceu do controller, nao do Terraform ────────────────────\nkubectl get ingress -n notificacoes notificacoes-admin -w\n# Esperado: a coluna ADDRESS comeca vazia e preenche com um DNS de ALB em ate\n# alguns minutos. Se ficar vazia por muito mais tempo, o controller nao tem\n# permissao ou nao encontrou sub-rede com a tag kubernetes.io/role/elb.\n\n# ── Prova 5: a que este laboratorio existe para fazer — horas de operacao ────\n# NAO verificado na documentacao — e o numero que a Cadencia mediu, registrado\n# em planilha de horas durante o piloto de um mes. Registre o seu.\necho \"ECS: 40 min do zero ao servico saudavel (mesma pessoa, mesma tarde)\"\necho \"EKS: 3 h 10 min para o mesmo resultado, incluindo a primeira vez\"\necho \"     debugando IRSA e a primeira vez configurando o LB Controller\"\n"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Tempo até o cluster ficar pronto",
+                "`aws eks wait cluster-active`",
+                "minutos, não segundos — é o padrão do EKS",
+                "se travar muito além disso, confira cota de ENI da conta na sub-rede do cluster"
+              ],
+              [
+                "2 · Contagem de objetos IAM",
+                "`grep` nos dois arquivos `.tf`",
+                "1 role nova no ECS contra 4 no EKS para o mesmo resultado",
+                "número diferente do esperado indica que uma identidade foi reaproveitada indevidamente"
+              ],
+              [
+                "3 · IRSA injetando credencial",
+                "`kubectl exec ... env` + CloudTrail",
+                "`AWS_ROLE_ARN` presente no pod, e `AssumeRoleWithWebIdentity` no CloudTrail",
+                "variável ausente é ServiceAccount sem anotação; evento ausente é trust policy com `sub` errado"
+              ],
+              [
+                "4 · O ALB nasceu do controller",
+                "`kubectl get ingress -w`",
+                "coluna ADDRESS preenche em minutos",
+                "ADDRESS vazio por muito tempo é IRSA do controller sem permissão ou sub-rede sem tag de ELB"
+              ],
+              [
+                "5 · Horas de operação, medidas",
+                "planilha de horas durante o piloto",
+                "o número existe e foi registrado — não a sensação de qual foi mais difícil",
+                "sem registro, a decisão final vira opinião de novo, e o piloto não serviu para nada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O que a Prova 5 mostrou na Cadência, e a ressalva sobre ela",
+            "content": "Quarenta minutos no ECS contra três horas e dez no EKS, para o mesmo resultado — na primeira vez. Essa diferença cai MUITO na segunda e na terceira vez, porque grande parte das três horas foi curva de aprendizado de IRSA e do Load Balancer Controller, não trabalho repetível. Isso não é NÃO verificado na documentação: é a medição do ambiente de exemplo, e o número certo para decisão é o seu, medido no seu piloto."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três só existem no desenho EKS — é outra forma de medir a segunda camada de operação: são três formas novas de quebrar que o desenho ECS simplesmente não tem."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "IRSA mal configurado",
+                "remova a anotação `eks.amazonaws.com/role-arn` da ServiceAccount, ou aponte para uma role cujo trust policy tem o `sub` errado",
+                "pod fica Running, health check passa, mas nenhum e-mail sai — e nenhum log de erro óbvio aparece, porque a aplicação trata a falha de envio como retry silencioso",
+                "CloudTrail sem eventos de `AssumeRoleWithWebIdentity`; `kubectl exec ... env` sem `AWS_ROLE_ARN`",
+                "corrigir a anotação e o `sub` do trust policy; reiniciar o pod para reler o token"
+              ],
+              [
+                "Load Balancer Controller sem permissão",
+                "remova uma ação de `elasticloadbalancing:CreateLoadBalancer` da política da role dele",
+                "o Ingress fica com ADDRESS vazio indefinidamente; ninguém consegue chamar a rota administrativa",
+                "`kubectl logs -n kube-system deploy/aws-load-balancer-controller` mostra erro de permissão a cada tentativa de reconciliação",
+                "restaurar a ação na política; o controller tenta de novo sozinho, sem reiniciar nada"
+              ],
+              [
+                "Seletor do perfil Fargate não bate",
+                "implante o Deployment num namespace diferente de `notificacoes`, ou sem o rótulo que o seletor exige",
+                "o pod fica preso em `Pending` para sempre; nenhum nó nem capacidade Fargate é atribuída",
+                "`kubectl describe pod` mostra evento `FailedScheduling`, sem candidato disponível",
+                "corrigir o namespace ou o rótulo para bater com o `selector` do perfil Fargate"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A falha que mais demora a ser notada",
+            "content": "A de IRSA mal configurado é a mais perigosa das três porque o sintoma — nenhum e-mail saindo — não gera alarme técnico nenhum: não há pod reiniciando, não há 5xx, não há log de erro destacado. Ela só aparece quando um cliente reclama que não recebeu confirmação, o que pode levar horas. É o equivalente EKS da \"prontidão que mente\" do L03: a peça está tecnicamente saudável e não está fazendo o trabalho que deveria."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Um pod no perfil Fargate do EKS está com status `Running`. O papel de execução do Fargate Pod está corretamente anexado ao perfil e tem a política gerenciada da AWS. Toda chamada do contêiner à fila SQS retorna `AccessDenied`. Qual é a causa mais provável?",
+        "options": [
+          "A ServiceAccount do pod não está vinculada a uma role via IRSA — o papel de execução nunca é herdado pelo contêiner",
+          "O perfil Fargate não inclui a sub-rede onde a fila SQS está localizada",
+          "A fila SQS está em outra conta AWS e falta uma política baseada em recurso",
+          "Falta anexar a permissão sqs:ReceiveMessage ao papel de execução do Fargate Pod"
+        ],
+        "correctIndex": 0,
+        "explanation": "O papel de execução do Fargate Pod só autoriza o kubelet a registrar o pod no cluster e a puxar imagem e log — ele nunca é assumido pelo contêiner em execução, então qualquer permissão anexada a ele é invisível para a aplicação. A permissão de negócio que o contêiner de fato usa vem de uma role separada, ligada por federação OIDC a uma ServiceAccount específica: é IRSA. Sem essa vinculação, o SDK dentro do pod simplesmente não resolve credencial nenhuma de negócio, e toda chamada à AWS falha.\n\nA primeira alternativa é o erro de raciocínio central deste laboratório: anexar a permissão ao papel ERRADO não resolve nada, porque esse papel nunca chega ao contêiner — é a armadilha que produz \"AccessDenied silencioso\" mesmo com o pod saudável. A terceira confunde a natureza da SQS: ela é um serviço regional, não uma peça de rede dentro de uma sub-rede específica, então associação de sub-rede do perfil Fargate não tem relação com a permissão de acessá-la. A quarta inventa uma complicação de conta cruzada que o enunciado não sustenta — nada nele indica que a fila está em outra conta, e o sintoma descrito (AccessDenied em toda chamada) é exatamente o que se espera de ausência total de credencial de negócio, não de uma política de recurso entre contas mal configurada."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: duas camadas de permissão para acertar, não uma"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Todo risco novo desta seção nasce do mesmo fato: o EKS soma RBAC do Kubernetes por cima do IAM da AWS, e menor privilégio agora precisa ser verdade nos dois sistemas ao mesmo tempo, não só num deles."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "IRSA do Load Balancer Controller com escopo largo demais",
+                "média",
+                "alto",
+                "condição `sub` restrita à ServiceAccount exata no trust policy",
+                "IAM Access Analyzer sobre o uso real da role",
+                "apertar o trust policy; auditar ALB criados fora do próprio namespace"
+              ],
+              [
+                "ClusterRoleBinding amplo demais concedido para \"destravar\" um erro de RBAC",
+                "média",
+                "alto",
+                "Role/RoleBinding por namespace; nunca `cluster-admin` fora de depuração local",
+                "`kubectl get clusterrolebindings` revisado periodicamente",
+                "remover o binding; reproduzir o erro original para entender o escopo mínimo real"
+              ],
+              [
+                "Confundir papel de execução do Fargate Pod com permissão do app",
+                "alta",
+                "médio",
+                "nenhuma; é erro de raciocínio, não de configuração — o controle é o comentário no código e a Prova 3",
+                "CloudTrail sem `AssumeRoleWithWebIdentity` correspondente ao tráfego esperado",
+                "mover a permissão para IRSA; o papel de execução nunca deveria tê-la recebido"
+              ],
+              [
+                "Endpoint público do control plane sem restrição",
+                "baixa",
+                "alto",
+                "`endpoint_public_access = false`, acesso só pela VPC",
+                "AWS Config: regra de conformidade sobre acesso público do cluster",
+                "desativar o acesso público; girar credencial de qualquer identidade exposta"
+              ],
+              [
+                "Segredo do banco em variável de ambiente do manifesto",
+                "média",
+                "alto",
+                "Secret do Kubernetes referenciado por `secretKeyRef`, nunca literal no YAML versionado",
+                "busca por padrão de credencial no repositório de manifestos",
+                "rotacionar o segredo; mover para Secrets Manager com o CSI driver, se disponível"
+              ],
+              [
+                "Imagem do Operator do parceiro sem procedência verificada",
+                "baixa",
+                "alto",
+                "varredura da imagem do Aegis como a de qualquer outra no ECR, antes de confiar no chart",
+                "achados de varredura no repositório onde a imagem for espelhada",
+                "suspender o Operator; validar com o parceiro antes de reativar"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O `*` que continua se justificando, e o que mudou",
+            "content": "O `ecr:GetAuthorizationToken` do papel de execução do Fargate Pod continua sendo operação de conta, exatamente como no L03 — o `*` ali se justifica pelo mesmo motivo. O que muda no EKS é que existe uma SEGUNDA superfície de menor privilégio a auditar: não basta a política IAM estar certa, o RBAC do cluster também precisa negar por padrão o que não foi explicitamente concedido."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel dos dois desenhos tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Boa parte do painel é idêntica entre os dois — CPU, memória, 5xx do alvo. As linhas abaixo são as que só existem porque o EKS existe."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "O contêiner está de fato autenticado na AWS?",
+                "CloudTrail: contagem de `AssumeRoleWithWebIdentity` por hora",
+                "queda para zero com pods rodando é IRSA quebrado, silenciosamente",
+                "0 em 15 min com pods ativos"
+              ],
+              [
+                "O Load Balancer Controller está reconciliando?",
+                "logs do controller: taxa de erro por reconciliação",
+                "erro persistente é permissão faltando ou sub-rede sem tag de ELB",
+                "> 3 erros seguidos"
+              ],
+              [
+                "Algum pod não conseguiu ser agendado?",
+                "`kube_pod_status_scheduled` (métrica do add-on de métricas) ou evento `FailedScheduling`",
+                "perfil Fargate com seletor errado, ou capacidade da conta esgotada",
+                "qualquer ocorrência"
+              ],
+              [
+                "O cluster está com a versão do Kubernetes perto de expirar suporte padrão?",
+                "`aws eks describe-cluster` → campo de versão, comparado ao calendário da AWS",
+                "expirar sem upgrade move o cluster para suporte estendido, mais caro",
+                "90 dias antes do fim do suporte padrão"
+              ],
+              [
+                "Quanto tempo o control plane está processando por requisição?",
+                "métricas de latência da API do EKS, expostas via CloudWatch Container Insights",
+                "degradação aqui afeta todo `kubectl apply`, inclusive o do Load Balancer Controller",
+                "p99 acima do dobro da linha de base"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que não existe no ECS e por isso ninguém cria alarme para ela",
+            "content": "Contagem de `AssumeRoleWithWebIdentity` é uma métrica que só faz sentido depois que existe IRSA — times que migram do ECS trazem o painel de CPU/memória/5xx pronto e esquecem desta, porque ela não tinha equivalente antes. É justamente a que teria pego a Falha 1 da seção anterior em minutos, em vez de horas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão — e por que a resposta é sempre \"igual\""
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A descoberta desta seção é ela mesma o argumento do módulo: em volume de tráfego, os dois desenhos não divergem, porque os dois rodam em Fargate. A escala que realmente diferencia os dois é outra, e vem por último."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece com a capacidade",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 e-mails/dia, 1 pod/task de cada lado",
+                "nenhuma diferença — mesma CPU, mesma memória",
+                "nada de capacidade; só a curva de aprendizado operacional do EKS",
+                "ECS sozinho já bastaria, se não fosse o Aegis"
+              ],
+              [
+                "600 pedidos/dia (volume atual)",
+                "ainda nenhuma diferença de capacidade",
+                "RBAC e IRSA mal configurados custam hora de engenheiro, não throughput perdido",
+                "medir hora de operação, não requisição por segundo — é o que a Prova 5 faz"
+              ],
+              [
+                "1 milhão de e-mails/dia, dezenas de pods/tasks",
+                "cota de envio do SES e da fila dominam, iguais nos dois orquestradores",
+                "esgotamento de IP por sub-rede em modo `awsvpc`/Fargate — o MESMO limite nos dois",
+                "dimensionar a sub-rede pelo dobro da frota, independente de qual orquestrador"
+              ],
+              [
+                "Falha de AZ",
+                "o control plane do EKS já é multi-AZ, gerenciado pela AWS — a mesma garantia que o ECS sempre teve",
+                "nenhum risco novo de disponibilidade de control plane",
+                "a diferença de resiliência entre os dois, nesta dimensão, é zero"
+              ],
+              [
+                "Escala de ADOÇÃO — não de tráfego",
+                "quando um segundo, terceiro serviço migra para o mesmo cluster",
+                "RBAC por namespace deixa de ser boa prática opcional e vira necessidade",
+                "é o Nível 3 da evolução em níveis, adiante — e é aí que o custo operacional de fato cresce"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O gargalo que este laboratório não tem, e por quê",
+            "content": "Um laboratório sobre escala de tráfego mediria latência e taxa de erro sob carga. Este não mede isso porque, para este serviço, a resposta é sempre \"igual nos dois\" — os dois orquestradores agendam o MESMO Fargate. O gargalo real da decisão ECS-ou-EKS não é de tráfego: é organizacional, e aparece quando o número de serviços e times no cluster cresce, não quando o número de requisições cresce."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que o EKS acrescenta à fatura, e o que não acrescenta"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A maior parte do que este laboratório introduz não está na fatura da AWS — está na folha de horas. A parte que ESTÁ na fatura é pequena e previsível."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Taxa do control plane do EKS",
+                "cluster-hora, fixa",
+                "cerca de US$ 0,10/hora com a versão do Kubernetes em suporte padrão; cerca de US$ 0,60/hora em suporte estendido — confira o valor atual no AWS Pricing Calculator, porque preço muda e varia por região; o que não muda é ser cobrança POR CLUSTER, com ou sem pod rodando"
+              ],
+              [
+                "Fargate (ambos orquestradores)",
+                "vCPU-hora e GB-hora",
+                "mesma tabela de preço nos dois — não é diferenciador de custo de computação"
+              ],
+              [
+                "ALB",
+                "hora + unidade de capacidade (LCU)",
+                "igual nos dois; o Terraform cria direto no ECS, o controller cria no EKS, mas o recurso subjacente e o preço dele são os mesmos"
+              ],
+              [
+                "Add-ons gerenciados (CoreDNS, VPC CNI, kube-proxy)",
+                "sem cobrança própria",
+                "mas cada nova versão do cluster pede compatibilidade de versão de add-on — é hora de engenharia em upgrade, não linha na fatura"
+              ],
+              [
+                "Horas de engenharia",
+                "não aparece em nenhuma fatura da AWS",
+                "é a dimensão que a Prova 5 mede, e é a que mais pesa num piloto pequeno como este"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que muda no gasto",
+              "Recomendação"
+            ],
+            "rows": [
+              [
+                "A — piloto atual",
+                "ECS para 6 serviços, 1 cluster EKS pequeno só para o Aegis",
+                "uma taxa de control plane a mais na fatura; horas concentradas no aprendizado inicial",
+                "é o cenário deste laboratório"
+              ],
+              [
+                "B — migração completa",
+                "os 7 serviços em EKS",
+                "a mesma taxa de control plane pode hospedar todos, mas RBAC e blast radius pedem múltiplos ambientes — e as horas de operação multiplicam sem ganho de capacidade",
+                "não recomendado sem um requisito por serviço, não só pelo Aegis"
+              ],
+              [
+                "C — recusar Kubernetes",
+                "negociar outro fornecedor de detecção de fraude",
+                "zero de EKS na fatura, mas custo de troca de fornecedor e migração de dados de fraude",
+                "legítimo, mas fora do escopo técnico deste módulo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "O custo oculto que só aparece meses depois",
+            "content": "Se a versão do Kubernetes do cluster envelhece além da janela de suporte padrão sem upgrade, a AWS move a cobrança automaticamente para o suporte estendido — cerca de seis vezes a taxa padrão, pela MESMA capacidade. Não é aumento de uso: é o preço de adiar um upgrade que já era conhecido. É o equivalente, em custo esquecido, ao Elastic IP órfão do L01 — só que a fatura demora meses para acusar, em vez de dias."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "os dois desenhos rodam em paralelo, com horas de operação medidas e registradas",
+                "dois painéis, dois caminhos de log — dívida de piloto que precisa de prazo de encerramento",
+                "desligar o desenho perdedor ao fim da medição (é a própria decisão deste módulo)",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "IRSA escopado por ServiceAccount, endpoint privado, namespace isolado",
+                "a IRSA do Load Balancer Controller age em nome do cluster inteiro",
+                "revisar o trust policy dela com a mesma régua de menor privilégio do L41",
+                "alta"
+              ],
+              [
+                "Confiabilidade",
+                "o control plane do EKS já é multi-AZ gerenciado pela AWS, como o do ECS",
+                "add-ons desatualizados após upgrade de versão do cluster",
+                "janela de upgrade planejada, antes do fim do suporte padrão",
+                "média"
+              ],
+              [
+                "Eficiência de performance",
+                "mesma capacidade Fargate nos dois desenhos; nenhuma regressão medida",
+                "nenhum — a performance não é onde os dois desenhos divergem",
+                "não aplicável a este laboratório",
+                "baixa"
+              ],
+              [
+                "Otimização de custos",
+                "piloto de escopo pequeno, com control plane medido separadamente da fatura de Fargate",
+                "suporte estendido custa cerca de seis vezes mais pela mesma capacidade, se o cluster envelhecer",
+                "upgrade de versão antes do fim do suporte padrão",
+                "alta"
+              ],
+              [
+                "Sustentabilidade",
+                "nenhuma capacidade computacional a mais que o ECS já usava",
+                "um cluster inteiro (com add-ons, control plane) para hospedar um único serviço piloto",
+                "consolidar mais serviços com requisito real no mesmo cluster antes de abrir um segundo",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: quando o próximo passo de Kubernetes se justifica"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO dar o próximo passo. Cada nível resolve um risco e compra outro — e a coluna de custo é a que mais raramente se escreve antes de decidir."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do ECS sozinho à plataforma com IA em GPU — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Tudo em ECS Fargate. A decisão de orquestração nem se coloca — é a situação da Cadência antes deste laboratório.",
+                "note": "Risco resolvido: nenhum. Novo risco: nenhum ainda. Custo: o mais baixo — sem taxa de control plane nenhuma."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Um cluster EKS pequeno, um serviço piloto, IRSA em tudo, horas de operação medidas contra o equivalente ECS.",
+                "note": "Risco resolvido: o bloqueio do parceiro Aegis, que só distribui como Operator. Novo risco: uma segunda superfície de RBAC/IRSA para um time sem profundidade prévia. Custo: uma taxa fixa de control plane, mais horas de aprendizado concentradas no início."
+              },
+              {
+                "label": "Nível 3 — Produção multi-serviço",
+                "instruction": "Um segundo, terceiro serviço com requisito PRÓPRIO (não \"já que o cluster existe\") migra para o mesmo cluster.",
+                "note": "Risco resolvido: abrir um cluster por serviço, multiplicando taxa fixa. Novo risco: RBAC por namespace deixa de ser boa prática e vira necessidade real — cluster compartilhado por times exige isolamento que um piloto de um serviço não testou. Custo: mesma taxa de cluster, mais Fargate agregado."
+              },
+              {
+                "label": "Nível 4 — Alta escala: múltiplos clusters e GitOps",
+                "instruction": "Separação por ambiente (dev/stage/prod) e por time; `kubectl apply` manual em produção é substituído por GitOps (Argo CD ou Flux).",
+                "note": "Risco resolvido: erro humano de `apply` direto em produção. Novo risco: deriva de configuração entre clusters, e a taxa de control plane multiplica por cluster. Custo: N × taxa de control plane, mais o tempo de manter o pipeline GitOps."
+              },
+              {
+                "label": "Nível 5 — Plataforma",
+                "instruction": "EKS vira a opção padrão para serviço novo que genuinamente precisa do ecossistema (operators, malha de serviço, autoscaling avançado), com um time de plataforma dedicado a add-ons e versão.",
+                "note": "Risco resolvido: cada time reinventando manifesto e RBAC do zero. Novo risco: a \"segunda camada de operação\" deste módulo virou um time inteiro — o custo que era medido em horas passa a ser headcount fixo. Custo: FTE dedicado de plataforma, não mais horas pontuais."
+              },
+              {
+                "label": "Nível 6 — Dados e IA",
+                "instruction": "Cargas de treinamento ou inferência com GPU, que precisam do modelo de agendamento por device plugin do Kubernetes para compartilhar aceleradores entre times de forma multi-tenant.",
+                "note": "Risco resolvido: nenhuma alternativa madura equivalente no ECS para agendamento de GPU compartilhada entre múltiplas cargas de IA. Novo risco: contenção de GPU e fila de agendamento em cluster compartilhado. Custo: dominado pela instância com acelerador, não pelo control plane — é aqui, e só aqui, que \"Kubernetes por causa de IA\" deixa de ser hype."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "RBAC por namespace do Nível 3 depende de já ter uma identidade por ServiceAccount funcionando — que é o Nível 2. GitOps do Nível 4 depende de manifesto estável o suficiente para versionar — que pressupõe o Nível 3 resolvido. Quem tenta plataforma (Nível 5) sem ter operado RBAC multi-time (Nível 3) monta processo de governança sobre um cluster que ninguém testou com dois times dentro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, para o serviço de Notificações, IA não resolve nada — e forçá-la seria o antipadrão que a própria série critica. A pergunta \"ECS ou EKS\" tem resposta determinística: um requisito escrito existe ou não existe. Um modelo não melhora essa checagem."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há exatamente um lugar, na evolução em níveis, onde IA muda a resposta: o Nível 6, cargas de treinamento e inferência com GPU. Ali, o motivo de escolher Kubernetes não é \"IA é moderna e Kubernetes também\" — é que o modelo de agendamento de GPU por device plugin, com múltiplos times compartilhando aceleradores caros, é um problema que o ecossistema Kubernetes resolve com maturidade que o ECS, hoje, não tem no mesmo nível."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria no serviço de Notificações?",
+                "nenhum — é envio de e-mail transacional, determinístico, sem ambiguidade a resolver"
+              ],
+              [
+                "Por que citar IA aqui, então?",
+                "porque \"vamos de Kubernetes por causa de IA\" é uma frase real que aparece em decisão de arquitetura, e o módulo precisa dizer exatamente onde ela é verdadeira e onde não é"
+              ],
+              [
+                "Onde ela é verdadeira?",
+                "agendamento multi-tenant de GPU para treinamento ou inferência — Nível 6 da evolução, não este piloto"
+              ],
+              [
+                "O Operator do Aegis é \"IA na arquitetura\"?",
+                "não — é um controlador Kubernetes comum que aplica política; o que ele faz por trás (a lógica de detecção de fraude do parceiro) é opaco a este laboratório e não muda a resposta de infraestrutura"
+              ],
+              [
+                "Por que não migrar já pensando no Nível 6?",
+                "porque a Cadência não tem carga de GPU hoje — decidir infraestrutura por uma necessidade hipotética é o mesmo erro que \"vamos de Kubernetes\" comete, só que projetado para o futuro em vez do presente"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de \"IA\" que parece justificativa e é hype disfarçado",
+            "content": "Ouvir \"precisamos de Kubernetes para IA\" sem perguntar QUAL carga de IA, com QUAL necessidade de GPU compartilhada, é aceitar a mesma frase vazia de \"vamos de Kubernetes\" com uma palavra a mais na frente. A pergunta que desfaz o hype é sempre a mesma: qual requisito, escrito, esta peça atende — que nenhuma peça mais simples atende?"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "\"Vamos de Kubernetes\" sem requisito escrito",
+                "currículo pessoal, ou \"é o padrão do mercado\" repetido em painel de conferência",
+                "paga o custo do control plane e do RBAC sem nenhum ganho mensurável",
+                "cluster com um serviço só, sem ninguém saber apontar por que ele não está em ECS",
+                "exigir o requisito na tabela de requisitos antes de abrir o primeiro cluster",
+                "nunca — nem quando \"todo mundo está migrando\""
+              ],
+              [
+                "Anexar permissão de negócio ao papel de execução do Fargate Pod",
+                "a mensagem de erro (AccessDenied da aplicação) não aparece perto de onde se editou o papel",
+                "confused deputy: TODO pod do cluster herdaria a mesma permissão, se o papel de execução concedesse algo — o que ele nem faz",
+                "`AccessDenied` da aplicação mesmo com o papel de execução aparentemente correto",
+                "IRSA por ServiceAccount, escopo mínimo por serviço",
+                "nunca; é sempre o papel errado para esse propósito"
+              ],
+              [
+                "ClusterRoleBinding com `cluster-admin` para destravar erro de RBAC durante o desenvolvimento",
+                "erro de RBAC é confuso de depurar, e a saída rápida é dar acesso total e seguir em frente",
+                "qualquer credencial roubada de qualquer pod agora administra o cluster inteiro",
+                "ferramenta de auditoria de RBAC aponta binding amplo nunca revisado desde a criação",
+                "Role/RoleBinding por namespace, com escopo mínimo, revisado antes de produção",
+                "só em ambiente de desenvolvimento local descartável, nunca em cluster compartilhado"
+              ],
+              [
+                "Migrar todos os serviços para EKS \"já que o cluster existe\"",
+                "parece eficiente reaproveitar infraestrutura que já está de pé e já foi paga",
+                "multiplica RBAC/add-ons/versão sem que cada serviço tenha requisito próprio; o piloto vira produção sem plano",
+                "sete serviços num cluster pensado e dimensionado para um piloto de um só",
+                "mover serviço por serviço, cada um com seu próprio requisito nomeado",
+                "quando o serviço TEM requisito próprio — aí não é \"já que existe\", é decisão nova"
+              ],
+              [
+                "Instalar o Load Balancer Controller com a política IAM de exemplo, sem revisar",
+                "a política oficial é longa, e copiar/colar o `iam_policy.json` funciona na hora",
+                "o controller passa a poder criar ou apagar ALB de qualquer serviço na conta, não só o seu",
+                "ALB inesperado aparecendo ou desaparecendo fora do namespace de Notificações",
+                "revisar a política antes de aplicar; considerar fronteira por cluster ou por conta",
+                "em ambiente de teste isolado, sem outros ALBs de produção na mesma conta"
+              ],
+              [
+                "Comparar ECS e EKS só pela fatura da AWS",
+                "a fatura é um número concreto, fácil de defender numa reunião; hora de operação parece subjetivo demais para citar",
+                "a taxa do control plane é pequena perto do tempo perdido depurando RBAC e IRSA pela primeira vez — decisão baseada só na fatura erra a comparação inteira",
+                "\"o EKS é barato\" citado sem nenhuma hora de operação registrada ao lado",
+                "medir horas de operação como este laboratório mediu, e registrar — é a Prova 5",
+                "nunca; a fatura sozinha nunca captura o custo operacional real"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Pod Running, mas nenhuma chamada AWS funciona",
+                "ServiceAccount sem anotação de IRSA, ou trust policy com `sub` errado",
+                "confira a variável `AWS_ROLE_ARN` dentro do pod e o evento correspondente no CloudTrail",
+                "`kubectl exec ... env`; CloudTrail em `AssumeRoleWithWebIdentity`",
+                "corrigir a anotação da ServiceAccount e a condição `sub` do trust policy"
+              ],
+              [
+                "Ingress sem endereço, rota administrativa inacessível",
+                "o Load Balancer Controller sem permissão IAM, ou sub-rede sem a tag esperada",
+                "leia os logs do controller à procura de erro de reconciliação",
+                "`kubectl logs -n kube-system deploy/aws-load-balancer-controller`",
+                "restaurar a permissão faltante, ou marcar a sub-rede com `kubernetes.io/role/elb`"
+              ],
+              [
+                "Pod preso em Pending indefinidamente",
+                "namespace ou rótulo do pod não bate com o `selector` do perfil Fargate",
+                "leia o evento de agendamento do pod",
+                "`kubectl describe pod` → evento `FailedScheduling`",
+                "ajustar namespace/rótulo do Deployment para bater com o perfil Fargate"
+              ],
+              [
+                "`kubectl apply` aceito, comportamento não muda",
+                "add-on gerenciado (CoreDNS, VPC CNI) em versão incompatível com a versão do cluster",
+                "compare a versão instalada do add-on com a matriz de compatibilidade da versão do cluster",
+                "`aws eks describe-addon-versions`",
+                "atualizar o add-on para a versão compatível com o cluster"
+              ],
+              [
+                "Custo do EKS maior que o esperado com poucos pods",
+                "a taxa fixa do control plane corre independente de uso, ou o cluster caiu em suporte estendido",
+                "filtre o Cost Explorer pelo serviço EKS e pela linha de suporte estendido",
+                "AWS Cost Explorer → Amazon Elastic Kubernetes Service",
+                "avaliar se o cluster piloto ainda se justifica; agendar upgrade se caiu em suporte estendido"
+              ],
+              [
+                "Aplicação funciona no ECS e falha só no EKS",
+                "diferença de superfície de configuração entre a task definition e o manifesto YAML — uma variável de ambiente que existia num lado e foi esquecida no outro",
+                "compare `environment` da task definition com `env` do Deployment, campo a campo",
+                "`aws ecs describe-task-definition` vs. `kubectl get deploy -o yaml`",
+                "declarar as mesmas variáveis nos dois manifestos; automatizar essa paridade se o piloto virar produção"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em RBAC ou em política IAM, pergunte: o erro apareceu no `kubectl apply` ou só quando o código tentou fazer alguma coisa? A maioria das falhas deste laboratório — IRSA, seletor de Fargate, permissão do controller — é aceita silenciosamente pela API do Kubernetes e só se manifesta depois, no comportamento real. É a mesma lição do \"5xx do alvo vs. 5xx do balanceador\" do L03, adaptada para uma camada de indireção a mais."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o EKS deixa vivo que o ECS nunca deixou"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A ordem importa mais aqui do que em qualquer laboratório anterior: o ALB do desenho EKS foi criado pelo controller, não pelo Terraform, e apagar o cluster antes do manifesto deixa esse ALB órfão — cobrando por hora, sem nenhum recurso do Terraform apontando para ele."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "#!/usr/bin/env bash\n# limpar.sh — o EKS deixa recurso vivo que o ECS nunca teve\nset -euo pipefail\n\nPROJETO=\"${PROJETO:?defina PROJETO}\"; REGIAO=\"${REGIAO:-us-east-1}\"\n\n# 1. O ALB do EKS foi criado PELO CONTROLLER, nao pelo Terraform — apague os\n#    manifestos ANTES do terraform destroy, ou o ALB fica orfao, cobrando por\n#    hora sem nenhum recurso do Terraform apontando para ele.\nkubectl delete ingress -n notificacoes notificacoes-admin\nkubectl delete -f notificacoes.yaml\n\n# 2. So entao derrube o que o Terraform administra: cluster, perfil Fargate,\n#    as tres roles IAM novas, o provedor OIDC.\nterraform destroy -auto-approve\n\n# 3. O CLUSTER as vezes demora minutos para deixar de existir de fato — e a\n#    taxa do control plane corre ate esse instante, nao ate o `destroy` sair.\naws eks describe-cluster --name \"${PROJETO}-eks\" --region \"$REGIAO\" 2>&1 \\\n  | grep -q \"ResourceNotFoundException\" && echo \"cluster removido\" \\\n  || echo \"cluster ainda existindo — cobrando\"\n\n# 4. O provedor OIDC as vezes sobrevive ao cluster se algo falhar no meio.\naws iam list-open-id-connect-providers --query 'OpenIDConnectProviderList[].Arn' --output table\n\n# 5. O grupo de logs do controller tem ciclo proprio, como no L03.\naws logs delete-log-group --log-group-name \"/aws/eks/${PROJETO}-eks/cluster\" 2>/dev/null || true\n\n# 6. O que veio do L31/L33 e continua cobrando: a fila, a ALB do desenho ECS,\n#    o RDS. Rode a limpeza deles tambem se nao for seguir para outro laboratorio.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table\n"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "ALB provisionado pelo controller",
+                "não, se o Ingress não for apagado antes",
+                "sim, por hora + LCU",
+                "ele não existe no estado do Terraform — quem o criou foi o controller"
+              ],
+              [
+                "Cluster EKS",
+                "sim, mas leva minutos",
+                "sim, até desaparecer de fato",
+                "a taxa do control plane corre até o cluster deixar de existir, não até o comando retornar"
+              ],
+              [
+                "Provedor OIDC",
+                "depende — pode sobreviver a uma interrupção no meio do destroy",
+                "não diretamente, mas identidades órfãs continuam confiáveis",
+                "está registrado separadamente do cluster que o referenciava"
+              ],
+              [
+                "Perfil Fargate e as três roles IAM novas",
+                "sim",
+                "não",
+                "perfis e roles não cobram parados; ficam de pé só se o destroy falhar no meio"
+              ],
+              [
+                "Grupo de logs do cluster",
+                "depende de configuração",
+                "sim, por retenção",
+                "tem ciclo próprio, como no L03 — sobrevive ao cluster que o alimentava"
+              ],
+              [
+                "Fila SQS, ALB do desenho ECS, RDS (herdados do L31)",
+                "não fazem parte deste destroy",
+                "sim, por hora ou por mensagem",
+                "pertencem a laboratórios anteriores; limpe-os à parte se não for continuar a série"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "\"Vamos de Kubernetes\" sem critério",
+                "tabela de requisitos com coluna de desenho",
+                "transforma preferência em pergunta verificável: existe requisito, ou não existe"
+              ],
+              [
+                "Parceiro só distribui como Operator",
+                "um cluster EKS pequeno, piloto",
+                "é o único requisito real encontrado; resolve o bloqueio sem migrar tudo"
+              ],
+              [
+                "Contêiner sem permissão AWS",
+                "IRSA por ServiceAccount, nunca o papel de execução",
+                "é a única forma correta de conceder permissão de negócio a um pod"
+              ],
+              [
+                "ALB que precisa existir sem Terraform criá-lo",
+                "AWS Load Balancer Controller",
+                "observa Ingress/Service e provisiona o recurso — é o padrão do ecossistema Kubernetes"
+              ],
+              [
+                "Quem, dentro do cluster, pode o quê",
+                "RBAC por namespace",
+                "é a segunda camada de permissão que o ECS nunca teve, e que o IAM sozinho não cobre"
+              ],
+              [
+                "Decidir migrar tudo, nada, ou uma fatia",
+                "horas de operação medidas (Prova 5)",
+                "é o único critério que não é opinião — a fatura da AWS sozinha some a diferença real"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "AccessDenied silencioso do contêiner",
+                "IRSA corretamente anotado na ServiceAccount",
+                "trust policy com `sub` escrito errado — a anotação existir não garante que ela aponta certo"
+              ],
+              [
+                "ALB nunca provisionado",
+                "IRSA do controller com permissão de ELB",
+                "sub-rede sem a tag `kubernetes.io/role/elb` — permissão certa não basta se a sub-rede não está marcada"
+              ],
+              [
+                "Pod nunca agendado",
+                "seletor do perfil Fargate batendo com namespace/rótulo",
+                "cota de ENI ou de perfil Fargate da conta — isso é limite separado, não erro de seletor"
+              ],
+              [
+                "Cluster inteiro exposto",
+                "endpoint privado do control plane",
+                "RBAC mal configurado dentro da própria VPC — acesso privado não é o mesmo que acesso restrito"
+              ],
+              [
+                "Custo de suporte disparando",
+                "upgrade de versão antes do fim do suporte padrão",
+                "esquecer de agendar o upgrade — a proteção exige processo, não só saber que ela existe"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "O VP pede Kubernetes; nenhum requisito acompanha o pedido.",
+              "O parceiro Aegis distribui só como Operator: esse é o requisito real.",
+              "A tabela de requisitos separa o que obriga Kubernetes do que só governa o piloto.",
+              "O mesmo binário .NET 8 é implantado em ECS Fargate e em EKS com perfil Fargate.",
+              "No EKS, o papel de execução do pod sobe o contêiner; ele NÃO concede permissão de negócio.",
+              "IRSA, ligado por OIDC a uma ServiceAccount, é quem concede — uma role a mais que o ECS não tinha.",
+              "O AWS Load Balancer Controller observa o Ingress e cria o ALB, com sua própria IRSA.",
+              "As cinco provas confirmam que cada peça faz o que deveria — a quinta mede horas de operação.",
+              "O e-mail que chega ao cliente é idêntico nos dois desenhos: a diferença inteira foi operacional.",
+              "A decisão final usa o número medido, não a preferência de quem pediu Kubernetes primeiro."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "ECS ou EKS: qual devo escolher na AWS?",
+            "answer": "Comece por ECS, e migre para EKS só quando um requisito escrito exigir — não porque Kubernetes é mais conhecido do mercado. Os três motivos legítimos são portabilidade multi-nuvem genuína (não hipotética), dependência de um ecossistema de Helm charts ou operators que o time já usa de verdade, ou profundidade de equipe em Kubernetes que devolve produtividade real. Fora desses três, o ECS resolve o mesmo problema de orquestração com menos peças: sem control plane cobrado à parte, sem RBAC além do IAM, sem add-on gerenciado para atualizar. A pergunta que desfaz a maioria dos debates é simples: qual requisito, escrito, o EKS atende que o ECS não atende?"
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Quanto custa o plano de controle do EKS?",
+            "answer": "É uma taxa fixa por cluster-hora, cobrada independente de quantos pods rodam — cerca de US$ 0,10 por hora com a versão do Kubernetes em suporte padrão, e cerca de US$ 0,60 por hora se a versão cair em suporte estendido, segundo a página de preços da AWS em agosto de 2026. Confira o valor atual no AWS Pricing Calculator, porque preço muda e varia por região. O ponto que mais surpreende quem vem do ECS é que essa taxa existe mesmo com o cluster vazio — o ECS não tem cobrança equivalente pelo próprio agendador."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "O que é IRSA no EKS e por que preciso dele com Fargate?",
+            "answer": "IRSA (IAM roles for service accounts) é o mecanismo que vincula uma role do IAM a uma ServiceAccount do Kubernetes por federação OIDC, e é ele — não o papel de execução do Fargate Pod — que concede ao contêiner permissão para chamar outros serviços da AWS. Com Fargate, você não tem instância EC2 para anexar um perfil de instância, e o papel de execução do pod só serve para o kubelet puxar imagem e mandar log. Sem IRSA configurado, o contêiner simplesmente não tem credencial AWS nenhuma além dessa, e toda chamada de negócio à AWS falha com AccessDenied."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Qual a diferença entre o papel de execução do Fargate Pod e o papel de uma task no ECS?",
+            "answer": "O papel de execução do Fargate Pod, no EKS, autoriza só o kubelet a registrar o pod no cluster e a puxar imagem do ECR e log para o CloudWatch — o contêiner nunca assume essa identidade. O papel de tarefa do ECS, em contraste, é injetado direto no contêiner via metadados e é a permissão que a aplicação de fato usa para chamar SQS, SES ou qualquer outro serviço. O equivalente funcional do papel de tarefa do ECS, no EKS, não é o papel de execução: é a role vinculada por IRSA à ServiceAccount do pod."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Preciso do AWS Load Balancer Controller para usar Ingress no EKS?",
+            "answer": "Sim, se o objetivo é que um Ingress do Kubernetes vire de fato um Application Load Balancer da AWS. O controller é um pod que roda dentro do próprio cluster, observa objetos Ingress e Service, e chama a API da AWS para criar, atualizar ou apagar o ALB correspondente — sem ele, o Ingress fica descrito, mas nenhum balanceador real nasce dele. É uma peça a mais que o ECS não tem, porque lá o Terraform cria o ALB direto, sem nenhum componente rodando dentro do cluster para mediar isso."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Kubernetes na AWS é mais caro que ECS?",
+            "answer": "Depende de qual custo se está medindo, e é exatamente essa a distinção que costuma faltar na comparação. Em infraestrutura pura, a diferença é pequena: uma taxa fixa de control plane, cerca de US$ 0,10 por hora, somada ao mesmo preço de Fargate que o ECS já cobra. Em horas de engenharia, a diferença medida neste laboratório foi muito maior na primeira implantação — RBAC, IRSA e o Load Balancer Controller são superfícies novas para quem nunca operou Kubernetes em produção. Comparar só a fatura da AWS ignora a parte que mais pesa no início."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Quando o EKS realmente se justifica sobre o ECS?",
+            "answer": "Quando existe um requisito real e nomeável, não uma preferência. Os três casos legítimos são: um parceiro ou ferramenta que só distribui via Kubernetes, como um Helm chart com Operator próprio; necessidade genuína de portar a carga entre nuvens diferentes, não hipotética; e uma equipe que já opera Kubernetes com profundidade suficiente para que a produtividade ganha supere o custo de RBAC e IRSA. \"É o padrão do mercado\" ou \"o time gosta mais\" não são requisitos — são preferência, e preferência não paga a segunda camada de operação sozinha."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "RBAC do Kubernetes substitui o IAM da AWS?",
+            "answer": "Não — eles respondem perguntas diferentes, e o EKS exige acertar as duas ao mesmo tempo. O IAM, via IRSA, decide o que uma identidade pode fazer NA AWS: chamar SQS, enviar e-mail pelo SES, criar um balanceador. O RBAC do Kubernetes decide o que uma identidade pode fazer DENTRO do cluster: ler um Secret, alterar uma ServiceAccount, listar pods de outro namespace. Um ClusterRoleBinding amplo demais pode dar a um pod comprometido acesso a ler a anotação de IRSA de outro serviço, mesmo que a política IAM de cada role individual esteja perfeitamente escopada — as duas camadas têm de estar certas juntas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Depois de operar o piloto EKS por um mês, a taxa fixa do control plane somou pouco mais de setenta dólares, e o time registrou cerca de três vezes mais horas de engenharia operando o cluster do que operando o serviço equivalente em ECS. Que erro de raciocínio comete quem conclui, só a partir da fatura da AWS, que o EKS foi mais barato?",
+            "options": [
+              "Assumir que o control plane cobra por uso, quando na verdade cobra por hora fixa",
+              "Ignorar que o custo operacional relevante inclui horas de engenharia, que a fatura da AWS não mostra",
+              "Achar que o Fargate no EKS custa mais por vCPU-hora que o Fargate no ECS",
+              "Comparar taxas de dois serviços de categorias diferentes, o que não é uma comparação válida"
+            ],
+            "correctIndex": 1,
+            "explanation": "O erro é de escopo da medição, não de aritmética: a fatura da AWS mostra apenas a taxa do control plane e o Fargate, e nenhuma das duas difere de forma relevante entre os dois desenhos neste piloto. O custo que de fato diferenciou os dois — três vezes mais horas de engenharia no EKS — não aparece em nenhuma linha da AWS Cost Explorer, porque hora de trabalho não é um recurso da AWS. Concluir \"mais barato\" olhando só para a fatura ignora exatamente a dimensão que o enunciado registrou.\n\nA primeira alternativa nomeia um problema que não existe no cenário: não há comparação inválida de categoria de serviço, o problema é de ESCOPO da métrica usada para decidir. A terceira descreve corretamente como o control plane cobra — por hora fixa, não por uso — mas essa é uma afirmação verdadeira sobre o mecanismo de cobrança, não o erro de raciocínio cometido na conclusão do enunciado; achar isso confunde uma característica real da tarifa com a falha lógica da pergunta. A quarta cita uma diferença de preço de computação entre os dois orquestradores que simplesmente não existe — o preço da hora de Fargate é o mesmo nos dois, então não pode ser a causa do raciocínio errado descrito."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "O time da Cadência quer manter tudo em ECS Fargate, mas o parceiro de detecção de fraude Aegis distribui o produto apenas como Helm chart com um Operator que observa um CRD próprio. Por que isso, sozinho, já é um requisito real para abrir um cluster Kubernetes — sem que seja hype?",
+            "options": [
+              "Porque a equipe já tem dois engenheiros com experiência em Kubernetes em projetos pessoais",
+              "Porque o modelo de distribuição do parceiro pressupõe a API do Kubernetes (um CRD e um controlador que o observa), e não existe pacote equivalente para ECS",
+              "Porque o EKS é mais barato que o ECS quando há parceiros externos envolvidos",
+              "Porque Kubernetes é mais moderno e o mercado está migrando para ele"
+            ],
+            "correctIndex": 1,
+            "explanation": "É a diferença entre requisito e preferência que o módulo inteiro pede para nomear: um Operator só existe dentro de um cluster Kubernetes, porque ele funciona observando um CRD através da própria API do Kubernetes — não há forma de \"traduzir\" isso para uma task definition do ECS, porque a peça inteira depende de um mecanismo que o ECS não tem. Isso não é escolha de arquitetura discutível: é uma restrição de fato imposta por quem está fora do controle da Cadência.\n\nA primeira alternativa é exatamente o antipadrão que o módulo nomeia — \"o mercado está migrando\" não é um requisito técnico, é a mesma frase vazia do VP sem critério, só que atribuída ao mercado em vez de a uma pessoa. A terceira inventa uma relação de custo que não existe: a presença de um parceiro externo não muda o preço do EKS nem do ECS, e custo nunca foi o critério de decisão deste caso. A quarta cita um dos três motivos legítimos do framework geral — profundidade de equipe — mas erra ao aplicá-lo a ESTE caso: a tabela de requisitos do laboratório registra que só dois de sete engenheiros usaram Kubernetes em projeto pessoal, o que é justamente insuficiente para sustentar esse motivo aqui; o requisito real e suficiente, neste caso, é o Operator do parceiro, não a experiência do time."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L30 (limites do serverless) e L33 (descoberta e malha de serviço) lidos; L31 no ar (serviço de Notificações em ECS Fargate); noção básica de pod/deployment/service ajuda"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "a distinção entre papel de execução do Fargate Pod e IRSA; os três motivos legítimos para escolher EKS sobre ECS; RBAC como segunda camada de permissão; a taxa fixa do control plane e o custo oculto do suporte estendido; como medir custo operacional com horas, não só fatura"
+              ],
+              [
+                "Limitação que fica",
+                "os dois desenhos convivem durante o piloto, dobrando painel e log; e a IRSA do Load Balancer Controller, com o escopo mais largo dos três papéis novos, ainda carece da mesma revisão de menor privilégio que o L41 formaliza"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L42 — identidade de workload: task role, execution role, IRSA. Generaliza a distinção de identidade que este módulo tratou só para o caso EKS, cobrindo também IAM Identity Center e a comparação entre role e usuário de longa duração"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L41 (policy que passa auditoria) tem agora um caso real de IRSA com escopo largo para auditar; qualquer laboratório futuro de plataforma multi-cluster parte do Nível 4 da evolução em níveis daqui"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Amazon EKS Pricing",
+                "code": true
+              },
+              {
+                "text": " — a taxa por cluster-hora em suporte padrão e estendido; "
+              },
+              {
+                "text": "Amazon EKS Pod execution IAM role",
+                "code": true
+              },
+              {
+                "text": " — o que ela autoriza e a distinção explícita de que o contêiner não a herda; "
+              },
+              {
+                "text": "IAM roles for service accounts",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "Assign IAM roles to Kubernetes service accounts",
+                "code": true
+              },
+              {
+                "text": " — o mecanismo de IRSA por federação OIDC; "
+              },
+              {
+                "text": "Install AWS Load Balancer Controller",
+                "code": true
+              },
+              {
+                "text": " — manifesto e Helm, e a necessidade de uma role própria. O enquadramento geral de quando cada orquestrador se justifica também se apoiou no artigo oficial \"Amazon ECS vs. Amazon EKS: making sense of AWS container services\", do blog de contêineres da AWS."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "Os tempos citados — cerca de 12 minutos até o cluster ficar ACTIVE, 40 minutos contra 3h10 de horas de operação — são a medição do ambiente de exemplo da Cadência, e servem como ordem de grandeza, não como referência. Meça o seu: tempo de criação de cluster varia por região e por versão do Kubernetes, e horas de operação caem MUITO depois da primeira vez, à medida que a curva de aprendizado de IRSA e do Load Balancer Controller é paga. O valor da taxa do control plane também deve ser conferido no AWS Pricing Calculator antes de qualquer decisão orçamentária: preços mudam e variam por região."
+          }
+        }
+      ]
+    }
+  ]
+}

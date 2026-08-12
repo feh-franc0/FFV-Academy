@@ -16,9 +16,10 @@ describe('<PlaylistsClient> render', () => {
   it('renderiza header e lista todas as playlists', () => {
     render(<PlaylistsClient />);
     expect(screen.getByRole('heading', { name: /playlists curadas/i })).toBeInTheDocument();
-    // Sempre existe "Do zero à IA" e "Staff Engineer path" no catálogo canônico
+    // Sempre existe "Do zero à IA" e "IA na AWS do zero" no catálogo canônico.
+    // A segunda substituiu "Claude Code Pro" na consolidação de ago/2026.
     expect(screen.getByRole('heading', { name: /do zero à ia/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /staff engineer path/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /ia na aws do zero/i })).toBeInTheDocument();
   });
 
   it('links dos módulos resolvem para /aprenda/<slug> (drop de slugs inexistentes)', () => {

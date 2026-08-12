@@ -99,8 +99,15 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Method(http.MethodGet, "/metrics", cfg.Metrics)
 	}
 
-	// Webhook Stripe (sem auth JWT — usa assinatura Stripe).
-	r.Post("/api/v1/webhooks/stripe", cfg.Billing.StripeWebhook)
+	// Webhook Stripe (sem auth JWT — usa assinatura Stripe). Auditado com
+	// IncludeFailures: uma assinatura inválida rejeitada (401/400) é tão
+	// digna de trilha quanto um evento processado com sucesso (achado P-13).
+	if cfg.AuditLog != nil {
+		r.With(middleware.AuditLog(cfg.AuditLog, middleware.AuditLogOptions{IncludeFailures: true})).
+			Post("/api/v1/webhooks/stripe", cfg.Billing.StripeWebhook)
+	} else {
+		r.Post("/api/v1/webhooks/stripe", cfg.Billing.StripeWebhook)
+	}
 
 	// Endpoints públicos do catálogo (leitura sem auth).
 	r.Get("/api/v1/simulados", cfg.Simulado.ListSimulados)
@@ -168,15 +175,28 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	// Rate-limits por IP — complementam o rate-limit por email/user já existente.
 	// Limites conservadores: auth é o vetor mais crítico de DoS (email flood).
-	authLimit := middleware.NewRateLimiter(cfg.Redis, 20, time.Minute, "rl:auth")
-	tutorLimit := middleware.NewRateLimiter(cfg.Redis, 60, time.Minute, "rl:tutor")
-	certLimit := middleware.NewRateLimiter(cfg.Redis, 120, time.Minute, "rl:cert")
+	// auth e tutor são fail-CLOSED: são as rotas de custo (auth = flood de
+	// email/SMS; tutor = chamada à Anthropic paga), e ambas já dependem do
+	// Redis para o rate-limit por email/usuário — um Redis fora não pode
+	// remover essa E a camada por IP ao mesmo tempo.
+	authLimit := middleware.NewRateLimiterFailClosed(cfg.Redis, 20, time.Minute, "rl:auth")
+	tutorLimit := middleware.NewRateLimiterFailClosed(cfg.Redis, 60, time.Minute, "rl:tutor")
+	// cert é fail-CLOSED (achado P-09, auditoria de 11/ago/2026): a rota
+	// protege contra enumeração de hash de certificado — um Redis fora do ar
+	// não pode virar um oráculo sem limite justo na rota que existe pra
+	// impedir enumeração.
+	certLimit := middleware.NewRateLimiterFailClosed(cfg.Redis, 120, time.Minute, "rl:cert")
 	// events/view é público — limite generoso pra usuários reais (1-2 pings/min
 	// por slug) e estrangular bots de scraping abusivo.
 	viewLimit := middleware.NewRateLimiter(cfg.Redis, 240, time.Minute, "rl:view")
 	// Listagens públicas (news, cheatsheets, playlists) — cache de 5-10min no
 	// header já protege, mas rate-limit fecha vetor de scraping massivo.
 	contentLimit := middleware.NewRateLimiter(cfg.Redis, 300, time.Minute, "rl:content")
+	// questions/batch aceita até 200 IDs por chamada e é autenticado — a
+	// correção de P-01 já fecha o vazamento de gabarito em si (gating por
+	// tentativa/ownership), este limite é defesa em profundidade contra
+	// varredura de metadado de questão (stem/options) em volume.
+	questionsBatchLimit := middleware.NewRateLimiterFailClosed(cfg.Redis, 30, time.Minute, "rl:questions-batch")
 
 	// Tracking de acesso a módulo — público, fire-and-forget. Body limit
 	// pequeno + rate limit por IP previnem abuso.
@@ -207,6 +227,14 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	r.Route("/api/v1/auth", func(r chi.Router) {
 		r.Use(authLimit.Middleware())
 		r.Use(authBodyLimit)
+		// IncludeFailures: uma tentativa de login que falha (código errado,
+		// expirado, rate-limit) é o evento que mais importa auditar aqui —
+		// até 11/ago/2026 (achado P-13) esta rota ficava totalmente fora da
+		// trilha, sucesso ou falha, porque /api/v1/auth/* fica fora do grupo
+		// autenticado (que é onde o AuditLog rodava) por desenho.
+		if cfg.AuditLog != nil {
+			r.Use(middleware.AuditLog(cfg.AuditLog, middleware.AuditLogOptions{IncludeFailures: true}))
+		}
 		r.Post("/request-token", cfg.Auth.RequestToken)
 		r.Post("/verify", cfg.Auth.Verify)
 		r.Post("/refresh", cfg.Auth.Refresh)
@@ -243,7 +271,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Modo estudo livre — questões aleatórias sem timer (requer login).
 		if cfg.Study != nil {
 			r.Get("/api/v1/simulados/{simuladoId}/study/random", cfg.Study.GetRandomQuestions)
-			r.Get("/api/v1/simulados/{simuladoId}/questions/batch", cfg.Study.GetQuestionsByIDs)
+			r.With(questionsBatchLimit.Middleware()).Get("/api/v1/simulados/{simuladoId}/questions/batch", cfg.Study.GetQuestionsByIDs)
 		}
 
 		// Tentativas.
@@ -252,6 +280,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Post("/api/v1/attempts/{attemptId}/flags/{questionId}", cfg.Simulado.ToggleReviewFlag)
 		r.Post("/api/v1/attempts/{attemptId}/finish", cfg.Simulado.FinishAttempt)
 		r.Post("/api/v1/attempts/{attemptId}/cancel", cfg.Simulado.CancelAttempt)
+		r.Post("/api/v1/attempts/{attemptId}/claim-xp", cfg.Simulado.ClaimXPCredit)
 
 		// Report de questão.
 		r.Post("/api/v1/questions/{questionId}/report", cfg.Simulado.ReportQuestion)
@@ -270,11 +299,12 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Certificados — emissão.
 		r.Post("/api/v1/certificates", cfg.Certificate.IssueCertificate)
 
-		// Billing.
-		r.Post("/api/v1/billing/checkout", cfg.Billing.CreateCheckout)
+		// Billing. Body é só {productId} — 4KB é folgado (achado P-09).
+		r.With(middleware.BodyLimit(4*1024)).Post("/api/v1/billing/checkout", cfg.Billing.CreateCheckout)
 
 		// Tutor IA — rate-limit por IP além do rate-limit por user já existente.
-		r.With(tutorLimit.Middleware()).Post("/api/v1/tutor/ask", cfg.Tutor.Ask)
+		// Body é {simuladoId, questionId, kind} — 8KB é folgado (achado P-09).
+		r.With(tutorLimit.Middleware()).With(middleware.BodyLimit(8*1024)).Post("/api/v1/tutor/ask", cfg.Tutor.Ask)
 
 		// Leaderboard.
 		r.Get("/api/v1/leaderboard", cfg.Leaderboard.GetWeekly)

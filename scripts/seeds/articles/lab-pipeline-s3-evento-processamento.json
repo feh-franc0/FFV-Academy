@@ -1,0 +1,2482 @@
+{
+  "slug": "lab-pipeline-s3-evento-processamento",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência — a mesma equipe do "
+              },
+              {
+                "text": "L01",
+                "code": true
+              },
+              {
+                "text": ", do "
+              },
+              {
+                "text": "L17",
+                "code": true
+              },
+              {
+                "text": " e do "
+              },
+              {
+                "text": "L22",
+                "code": true
+              },
+              {
+                "text": " — abriu um canal para que os doze fornecedores das trinta lojas mandem planilhas de preço e estoque. O upload já é seguro: usa exatamente o fluxo do "
+              },
+              {
+                "text": "L17",
+                "code": true
+              },
+              {
+                "text": ", com URL pré-assinada e teto de tamanho. O problema começa depois que o arquivo chega."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Hoje, nada acontece quando a planilha cai no bucket. Um analista precisa lembrar de abrir o console do S3, ou esperar um e-mail avulso do fornecedor avisando, para então baixar o arquivo e rodar um script local que atualiza o catálogo linha a linha. Numa semana medida de exemplo, das 34 planilhas recebidas, 6 esperaram mais de 4 horas até alguém notar, e uma passou o fim de semana inteiro parada."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O conserto óbvio — lembrete no calendário, checagem mais frequente — ataca o sintoma. O defeito real é estrutural: não existe gatilho nenhum entre \"o arquivo chegou\" e \"alguém processa o arquivo\". O S3 sabe exatamente quando o objeto foi criado; a Cadência nunca perguntou a ele."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Intermediário — depende do L17 (upload assinado) e do L22 (fila, DLQ, idempotência)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L17 e L22 no ar, catálogo do L01 (Postgres) acessível, C# / .NET 8 e Terraform básicos"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 40 min · implementação 2 h a 2 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo: EventBridge, Lambda, SQS e DynamoDB cobram por uso — sem hora ligada parada"
+              },
+              {
+                "k": "Serviços",
+                "v": "S3 (entrega de eventos ao EventBridge), EventBridge, Lambda (2 funções), SQS + DLQ, DynamoDB, CloudWatch"
+              },
+              {
+                "k": "Volume atual",
+                "v": "12 fornecedores, 3 a 8 planilhas por dia, até 5 mil linhas cada, pico no início do mês"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "todo arquivo que chega tem estado rastreável do recebimento ao arquivamento ou rejeição, sem depender de alguém notar"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "a planilha chega como CSV em UTF-8 com cabeçalho fixo (sku, preco, estoque); fornecedor mandando XLSX ou layout livre está fora deste desenho"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "pipeline disparado pelo próprio evento do S3, com o estado de cada arquivo rastreável numa tabela, e um arquivo malformado provado indo parar em rejeitado/ com o motivo"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é o pipeline que interpreta documento não estruturado — foto, PDF escaneado, layout livre. Aqui a planilha já chega com schema fixo, e é exatamente por isso que regra determinística resolve sem IA nenhuma. O caso do documento não estruturado, com extração e revisão humana, é o L92, e ele evolui deste laboratório."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que \"alguém lembrar de rodar o script\" é sintoma de ausência de gatilho, não de falta de disciplina.",
+              "Habilitar a entrega de eventos do S3 ao EventBridge e escrever uma regra filtrada por prefixo.",
+              "Nomear o limite da notificação direta de bucket — um destino por tipo de evento — e explicar por que ele trava evolução.",
+              "Implementar um Lambda validador que decide aceitar ou rejeitar um arquivo antes de processar qualquer linha.",
+              "Tratar a entrega \"ao menos uma vez\" com escrita condicional no DynamoDB, evitando processar o mesmo arquivo duas vezes.",
+              "Configurar fila e DLQ para o processamento pesado, reaproveitando o padrão do L22.",
+              "Provar, com medição, que um arquivo malformado termina em rejeitado/ com o motivo registrado, não desaparece.",
+              "Diagnosticar um arquivo \"preso\" distinguindo entre falha de roteamento, falha de validação e falha de processamento."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "S3 Event Notifications → EventBridge",
+                "DVA-C02, SAA-C03",
+                "entrega habilitada no bucket, todas as regras vivem no EventBridge",
+                "diferença entre habilitar a entrega e configurar destino direto no bucket"
+              ],
+              [
+                "Padrão de evento (event pattern) filtrado por prefixo",
+                "DVA-C02",
+                "a regra decide o que importa sem tocar o bucket de novo",
+                "como acrescentar um segundo consumidor sem reconfigurar a origem"
+              ],
+              [
+                "Limite de destino da notificação direta",
+                "DVA-C02, SAA-C03",
+                "um único destino por tipo de evento é o motivo de usar EventBridge",
+                "quando a notificação direta ainda é aceitável, e quando ela trava"
+              ],
+              [
+                "Entrega \"ao menos uma vez\" e duplicidade",
+                "DVA-C02",
+                "escrita condicional no DynamoDB antes de qualquer efeito",
+                "que duplicata é o contrato documentado, não uma falha rara"
+              ],
+              [
+                "Dead-letter queue e redrive policy",
+                "DVA-C02, SAA-C03",
+                "reaproveitada do L22, agora para arquivo em vez de pedido",
+                "que DLQ sem alarme é tão inútil quanto não ter DLQ"
+              ],
+              [
+                "Partial batch response (ReportBatchItemFailures)",
+                "DVA-C02",
+                "evita reprocessar arquivo que já teve sucesso dentro de um lote",
+                "o comportamento padrão sem essa configuração: o lote inteiro volta"
+              ],
+              [
+                "Risco de loop de execução Lambda ↔ S3",
+                "DVA-C02",
+                "evitado com filtro de prefixo na regra do EventBridge",
+                "por que saída do pipeline no mesmo bucket, sem filtro, dispara o próprio gatilho"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve um bucket com notificação configurada para um Lambda e pergunta como adicionar um segundo consumidor sem alterar o produtor. A resposta não é \"crie outra notificação no mesmo bucket\" — a notificação direta aceita um único destino por tipo de evento. A resposta é EventBridge: habilitar a entrega uma vez e acrescentar regras depois, sem tocar o bucket outra vez."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Zero arquivo esquecido ou processado com atraso de horas",
+                "obrigatório",
+                "EventBridge habilitado no bucket; nada de checagem manual nem notificação direta"
+              ],
+              [
+                "Rastreabilidade do estado de cada arquivo",
+                "obrigatório",
+                "tabela DynamoDB como fonte de verdade — não inferência pelo prefixo do S3"
+              ],
+              [
+                "Arquivo malformado não trava nem desaparece",
+                "obrigatório",
+                "validação estrutural síncrona antes de enfileirar; prefixo rejeitado/{motivo}"
+              ],
+              [
+                "Não processar o mesmo arquivo duas vezes",
+                "obrigatório",
+                "escrita condicional por ArquivoId antes de qualquer efeito, tratando o at-least-once"
+              ],
+              [
+                "Acrescentar consumidor futuro sem reconfigurar o bucket",
+                "desejado pela equipe",
+                "EventBridge em vez de notificação direta, que só permite um destino por tipo de evento"
+              ],
+              [
+                "Validação rápida não pode esperar o processamento pesado",
+                "obrigatório",
+                "dois Lambdas separados por fila, não um handler monolítico"
+              ],
+              [
+                "Falha persistente vista por humano",
+                "requisito operacional",
+                "DLQ com alarme de mensagem visível, igual ao L22"
+              ],
+              [
+                "Formato aceito hoje",
+                "CSV em UTF-8, cabeçalho fixo (sku, preco, estoque)",
+                "autoriza validação estrutural simples; XLSX ou layout livre fica fora de escopo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b3_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A hipótese do formato fixo tem prazo de validade",
+            "content": "Enquanto os 12 fornecedores mandarem CSV com o mesmo cabeçalho, uma checagem de três colunas resolve a validação estrutural inteira. No dia em que um fornecedor mandar XLSX, ou mudar a ordem das colunas sem avisar, essa hipótese deixa de valer — e o desenho certo nesse momento é versionar o schema por fornecedor, não reescrever a validação a cada exceção nova."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o processo real de hoje"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o processo que a Cadência tem hoje, e ele é legítimo como ponto de partida: processa a planilha de verdade, sem nenhum recurso novo. O laboratório começa por medir o defeito — porque um número torna o atraso discutível, e \"às vezes demora\" não."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O script que alguém precisa lembrar de rodar",
+            "caption": "Este é o processo real da Cadência hoje, e ele funciona — a planilha chega, e mais cedo ou mais tarde alguém a processa. O atraso não vem de nenhuma falha técnica: vem da ausência total de um gatilho. Percorra os passos e repare que o defeito não é \"o script é ruim\" — é que nada dispara o script.",
+            "groups": [
+              {
+                "label": "Fornecedor",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "fornecedor",
+                    "service": "browser",
+                    "label": "Portal do fornecedor (upload do L17)",
+                    "note": "usa o mesmo POST assinado do L17; da parte do fornecedor, o trabalho termina no envio"
+                  }
+                ]
+              },
+              {
+                "label": "Armazenamento (herdado do L17)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3",
+                    "service": "s3",
+                    "label": "Bucket de planilhas, prefixo entrada/",
+                    "note": "recebe o objeto normalmente; nenhuma notificação de evento está configurada nele"
+                  }
+                ]
+              },
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "analista",
+                    "service": "ide",
+                    "label": "Analista da Cadência, no laptop",
+                    "note": "só sabe do arquivo se abrir o console do S3 por conta própria ou se o fornecedor avisar à parte, por fora do sistema"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — dados (herdado do L01)",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "catalogo",
+                    "service": "postgres",
+                    "label": "Catálogo de preços e estoque",
+                    "note": "só recebe a planilha nova quando o analista roda o script à mão a partir do laptop"
+                  }
+                ]
+              },
+              {
+                "label": "Efeito visível",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "loja",
+                    "service": "user",
+                    "label": "Loja consultando o preço",
+                    "note": "lê o valor que já estava lá; não tem como saber que existe uma planilha mais nova esperando"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "fornecedor",
+                "to": "s3",
+                "label": "POST assinado, mesmo fluxo do L17",
+                "style": "solid"
+              },
+              {
+                "from": "s3",
+                "to": "analista",
+                "label": "nenhum evento emitido; o olho humano é o único gatilho",
+                "style": "dashed"
+              },
+              {
+                "from": "analista",
+                "to": "s3",
+                "label": "checagem manual, sem horário fixo — às vezes só no fim do dia",
+                "style": "dashed"
+              },
+              {
+                "from": "analista",
+                "to": "catalogo",
+                "label": "UPDATE linha a linha, rodado à mão a partir do laptop",
+                "style": "solid"
+              },
+              {
+                "from": "catalogo",
+                "to": "loja",
+                "label": "serve o preço antigo até a atualização rodar",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O upload termina, e nada reage",
+                "detail": "O fluxo do L17 grava o objeto no bucket com toda a segurança que aquele laboratório construiu — chave escolhida pelo servidor, teto de tamanho, validação de tipo. Nenhuma dessas peças dispara mais nada depois do PUT: o bucket recebeu o arquivo e ficou em silêncio.",
+                "nodes": [
+                  "fornecedor",
+                  "s3"
+                ],
+                "edges": [
+                  "fornecedor>s3"
+                ]
+              },
+              {
+                "label": "O bucket não fala com ninguém",
+                "detail": "Sem notificação configurada — nem para o EventBridge, nem direta para um Lambda —, o evento de criação do objeto acontece e morre ali. O S3 sabe exatamente quando o arquivo chegou; simplesmente ninguém perguntou a ele.",
+                "nodes": [
+                  "s3",
+                  "analista"
+                ],
+                "edges": [
+                  "s3>analista"
+                ]
+              },
+              {
+                "label": "O gatilho é um humano, e humano tem agenda",
+                "detail": "A única forma de o arquivo ser notado é alguém abrir o console do S3 por iniciativa própria, ou o fornecedor escrever um e-mail avisando — o que nem sempre acontece. Numa semana medida de exemplo, das 34 planilhas recebidas, 6 esperaram mais de 4 horas até alguém notar, e uma chegou numa sexta às 18h e só foi processada na segunda de manhã.",
+                "nodes": [
+                  "analista",
+                  "s3"
+                ],
+                "edges": [
+                  "analista>s3"
+                ]
+              },
+              {
+                "label": "Quando alguém lembra, o script roda à mão",
+                "detail": "O analista baixa o arquivo com um comando de linha, roda um script local que lê a planilha e emite `UPDATE` linha a linha no catálogo. Funciona — mas é um processo sem trilha: se o script travar na linha 340, não existe registro de que parou ali, nem de quais linhas já foram aplicadas.",
+                "nodes": [
+                  "analista",
+                  "catalogo"
+                ],
+                "edges": [
+                  "analista>catalogo"
+                ]
+              },
+              {
+                "label": "O preço errado fica no ar enquanto ninguém roda o script",
+                "detail": "Entre o upload e a execução manual, a loja continua consultando o preço antigo. Não é um erro de sistema — é exatamente o comportamento esperado de um catálogo que não foi atualizado ainda. O custo do atraso aparece como venda com preço errado, não como exceção em log nenhum.",
+                "nodes": [
+                  "catalogo",
+                  "loja"
+                ],
+                "edges": [
+                  "catalogo>loja"
+                ]
+              },
+              {
+                "label": "Por que a Cadência opera assim",
+                "detail": "Porque funcionou desde o primeiro fornecedor, quando havia uma planilha por semana e dava para checar o e-mail de manhã. O desenho não é ingênuo: é a extrapolação de um caso em que estava certo. Com 12 fornecedores e picos de início de mês, a mesma checagem manual deixou de dar conta.",
+                "nodes": [
+                  "fornecedor",
+                  "analista"
+                ],
+                "edges": [
+                  "s3>analista"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "Os dois defeitos não são o mesmo, e um esconde o outro",
+            "content": "O primeiro é atraso: o arquivo espera horas até alguém notar. O segundo, mais caro, é silencioso — um arquivo pode não ser notado NUNCA, se o e-mail avulso do fornecedor se perder ou o analista estiver de férias. Não existe alarme para \"arquivo esquecido\", porque não existe nenhum sistema observando o bucket."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção: o evento dirige o pipeline"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. Se você não conseguir apontar o requisito, a peça é adorno — e este desenho não tem nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O S3 fala com o EventBridge; dois Lambdas dividem o trabalho por peso",
+            "caption": "A mudança estrutural não é \"plugar um Lambda no bucket\": é trocar quem escuta o evento (o EventBridge, não o bucket) e separar decidir-rápido de processar-pesado em duas funções ligadas por fila. A tabela do DynamoDB é quem sabe o estado real de cada arquivo — o prefixo do S3 é só conveniência visual. Percorra os passos: cada peça nova rastreia a um requisito da seção anterior.",
+            "groups": [
+              {
+                "label": "Fornecedor",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "fornecedor",
+                    "service": "browser",
+                    "label": "Portal do fornecedor (upload do L17)",
+                    "note": "nenhuma mudança aqui: o mesmo POST assinado do L17 continua sendo a porta de entrada"
+                  }
+                ]
+              },
+              {
+                "label": "Armazenamento (herdado do L17)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3",
+                    "service": "s3",
+                    "label": "Bucket de planilhas",
+                    "note": "o mesmo bucket do L17, agora com entrega de eventos ao EventBridge habilitada — a forma de subir o arquivo não muda"
+                  }
+                ]
+              },
+              {
+                "label": "Roteamento de evento",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "eb",
+                    "service": "eventbridge",
+                    "label": "EventBridge, regra filtrada por prefixo entrada/",
+                    "note": "decide quem escuta o Object Created; um segundo consumidor futuro é uma regra nova, sem tocar o bucket"
+                  }
+                ]
+              },
+              {
+                "label": "Validação rápida",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "validador",
+                    "service": "lambda",
+                    "label": "Lambda Validador",
+                    "note": "confere estrutura e registra a intenção antes de qualquer linha ser processada"
+                  },
+                  {
+                    "id": "db",
+                    "service": "dynamodb",
+                    "label": "Tabela de arquivos",
+                    "note": "a trilha de estado real — recebido, validado, processado ou rejeitado, com motivo quando falha"
+                  }
+                ]
+              },
+              {
+                "label": "Processamento pesado",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "fila",
+                    "service": "sqs",
+                    "label": "Fila de processamento",
+                    "note": "absorve o volume de linhas sem prender a validação rápida do próximo arquivo"
+                  },
+                  {
+                    "id": "processador",
+                    "service": "lambda",
+                    "label": "Lambda Processador",
+                    "note": "aplica linha a linha no catálogo, no seu próprio ritmo, longe do caminho síncrono do evento"
+                  },
+                  {
+                    "id": "dlq",
+                    "service": "sqs",
+                    "label": "DLQ",
+                    "note": "recebe o arquivo que falhou 5 vezes seguidas — o mesmo padrão do L22"
+                  },
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Alarme de DLQ",
+                    "note": "transforma mensagem parada em aviso para humano, e não em lixo silencioso"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — dados (herdado do L01)",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "catalogo",
+                    "service": "postgres",
+                    "label": "Catálogo de preços e estoque",
+                    "note": "recebe o UPSERT linha a linha do processador, sem intervenção humana"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "fornecedor",
+                "to": "s3",
+                "label": "POST assinado, mesmo fluxo do L17",
+                "style": "solid"
+              },
+              {
+                "from": "s3",
+                "to": "eb",
+                "label": "evento Object Created, entregue ao menos uma vez",
+                "style": "solid"
+              },
+              {
+                "from": "eb",
+                "to": "validador",
+                "label": "invocação filtrada por prefixo entrada/ e tipo do evento",
+                "style": "solid"
+              },
+              {
+                "from": "validador",
+                "to": "db",
+                "label": "PutItem condicional: attribute_not_exists(ArquivoId)",
+                "style": "solid"
+              },
+              {
+                "from": "validador",
+                "to": "s3",
+                "label": "move o objeto para rejeitado/{motivo} quando a estrutura falha",
+                "style": "dashed"
+              },
+              {
+                "from": "validador",
+                "to": "fila",
+                "label": "SendMessage só se a condição foi nova e a estrutura passou",
+                "style": "solid"
+              },
+              {
+                "from": "fila",
+                "to": "processador",
+                "label": "poll em lote, até 10 mensagens",
+                "style": "solid"
+              },
+              {
+                "from": "processador",
+                "to": "catalogo",
+                "label": "UPSERT por SKU, linha a linha",
+                "style": "solid"
+              },
+              {
+                "from": "processador",
+                "to": "s3",
+                "label": "move o objeto de entrada/ para processado/ ao concluir",
+                "style": "dashed"
+              },
+              {
+                "from": "processador",
+                "to": "db",
+                "label": "grava o veredito final e o total de linhas aplicadas",
+                "style": "solid"
+              },
+              {
+                "from": "fila",
+                "to": "dlq",
+                "label": "após 5 tentativas, redrive policy",
+                "style": "dashed"
+              },
+              {
+                "from": "dlq",
+                "to": "cw",
+                "label": "ApproximateNumberOfMessagesVisible > 0",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O bucket fala com o EventBridge, não direto com o Lambda",
+                "detail": "A notificação direta do S3 aceita um único destino por tipo de evento: se o validador já ocupa o `ObjectCreated`, um segundo consumidor — auditoria, métrica — exige desmontar a configuração do bucket para caber. É a mesma dívida que o fanout do L23/L24 resolveu para SNS/SQS, agora aplicada a S3: o EventBridge aceita quantas regras forem necessárias sem tocar o bucket de novo.",
+                "nodes": [
+                  "s3",
+                  "eb"
+                ],
+                "edges": [
+                  "s3>eb"
+                ]
+              },
+              {
+                "label": "A regra filtra sem tocar o bucket",
+                "detail": "O padrão de evento compara `detail.bucket.name` e o prefixo da chave contra `entrada/`. Adicionar um segundo consumidor no futuro é uma regra nova apontando para o mesmo barramento — o bucket nunca é reconfigurado outra vez.",
+                "nodes": [
+                  "eb",
+                  "validador"
+                ],
+                "edges": [
+                  "eb>validador"
+                ]
+              },
+              {
+                "label": "A entrega repetida é tratada antes de qualquer efeito",
+                "detail": "S3 e EventBridge entregam \"ao menos uma vez\", nunca \"exatamente uma vez\" — e a AWS documenta explicitamente que retries ocasionais produzem evento duplicado para o mesmo objeto. O `PutItem` com `ConditionExpression: attribute_not_exists(ArquivoId)` só tem sucesso na PRIMEIRA vez que aquele arquivo é visto — é a mesma técnica do L22, agora com a chave sendo o arquivo, não o pedido.",
+                "nodes": [
+                  "validador",
+                  "db"
+                ],
+                "edges": [
+                  "validador>db"
+                ]
+              },
+              {
+                "label": "A validação estrutural decide sem processar linha nenhuma",
+                "detail": "O validador confere cabeçalho, codificação e a presença das colunas esperadas — não abre a planilha linha a linha. Se a estrutura falha, o objeto é movido para `rejeitado/{motivo}` e a tabela grava a razão: o arquivo não desaparece, ele fica visível com um motivo legível.",
+                "nodes": [
+                  "validador",
+                  "s3"
+                ],
+                "edges": [
+                  "validador>s3"
+                ]
+              },
+              {
+                "label": "O trabalho pesado sai do caminho síncrono",
+                "detail": "Só depois de a condição ter sido nova E a estrutura ter passado é que a mensagem vai para a fila. Isso mantém o validador rápido — ele nunca fica preso processando milhares de linhas — e é o que evita que um arquivo grande atrase a validação do próximo.",
+                "nodes": [
+                  "validador",
+                  "fila"
+                ],
+                "edges": [
+                  "validador>fila"
+                ]
+              },
+              {
+                "label": "O processador aplica linha a linha, e sabe quando desistir",
+                "detail": "O Lambda Processador consome em lote, aplica o `UPSERT` por SKU e, se falhar, devolve só o item com problema (`ReportBatchItemFailures`, o mesmo mecanismo do L22). Depois de 5 tentativas sem sucesso, a mensagem vai para a DLQ, e o alarme avisa — sem isso, um arquivo com erro fica reentregando silenciosamente.",
+                "nodes": [
+                  "fila",
+                  "processador",
+                  "dlq"
+                ],
+                "edges": [
+                  "fila>processador",
+                  "fila>dlq"
+                ]
+              },
+              {
+                "label": "O estado final mora na tabela; o arquivo movido é conveniência visual",
+                "detail": "O `UPSERT` no catálogo e a gravação do veredito na tabela acontecem antes de o objeto ser movido a `processado/`. Se alguém for procurar \"o que aconteceu com o arquivo X\", a resposta certa vem da consulta na tabela — o mesmo princípio que o L17 já tinha estabelecido para os laudos.",
+                "nodes": [
+                  "processador",
+                  "db",
+                  "catalogo"
+                ],
+                "edges": [
+                  "processador>db",
+                  "processador>catalogo"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "O que muda para o fornecedor: nada",
+            "content": "A forma de enviar a planilha é idêntica à do L17 — o mesmo POST assinado, a mesma URL. Toda a mudança acontece depois do upload, sem tocar o contrato que o fornecedor já usa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de um arquivo, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os oito passos abaixo separam duas fases que o processo manual misturava numa só: \"perceber que o arquivo chegou\" e \"processar o arquivo\". Nenhuma pessoa participa de nenhuma das duas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "O caminho de um arquivo, da chegada ao veredito",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1. O fornecedor envia a planilha",
+                "desc": "POST assinado ao bucket, reaproveitando a política do L17. A chave é `entrada/{fornecedorId}/{uuid}-planilha.csv` — escolhida pelo servidor, nunca pelo cliente."
+              },
+              {
+                "label": "2. O S3 anuncia o objeto criado ao EventBridge",
+                "desc": "Com a entrega ao EventBridge habilitada no bucket, o evento `Object Created` sai sem que o objeto tenha sido reconfigurado — é comportamento do bucket, não do arquivo."
+              },
+              {
+                "label": "3. A regra filtra e invoca o Validador",
+                "desc": "O padrão de evento casa `detail.bucket.name` e o prefixo `entrada/`. Objetos em `processado/` ou `rejeitado/` não casam com essa regra — é o que impede o loop."
+              },
+              {
+                "label": "4. O Validador registra a intenção com escrita condicional",
+                "desc": "`PutItem` com `attribute_not_exists(ArquivoId)`. Se a condição falhar, é uma entrega repetida do mesmo evento: o Validador registra o log e encerra sem efeito novo."
+              },
+              {
+                "label": "5. A estrutura é conferida — cabeçalho, colunas, codificação",
+                "desc": "Nenhuma linha de dado é interpretada aqui. Falhou: o objeto vai para `rejeitado/{motivo}` e a tabela grava o motivo. Passou: segue para o passo 6."
+              },
+              {
+                "label": "6. A mensagem entra na fila de processamento pesado",
+                "desc": "O Validador devolve em milissegundos — o trabalho de milhares de linhas não acontece na função que decide se o arquivo é válido."
+              },
+              {
+                "label": "7. O Processador aplica linha a linha e decide o veredito final",
+                "desc": "Lê a planilha do S3, faz `UPSERT` por SKU no catálogo, grava o total de linhas aplicadas na tabela e move o objeto para `processado/`."
+              },
+              {
+                "label": "8. Falha persistente vai para a DLQ, com alarme",
+                "desc": "Depois de 5 tentativas malsucedidas do Processador, a mensagem sai da fila principal para a DLQ, e o alarme de mensagem visível dispara."
+              }
+            ]
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O que o EventBridge entrega ao Validador. Repare que o corpo da planilha nao esta aqui — so metadado. A funcao ainda vai buscar o conteudo no S3 se precisar."
+              }
+            ]
+          },
+          "position": 2
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "json",
+            "filename": "evento-object-created.json",
+            "code": "{\n  \"version\": \"0\",\n  \"source\": \"aws.s3\",\n  \"detail-type\": \"Object Created\",\n  \"account\": \"111122223333\",\n  \"region\": \"sa-east-1\",\n  \"time\": \"2026-08-07T13:04:12Z\",\n  \"detail\": {\n    \"bucket\": { \"name\": \"ffv-lab-planilhas\" },\n    \"object\": {\n      \"key\": \"entrada/fornecedor-08/9c2f-precos-agosto.csv\",\n      \"size\": 184320,\n      \"etag\": \"d41d8cd98f00b204e9800998ecf8427e\",\n      \"sequencer\": \"0062E99A88DC407460\"\n    },\n    \"request-id\": \"8N2J5M3R7K1QZP4W\",\n    \"requester\": \"111122223333\",\n    \"reason\": \"PutObject\"\n  }\n}"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "Por que o ArquivoId usa o ETag, e não só bucket e chave",
+            "content": "Duas ENTREGAS do mesmo evento — retry do S3 ou do EventBridge — trazem o mesmo ETag, e a condição no DynamoDB as reconhece como o mesmo arquivo. Um fornecedor que reenvia um arquivo com o mesmo nome, mas conteúdo diferente, produz um ETag diferente — e é tratado como arquivo novo, que é o comportamento correto: conteúdo novo merece processamento novo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Doze fornecedores da Cadência enviam de 3 a 8 planilhas de preço e estoque por dia, com pico no início do mês, e a equipe de duas pessoas não pode depender de alguém lembrar de checar o bucket para que o catálogo fique atualizado.",
+            "winner": "EventBridge como roteador do evento do S3, um Lambda leve para validar e decidir, fila + DLQ para o processamento pesado, e DynamoDB como fonte de verdade do estado",
+            "why": "O EventBridge resolve o problema declarado — ninguém mais precisa notar o arquivo — sem prender a validação rápida ao tempo de processar milhares de linhas, porque as duas coisas vivem em funções separadas ligadas por fila. A escrita condicional no DynamoDB trata a entrega \"ao menos uma vez\" como o contrato documentado que ela é, não como falha rara a ignorar. E como o EventBridge aceita múltiplas regras sem reconfigurar o bucket, acrescentar um segundo consumidor — por exemplo, auditoria — no futuro não exige desmontar nada que já funciona.",
+            "alternatives": [
+              {
+                "name": "Notificação direta do bucket para o Lambda",
+                "downside": "Funciona igual no dia 1, mas só permite um destino por tipo de evento. No dia em que a Cadência quiser mandar cópia do evento para auditoria, vai precisar desmontar a configuração do bucket e reconciliar com quem já usa aquele destino — a mesma dívida que o L23 resolveu para SNS/SQS, agora em S3."
+              },
+              {
+                "name": "Polling periódico do bucket (listar objetos a cada N minutos)",
+                "downside": "Troca \"lembrar\" por \"agendar\", mas não elimina o atraso: com intervalo de 15 minutos, o atraso médio é metade disso e o pior caso é o intervalo inteiro. Em escala, listar o bucket repetidamente também tem custo de requisição que cresce com o número de objetos, mesmo quando nada mudou."
+              },
+              {
+                "name": "O fornecedor chama uma API avisando que terminou o envio",
+                "downside": "Confia que o cliente vai terminar a chamada. Se o navegador fechar ou a requisição de aviso falhar depois do upload já ter sido confirmado pelo S3, o arquivo fica exatamente tão órfão quanto hoje — o mesmo defeito, só transferido para outro ponto de falha que a Cadência não controla."
+              },
+              {
+                "name": "Um único Lambda fazendo validação e processamento pesado no mesmo handler",
+                "downside": "Menos peça para configurar, mas acopla o tempo de resposta ao evento ao tempo de processar milhares de linhas. Um arquivo grande de um fornecedor atrasa a validação do próximo arquivo, de outro fornecedor, que não tem nada a ver com o primeiro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Roteamento do evento",
+                "EventBridge",
+                "notificação direta do bucket para o Lambda",
+                "múltiplos destinos e filtro por padrão, sem reconfigurar o bucket a cada mudança",
+                "mais uma peça (a regra) para entender e depurar"
+              ],
+              [
+                "Separação leve/pesado",
+                "dois Lambdas ligados por fila",
+                "um handler único fazendo tudo",
+                "validação rápida não fica presa ao tempo de processar milhares de linhas",
+                "mais latência de ponta a ponta no caminho feliz — poucos segundos a mais"
+              ],
+              [
+                "Dedupe de entrega repetida",
+                "PutItem condicional no DynamoDB por ArquivoId",
+                "confiar que o evento não duplica",
+                "at-least-once é o contrato documentado do S3 e do EventBridge, não exceção rara",
+                "mais uma tabela e uma chave (bucket + chave + ETag) para manter"
+              ],
+              [
+                "Onde o malformado vai parar",
+                "prefixo rejeitado/{motivo} + registro na tabela",
+                "descartar silenciosamente ou deixar em entrada/",
+                "dá ao analista onde olhar sem vasculhar log, e evita reprocessamento em loop",
+                "ocupa espaço até uma regra de ciclo de vida limpar"
+              ],
+              [
+                "Tipo de fila",
+                "SQS standard",
+                "SQS FIFO",
+                "arquivos de fornecedores diferentes são independentes; ordem entre eles não importa",
+                "nenhuma garantia de ordem — irrelevante para este requisito"
+              ],
+              [
+                "Fonte de verdade do estado",
+                "DynamoDB",
+                "inferir pelo prefixo do objeto no S3",
+                "um move que falha no meio deixa o prefixo mentindo; a tabela não tem esse risco",
+                "mais uma escrita por transição de estado"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: o bucket fala com o EventBridge, a regra filtra"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A habilitação da entrega ao EventBridge é uma linha. O que exige atenção é a regra: sem o filtro de prefixo, o objeto movido para `processado/` pelo próprio pipeline dispara um `Object Created` novo, e o validador seria invocado sobre a própria saída."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "eventbridge.tf",
+            "code": "# eventbridge.tf — o bucket fala com o EventBridge, a regra filtra\n\n# Habilita a entrega de TODOS os eventos do bucket ao EventBridge. Diferente da\n# notificacao direta, aqui nao se escolhe tipo de evento nem destino — isso fica\n# a cargo das regras abaixo, e e por isso que multiplos consumidores cabem sem\n# reconfigurar este bloco de novo.\nresource \"aws_s3_bucket_notification\" \"planilhas\" {\n  bucket      = aws_s3_bucket.planilhas.id\n  eventbridge = true\n}\n\n# A regra e quem decide o que importa: bucket certo, evento de criacao, e\n# SOMENTE o prefixo de entrada. Sem o filtro de prefixo, um objeto movido para\n# processado/ ou rejeitado/ pelo proprio pipeline gera um NOVO ObjectCreated —\n# e o validador dispararia a si mesmo. Este e o loop de execucao que a\n# documentacao da AWS avisa para Lambda-com-S3, e a causa e sempre a mesma:\n# saida do pipeline caindo dentro do alcance do proprio gatilho.\nresource \"aws_cloudwatch_event_rule\" \"planilha_recebida\" {\n  name = \"${var.projeto}-planilha-recebida\"\n\n  event_pattern = jsonencode({\n    source      = [\"aws.s3\"]\n    detail-type = [\"Object Created\"]\n    detail = {\n      bucket = { name = [aws_s3_bucket.planilhas.id] }\n      object = { key = [{ prefix = \"entrada/\" }] }\n    }\n  })\n}\n\nresource \"aws_cloudwatch_event_target\" \"invoca_validador\" {\n  rule      = aws_cloudwatch_event_rule.planilha_recebida.name\n  target_id = \"validador\"\n  arn       = aws_lambda_function.validador.arn\n}\n\nresource \"aws_lambda_permission\" \"eventbridge_invoca_validador\" {\n  statement_id  = \"AllowEventBridgeInvoke\"\n  action        = \"lambda:InvokeFunction\"\n  function_name = aws_lambda_function.validador.function_name\n  principal     = \"events.amazonaws.com\"\n  source_arn    = aws_cloudwatch_event_rule.planilha_recebida.arn\n}\n\n# A tabela e a fonte de verdade do estado de cada arquivo. O prefixo do S3\n# (entrada/processado/rejeitado) e so conveniencia para quem navega pelo\n# console — se um move falhar no meio, e esta tabela que continua confiavel.\nresource \"aws_dynamodb_table\" \"arquivos\" {\n  name         = \"${var.projeto}-arquivos\"\n  billing_mode = \"PAY_PER_REQUEST\"\n  hash_key     = \"ArquivoId\"\n\n  attribute {\n    name = \"ArquivoId\"\n    type = \"S\"\n  }\n\n  point_in_time_recovery {\n    enabled = true\n  }\n}\n\noutput \"tabela_arquivos\" {\n  value       = aws_dynamodb_table.arquivos.name\n  description = \"fonte de verdade do estado de cada arquivo recebido\"\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "O loop de execução é documentado pela própria AWS, e é real",
+            "content": "A documentação de Lambda com S3 avisa explicitamente: se a notificação escreve de volta no MESMO bucket que a dispara, isso pode causar um loop de execução — o Lambda indiretamente dispara a si mesmo. Aqui o risco existe porque o Processador move o objeto de `entrada/` para `processado/` dentro do mesmo bucket; sem o filtro de prefixo na regra, cada arquivo processado geraria uma nova invocação do Validador, em looping — e cada invocação é custo real, não hipotético."
+          }
+        },
+        {
+          "id": "b8_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "Um único recurso de notificação por bucket, não um por evento",
+            "content": "`aws_s3_bucket_notification` com `eventbridge = true` é a única declaração de notificação para o bucket inteiro — diferente da notificação direta, que exige um bloco por combinação de evento e destino. Escrever uma segunda regra do EventBridge depois não toca este recurso de novo: a decisão de quem escuta o quê fica inteira do lado do EventBridge."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o Validador decide sem processar linha nenhuma"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O Validador tem uma única responsabilidade: registrar a intenção de forma idempotente e decidir, pela estrutura, se o arquivo segue para processamento pesado ou para rejeitado. Ele nunca abre a planilha linha a linha."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Validador/Function.cs",
+            "code": "// Validador/Function.cs — decide rapido, sem processar linha nenhuma\n\npublic class Function\n{\n    private readonly IAmazonS3 _s3;\n    private readonly IAmazonDynamoDB _db;\n    private readonly IAmazonSQS _sqs;\n    private const string TabelaArquivos = \"ffv-lab-arquivos\";\n    private const string FilaProcessamento = \"https://sqs.sa-east-1.amazonaws.com/.../ffv-lab-planilhas-processamento\";\n\n    public async Task FunctionHandler(EventBridgeEvent<S3ObjectCreatedDetail> evento, ILambdaContext ctx)\n    {\n        var bucket = evento.Detail.Bucket.Name;\n        var chave = evento.Detail.Object.Key;\n        // O ETag do proprio evento e parte da identidade: duas ENTREGAS do\n        // mesmo objeto (retry do S3/EventBridge) tem o mesmo ETag; um objeto\n        // REENVIADO pelo fornecedor com o mesmo nome, nao — e por isso ele\n        // conta como arquivo novo, o que e o comportamento correto.\n        var arquivoId = $\"{bucket}/{chave}#{evento.Detail.Object.ETag}\";\n\n        // Escrita condicional: so tem sucesso na PRIMEIRA vez que este\n        // ArquivoId e visto. E a mesma tecnica do L22 (PutItem condicional\n        // por PedidoId), aplicada aqui por ARQUIVO. Entrega \"ao menos uma\n        // vez\" e o contrato documentado do S3 e do EventBridge — nao uma\n        // falha rara a ignorar.\n        try\n        {\n            await _db.PutItemAsync(new PutItemRequest\n            {\n                TableName = TabelaArquivos,\n                Item = new Dictionary<string, AttributeValue>\n                {\n                    [\"ArquivoId\"] = new() { S = arquivoId },\n                    [\"Bucket\"] = new() { S = bucket },\n                    [\"Chave\"] = new() { S = chave },\n                    [\"Estado\"] = new() { S = \"RECEBIDO\" },\n                    [\"RecebidoEm\"] = new() { S = DateTimeOffset.UtcNow.ToString(\"O\") },\n                },\n                ConditionExpression = \"attribute_not_exists(ArquivoId)\",\n            });\n        }\n        catch (ConditionalCheckFailedException)\n        {\n            // Entrega repetida do MESMO evento. Nao e erro: e o contrato \"ao\n            // menos uma vez\" se manifestando. Registrar e sair e a resposta\n            // correta — reprocessar aqui duplicaria o efeito la na frente.\n            ctx.Logger.LogInformation($\"entrega repetida ignorada: {arquivoId}\");\n            return;\n        }\n\n        var cabecalho = await LerPrimeirasLinhasAsync(bucket, chave);\n        var (valido, motivo) = ValidarEstrutura(cabecalho);\n\n        if (!valido)\n        {\n            var chaveRejeitada = chave.Replace(\"entrada/\", $\"rejeitado/{Sanear(motivo)}/\");\n            await _s3.CopyObjectAsync(bucket, chave, bucket, chaveRejeitada);\n            await _s3.DeleteObjectAsync(bucket, chave);\n            await AtualizarEstadoAsync(arquivoId, \"REJEITADO\", motivo);\n            return;\n        }\n\n        await AtualizarEstadoAsync(arquivoId, \"VALIDADO\", motivo: null);\n\n        // So enfileira o trabalho pesado depois de a condicao ter sido nova\n        // E a estrutura ter passado. O validador nunca fica preso lendo\n        // milhares de linhas — isso e trabalho do Processador, em outra funcao.\n        await _sqs.SendMessageAsync(new SendMessageRequest\n        {\n            QueueUrl = FilaProcessamento,\n            MessageBody = JsonSerializer.Serialize(new { arquivoId, bucket, chave }),\n        });\n    }\n\n    private static (bool valido, string motivo) ValidarEstrutura(string primeirasLinhas)\n    {\n        // Confere SO estrutura: cabecalho esperado e codificacao. Nenhuma\n        // linha de dado e interpretada aqui — isso e responsabilidade do\n        // Processador, deliberadamente separado.\n        var colunasEsperadas = new[] { \"sku\", \"preco\", \"estoque\" };\n        var primeiraLinha = primeirasLinhas.Split('\\n').FirstOrDefault() ?? \"\";\n        var colunas = primeiraLinha.Trim().ToLowerInvariant().Split(',');\n\n        if (!colunasEsperadas.All(colunas.Contains))\n            return (false, \"cabecalho-inesperado\");\n\n        // Protege quem eventualmente abrir o arquivo rejeitado no Excel: uma\n        // celula comecando com =, +, - ou @ e interpretada como formula pelo\n        // Excel, e pode executar comando. Nao processamos o arquivo, mas\n        // marcamos o risco no motivo para quem for investigar manualmente.\n        if (primeirasLinhas.Contains(\",=\") || primeirasLinhas.Contains(\",+\") || primeirasLinhas.Contains(\",@\"))\n            return (false, \"possivel-injecao-de-formula\");\n\n        return (true, motivo: null);\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que a validação de injeção de fórmula está aqui, e não é o foco do módulo",
+            "content": "Uma célula CSV começando com `=`, `+`, `-` ou `@` é interpretada como fórmula pelo Excel — inclusive fórmulas que executam comando. O pipeline nunca abre o arquivo em planilha eletrônica nenhuma, mas o analista que for investigar um arquivo rejeitado manualmente pode abrir. Marcar esse padrão no motivo de rejeição é barato e evita que o próximo passo humano vire o ponto fraco que o pipeline automatizado evitou."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: a fila, a DLQ e a tabela de estado"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A fila e a DLQ seguem exatamente o padrão do L22 — a diferença é o que elas carregam: não é mais um pedido, é a referência a um arquivo inteiro no S3."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "fila.tf",
+            "code": "# fila.tf — fila e DLQ do processamento pesado, o mesmo padrao do L22\n\nresource \"aws_sqs_queue\" \"planilhas_dlq\" {\n  name                       = \"${var.projeto}-planilhas-dlq\"\n  message_retention_seconds  = 1209600 # 14 dias — teto do servico, para dar tempo de investigar\n  sqs_managed_sse_enabled    = true\n}\n\nresource \"aws_sqs_queue\" \"planilhas_processamento\" {\n  name = \"${var.projeto}-planilhas-processamento\"\n\n  # 6x o timeout da funcao processadora (60 s) — cobre reentrega por\n  # throttling sem multiplicar demais o atraso caso a mensagem precise\n  # mesmo ser reentregue.\n  visibility_timeout_seconds = 360\n\n  message_retention_seconds = 345600 # 4 dias cobrem qualquer pico de inicio de mes\n  sqs_managed_sse_enabled   = true\n\n  redrive_policy = jsonencode({\n    deadLetterTargetArn = aws_sqs_queue.planilhas_dlq.arn\n    # 5, como no L22: da margem a falha transitoria (ex.: pool do Postgres\n    # momentaneamente cheio) sem deixar mensagem ruim reentregando para sempre.\n    maxReceiveCount = 5\n  })\n}\n\nresource \"aws_sqs_queue_redrive_allow_policy\" \"dlq_allow\" {\n  queue_url = aws_sqs_queue.planilhas_dlq.id\n  redrive_allow_policy = jsonencode({\n    redrivePermission = \"byQueue\"\n    sourceQueueArns   = [aws_sqs_queue.planilhas_processamento.arn]\n  })\n}\n\nresource \"aws_cloudwatch_metric_alarm\" \"dlq_com_mensagem\" {\n  alarm_name          = \"${var.projeto}-planilhas-dlq-nao-vazia\"\n  namespace           = \"AWS/SQS\"\n  metric_name         = \"ApproximateNumberOfMessagesVisible\"\n  statistic           = \"Maximum\"\n  period              = 300\n  evaluation_periods  = 1\n  threshold           = 0\n  comparison_operator = \"GreaterThanThreshold\"\n  treat_missing_data  = \"notBreaching\"\n\n  dimensions = {\n    QueueName = aws_sqs_queue.planilhas_dlq.name\n  }\n\n  alarm_actions = [aws_sns_topic.alertas.arn]\n}\n\nresource \"aws_lambda_event_source_mapping\" \"processador_consome_fila\" {\n  event_source_arn = aws_sqs_queue.planilhas_processamento.arn\n  function_name    = aws_lambda_function.processador.arn\n  batch_size       = 10\n\n  # Sem isto, UM item com erro no lote de 10 devolve os 10 para a fila —\n  # inclusive os 9 que ja tiveram efeito aplicado. O mesmo mecanismo do L22.\n  function_response_types = [\"ReportBatchItemFailures\"]\n}\n\n# O validador so pode gravar mensagem NESTA fila — nao em qualquer fila da\n# conta. GetAuthorizationToken-like: sqs:SendMessage aceita recurso\n# especifico, entao aqui o ARN e restrito, sem \"*\" nenhum.\ndata \"aws_iam_policy_document\" \"validador_envia_fila\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"sqs:SendMessage\"]\n    resources = [aws_sqs_queue.planilhas_processamento.arn]\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Onde",
+              "Parâmetro",
+              "Valor aqui",
+              "Por quê"
+            ],
+            "rows": [
+              [
+                "Fila principal",
+                "`visibility_timeout_seconds`",
+                "360 s (6× o timeout da função)",
+                "cobre reentrega por throttling sem multiplicar demais o atraso de uma reentrega real"
+              ],
+              [
+                "Fila principal",
+                "`maxReceiveCount`",
+                "5",
+                "falha transitória (pool do Postgres momentaneamente cheio) não deve virar alarme na primeira tentativa"
+              ],
+              [
+                "Mapeamento de evento",
+                "`batch_size`",
+                "10",
+                "processa até 10 arquivos por invocação, sem exigir capacidade provisionada com antecedência"
+              ],
+              [
+                "Mapeamento de evento",
+                "`function_response_types`",
+                "`ReportBatchItemFailures`",
+                "evita reprocessar arquivo que já teve sucesso dentro do mesmo lote"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: o Processador aplica linha a linha"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O Processador só é acionado depois de o Validador ter aprovado a estrutura. Seu trabalho é aplicar cada linha no catálogo, mover o objeto e gravar o veredito final."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Processador/Function.cs",
+            "code": "// Processador/Function.cs — aplica linha a linha, e sabe quando desistir\n\npublic class Function\n{\n    private readonly NpgsqlDataSource _db;\n    private readonly IAmazonS3 _s3;\n    private readonly IAmazonDynamoDB _dynamo;\n\n    public async Task<SQSBatchResponse> FunctionHandler(SQSEvent evento, ILambdaContext ctx)\n    {\n        var falhas = new List<SQSBatchResponse.BatchItemFailure>();\n\n        foreach (var msg in evento.Records)\n        {\n            try\n            {\n                var tarefa = JsonSerializer.Deserialize<TarefaProcessamento>(msg.Body)!;\n                var linhas = await LerPlanilhaAsync(tarefa.Bucket, tarefa.Chave);\n\n                await using var conexao = await _db.OpenConnectionAsync();\n                await using var transacao = await conexao.BeginTransactionAsync();\n\n                // UPSERT por SKU com o valor ABSOLUTO da planilha — nao um\n                // incremento. E o que torna reaplicar a mesma linha duas\n                // vezes inofensivo: o resultado final e o mesmo preco e o\n                // mesmo estoque, nao um estoque somado duas vezes.\n                var comando = new NpgsqlCommand(\n                    \"INSERT INTO catalogo (sku, preco_centavos, estoque, atualizado_em) \" +\n                    \"VALUES (@sku, @preco, @estoque, now()) \" +\n                    \"ON CONFLICT (sku) DO UPDATE SET \" +\n                    \"  preco_centavos = EXCLUDED.preco_centavos, \" +\n                    \"  estoque = EXCLUDED.estoque, \" +\n                    \"  atualizado_em = now()\",\n                    conexao, transacao);\n\n                int aplicadas = 0;\n                foreach (var linha in linhas)\n                {\n                    comando.Parameters.Clear();\n                    comando.Parameters.AddWithValue(\"sku\", linha.Sku);\n                    comando.Parameters.AddWithValue(\"preco\", linha.PrecoCentavos);\n                    comando.Parameters.AddWithValue(\"estoque\", linha.Estoque);\n                    await comando.ExecuteNonQueryAsync();\n                    aplicadas++;\n                }\n\n                await transacao.CommitAsync();\n\n                var chaveFinal = tarefa.Chave.Replace(\"entrada/\", \"processado/\");\n                await _s3.CopyObjectAsync(tarefa.Bucket, tarefa.Chave, tarefa.Bucket, chaveFinal);\n                await _s3.DeleteObjectAsync(tarefa.Bucket, tarefa.Chave);\n\n                await AtualizarEstadoAsync(tarefa.ArquivoId, \"PROCESSADO\", linhasAplicadas: aplicadas);\n            }\n            catch (Exception ex)\n            {\n                ctx.Logger.LogError($\"falha ao processar {msg.MessageId}: {ex.Message}\");\n                // Devolve SO este item — os demais mensagens do lote, se\n                // ja tiverem tido sucesso, nao voltam para a fila.\n                falhas.Add(new SQSBatchResponse.BatchItemFailure { ItemIdentifier = msg.MessageId });\n            }\n        }\n\n        return new SQSBatchResponse { BatchItemFailures = falhas };\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O UPSERT usa o valor absoluto da planilha, nunca um incremento",
+            "content": "Se o processamento fosse `estoque = estoque + linha.Quantidade`, reaplicar a mesma linha duas vezes — por exemplo, numa reentrega da fila — dobraria o estoque. Como o UPSERT grava o valor absoluto que veio na planilha, reaplicar a mesma linha é inofensivo: o resultado final é o mesmo, não a soma de duas aplicações. É uma segunda camada de proteção, além da escrita condicional do Validador — nem toda duplicata possível é pega no mesmo lugar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar que o arquivo não depende de ninguém lembrar"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma delas aceita \"o catálogo parece atualizado\" como resultado — cada uma tem um número ou um estado esperado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# ── Prova 1: do upload ao veredito, sem toque humano ────────────────────────\naws s3 cp planilha-valida.csv \\\n  \"s3://ffv-lab-planilhas/entrada/fornecedor-08/$(uuidgen)-precos.csv\"\nINICIO=$(date +%s)\nwatch -n2 \"aws dynamodb scan --table-name ffv-lab-arquivos \\\n  --query 'Items[?Estado.S==\\`PROCESSADO\\`]' --output json | jq length\"\n# Esperado: o estado chega a PROCESSADO sem nenhum comando manual entre o cp e o scan.\n# Medicao de exemplo, arquivo de 800 linhas: 8 a 14 s do upload ao veredito final,\n# dominados pelo tempo de leitura e UPSERT das linhas, nao pelo roteamento do evento.\n\n# ── Prova 2: arquivo malformado nao desaparece — vai para rejeitado/ com motivo ──\necho \"coluna1,coluna2\" > planilha-invalida.csv\naws s3 cp planilha-invalida.csv \"s3://ffv-lab-planilhas/entrada/fornecedor-08/teste-invalido.csv\"\nsleep 10\naws s3 ls s3://ffv-lab-planilhas/rejeitado/ --recursive | grep teste-invalido\naws dynamodb get-item --table-name ffv-lab-arquivos \\\n  --key '{\"ArquivoId\":{\"S\":\"ffv-lab-planilhas/entrada/fornecedor-08/teste-invalido.csv#...\"}}' \\\n  --query \"Item.Motivo.S\"\n# Esperado: \"cabecalho-inesperado\", e ZERO linhas tocadas no catalogo.\n\n# ── Prova 3: entrega duplicada nao processa duas vezes ──────────────────────\n# Publica o MESMO evento de amostra duas vezes, simulando o retry documentado.\nfor i in 1 2; do\n  aws events put-events --entries file://evento-de-amostra.json\ndone\naws logs filter-log-events --log-group-name /aws/lambda/ffv-lab-validador \\\n  --filter-pattern \"entrega repetida ignorada\" --query \"length(events)\"\n# Esperado: 1 — a segunda entrega foi reconhecida e ignorada, nao reprocessada.\n\n# ── Prova 4: falha persistente vai para a DLQ, com alarme ───────────────────\n# Force um erro no Processador (ex.: aponte para uma tabela Postgres inexistente)\n# e envie um arquivo valido. Depois de 5 tentativas:\naws sqs get-queue-attributes \\\n  --queue-url \"$(terraform output -raw fila_dlq_url)\" \\\n  --attribute-names ApproximateNumberOfMessagesVisible\n# Esperado: 1 mensagem visivel na DLQ, e o alarme ffv-lab-planilhas-dlq-nao-vazia em ALARM.\n\n# ── Prova 5: a notificacao direta NAO aceita dois destinos sobrepostos ──────\n# Prova negativa: mostra por que este modulo nao usou notificacao direta.\naws s3api put-bucket-notification-configuration \\\n  --bucket ffv-lab-planilhas \\\n  --notification-configuration file://duas-notificacoes-mesmo-prefixo.json\n# Esperado: erro da API — configuracao ambigua para o mesmo tipo de evento e prefixo\n# sobreposto. E o limite que a decisao desta secao evita, na pratica, nao so na teoria."
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Upload até veredito, sem toque humano",
+                "estado chega a PROCESSADO sozinho",
+                "se fica em RECEBIDO, a regra do EventBridge não invocou o Validador"
+              ],
+              [
+                "2 · Malformado não desaparece",
+                "objeto em rejeitado/ com motivo na tabela",
+                "se sumiu, a cópia falhou antes do delete — confira a ordem das duas chamadas"
+              ],
+              [
+                "3 · Duplicata não reprocessa",
+                "log de \"entrega repetida\" exatamente 1 vez",
+                "se processou duas vezes, a condição do PutItem está ausente ou a chave está errada"
+              ],
+              [
+                "4 · Falha persistente alcança a DLQ",
+                "mensagem na DLQ e alarme em ALARM",
+                "se fica reentregando para sempre, confira `maxReceiveCount` e a redrive policy"
+              ],
+              [
+                "5 · Notificação direta recusa sobreposição",
+                "API devolve erro de configuração ambígua",
+                "se aceitou, os prefixos não se sobrepõem de verdade — ajuste o teste"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "O que a prova 5 prova, de fato",
+            "content": "O erro devolvido pela API é sobre o BUCKET não conseguir decidir, sozinho, para qual dos dois destinos mandar o mesmo evento — não sobre limite de conta nem de permissão. É a prova de que a decisão de usar EventBridge nesta seção não é preferência de estilo: é a resposta a uma restrição que a API do S3 aplica e recusa contornar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três acontecem de verdade, e nenhuma delas produz uma exceção clara na hora — o sintoma aparece minutos ou horas depois, longe da causa."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Escrita condicional removida do Validador",
+                "tire o `ConditionExpression` do `PutItem`",
+                "entrega duplicada do EventBridge processa o mesmo arquivo duas vezes",
+                "duas linhas PROCESSADO para o mesmo ArquivoId na tabela",
+                "devolver a condição `attribute_not_exists(ArquivoId)`"
+              ],
+              [
+                "Regra sem filtro de prefixo",
+                "remova `detail.object.key` do padrão de evento",
+                "o mesmo arquivo entra em RECEBIDO repetidamente, sem fim",
+                "contagem de invocações do Validador muito acima do número de uploads",
+                "restringir a regra ao prefixo entrada/, como no Terraform desta seção"
+              ],
+              [
+                "`maxReceiveCount` alto demais (ex.: 50)",
+                "suba o valor na redrive policy e envie um arquivo com erro real de parsing",
+                "a mensagem reentrega dezenas de vezes antes de qualquer alarme disparar",
+                "invocações do Processador muito acima do número de arquivos recebidos",
+                "valor entre 3 e 5 — dá margem à falha transitória sem esconder a permanente"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "O loop de reprocessamento é o mesmo risco documentado pela AWS para Lambda-com-S3",
+            "content": "Sem o filtro de prefixo, mover o arquivo processado para dentro do mesmo bucket que dispara o evento cria exatamente o loop de execução que a documentação da AWS avisa: o Processador termina, move o objeto, o move gera um `Object Created` novo, e o Validador é invocado de novo sobre um arquivo que já está pronto. Cada volta do laço é uma invocação real de duas funções Lambda, cobrando enquanto ninguém percebe."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Uma equipe configura a notificação do bucket S3 diretamente para um Lambda de validação, e meses depois precisa acrescentar um segundo consumidor — um Lambda de auditoria — para o mesmo evento de criação de objeto. Qual é o obstáculo?",
+        "options": [
+          "A notificação direta do bucket aceita um único destino por tipo de evento",
+          "O S3 não permite dois Lambdas na mesma conta AWS",
+          "O evento de criação de objeto só pode ser lido uma vez, por design",
+          "O Lambda de auditoria precisaria de mais memória que o padrão permite"
+        ],
+        "correctIndex": 0,
+        "explanation": "A notificação direta do S3 aceita um único destino por tipo de evento notificado — não é limite de conta nem de memória, é do modelo de configuração do bucket. Para acrescentar o Lambda de auditoria, a equipe precisaria desmontar a notificação existente e reconciliar os dois destinos, o que é exatamente o tipo de reconfiguração que o EventBridge evita: nele, cada consumidor novo é uma regra, sem tocar o bucket.\n\nA primeira alternativa inventa uma restrição de memória que não existe e que não tem relação nenhuma com notificação de evento. A terceira confunde limite de notificação com limite de conta — nada impede duas funções Lambda distintas de existirem juntas; o que falta é como o BUCKET as aciona. A quarta erra o mecanismo: o evento não é \"consumido\" e descartado como uma fila FIFO de um único leitor — o problema é puramente de quantos destinos cabem na configuração de notificação direta."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o que muda quando o pipeline processa sozinho"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Automatizar o gatilho também automatiza o efeito de um arquivo malicioso ou malformado — antes, um humano olhava a planilha antes de rodar o script; agora, o primeiro olhar é o do Validador."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Planilha com fórmula que executa comando ao ser aberta no Excel",
+                "baixa",
+                "médio",
+                "pipeline nunca abre em planilha eletrônica; marca o padrão como motivo de rejeição",
+                "contagem de arquivos rejeitados por \"possivel-injecao-de-formula\"",
+                "orientar quem for investigar manualmente a nunca abrir o arquivo bruto"
+              ],
+              [
+                "Fornecedor consegue sobrescrever a planilha de outro",
+                "baixa",
+                "alto",
+                "chave escolhida pelo servidor com o fornecedorId, herdado do L17",
+                "CloudTrail em PutObject fora do padrão de chave esperado",
+                "revogar credencial e investigar; a chave por fornecedor já limita o alcance"
+              ],
+              [
+                "Papel do Processador com permissão ampla no catálogo",
+                "média",
+                "alto",
+                "IAM restrito a INSERT/UPDATE numa tabela específica, sem DROP nem DELETE",
+                "IAM Access Analyzer sobre o uso real do papel",
+                "derivar a política do uso medido — é o L41"
+              ],
+              [
+                "Evento duplicado processado duas vezes",
+                "média",
+                "médio",
+                "escrita condicional no DynamoDB e UPSERT com valor absoluto, não incremento",
+                "alarme comparando total de PROCESSADO com total de uploads",
+                "investigar a causa da falta de condição; reconciliar o catálogo se necessário"
+              ],
+              [
+                "Loop de execução consumindo invocação sem parar",
+                "baixa se a regra estiver correta",
+                "médio",
+                "filtro de prefixo entrada/ na regra do EventBridge",
+                "gráfico de invocações do Validador muito acima do volume de upload",
+                "pausar a regra do EventBridge; corrigir o filtro; reprocessar arquivos represados"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "Algum arquivo está parado em RECEBIDO?",
+                "consulta na tabela por Estado + tempo desde RecebidoEm",
+                "travou entre validação e enfileiramento",
+                "> 15 min em RECEBIDO"
+              ],
+              [
+                "A fila está crescendo mais rápido do que esvazia?",
+                "`ApproximateNumberOfMessagesVisible` da fila principal",
+                "o Processador não acompanha o volume",
+                "tendência de alta sustentada por 10 min"
+              ],
+              [
+                "Quantos arquivos foram rejeitados hoje, e por quê?",
+                "consulta agregada por Motivo na tabela",
+                "fornecedor mudou formato sem avisar",
+                "qualquer aumento súbito frente à média"
+              ],
+              [
+                "A regra do EventBridge está invocando o Validador de fato?",
+                "Invocations do Validador vs uploads no bucket",
+                "regra mal filtrada ou entrega desabilitada",
+                "qualquer discrepância"
+              ],
+              [
+                "A DLQ está vazia?",
+                "`ApproximateNumberOfMessagesVisible` da DLQ",
+                "falha persistente sem verificação humana",
+                "> 0 dispara o alarme"
+              ],
+              [
+                "Quantas invocações o Validador teve hoje?",
+                "Invocations, comparado ao número de uploads",
+                "valor muito maior que uploads indica loop de reprocessamento",
+                "> 2× o número de uploads do dia"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A consulta que substitui \"olhar o bucket\"",
+            "content": "Com a tabela como fonte de verdade, \"quantos arquivos estão pendentes agora\" vira uma consulta por `Estado`, não uma listagem do S3. É a diferença entre um painel que responde em milissegundos e um que pagina por milhares de objetos para inferir estado que nunca foi gravado como estado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão de linhas"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 arquivos/dia, ~500 linhas cada",
+                "processamento em segundos por arquivo",
+                "nada; é o cenário deste laboratório",
+                "nada"
+              ],
+              [
+                "1 arquivo de 10 mil linhas",
+                "o Processador se aproxima do teto de 15 min do Lambda",
+                "timeout no meio do processamento, sem transação completa",
+                "dividir o arquivo em lotes menores por mensagem, ou mover o processamento pesado para Fargate/Step Functions"
+              ],
+              [
+                "1 milhão de linhas/dia, muitos fornecedores simultâneos",
+                "muitas invocações concorrentes do Processador",
+                "contenção de conexão no Postgres — cada invocação abre a sua",
+                "pool de conexão compartilhado (RDS Proxy) ou UPSERT em lote maior por transação"
+              ],
+              [
+                "Falha de AZ",
+                "Lambda, SQS e EventBridge são multi-AZ nativamente",
+                "o que pode faltar é o Postgres do L01, se não estiver em Multi-AZ",
+                "revisar a configuração de disponibilidade do RDS — é o L01/L02 cobrando de novo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "O teto de 15 minutos do Lambda não é um detalhe distante",
+            "content": "Uma planilha de 10 mil linhas com UPSERT linha a linha pode levar minutos, não segundos. O laboratório assume arquivos de até 5 mil linhas porque é o volume medido hoje; se o volume típico crescer, o UPSERT em lote (`unnest` de arrays no Postgres, em vez de um comando por linha) é o próximo ajuste antes de trocar de serviço."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Todo o pipeline novo é cobrado por uso, sem hora ligada parada — o custo cresce com o volume de arquivos e linhas, não com o tempo relógio."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "3 arquivos/dia, 500 linhas cada",
+                "invocações de Lambda e requisições de SQS/DynamoDB na casa de dezenas por dia",
+                "desprezível"
+              ],
+              [
+                "Produção pequena",
+                "8 arquivos/dia, 2 mil linhas em média",
+                "centenas de invocações e UPSERTs por dia; ainda dominado pelo Postgres do L01",
+                "baixa e previsível"
+              ],
+              [
+                "Alta escala",
+                "50 arquivos/dia, 10 mil linhas em média",
+                "invocações concorrentes do Processador e volume de escrita no Postgres crescem juntos",
+                "passa a ser linha visível — calcule no AWS Pricing Calculator com o volume real"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "EventBridge",
+                "evento publicado por regra correspondente",
+                "regra sem filtro de prefixo multiplica eventos correspondentes por loop, não só por volume real"
+              ],
+              [
+                "Lambda (Validador e Processador)",
+                "invocações e duração × memória",
+                "o Processador paga pelo tempo de leitura da planilha inteira, não só pelo UPSERT"
+              ],
+              [
+                "SQS",
+                "requisições de API (SendMessage, ReceiveMessage)",
+                "long polling do SDK do Lambda já reduz `ReceiveMessage` vazio"
+              ],
+              [
+                "DynamoDB (modo sob demanda)",
+                "leitura e escrita por requisição",
+                "uma escrita por transição de estado; quatro estados por arquivo é o padrão deste desenho"
+              ],
+              [
+                "S3",
+                "armazenamento e requisições PUT/COPY",
+                "o `CopyObject` do move para processado/rejeitado é uma segunda cobrança de armazenamento até o delete completar"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O que sai da fatura em relação ao processo manual",
+            "content": "Nada do que este pipeline acrescenta cobra parado. O script manual de hoje já \"custava\" em forma de tempo de analista — só que esse custo não aparecia em nenhuma fatura da AWS. Trocar horas de atenção humana por invocações medidas em milissegundos é o verdadeiro ganho de custo aqui, mesmo sem nenhuma linha nova relevante na conta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "pipeline dirigido por evento, com estado consultável e alarme de DLQ",
+                "formato de arquivo ainda é fixo (CSV, cabeçalho único)",
+                "validação de schema versionada por fornecedor",
+                "média"
+              ],
+              [
+                "Segurança",
+                "chave de objeto controlada pelo servidor, IAM restrito por função",
+                "arquivo rejeitado ainda pode ser aberto manualmente por um analista",
+                "documentar e treinar o time sobre injeção de fórmula em planilha",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "DLQ com alarme, escrita condicional contra duplicata, UPSERT idempotente",
+                "arquivo maior que o teto prático do Lambda ainda não tem caminho definido",
+                "dividir em lotes ou mover para Fargate quando o volume típico crescer",
+                "média"
+              ],
+              [
+                "Eficiência de performance",
+                "validação rápida separada do processamento pesado por fila",
+                "UPSERT linha a linha não escala para dezenas de milhares de linhas",
+                "UPSERT em lote no Postgres",
+                "baixa hoje"
+              ],
+              [
+                "Otimização de custos",
+                "tudo cobrado por uso, sem recurso ocioso",
+                "regra do EventBridge mal filtrada pode gerar loop e cobrança inesperada",
+                "alarme de invocações do Validador acima do volume esperado",
+                "alta"
+              ],
+              [
+                "Sustentabilidade",
+                "nenhum recurso fica ligado esperando arquivo",
+                "objetos rejeitados e processados acumulam sem ciclo de vida",
+                "regra de expiração por prefixo, revisada com dado de uso real",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do script manual ao pipeline dirigido por evento — e o que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Arquivo cai no S3 (herdado do L17) e um analista roda um script à mão quando lembra. É onde a Cadência estava.",
+                "note": "Risco resolvido: nenhum. Novo risco: atraso de horas e arquivo que nunca é notado. Custo: o mais baixo — nenhum recurso novo."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "EventBridge roteia o evento, um Validador decide rápido, uma fila com DLQ absorve o processamento pesado, DynamoDB rastreia o estado.",
+                "note": "Risco resolvido: atraso e arquivo esquecido. Novo risco: regra mal filtrada pode causar loop de reprocessamento. Custo: cobrado por uso, desprezível no volume atual."
+              },
+              {
+                "label": "Nível 3 — Múltiplos formatos e schemas",
+                "instruction": "Parser plugável por fornecedor, versionamento de schema, suporte a XLSX além de CSV.",
+                "note": "Risco resolvido: fornecedor mudando layout quebra a validação estrutural simples. Novo risco: mais um parser errado é mais uma classe de bug. Custo: mais tempo de desenvolvimento, pouco de infraestrutura."
+              },
+              {
+                "label": "Nível 4 — Escala com processamento particionado",
+                "instruction": "Arquivos grandes divididos em lotes menores por mensagem, ou processamento em Fargate/Step Functions para o que passa do teto do Lambda.",
+                "note": "Risco resolvido: timeout de função em arquivo muito grande. Novo risco: coordenar o resultado de múltiplos lotes do mesmo arquivo. Custo: capacidade proporcional ao volume, não mais fixo."
+              },
+              {
+                "label": "Nível 5 — Plataforma multi-fornecedor",
+                "instruction": "Cota e SLA por fornecedor, painel próprio por fornecedor, contrato de formato versionado e comunicado.",
+                "note": "Risco resolvido: um fornecedor grande demais afeta o processamento dos outros. Novo risco: complexidade de governança por fornecedor. Custo: duplicação de configuração por cliente."
+              },
+              {
+                "label": "Nível 6 — Dados e IA, quando o arquivo deixa de ser estruturado",
+                "instruction": "Extração antes de interpretação para documento não estruturado — foto, PDF escaneado, layout livre — com revisão humana no desenho.",
+                "note": "Risco resolvido: fornecedor que não consegue mandar CSV com schema fixo. Novo risco: confiança do modelo em campo ambíguo, exige avaliação e caminho manual. Custo: maior por documento, mas evita rejeitar o fornecedor inteiro. É o L92."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "O nível 4 (particionar arquivo grande) depende de o estado por arquivo já ser consultável — que é o nível 2, construído neste laboratório. Quem tenta particionar processamento sem uma tabela de estado por trás monta a mecânica de dividir o trabalho sem conseguir dizer qual lote pertence a qual arquivo. É a decoração que o nível anterior evita."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não resolve o problema central, e forçá-la seria pagar tokens para reinventar um `if`. A planilha chega como CSV com cabeçalho fixo — dado já estruturado — e uma regra determinística (colunas esperadas presentes, codificação válida) resolve com menos código, menos latência e sem chance de \"alucinar\" um preço."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar onde IA acrescentaria valor real, e ele é o oposto deste cenário: quando o arquivo NÃO chega estruturado — foto de uma tabela impressa, PDF escaneado, planilha com layout livre que muda por fornecedor. Aí a ordem importa: extração determinística primeiro (Textract), modelo só para o campo que exige interpretação, e revisão humana quando a confiança cai. É o desenho do L92, que evolui deste laboratório."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria aqui?",
+                "nenhum — o schema é fixo e a validação é determinística"
+              ],
+              [
+                "Por que não usar um LLM para \"entender\" a planilha mesmo assim?",
+                "trocaria um sinal exato (cabeçalho presente ou ausente) por um probabilístico, sem ganho nenhum"
+              ],
+              [
+                "Quando IA passa a valer a pena neste fluxo?",
+                "quando o arquivo deixa de ter schema fixo — documento não estruturado é o L92"
+              ],
+              [
+                "O que muda no desenho quando isso acontece?",
+                "extração determinística entra ANTES do modelo, e revisão humana vira parte do fluxo, não exceção"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"ler a planilha e decidir se está certa\" substitui uma checagem de cabeçalho — determinística, rápida e sem custo de token — por uma chamada probabilística que pode aprovar um cabeçalho quase certo. Onde existe validação exata possível, IA só acrescenta latência e a chance de errar com confiança."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Notificação direta do bucket para o Lambda",
+                "é a primeira opção que o console mostra, e parece mais simples",
+                "aceita um único destino por tipo de evento — trava quando surge um segundo consumidor",
+                "precisa desmontar a configuração do bucket para acrescentar auditoria",
+                "entrega ao EventBridge, com regras filtradas",
+                "quando é comprovadamente certo que nunca haverá segundo consumidor"
+              ],
+              [
+                "Um Lambda só fazendo validação e processamento pesado",
+                "é menos peça para configurar e implantar",
+                "acopla o tempo de resposta ao evento ao tempo de processar milhares de linhas",
+                "arquivo grande de um fornecedor atrasa a validação do próximo, de outro fornecedor",
+                "dois Lambdas ligados por fila, como neste módulo",
+                "arquivos sempre pequenos e função com folga de tempo confortável"
+              ],
+              [
+                "Confiar que o evento nunca duplica",
+                "na prática, raramente duplica, e parece exagero tratar",
+                "at-least-once é o contrato documentado do S3 e do EventBridge, não bug raro",
+                "processamento duplicado silencioso, sem erro nenhum para investigar",
+                "escrita condicional por ArquivoId antes de qualquer efeito",
+                "nunca — o custo de tratar é uma condição a mais no PutItem"
+              ],
+              [
+                "Regra do EventBridge sem filtro de prefixo",
+                "parece mais simples capturar todo Object Created do bucket",
+                "objeto movido para processado/ pelo próprio pipeline dispara o mesmo evento de novo",
+                "loop de reprocessamento — o mesmo arquivo entra em RECEBIDO repetidamente",
+                "filtrar por prefixo entrada/ na regra",
+                "nunca, no mesmo bucket que recebe a saída do próprio pipeline"
+              ],
+              [
+                "Inferir o estado do arquivo pelo prefixo do S3",
+                "\"o console já mostra isso, por que duplicar numa tabela\"",
+                "um move que falha no meio deixa o prefixo mentindo sobre o estado real",
+                "painel mostra sucesso baseado numa suposição que nunca foi verificada",
+                "DynamoDB como fonte de verdade, prefixo como conveniência visual",
+                "só para inspeção visual humana, nunca para decisão automatizada"
+              ],
+              [
+                "`maxReceiveCount` em 1",
+                "\"manda pra DLQ no primeiro erro, resolve rápido\"",
+                "falha transitória — Postgres momentaneamente sem conexão livre — vira alarme falso",
+                "DLQ recebendo arquivo que teria sido processado com sucesso na segunda tentativa",
+                "`maxReceiveCount` entre 3 e 5",
+                "quando toda falha possível for, por natureza, permanente — raro"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Arquivo nunca sai do estado RECEBIDO",
+                "a regra do EventBridge não invocou o Validador",
+                "compare invocações do Validador com uploads no bucket",
+                "CloudWatch Invocations do Validador",
+                "confira `eventbridge = true` na notificação do bucket e o padrão da regra"
+              ],
+              [
+                "Arquivo válido nunca chega a PROCESSADO",
+                "mensagem presa na fila sem consumidor saudável",
+                "compare mensagens visíveis com mensagens em voo",
+                "métricas da fila de processamento",
+                "veja o log de erro do Processador para a mensagem"
+              ],
+              [
+                "Mesmo arquivo processado duas vezes",
+                "escrita condicional ausente ou chave (ArquivoId) errada",
+                "procure duas linhas PROCESSADO para o mesmo ArquivoId",
+                "tabela de arquivos no DynamoDB",
+                "devolver `ConditionExpression: attribute_not_exists(ArquivoId)`"
+              ],
+              [
+                "O mesmo arquivo entra em RECEBIDO repetidamente",
+                "regra sem filtro de prefixo, capturando o próprio destino do move",
+                "conte quantos Object Created a mesma chave gerou",
+                "CloudTrail data events no bucket",
+                "restringir a regra ao prefixo entrada/"
+              ],
+              [
+                "DLQ crescendo",
+                "mensagem malformada real, ou dependência (Postgres) fora do ar",
+                "veja se todas as mensagens da DLQ têm o mesmo motivo de erro",
+                "corpo da mensagem e log do Processador",
+                "corrigir o parser, ou aguardar e reprocessar quando a dependência voltar"
+              ],
+              [
+                "Arquivo some do prefixo entrada/ sem estado final na tabela",
+                "move feito no S3, mas a escrita final no DynamoDB falhou no meio",
+                "compare a listagem do bucket com a consulta na tabela",
+                "log do Processador no instante da falha",
+                "reprocessar a partir do ArquivoId gravado, não a partir do prefixo do S3"
+              ],
+              [
+                "A regra do EventBridge não casa com nada",
+                "padrão de evento com nome de campo errado",
+                "teste o padrão na própria console do EventBridge com um evento de amostra",
+                "\"Test pattern\" do EventBridge",
+                "corrigir o `event_pattern`, comparando com o payload real recebido"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em qualquer parâmetro, pergunte: o evento chegou até o Validador? Se as invocações do Validador batem com o número de uploads, o problema está depois — validação ou fila. Se não batem, o problema está no roteamento: entrega do bucket ao EventBridge, ou o padrão da regra."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório acrescenta pouco recurso fixo, mas três coisas sobrevivem ao "
+              },
+              {
+                "text": "terraform destroy",
+                "code": true
+              },
+              {
+                "text": " e merecem checagem explícita."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Derrube o que o Terraform administra.\nterraform destroy -auto-approve\n\n# 2. OBJETOS NO BUCKET: o destroy nao apaga o CONTEUDO de um bucket que ja\n#    existia (herdado do L17). Planilhas em entrada/, processado/ e rejeitado/\n#    continuam la, cobrando armazenamento.\naws s3 ls s3://ffv-lab-planilhas --recursive --summarize | tail -2\naws s3 rm s3://ffv-lab-planilhas/entrada/ --recursive\naws s3 rm s3://ffv-lab-planilhas/processado/ --recursive\naws s3 rm s3://ffv-lab-planilhas/rejeitado/ --recursive\n\n# 3. TABELA DYNAMODB: guarda o historico de estado de cada arquivo. Apagar a\n#    tabela apaga a TRILHA inteira, nao so o \"estado atual\" — confirme que\n#    ninguem precisa dela para auditoria antes de seguir.\naws dynamodb delete-table --table-name ffv-lab-arquivos\n\n# 4. FILA COM MENSAGEM: se voce interrompeu no meio de um teste de falha, a\n#    DLQ pode ainda ter mensagem — o destroy de uma fila SQS nao falha por\n#    causa disso, mas confirme que nao ha nada relevante antes de seguir.\naws sqs get-queue-attributes \\\n  --queue-url \"$(terraform output -raw fila_dlq_url 2>/dev/null || echo \"\")\" \\\n  --attribute-names ApproximateNumberOfMessagesVisible 2>/dev/null || true\n\n# 5. Prova final: nada com nome do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Regra do EventBridge e alvo",
+                "sim",
+                "não",
+                "gerenciados pelo Terraform, sem estado próprio"
+              ],
+              [
+                "Fila e DLQ",
+                "sim",
+                "não",
+                "SQS não cobra por fila vazia parada"
+              ],
+              [
+                "Tabela DynamoDB",
+                "sim, se não tiver `prevent_destroy`",
+                "sim, enquanto existir",
+                "apaga o histórico inteiro de estado — confirme antes"
+              ],
+              [
+                "Objetos no bucket (entrada/processado/rejeitado)",
+                "não",
+                "sim, GB-mês",
+                "o bucket é herdado do L17; destroy de infraestrutura não apaga conteúdo de bucket existente"
+              ],
+              [
+                "Grupos de log dos dois Lambdas",
+                "depende de `skip_destroy`",
+                "sim, retenção",
+                "têm ciclo próprio; sobrevivem à função que os alimentava"
+              ],
+              [
+                "Alarme e tópico SNS",
+                "sim se em Terraform",
+                "centavos",
+                "alarme criado à mão no console não aparece no estado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "Apagar a tabela apaga a trilha, não só o \"estado atual\"",
+            "content": "Diferente de um cache que se reconstrói sozinho, a tabela de arquivos é o único registro de quando cada planilha chegou, quem a enviou e por que foi aceita ou rejeitada. Um `terraform destroy` que inclui essa tabela remove esse histórico por completo — exporte para o S3 antes, se auditoria futura importar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Ninguém é avisado quando o arquivo chega",
+                "entrega de eventos do S3 ao EventBridge",
+                "o S3 já emite o evento; faltava alguém ouvir"
+              ],
+              [
+                "Notificação direta travaria a evolução",
+                "regra do EventBridge filtrada por prefixo",
+                "aceita quantas regras forem necessárias, sem reconfigurar o bucket"
+              ],
+              [
+                "Validação lenta atrasaria o próximo arquivo",
+                "dois Lambdas ligados por fila",
+                "separa decidir-rápido de processar-pesado"
+              ],
+              [
+                "Entrega \"ao menos uma vez\" pode duplicar efeito",
+                "PutItem condicional por ArquivoId",
+                "só a primeira entrega do mesmo arquivo tem efeito"
+              ],
+              [
+                "Arquivo malformado sumindo sem explicação",
+                "prefixo rejeitado/{motivo} + registro na tabela",
+                "visível para quem investiga, com a razão registrada"
+              ],
+              [
+                "Falha persistente sem ninguém notar",
+                "DLQ com alarme de mensagem visível",
+                "reaproveita o padrão do L22 — DLQ sem alarme é tão inútil quanto não ter DLQ"
+              ],
+              [
+                "Estado inferido por onde o objeto está",
+                "DynamoDB como fonte de verdade",
+                "um move que falha no meio não engana quem consulta a tabela"
+              ],
+              [
+                "Objeto processado disparando o próprio gatilho",
+                "filtro de prefixo entrada/ na regra",
+                "é o risco de loop que a documentação da AWS avisa para Lambda-com-S3"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "O fornecedor envia a planilha pelo mesmo POST assinado do L17.",
+              "O S3 anuncia o objeto criado ao EventBridge, sem reconfiguração do bucket.",
+              "A regra filtra por prefixo entrada/ e invoca o Validador.",
+              "O Validador registra a intenção com escrita condicional por ArquivoId.",
+              "Entrega repetida do mesmo evento é reconhecida e ignorada, sem efeito duplo.",
+              "A estrutura é conferida — cabeçalho, colunas, codificação — sem abrir linha nenhuma.",
+              "Malformado vai para rejeitado/{motivo}; válido entra na fila de processamento.",
+              "O Processador aplica UPSERT linha a linha e move o objeto para processado/.",
+              "O veredito final é gravado na tabela, que é a fonte de verdade do estado.",
+              "Falha persistente sai para a DLQ, e o alarme avisa um humano."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que meu pipeline processa a mesma planilha duas vezes?",
+            "answer": "Porque S3 e EventBridge entregam eventos \"ao menos uma vez\", e retries ocasionais produzem notificação duplicada para o mesmo objeto — isso é contrato documentado, não falha rara. A correção é uma escrita condicional no DynamoDB antes de qualquer efeito: `PutItem` com `ConditionExpression: attribute_not_exists(ArquivoId)` só tem sucesso na primeira vez que aquele arquivo é visto. Se você não tratar isso, o sintoma aparece como linhas do catálogo atualizadas mais vezes do que arquivos recebidos, sem nenhuma exceção óbvia no meio do caminho."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Posso simplesmente configurar a notificação do S3 direto para um Lambda?",
+            "answer": "Pode, e funciona no primeiro dia — mas a notificação direta do bucket aceita um único destino por tipo de evento. No dia em que você quiser acrescentar um segundo consumidor, como um Lambda de auditoria ouvindo o mesmo `Object Created`, vai precisar desmontar a configuração do bucket para caber. O EventBridge resolve isso de origem: habilita a entrega uma vez, e cada consumidor novo é uma regra, sem tocar o bucket outra vez."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "O que acontece se a planilha enviada tiver o cabeçalho errado?",
+            "answer": "O Validador recusa antes de processar qualquer linha: o objeto é movido para o prefixo `rejeitado/{motivo}` no mesmo bucket, e a tabela de estado grava a razão exata da rejeição. Nenhuma linha do catálogo é tocada. Essa validação é estrutural — confere cabeçalho, colunas esperadas e codificação —, não o conteúdo de cada célula, que só é interpretado depois, pelo Processador, se o arquivo passar nesta primeira checagem."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Por que separar a validação do processamento pesado em duas funções Lambda?",
+            "answer": "Porque acoplar as duas no mesmo handler faz o tempo de resposta ao evento depender do tamanho do arquivo. Um Lambda único processando 5 mil linhas fica ocupado por segundos ou minutos, e enquanto isso a validação do PRÓXIMO arquivo — de outro fornecedor, sem nenhuma relação com o primeiro — espera na fila de invocações. Com duas funções ligadas por uma fila SQS, o Validador responde em milissegundos e o Processador trabalha no seu próprio ritmo, sem bloquear ninguém."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Por que um arquivo processado pode disparar o pipeline de novo?",
+            "answer": "Porque o Processador move o objeto de `entrada/` para `processado/` dentro do MESMO bucket que dispara o evento. Sem um filtro de prefixo na regra do EventBridge, esse move gera um novo `Object Created` que aciona o Validador outra vez — um loop de execução real, que a própria documentação da AWS descreve para o caso de Lambda com S3. A correção é restringir a regra ao prefixo `entrada/`, para que o próprio destino do pipeline nunca seja interpretado como chegada nova."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Como sei se um arquivo específico foi processado, sem vasculhar o bucket?",
+            "answer": "Consulte a tabela do DynamoDB pelo `ArquivoId` — ela é a fonte de verdade do estado, não o prefixo onde o objeto está fisicamente. Um `move` no S3 que falhe no meio do caminho pode deixar o objeto num lugar inesperado por segundos, mas a tabela só grava o estado `PROCESSADO` depois que o efeito no catálogo já foi confirmado. Inferir o estado pela pasta é o antipadrão que este laboratório evita deliberadamente."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Preciso de FIFO na fila de processamento, já que os arquivos têm ordem de chegada?",
+            "answer": "Não, porque a ordem que importa não é entre arquivos de fornecedores diferentes — cada planilha atualiza SKUs próprios, e processar a do fornecedor A antes ou depois da do fornecedor B não muda o resultado final de nenhum dos dois catálogos. Fila `standard` entrega throughput bem maior que FIFO e resolve exatamente o requisito real. FIFO só valeria se duas planilhas do MESMO fornecedor precisassem ser aplicadas estritamente na ordem de envio, o que não é o caso aqui."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Este pipeline funciona para PDF ou foto de planilha impressa?",
+            "answer": "Não da forma como está desenhado aqui: a validação estrutural deste laboratório confere cabeçalho e colunas de um CSV com schema fixo, e um PDF ou foto não tem essas colunas para conferir. Documento não estruturado pede um desenho diferente — extração determinística primeiro, com Textract ou similar, modelo de linguagem só para o campo que exige interpretação, e revisão humana quando a confiança do modelo cai. Esse desenho é o L92, que evolui deste laboratório."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "O Processador move cada arquivo processado de entrada/ para processado/, dentro do mesmo bucket que dispara os eventos ao EventBridge. Sem nenhum filtro de prefixo na regra, o que acontece?",
+            "options": [
+              "Nada — o EventBridge ignora eventos gerados por operações internas do próprio pipeline",
+              "O move falha, porque um objeto não pode ser copiado dentro do mesmo bucket",
+              "O Validador é invocado de novo sobre o arquivo já processado, criando um loop de execução",
+              "A regra passa a custar o dobro, mas o comportamento funcional permanece correto"
+            ],
+            "correctIndex": 2,
+            "explanation": "O move gera um `Object Created` como qualquer outro PutObject — o S3 não distingue \"upload de fornecedor\" de \"cópia feita pelo próprio pipeline\". Sem o filtro de prefixo, a regra casa com esse evento novo, invoca o Validador de novo sobre um arquivo que já está em processado/, e — se o Validador também escrever de volta no bucket — o ciclo se repete. É o loop de execução que a própria documentação da AWS descreve para Lambda acionado por S3, e cada volta é invocação real, cobrando de verdade.\n\nA primeira alternativa assume uma inteligência que o S3 não tem: ele não sabe a origem semântica de uma operação, só que um objeto foi criado. A terceira inventa uma restrição técnica inexistente — copiar dentro do mesmo bucket, para um prefixo diferente, é uma operação comum e válida. A quarta reconhece o custo, mas erra ao dizer que o comportamento funcional \"permanece correto\": um arquivo entrando em RECEBIDO repetidamente, sem nunca estabilizar, é exatamente o defeito funcional, não só financeiro."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Depois de processar 3.000 linhas de uma planilha com sucesso, a conexão do Processador com o Postgres cai na linha 3.001, e a função Lambda relança exceção. A mensagem volta para a fila e é reentregue. O que evita que as 3.000 primeiras linhas sejam alteradas de novo, incorretamente, na reentrega?",
+            "options": [
+              "O `visibility_timeout` da fila, que impede qualquer reentrega antes de 360 segundos",
+              "O DynamoDB bloqueia automaticamente qualquer segunda escrita no mesmo ArquivoId",
+              "O UPSERT usar o valor absoluto de cada linha, não um incremento — reaplicar é inofensivo",
+              "O `ReportBatchItemFailures` pula automaticamente as linhas já aplicadas dentro do arquivo"
+            ],
+            "correctIndex": 2,
+            "explanation": "A proteção real está no formato do UPSERT: como cada linha grava `preco_centavos` e `estoque` com o VALOR que veio na planilha — não um incremento sobre o valor anterior —, reaplicar a mesma linha 3.000 vezes produz sempre o mesmo resultado final. É idempotência por natureza da operação, não por controle explícito de \"já processei esta linha\". A reentrega da mensagem inteira volta a rodar as 3.000 linhas, mas o efeito é o mesmo de tê-las rodado uma vez.\n\nA primeira alternativa confunde o papel do `visibility_timeout`: ele evita que DOIS consumidores peguem a MESMA mensagem ao mesmo tempo, mas não impede a reentrega acontecer depois de expirar — o que é exatamente o caso aqui. A terceira inventa um comportamento que o DynamoDB não tem neste desenho: a condição do PutItem protege o ArquivoId no VALIDADOR, na primeira entrada, não linha de planilha nenhuma dentro do Processador. A quarta erra o nível: `ReportBatchItemFailures` decide quais MENSAGENS do lote voltam para a fila, não quais LINHAS dentro de uma mensagem já foram aplicadas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L17 no ar (upload assinado ao S3), L22 no ar (fila, DLQ, idempotência), catálogo do L01 acessível"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "entrega de eventos do S3 ao EventBridge; limite de destino da notificação direta; escrita condicional aplicada por arquivo; separação de validação rápida e processamento pesado; risco documentado de loop de execução Lambda-com-S3"
+              ],
+              [
+                "Limitação que fica",
+                "formato aceito é CSV com cabeçalho fixo; arquivo maior que o teto prático do Lambda ainda não tem caminho de particionamento definido"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L92 — IDP: documento não estruturado, extração determinística antes do modelo, e revisão humana no desenho. Reaproveita a trilha de estado deste laboratório"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Amazon S3 → EventBridge",
+                "code": true
+              },
+              {
+                "text": " — os eventos que o S3 envia e a diferença frente à notificação direta; "
+              },
+              {
+                "text": "Event notification types and destinations",
+                "code": true
+              },
+              {
+                "text": " — o limite de um destino por tipo de evento na notificação direta, o aviso de loop de execução para Lambda acionado por objeto do mesmo bucket, e a garantia de entrega \"ao menos uma vez\" com possibilidade de duplicata; e "
+              },
+              {
+                "text": "DynamoDB conditional writes",
+                "code": true
+              },
+              {
+                "text": " — o comportamento de `ConditionExpression` e `ConditionalCheckFailedException` usado para deduplicar por arquivo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "O tempo de \"8 a 14 s do upload ao veredito\" e os números da semana de exemplo (34 planilhas, 6 com mais de 4 horas de atraso) são medições ilustrativas do cenário deste laboratório, não uma referência da AWS. Meça na sua conta, com o volume real dos seus arquivos: o tempo do Processador cresce com o número de linhas, e o ponto em que ele se aproxima do teto do Lambda depende do tamanho típico da SUA planilha, não da do exemplo."
+          }
+        }
+      ]
+    }
+  ]
+}

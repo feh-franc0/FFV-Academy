@@ -43,6 +43,8 @@ func HandleDomainErrorCtx(r *http.Request, w http.ResponseWriter, err error) {
 		status, etype = http.StatusForbidden, "forbidden"
 	case errors.Is(err, shared.ErrConflict):
 		status, etype = http.StatusConflict, "conflict"
+	case errors.Is(err, shared.ErrRegistrationRequired):
+		status, etype = http.StatusBadRequest, "registration-required"
 	case errors.Is(err, shared.ErrValidation):
 		status, etype = http.StatusBadRequest, "validation-error"
 	case errors.Is(err, shared.ErrRateLimited):

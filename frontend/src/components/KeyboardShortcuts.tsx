@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { X, Keyboard } from 'lucide-react';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 
 const SHORTCUTS = [
   { keys: ['?'], desc: 'Mostrar/ocultar este painel' },
@@ -18,6 +19,8 @@ const SHORTCUTS = [
 
 export function KeyboardShortcuts() {
   const [open, setOpen] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, open);
 
   useEffect(() => {
     function handler(e: KeyboardEvent) {
@@ -37,9 +40,11 @@ export function KeyboardShortcuts() {
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label="Atalhos de teclado"
+      tabIndex={-1}
       className="fixed inset-0 z-[200] flex items-center justify-center px-4"
       style={{ background: 'color-mix(in srgb, #000 55%, transparent)', backdropFilter: 'blur(8px)' }}
       onClick={() => setOpen(false)}

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { SIMULADOS_CATALOG } from '@/lib/simulados-catalog';
 import { SimuladoDetailClient } from './SimuladoDetailClient';
+import { BASE, social } from '@/lib/metadata-social';
 
 interface Params {
   slug: string;
@@ -13,11 +14,18 @@ export function generateStaticParams(): Params[] {
 export async function generateMetadata({ params }: { params: Promise<Params> }): Promise<Metadata> {
   const { slug } = await params;
   const sim = SIMULADOS_CATALOG.find(s => s.id === `simulado-${slug}`);
-  if (!sim) return { title: 'Simulado não encontrado — FFV Academy' };
+  if (!sim) return { title: 'Simulado não encontrado' };
   return {
-    title: `${sim.title} — FFV Academy`,
+    // Sem sufixo: o template do layout raiz o aplica — escrever à mão aqui
+    // produzia `<title>X — FFV Academy — FFV Academy</title>`.
+    title: sim.title,
     description: sim.description,
-    alternates: { canonical: `https://fernandofrancovalle.com/simulados/${slug}` },
+    alternates: { canonical: `${BASE}/simulados/${slug}` },
+    ...social({
+      titulo: `${sim.title} — FFV Academy`,
+      descricao: sim.description,
+      caminho: `/simulados/${slug}`,
+    }),
   };
 }
 

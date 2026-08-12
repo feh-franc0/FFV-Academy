@@ -3,7 +3,7 @@
   "title": null,
   "blocks": [
     {
-      "id": "3badb59f-52a9-4cd4-81f5-fd15db36664b",
+      "id": "q525-0",
       "type": "section",
       "position": 0,
       "data": {
@@ -11,26 +11,263 @@
       },
       "children": [
         {
-          "id": "20e4ff77-f006-444a-95f5-3982f13e7a52",
+          "id": "q525-1",
           "type": "code_block",
           "position": 0,
           "data": {
             "language": "text",
             "code": "1. INIT phase (cold start):\n   - Baixa código + layers\n   - Inicia runtime (Node/Python/etc)\n   - Executa código FORA do handler (import, DB pool setup)\n   Duração típica: 200-500ms (sem VPC), 1-10s (com VPC + Java)\n\n2. INVOKE phase:\n   - Executa handler (seu código)\n   - Paga por duração × memória\n\n3. Container reuse (\"warm\"):\n   - Mesmo container pode servir múltiplas requests\n   - State em memória PERSISTE (útil pra connection pool)\n   - Após ~5-15min idle, AWS deallocates"
           }
+        },
+        {
+          "type": "arch_diagram",
+          "data": {
+            "title": "O ciclo de vida de uma invocação: onde o cold start acontece",
+            "groups": [
+              {
+                "label": "Chegada",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ev",
+                    "service": "eventbridge",
+                    "label": "Evento",
+                    "note": "API GW, SQS, S3, agendamento"
+                  }
+                ]
+              },
+              {
+                "label": "Cold start — só na primeira",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "down",
+                    "service": "storage",
+                    "label": "1. Baixa o código",
+                    "note": "ZIP ou imagem, do S3/ECR"
+                  },
+                  {
+                    "id": "init_env",
+                    "service": "compute",
+                    "label": "2. Cria o ambiente",
+                    "note": "microVM Firecracker"
+                  },
+                  {
+                    "id": "init_code",
+                    "service": "lambda",
+                    "label": "3. Roda o INIT",
+                    "note": "import, cliente SDK, pool"
+                  }
+                ]
+              },
+              {
+                "label": "Toda invocação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "handler",
+                    "service": "lambda",
+                    "label": "4. Executa o handler",
+                    "note": "só aqui roda o seu event"
+                  }
+                ]
+              },
+              {
+                "label": "Ambiente quente",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "warm",
+                    "service": "lambda",
+                    "label": "Reaproveitado",
+                    "note": "próxima invocação pula 1-3"
+                  },
+                  {
+                    "id": "froze",
+                    "service": "management",
+                    "label": "Congelado",
+                    "note": "thread parada entre invocações"
+                  }
+                ]
+              },
+              {
+                "label": "Reduzir o cold start",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "pc",
+                    "service": "computeoptimizer",
+                    "label": "Provisioned Concurrency",
+                    "note": "ambientes já inicializados"
+                  },
+                  {
+                    "id": "snap",
+                    "service": "ai",
+                    "label": "SnapStart",
+                    "note": "snapshot do estado pós-INIT (Java)"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "ev",
+                "to": "down",
+                "label": "primeira vez"
+              },
+              {
+                "from": "down",
+                "to": "init_env"
+              },
+              {
+                "from": "init_env",
+                "to": "init_code"
+              },
+              {
+                "from": "init_code",
+                "to": "handler"
+              },
+              {
+                "from": "handler",
+                "to": "warm",
+                "label": "termina"
+              },
+              {
+                "from": "warm",
+                "to": "handler",
+                "label": "próximo evento pula o INIT"
+              },
+              {
+                "from": "warm",
+                "to": "froze",
+                "label": "sem tráfego",
+                "style": "dashed"
+              },
+              {
+                "from": "pc",
+                "to": "init_code",
+                "label": "pré-executa",
+                "style": "dashed"
+              },
+              {
+                "from": "snap",
+                "to": "init_code",
+                "label": "restaura snapshot",
+                "style": "dashed"
+              }
+            ],
+            "caption": "Este é um fluxo temporal, não uma topologia: os passos 1 a 3 acontecem só no cold start, e o 4 em toda invocação. Saber o que fica fora do handler é o que separa Lambda rápida de lenta.",
+            "steps": [
+              {
+                "label": "Cold start é a soma de três coisas",
+                "detail": "Baixar o código, criar o ambiente e rodar o INIT. Só a terceira você controla: é o seu código fora do handler. Pacote grande piora a primeira, e import pesado piora a terceira.",
+                "nodes": [
+                  "ev",
+                  "down",
+                  "init_env",
+                  "init_code"
+                ],
+                "edges": [
+                  "ev>down",
+                  "down>init_env",
+                  "init_env>init_code"
+                ]
+              },
+              {
+                "label": "O que vai FORA do handler roda uma vez",
+                "detail": "Cliente do SDK, conexão de banco, leitura de segredo: declare no escopo do módulo e será reaproveitado por todas as invocações daquele ambiente. Dentro do handler, roda a cada evento — e é o erro de desempenho nº 1 em Lambda.",
+                "nodes": [
+                  "init_code",
+                  "handler"
+                ],
+                "edges": [
+                  "init_code>handler"
+                ]
+              },
+              {
+                "label": "O ambiente quente é reaproveitado",
+                "detail": "Terminada a invocação, o ambiente fica disponível. A próxima pula os passos 1 a 3 e vai direto ao handler — daí a diferença de centenas de milissegundos para poucos.",
+                "nodes": [
+                  "handler",
+                  "warm"
+                ],
+                "edges": [
+                  "handler>warm",
+                  "warm>handler"
+                ]
+              },
+              {
+                "label": "Congelado não é o mesmo que encerrado",
+                "detail": "Entre invocações a execução é congelada: thread em background e I/O pendente param. Trabalho assíncrono disparado sem await pode simplesmente não terminar — e volta a rodar na invocação seguinte, no meio de outro evento.",
+                "nodes": [
+                  "warm",
+                  "froze"
+                ],
+                "edges": [
+                  "warm>froze"
+                ]
+              },
+              {
+                "label": "As duas formas de atacar o cold start",
+                "detail": "Provisioned Concurrency mantém N ambientes já inicializados e prontos — custa por hora. SnapStart tira um snapshot pós-INIT e restaura, sem custo extra, para Java. A questão que exige latência p99 previsível pede uma das duas.",
+                "nodes": [
+                  "pc",
+                  "snap",
+                  "init_code"
+                ],
+                "edges": [
+                  "pc>init_code",
+                  "snap>init_code"
+                ]
+              }
+            ]
+          },
+          "id": "q525-2",
+          "position": 1
         }
       ]
     },
     {
-      "id": "a0c12e47-fd37-4a91-a79f-02b277577e89",
+      "id": "q525-3",
       "type": "section",
       "position": 1,
+      "data": {
+        "title": "Onde isso entra no exame"
+      },
+      "children": [
+        {
+          "id": "q525-4",
+          "type": "exam_domain_badge",
+          "position": 0,
+          "data": {
+            "domain": "Domain 1 — Development with AWS Services",
+            "weight": "32%"
+          }
+        },
+        {
+          "id": "q525-5",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Lambda é o serviço mais cobrado do DVA. As questões giram em torno de três coisas: qual ajuste corta cold start (provisioned concurrency, memória, runtime), como o handler recebe o evento de cada fonte, e por que a função falha em silêncio. Espere pegadinha sobre retentativa de invocação assíncrona — são 2 tentativas automáticas antes da DLQ, e invocação síncrona não tem nenhuma."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "q525-6",
+      "type": "section",
+      "position": 2,
       "data": {
         "title": "Connection pool pattern"
       },
       "children": [
         {
-          "id": "0836211c-7c32-46f3-8c1c-e23ecd6cfaa0",
+          "id": "q525-7",
           "type": "code_block",
           "position": 0,
           "data": {
@@ -41,15 +278,31 @@
       ]
     },
     {
-      "id": "a8a86c44-4b9b-4084-bd70-ca8232c7c8bd",
+      "type": "quiz",
+      "data": {
+        "question": "Uma Lambda abre conexão com o RDS dentro do handler, a cada invocação. Sob carga, o banco esgota o pool de conexões. Qual é a correção?",
+        "options": [
+          "Aumentar a memória da função para acelerar a abertura de conexão",
+          "Reduzir a concorrência reservada da função para limitar as conexões",
+          "Trocar o RDS por DynamoDB",
+          "Mover a criação do cliente para FORA do handler, no escopo do módulo, e usar RDS Proxy"
+        ],
+        "correctIndex": 3,
+        "explanation": "Código fora do handler roda uma vez por ambiente de execução e é reaproveitado entre invocações — é ali que cliente de banco, SDK e leitura de segredo devem ficar. Isso corta drasticamente a criação de conexão. Para o caso de concorrência alta, o RDS Proxy multiplexa e protege o banco do pico. Mais memória acelera CPU, não resolve esgotamento de pool. Reduzir concorrência reservada limita o problema estrangulando a aplicação — trata o sintoma. Trocar de banco é reescrever o produto para resolver um erro de posicionamento de código."
+      },
+      "id": "q525-16",
+      "position": 3
+    },
+    {
+      "id": "q525-8",
       "type": "section",
-      "position": 2,
+      "position": 4,
       "data": {
         "title": "Layers"
       },
       "children": [
         {
-          "id": "867800d7-519d-46d1-b46f-947c354a3363",
+          "id": "q525-9",
           "type": "list",
           "position": 0,
           "data": {
@@ -63,7 +316,7 @@
           }
         },
         {
-          "id": "86a13cae-180c-4973-a321-f49fe844ae13",
+          "id": "q525-10",
           "type": "callout",
           "position": 1,
           "data": {
@@ -73,6 +326,85 @@
           }
         }
       ]
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Como reduzir partida a frio de verdade?",
+            "answer": "Reduzindo o que a inicialização faz e o tamanho do pacote, e usando concorrência provisionada quando a latência é requisito. O que não funciona é aquecer com chamada agendada — trata o sintoma numa instância e não escala. Mover trabalho de inicialização para fora do caminho da primeira invocação é o ganho maior."
+          },
+          "id": "q525-12",
+          "position": 0
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Para que servem as camadas de função?",
+            "answer": "Para separar dependência do código: a camada é empacotada uma vez e compartilhada entre funções, o que reduz o tamanho do pacote de implantação e o tempo de inicialização. O cuidado é de versionamento — camada é imutável por versão, e atualizar exige apontar a nova."
+          },
+          "id": "q525-13",
+          "position": 1
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "O que acontece quando a função falha numa invocação assíncrona?",
+            "answer": "A plataforma tenta novamente algumas vezes e, se você configurou destino de falha ou fila de mensagem morta, entrega o evento lá — sem isso, o evento é descartado em silêncio. É a pegadinha de prova mais comum do domínio: falha assíncrona sem destino configurado desaparece."
+          },
+          "id": "q525-14",
+          "position": 2
+        }
+      ],
+      "id": "q525-11",
+      "position": 5
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "type": "quiz",
+          "data": {
+            "question": "Uma função assíncrona (invocada por evento do S3) falha em 3 tentativas. Sem configuração adicional, o que acontece com o evento?",
+            "options": [
+              "Fica retido indefinidamente até alguém reprocessar",
+              "Volta automaticamente para o bucket S3",
+              "Gera um alarme automático no CloudWatch",
+              "É descartado silenciosamente — sem DLQ ou Lambda Destinations, o evento se perde"
+            ],
+            "correctIndex": 3,
+            "explanation": "Invocação assíncrona tem retry automático (duas tentativas adicionais por padrão) e, esgotado isso, o evento é descartado. Sem DLQ ou Lambda Destinations configurados, ele desaparece sem rastro — é a diferença entre \"perdemos 3 arquivos\" e \"temos 3 na fila de erro para reprocessar\". Ele não fica retido, não volta ao S3, e não há alarme automático: você precisa criar alarme sobre a métrica de erro. Configurar destino de falha é obrigatório em qualquer invocação assíncrona de produção."
+          },
+          "id": "q525-17",
+          "position": 0
+        },
+        {
+          "type": "quiz",
+          "data": {
+            "question": "O time precisa de latência p99 previsível numa API de checkout, e o cold start está causando picos. Qual recurso?",
+            "options": [
+              "Aumentar o timeout da função",
+              "Migrar a função para dentro de uma VPC",
+              "Reduzir o tamanho do pacote de deploy apenas",
+              "Provisioned Concurrency, que mantém ambientes já inicializados"
+            ],
+            "correctIndex": 3,
+            "explanation": "Provisioned Concurrency mantém N ambientes de execução inicializados e prontos, eliminando o cold start para essa faixa de concorrência — é o recurso feito para requisito de latência previsível, com custo por hora. Timeout não tem relação com cold start: ele define quando a execução é abortada. Reduzir o pacote ajuda (menos tempo baixando o código) mas não elimina a inicialização, e sozinho não dá previsibilidade. Colocar a função em VPC historicamente PIORAVA o cold start e não é solução para latência."
+          },
+          "id": "q525-18",
+          "position": 1
+        }
+      ],
+      "id": "q525-15",
+      "position": 6
     }
   ]
 }

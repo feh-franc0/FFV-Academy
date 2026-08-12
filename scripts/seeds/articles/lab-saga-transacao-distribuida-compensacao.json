@@ -1,0 +1,2745 @@
+{
+  "slug": "lab-saga-transacao-distribuida-compensacao",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cesta é um marketplace de mercado que, seguindo o "
+              },
+              {
+                "text": "L31",
+                "code": true
+              },
+              {
+                "text": ", separou o monólito em dois serviços com bancos próprios: Pedidos e Estoque. A separação resolveu o problema que a motivou — os dois times deixaram de bloquear deploy um do outro. Ela também apagou algo que ninguém sentiu falta até o primeiro incidente: não existe mais uma transação de banco capaz de garantir que \"reservar estoque\" e \"confirmar pagamento\" aconteçam juntos ou não aconteçam."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O incidente foi este: um pedido reservou uma unidade de um produto popular, a chamada ao gateway de pagamento expirou por timeout de rede, e o processo que orquestrava os dois foi reciclado antes de decidir o que fazer com a reserva. Resultado — a tabela de Estoque mostrava a unidade comprometida; a tabela de Pedidos não tinha registro nenhum daquele pedido. O cliente viu erro na tela e tentou de novo mais tarde; a unidade ficou indisponível para todo mundo até um engenheiro notar, três dias depois, que o saldo não batia com as vendas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Isto não é bug de um `if` esquecido. É a consequência inevitável de separar dados entre serviços sem substituir a garantia que a transação única dava. O "
+              },
+              {
+                "text": "L25",
+                "code": true
+              },
+              {
+                "text": " já mostrou o mecanismo de retry e catch do Step Functions para uma cadeia de chamadas; este laboratório usa o MESMO mecanismo para resolver um problema diferente — não repetir uma chamada que falhou, mas desfazer as que já tinham dado certo quando uma chamada seguinte falha."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Especialista — depende do L25 (Step Functions) e do L32 (síncrono/assíncrono)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L25 concluído e no ar; L31 (dois serviços, dois bancos) entendido"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 55 min · implementação 2 h 30 a 3 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo: transições de estado, Lambdas de segundos e duas tabelas sob demanda — nada fica ligado 24h"
+              },
+              {
+                "k": "Serviços",
+                "v": "Step Functions (Standard), SQS, DynamoDB, Lambda"
+              },
+              {
+                "k": "Volume atual",
+                "v": "Cesta: cerca de 3.200 pedidos/dia, ticket médio de R$ 140"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "nenhum pedido pode deixar estoque reservado sem cobrança nem confirmação, permanentemente"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "o gateway de pagamento aceita um cabeçalho de idempotência e devolve o MESMO resultado para o mesmo token por 24h — como a maioria dos gateways reais faz; confirme na documentação do seu fornecedor antes de copiar este desenho"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "uma saga orquestrada com compensação em cada passo, a falha de cobrança e a falha de confirmação exercitadas de propósito, e uma fila de intervenção humana provada com uma compensação que também falha"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é uma fila de trabalho com retry (isso é o L22) nem uma cadeia de chamadas que só precisa repetir a que falhou (isso é o L25). Aqui, quando um passo falha, os passos ANTERIORES que já tiveram sucesso precisam ser desfeitos — e \"desfazer\" é código que você escreve, não um recurso da plataforma que existe pronto."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação, não com a sensação de ter entendido saga."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que 2PC entre dois bancos independentes trava disponibilidade em vez de resolver o problema.",
+              "Distinguir transação local, compensação e a diferença entre saga orquestrada e coreografada.",
+              "Escrever um Catch por Task que aponta para a compensação ESPECÍFICA daquele passo, não uma genérica.",
+              "Derivar a ordem de compensação como o espelho reverso da ordem de execução.",
+              "Provar, com falha injetada na cobrança, que o estoque reservado é liberado corretamente.",
+              "Provar, com falha injetada depois da cobrança, que estorno e liberação rodam nesta ordem.",
+              "Tratar a falha da PRÓPRIA compensação como caso de primeira classe, com fila e alarme.",
+              "Escrever uma compensação idempotente, sabendo que ela pode ser alcançada por mais de um caminho."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Saga: transação distribuída sem 2PC",
+                "SAP-C02",
+                "compensação nomeada por passo, no lugar de lock distribuído",
+                "por que 2PC não escala entre bancos independentes de serviços diferentes"
+              ],
+              [
+                "Orquestração vs. coreografia",
+                "SAP-C02",
+                "Step Functions como maestro central explícito",
+                "o trade-off entre auditabilidade (orquestrada) e desacoplamento (coreografada)"
+              ],
+              [
+                "Retry e Catch em ASL",
+                "DVA-C02, SAP-C02",
+                "cada Task com política própria de erro transitório e erro definitivo",
+                "ErrorEquals, States.ALL, States.TaskFailed e a ordem de avaliação dos retriers"
+              ],
+              [
+                "Idempotência de execução",
+                "DVA-C02",
+                "nome de execução = pedidoId, herdado do L25",
+                "ExecutionAlreadyExists e por que ele não substitui idempotência DENTRO da execução"
+              ],
+              [
+                "Consistência eventual entre serviços",
+                "SAP-C02",
+                "dois DynamoDB, sem transação cruzando os dois",
+                "por que database-per-service exige saga para operações que cruzam o domínio"
+              ],
+              [
+                "Escritas condicionais no DynamoDB",
+                "DVA-C02",
+                "ConditionExpression tanto na reserva quanto na liberação",
+                "como uma condição substitui um lock distribuído para evitar duplicidade"
+              ],
+              [
+                "SQS como fila de intervenção humana",
+                "SAP-C02, SOA-C02",
+                "fila de compensação falhou, com alarme",
+                "a diferença entre DLQ de mensagem malformada e fila operacional de decisão humana"
+              ],
+              [
+                "Standard vs. Express Workflows",
+                "DVA-C02",
+                "Standard escolhido pela semântica exactly-once por Task",
+                "quando Express é seguro: só depois de todo passo ser idempotente por si só"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve um Catch único no ÚLTIMO passo de uma cadeia de três chamadas e pergunta o que acontece se o segundo passo falhar. A resposta certa é que nada é desfeito automaticamente — só o passo com Catch próprio tem reação definida. Quem responde \"a saga reverte tudo\" está aplicando intuição de transação de banco a um mecanismo que não a tem por padrão."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito não funcional que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca no ASL ou no Terraform."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Zero pedido com estoque reservado sem cobrança nem confirmação, para sempre",
+                "obrigatório",
+                "todo Task de negócio com efeito colateral tem Catch apontando para uma compensação nomeada"
+              ],
+              [
+                "Cobrança não pode duplicar por retry",
+                "obrigatório",
+                "token de idempotência derivado do pedidoId, gerado uma vez, reutilizado em toda tentativa"
+              ],
+              [
+                "Compensação que falha não pode ser esquecida",
+                "obrigatório",
+                "Catch da própria compensação aponta para a fila de intervenção humana, não para um log"
+              ],
+              [
+                "Duas sagas para o mesmo pedido não podem coexistir",
+                "obrigatório",
+                "StartExecution com name = pedidoId, herdado do L25"
+              ],
+              [
+                "Cliente não pode esperar a saga inteira para receber uma resposta HTTP",
+                "< 300 ms de resposta à criação",
+                "a API só publica na fila e responde 202; a saga roda de forma assíncrona depois"
+              ],
+              [
+                "Auditoria: \"onde este pedido parou\" sem abrir o console",
+                "obrigatório para suporte",
+                "RegistrarFalha* grava o status em cada desfecho, direto na tabela Pedidos"
+              ],
+              [
+                "Time pequeno, sem vigília noturna",
+                "requisito de equipe",
+                "alarme automático na fila de compensação falhou, não checagem manual periódica"
+              ],
+              [
+                "Reserva não pode conviver com duas cobranças de tentativas concorrentes do mesmo pedido",
+                "obrigatório",
+                "ConditionExpression na reserva usa o pedidoId como parte da condição, não só o saldo"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: dois serviços, uma chamada síncrona"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que qualquer time chega sozinho depois de separar Pedidos e Estoque: uma chamada síncrona onde antes havia uma chamada de função. Ele é implantável e funciona em todo teste que não interrompe o processo no meio — que é exatamente o teste que ninguém escreve primeiro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Dois serviços, uma chamada síncrona, ninguém pronto para desfazer",
+            "caption": "Este desenho é a extensão natural de separar Pedidos e Estoque em dois serviços com bancos próprios (L31): uma função chama a outra como se fosse uma chamada de função comum. Funciona no caminho feliz e em todo teste que não mata um processo no meio. Percorra os passos: a inconsistência não vem de nenhuma linha errada, vem de nenhuma linha que desfaça a anterior.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente",
+                    "note": "envia o pedido e espera uma resposta síncrona da API — não sabe que dois serviços vão conversar por trás"
+                  }
+                ]
+              },
+              {
+                "label": "Borda",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "apigw",
+                    "service": "apigateway",
+                    "label": "API de Pedidos",
+                    "note": "expõe POST /pedidos e invoca o serviço de pedidos de forma síncrona, mantendo a conexão do cliente aberta"
+                  }
+                ]
+              },
+              {
+                "label": "Serviço de Pedidos, banco próprio",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "svcpedido",
+                    "service": "lambda",
+                    "label": "CriarPedido",
+                    "note": "chama o serviço de estoque e depois o gateway de pagamento em sequência, dentro da mesma execução"
+                  },
+                  {
+                    "id": "ddbpedido",
+                    "service": "dynamodb",
+                    "label": "Tabela Pedidos",
+                    "note": "só este serviço escreve aqui — é a fronteira de dado que o L31 estabeleceu entre os dois domínios"
+                  }
+                ]
+              },
+              {
+                "label": "Serviço de Estoque, banco próprio",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "svcestoque",
+                    "service": "lambda",
+                    "label": "ReservarEstoque",
+                    "note": "decrementa o saldo disponível assim que a reserva é confirmada, antes de saber se o pagamento será aprovado"
+                  },
+                  {
+                    "id": "ddbestoque",
+                    "service": "dynamodb",
+                    "label": "Tabela Estoque",
+                    "note": "só o serviço de estoque escreve aqui; o de pedidos não tem permissão de alterar este item"
+                  }
+                ]
+              },
+              {
+                "label": "Terceiro",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "gateway",
+                    "service": "external",
+                    "label": "Gateway de pagamento",
+                    "note": "processa a cobrança de forma síncrona e pode demorar, cair ou responder fora de ordem"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Logs de texto",
+                    "note": "registra cada chamada isoladamente; nenhum registro liga estoque e pagamento ao mesmo pedido"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "apigw",
+                "label": "POST /pedidos",
+                "style": "solid"
+              },
+              {
+                "from": "apigw",
+                "to": "svcpedido",
+                "label": "invoca com o corpo do pedido",
+                "style": "solid"
+              },
+              {
+                "from": "svcpedido",
+                "to": "svcestoque",
+                "label": "chamada síncrona: reservar(sku, qtd)",
+                "style": "solid"
+              },
+              {
+                "from": "svcestoque",
+                "to": "ddbestoque",
+                "label": "UpdateItem decrementa saldo disponível",
+                "style": "solid"
+              },
+              {
+                "from": "svcpedido",
+                "to": "gateway",
+                "label": "chamada síncrona: cobrar(cartão, valor)",
+                "style": "solid"
+              },
+              {
+                "from": "svcpedido",
+                "to": "ddbpedido",
+                "label": "grava o pedido só se as duas chamadas acima retornarem",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Dois serviços, dois bancos, nenhuma transação cruzando os dois",
+                "detail": "Desde que Pedidos e Estoque passaram a ter bancos próprios (L31), não existe mais uma transação ACID capaz de amarrar a escrita nos dois ao mesmo tempo. A chamada síncrona entre os dois serviços PARECE uma chamada de função, mas cada lado confirma a própria escrita de forma independente — não há mais \"tudo ou nada\".",
+                "nodes": [
+                  "svcpedido",
+                  "svcestoque"
+                ],
+                "edges": [
+                  "svcpedido>svcestoque"
+                ]
+              },
+              {
+                "label": "A reserva acontece antes de saber se o pagamento vai ser aprovado",
+                "detail": "ReservarEstoque decrementa o saldo de forma otimista: a hipótese é que a cobrança que vem depois vai dar certo. Não há nada que amarre essa decrementação a uma confirmação futura — uma vez gravada, ela é definitiva do ponto de vista do serviço de Estoque, que não sabe nada sobre pagamento.",
+                "nodes": [
+                  "svcestoque",
+                  "ddbestoque"
+                ],
+                "edges": [
+                  "svcestoque>ddbestoque"
+                ]
+              },
+              {
+                "label": "A cobrança é a segunda chamada síncrona, e ela pode falhar de várias formas",
+                "detail": "Recusa de cartão, timeout de rede, gateway fora do ar, ou o próprio processo de CriarPedido sendo encerrado no meio da espera — nenhuma delas é tratada de forma diferente aqui. O código que chama o gateway não distingue \"cobrança recusada\" de \"não sei se cobrou\", e as duas exigem reação diferente.",
+                "nodes": [
+                  "svcpedido",
+                  "gateway"
+                ],
+                "edges": [
+                  "svcpedido>gateway"
+                ]
+              },
+              {
+                "label": "Matar o processo aqui deixa o estoque reservado para sempre",
+                "detail": "Se a função CriarPedido é interrompida DEPOIS de reservar estoque e ANTES de gravar o resultado da cobrança — por timeout do API Gateway, erro de memória, ou o teste de falha injetada deste laboratório — não existe nenhuma linha de código que desfaça a reserva. O saldo decrementado não tem dono: não foi cobrado, não foi liberado.",
+                "nodes": [
+                  "svcpedido",
+                  "ddbpedido"
+                ],
+                "edges": [
+                  "svcpedido>ddbpedido"
+                ]
+              },
+              {
+                "label": "Os dois bancos contam histórias diferentes do mesmo pedido",
+                "detail": "Consultar a tabela Estoque mostra a unidade reservada. Consultar a tabela Pedidos não mostra pedido nenhum, porque a escrita final nunca aconteceu. Do ponto de vista do cliente, o pedido falhou; do ponto de vista do estoque, ele está comprometido. É exatamente o enunciado deste laboratório: pedido pago sem estoque reservado, ou aqui, sua face espelhada — estoque reservado sem pedido confirmado.",
+                "nodes": [
+                  "ddbestoque",
+                  "ddbpedido"
+                ],
+                "edges": [
+                  "svcpedido>ddbpedido"
+                ]
+              },
+              {
+                "label": "Por que alguém integra dois serviços assim",
+                "detail": "Porque é a forma mais direta de portar um monólito para dois serviços: onde havia uma chamada de método, agora há uma chamada de rede, e o código continua parecendo o mesmo. Funciona em todo teste de caminho feliz — e falha exatamente na hipótese que ninguém testa, que é o processo morrer no meio.",
+                "nodes": [
+                  "svcpedido",
+                  "svcestoque"
+                ],
+                "edges": [
+                  "svcpedido>svcestoque"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A prova do defeito não precisa de ferramenta nenhuma: mate o processo entre a reserva de estoque e a gravação do pedido, e observe os dois bancos depois."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "filename": "provar-o-defeito.sh",
+            "code": "# Simula o processo sendo interrompido DEPOIS de reservar e ANTES de gravar o\n# pedido — timeout do API Gateway, erro de memoria, ou o Lambda sendo reciclado.\naws lambda invoke --function-name cesta-criar-pedido-sincrono \\\n  --payload '{\"pedidoId\":\"p-teste-minimo\",\"sku\":\"sku-teste-minimo\",\"quantidade\":1,\\\n              \"forcarInterrupcaoAposReserva\":true}' \\\n  /dev/stdout\n\naws dynamodb get-item --table-name cesta-estoque \\\n  --key '{\"sku\":{\"S\":\"sku-teste-minimo\"}}' \\\n  --query 'Item.{saldo:saldo.N,reservas:reservas.M}' --output json\naws dynamodb get-item --table-name cesta-pedidos \\\n  --key '{\"pedidoId\":{\"S\":\"p-teste-minimo\"}}' --query 'Item' --output json\n# Esperado: o item de estoque mostra a reserva de p-teste-minimo. O item de\n# pedidos NAO EXISTE. Nenhum dos dois bancos tem erro — cada um esta correto do\n# proprio ponto de vista, e e por isso que ninguem detecta sozinho."
+          }
+        },
+        {
+          "id": "b4_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "O defeito não é o timeout — é a ausência de um plano para ele",
+            "content": "Toda chamada de rede pode falhar a qualquer momento, inclusive depois de já ter produzido efeito do outro lado. O problema desta arquitetura não é ela ter um timeout — é que nenhuma linha de código existe para o caso em que a reserva teve sucesso e a cobrança, não. Sem essa linha, o estoque comprometido não tem dono, e ninguém percebe até o saldo não bater com as vendas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção: a saga orquestrada"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A diferença estrutural em relação ao desenho anterior não é \"mais uma caixa\": é que agora existe um maestro que sabe tanto a ordem de ida quanto a ordem de volta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A saga orquestrada: cada passo tem uma compensação nomeada",
+            "caption": "A diferença estrutural não é \"mais um serviço\": é que agora existe um maestro explícito que sabe a ordem de ida E a ordem de volta. Cada Task de negócio tem um Catch apontando para o passo que desfaz o que ELE fez — não o que faz sentido em abstrato. Percorra os passos: a compensação de pagamento e a de estoque convergem para o mesmo estado, e é aí que mora o ensinamento deste desenho.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente",
+                    "note": "recebe 202 Aceito de imediato; a saga roda de forma assíncrona depois disso"
+                  }
+                ]
+              },
+              {
+                "label": "Borda e entrada assíncrona",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "apigw",
+                    "service": "apigateway",
+                    "label": "API de Pedidos",
+                    "note": "só publica o evento e responde; não espera a saga terminar para devolver algo ao cliente"
+                  },
+                  {
+                    "id": "sqs",
+                    "service": "sqs",
+                    "label": "Fila de pedidos criados",
+                    "note": "desacopla a criação do pedido do início da saga; se o iniciador cair, a mensagem não se perde"
+                  },
+                  {
+                    "id": "iniciador",
+                    "service": "lambda",
+                    "label": "Iniciador da Saga",
+                    "note": "chama StartExecution com nome = pedidoId — a mesma idempotência de execução construída no L25"
+                  }
+                ]
+              },
+              {
+                "label": "Orquestração",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sfn",
+                    "service": "stepfunctions",
+                    "label": "Máquina Saga Pedido (Standard)",
+                    "note": "decide a ordem de ida dos três passos de negócio e a ordem REVERSA de compensação quando algo falha"
+                  }
+                ]
+              },
+              {
+                "label": "Passos de negócio",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "reservar",
+                    "service": "lambda",
+                    "label": "ReservarEstoque",
+                    "note": "grava a reserva com condição de idempotência, para um retry não reservar a mesma unidade duas vezes"
+                  },
+                  {
+                    "id": "cobrar",
+                    "service": "lambda",
+                    "label": "CobrarPagamento",
+                    "note": "único passo que fala com um sistema fora da AWS — é onde a falha injetada deste laboratório acontece"
+                  },
+                  {
+                    "id": "confirmar",
+                    "service": "lambda",
+                    "label": "ConfirmarPedido",
+                    "note": "grava o status final; só ele autoriza dizer ao cliente que o pedido está confirmado de verdade"
+                  }
+                ]
+              },
+              {
+                "label": "Compensações",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "liberar",
+                    "service": "lambda",
+                    "label": "LiberarEstoque (compensação)",
+                    "note": "desfaz a reserva; é alcançado a partir de DOIS caminhos diferentes do grafo, por isso precisa ser idempotente"
+                  },
+                  {
+                    "id": "estornar",
+                    "service": "lambda",
+                    "label": "EstornarPagamento (compensação)",
+                    "note": "devolve o valor cobrado; só existe neste grafo porque ConfirmarPedido pode falhar depois da cobrança já ter sido feita"
+                  }
+                ]
+              },
+              {
+                "label": "Dados e terceiro",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ddbestoque",
+                    "service": "dynamodb",
+                    "label": "Tabela Estoque",
+                    "note": "mesma tabela do desenho anterior; a diferença é quem tem permissão de escrever nela agora"
+                  },
+                  {
+                    "id": "ddbpedido",
+                    "service": "dynamodb",
+                    "label": "Tabela Pedidos, com o histórico da saga",
+                    "note": "guarda o estado do pedido em cada transição — responde \"onde a saga parou\" sem abrir o console do Step Functions"
+                  },
+                  {
+                    "id": "gateway",
+                    "service": "external",
+                    "label": "Gateway de pagamento",
+                    "note": "cobra e estorna pelo mesmo token de idempotência, gerado uma única vez por pedido"
+                  }
+                ]
+              },
+              {
+                "label": "Quando a automação não basta",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "dlq",
+                    "service": "sqs",
+                    "label": "Fila de compensação falhou",
+                    "note": "recebe a saga quando a PRÓPRIA compensação esgota as tentativas de Retry — aqui não há mais automação"
+                  },
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Alarme de compensação pendente",
+                    "note": "dispara quando a fila de compensação falhou tem mensagem visível — é o olho humano do desenho"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "apigw",
+                "label": "POST /pedidos",
+                "style": "solid"
+              },
+              {
+                "from": "apigw",
+                "to": "sqs",
+                "label": "publica evento PedidoCriado",
+                "style": "solid"
+              },
+              {
+                "from": "sqs",
+                "to": "iniciador",
+                "label": "consome e inicia a saga",
+                "style": "solid"
+              },
+              {
+                "from": "iniciador",
+                "to": "sfn",
+                "label": "StartExecution(name=pedidoId)",
+                "style": "solid"
+              },
+              {
+                "from": "sfn",
+                "to": "reservar",
+                "label": "1º passo: reservar(sku, qtd)",
+                "style": "solid"
+              },
+              {
+                "from": "reservar",
+                "to": "ddbestoque",
+                "label": "UpdateItem condicional",
+                "style": "solid"
+              },
+              {
+                "from": "sfn",
+                "to": "cobrar",
+                "label": "2º passo, só se reservar teve sucesso",
+                "style": "solid"
+              },
+              {
+                "from": "cobrar",
+                "to": "gateway",
+                "label": "cobrar(token de idempotência, valor)",
+                "style": "solid"
+              },
+              {
+                "from": "sfn",
+                "to": "confirmar",
+                "label": "3º passo, só se cobrar teve sucesso",
+                "style": "solid"
+              },
+              {
+                "from": "confirmar",
+                "to": "ddbpedido",
+                "label": "grava status CONFIRMADO",
+                "style": "solid"
+              },
+              {
+                "from": "sfn",
+                "to": "liberar",
+                "label": "Catch de CobrarPagamento OU Next de EstornarPagamento",
+                "style": "dashed"
+              },
+              {
+                "from": "liberar",
+                "to": "ddbestoque",
+                "label": "UpdateItem condicional desfaz a reserva",
+                "style": "dashed"
+              },
+              {
+                "from": "sfn",
+                "to": "estornar",
+                "label": "Catch de ConfirmarPedido, só quando a cobrança já ocorreu",
+                "style": "dashed"
+              },
+              {
+                "from": "estornar",
+                "to": "gateway",
+                "label": "estornar(token de idempotência)",
+                "style": "dashed"
+              },
+              {
+                "from": "sfn",
+                "to": "dlq",
+                "label": "compensação esgotou as tentativas de Retry",
+                "style": "dashed"
+              },
+              {
+                "from": "dlq",
+                "to": "cw",
+                "label": "mensagem visível dispara o alarme",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A fila desacopla criar o pedido de iniciar a saga",
+                "detail": "O cliente recebe 202 Aceito assim que o evento é publicado — não espera a saga inteira. Se o Iniciador cair depois de consumir a mensagem mas antes de chamar StartExecution, a visibilidade da fila expira e outra tentativa consome a mesma mensagem de novo. É por isso que o nome da execução, no próximo passo, precisa ser determinístico.",
+                "nodes": [
+                  "apigw",
+                  "sqs",
+                  "iniciador"
+                ],
+                "edges": [
+                  "apigw>sqs",
+                  "sqs>iniciador"
+                ]
+              },
+              {
+                "label": "O nome da execução é a mesma idempotência do L25, e a saga não reinventa isso",
+                "detail": "O Iniciador chama StartExecution com name = pedidoId. Um Standard Workflow recusa iniciar uma segunda execução com o mesmo nome enquanto a primeira roda, respondendo ExecutionAlreadyExists. Isso protege contra a fila reentregar a mesma mensagem; não protege contra o QUE ACONTECE dentro da execução, que é o assunto dos próximos passos.",
+                "nodes": [
+                  "iniciador",
+                  "sfn"
+                ],
+                "edges": [
+                  "iniciador>sfn"
+                ]
+              },
+              {
+                "label": "Os três passos de negócio rodam em sequência, cada um só se o anterior deu certo",
+                "detail": "ReservarEstoque, CobrarPagamento e ConfirmarPedido são transações LOCAIS, cada uma confirmada e commitada no seu próprio banco antes de a saga avançar. Não existe transação cruzando os três — o que existe é uma ORDEM garantida pela máquina de estados, e é essa ordem que a arquitetura mínima não tinha.",
+                "nodes": [
+                  "sfn",
+                  "reservar",
+                  "cobrar",
+                  "confirmar"
+                ],
+                "edges": [
+                  "sfn>reservar",
+                  "sfn>cobrar",
+                  "sfn>confirmar"
+                ]
+              },
+              {
+                "label": "Se a cobrança falha, a compensação é uma seta nova no grafo, não uma mágica",
+                "detail": "O Catch de CobrarPagamento aponta explicitamente para LiberarEstoque. Não é o Step Functions \"desfazendo\" nada sozinho — é uma Task como qualquer outra, com o próprio Retry e o próprio Catch, escrita porque alguém decidiu que ESTE erro exige ESSA reação.",
+                "nodes": [
+                  "sfn",
+                  "liberar",
+                  "ddbestoque"
+                ],
+                "edges": [
+                  "sfn>liberar",
+                  "liberar>ddbestoque"
+                ]
+              },
+              {
+                "label": "Se a confirmação falha DEPOIS da cobrança, são duas compensações, na ordem inversa",
+                "detail": "ConfirmarPedido só é tentado depois de CobrarPagamento ter sucesso — então, se ele falha, o dinheiro já saiu. O Catch de ConfirmarPedido aponta primeiro para EstornarPagamento, que em seguida aponta para o MESMO estado LiberarEstoque usado no passo anterior. A ordem de desfazer é o espelho da ordem de fazer.",
+                "nodes": [
+                  "sfn",
+                  "estornar",
+                  "liberar"
+                ],
+                "edges": [
+                  "sfn>estornar",
+                  "sfn>liberar"
+                ]
+              },
+              {
+                "label": "Quando a própria compensação esgota o Retry, o próximo passo não é mais automático",
+                "detail": "Se o gateway está fora do ar também para o estorno, EstornarPagamento tenta de novo com backoff, e depois de esgotar as tentativas, o Catch dela aponta para a fila de compensação falhou — não para mais uma tentativa. A partir daqui, uma pessoa decide, com o histórico completo da execução na mão.",
+                "nodes": [
+                  "sfn",
+                  "dlq",
+                  "cw"
+                ],
+                "edges": [
+                  "sfn>dlq",
+                  "dlq>cw"
+                ]
+              },
+              {
+                "label": "O que muda em relação ao L25: agora TODO passo tem compensação nomeada",
+                "detail": "No L25, só a cobrança tinha um caminho de volta — reservar estoque sem confirmar o pedido inteiro ficava sem tratamento explícito nomeado além de um log. Aqui, os TRÊS passos de negócio têm compensação declarada, e a compensação em si tem Retry e Catch como qualquer outra Task.",
+                "nodes": [
+                  "reservar",
+                  "cobrar",
+                  "confirmar"
+                ],
+                "edges": [
+                  "sfn>cobrar"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Repare que "
+              },
+              {
+                "text": "LiberarEstoque",
+                "code": true
+              },
+              {
+                "text": " recebe duas setas de entrada diferentes no desenho: uma direto do Catch de "
+              },
+              {
+                "text": "CobrarPagamento",
+                "code": true
+              },
+              {
+                "text": ", outra depois de "
+              },
+              {
+                "text": "EstornarPagamento",
+                "code": true
+              },
+              {
+                "text": ". Isso não é um atalho de diagrama — é o mesmo estado do ASL, reaproveitado, e é exatamente por isso que a seção de código faz dessa compensação uma operação idempotente por si só, e não confia em ser chamada uma única vez."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "A pergunta que resume esta arquitetura inteira",
+            "content": "Para cada Task que grava algo em um banco, pergunte: \"se ESTE passo específico falhar depois, o que precisa ser desfeito?\" A resposta vira o Catch daquele Task, apontando para um estado com nome de verbo — Liberar, Estornar — nunca para um estado genérico de \"tratar erro\". Um Catch genérico é o sintoma de que ninguém fez essa pergunta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de um pedido, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os nomes dos erros no ASL não são estética: são o que permite ao Retry e ao Catch reagirem diferente a "
+              },
+              {
+                "text": "GatewayIndisponivelError",
+                "code": true
+              },
+              {
+                "text": " (tentar de novo) e a "
+              },
+              {
+                "text": "CartaoRecusadoError",
+                "code": true
+              },
+              {
+                "text": " (desistir e compensar). Sem essa distinção nomeada, tudo vira "
+              },
+              {
+                "text": "States.TaskFailed",
+                "code": true
+              },
+              {
+                "text": " e a máquina não tem como saber qual dos dois aconteceu."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "O caminho de um pedido — e os dois desvios que a saga sabe fazer",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1 · Cliente cria o pedido",
+                "desc": "API Gateway publica o evento PedidoCriado na fila e responde 202 Aceito. O cliente não fica esperando a saga terminar — a confirmação chega depois, por outro canal."
+              },
+              {
+                "label": "2 · Iniciador chama StartExecution(name = pedidoId)",
+                "desc": "Se já existe uma execução em andamento com esse nome, a chamada falha com ExecutionAlreadyExists e o Iniciador descarta a mensagem: idempotência de execução sem escrever nenhuma lógica extra para isso."
+              },
+              {
+                "label": "3 · ReservarEstoque grava a reserva com condição",
+                "desc": "UpdateItem só reserva se o pedidoId ainda não está na lista de reservas do item — reservar duas vezes por retry não é possível por construção, não por sorte."
+              },
+              {
+                "label": "4 · CobrarPagamento chama o gateway — é o ponto de falha injetada deste módulo",
+                "desc": "Erro transitório (gateway indisponível) é retried com backoff e jitter; recusa de cartão é definitiva e não é retried. As duas são erros diferentes, com nomes diferentes no ASL."
+              },
+              {
+                "label": "5a · Sucesso: ConfirmarPedido grava o status final",
+                "desc": "Só depois de ConfirmarPedido escrever CONFIRMADO na tabela Pedidos a saga termina com sucesso — é o único momento em que se pode dizer ao cliente que está tudo certo."
+              },
+              {
+                "label": "5b · Falha em CobrarPagamento: Catch dispara LiberarEstoque",
+                "desc": "Nada foi cobrado, então só existe uma coisa a desfazer. LiberarEstoque roda com o próprio Retry e o próprio Catch, como qualquer outra Task da máquina."
+              },
+              {
+                "label": "5c · Falha em ConfirmarPedido após cobrança: EstornarPagamento, depois LiberarEstoque",
+                "desc": "Aqui o dinheiro já saiu. A ordem de compensação é o espelho da ordem de execução: desfaz-se por último o que aconteceu por último. EstornarPagamento aponta para o MESMO estado LiberarEstoque usado no desvio 5b."
+              },
+              {
+                "label": "6 · Se qualquer compensação também esgota o Retry: fila de intervenção humana",
+                "desc": "O Catch da compensação não aponta para outra tentativa automática — aponta para a fila de compensação falhou, com o histórico completo da execução anexado. A partir daqui, ninguém finge que está resolvido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O payload que entra na saga carrega tudo que os cinco passos de negócio precisam, para que nenhum deles precise consultar outro serviço só para saber o que fazer:"
+              }
+            ]
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O evento PedidoCriado que a fila entrega ao Iniciador, e que vira o input de StartExecution. O cartaoToken NUNCA e o numero do cartao — e um token que o front trocou pelo numero direto com o gateway, antes de chegar aqui."
+              }
+            ]
+          },
+          "position": 3
+        },
+        {
+          "id": "b6_3",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "json",
+            "filename": "entrada-da-saga.json",
+            "code": "{\n  \"pedidoId\": \"p-8841\",\n  \"sku\": \"sku-cafe-500g\",\n  \"quantidade\": 2,\n  \"valorCentavos\": 4590,\n  \"cartaoToken\": \"tok_9f2e...\",\n  \"criadoEm\": \"2026-08-07T13:04:11.000Z\"\n}"
+          }
+        },
+        {
+          "id": "b6_4",
+          "type": "paragraph",
+          "position": 5,
+          "data": {
+            "content": [
+              {
+                "text": "E o que o Catch anexa ao input quando um passo falha — é este objeto que `CompensacaoFalhouParaFilaHumana` envia para a fila de intervenção, com os dois motivos lado a lado:"
+              }
+            ]
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Corpo real da mensagem em cesta-compensacao-falhou. pedidoId identifica o caso; os dois campos de erro mostram O QUE falhou no negocio E o que falhou ao tentar desfazer — as duas informacoes que quem investiga precisa juntas."
+              }
+            ]
+          },
+          "position": 6
+        },
+        {
+          "id": "b6_5",
+          "type": "code_block",
+          "position": 7,
+          "data": {
+            "language": "json",
+            "filename": "mensagem-da-fila-humana.json",
+            "code": "{\n  \"pedidoId\": \"p-9013\",\n  \"erroOriginal\": { \"Error\": \"CartaoRecusadoError\", \"Cause\": \"cartao recusado pelo emissor\" },\n  \"erroDaCompensacao\": { \"Error\": \"States.TaskFailed\", \"Cause\": \"EstornarPagamento: gateway indisponivel apos 4 tentativas\" }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "A Cesta separou Pedidos e Estoque em dois serviços com bancos próprios (L31). Um pedido precisa reservar estoque, cobrar o cartão e só então ser confirmado — três operações em dois serviços diferentes, sem transação de banco cruzando os dois, e com um gateway de pagamento externo que pode falhar de formas diferentes em cada chamada.",
+            "winner": "Saga orquestrada com Step Functions (Standard Workflow), com compensação nomeada em cada passo de negócio",
+            "why": "A orquestração dá um lugar ÚNICO onde a ordem de ida e a ordem de volta estão escritas e são auditáveis — get-execution-history mostra exatamente que compensação rodou e por quê, sem precisar juntar log de três serviços. Standard Workflow, e não Express, porque a cobrança não é idempotente por padrão no gateway: uma execução Express pode reprocessar um passo (semântica at-least-once), e reprocessar CobrarPagamento sem proteção própria cobraria duas vezes. O par retry/catch por Task é o mesmo mecanismo que o L25 já usava para chamada transitória — a saga não é uma ferramenta nova, é o MESMO mecanismo aplicado a compensação em vez de só a repetição.",
+            "alternatives": [
+              {
+                "name": "Duas fases de commit (2PC/XA) entre os dois bancos",
+                "downside": "Exige que um coordenador trave os recursos nos dois bancos até decidir, prendendo a disponibilidade de um serviço à saúde do outro — exatamente o acoplamento que separar os bancos tentou evitar. DynamoDB não participa de transação XA entre contas ou serviços independentes, então a opção nem está disponível aqui."
+              },
+              {
+                "name": "Saga coreografada (eventos, sem maestro central)",
+                "downside": "Cada serviço reage ao evento do anterior e publica o seu — desacopla o código, mas espalha a ordem de compensação entre N handlers diferentes. Responder \"onde este pedido travou\" exige juntar log de cada serviço à mão, sem um histórico único. Vale a troca quando os times são autônomos e o custo de observabilidade distribuída já foi pago; não é o caso de dois serviços e duas pessoas."
+              },
+              {
+                "name": "Compensação manual pelo time de suporte",
+                "downside": "É o que o incidente do L25 documentou: sem fila nem alarme, o estoque preso só é percebido quando alguém reclama. Não escala com o volume de pedidos e não deixa rastro de quantas vezes aconteceu."
+              },
+              {
+                "name": "Express Workflow para toda a saga, já nesta primeira versão",
+                "downside": "Mais barato por transição e sem limite prático de taxa, mas troca exactly-once por at-least-once: um passo pode rodar mais de uma vez sem que a máquina saiba. Só é seguro depois que TODO passo — inclusive as compensações — tiver proteção de idempotência própria, o que é o nível 4 da evolução deste laboratório."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Padrão de consistência",
+                "saga com compensação por passo",
+                "2PC/XA; nenhuma coordenação (status quo)",
+                "transação local em cada banco, coordenada por fora, sem lock cruzando serviços",
+                "consistência deixa de ser imediata e passa a ser eventual — há uma janela em que o estoque está reservado e o pagamento ainda não foi decidido"
+              ],
+              [
+                "Topologia da saga",
+                "orquestrada com Step Functions",
+                "coreografada com EventBridge/SNS",
+                "um único lugar audita a ordem de ida e de volta, sem juntar log de três serviços",
+                "acoplamento a um coordenador central; os serviços de negócio não são mais autônomos na ordem de execução"
+              ],
+              [
+                "Onde a compensação aponta ao esgotar o Retry",
+                "fila de intervenção humana + alarme",
+                "log e segue (o padrão do L25); nova tentativa infinita",
+                "compensação que falha é tão grave quanto a ação original falhando — merece o mesmo rigor",
+                "um pedido pode ficar em REQUER_INTERVENCAO_HUMANA por minutos até alguém responder ao alarme"
+              ],
+              [
+                "Idempotência da cobrança",
+                "token derivado do pedidoId",
+                "nenhuma proteção própria; confiar só no Retry declarativo",
+                "Retry do ASL garante que o ESTADO roda de novo, não que a ação por trás seja segura de repetir",
+                "depende de o gateway externo suportar e respeitar um cabeçalho de idempotência — é a hipótese declarada deste módulo"
+              ],
+              [
+                "Compensação compartilhada (LiberarEstoque)",
+                "um único estado, dois caminhos de entrada",
+                "duplicar o estado para cada caminho que o alcança",
+                "menos código para manter sincronizado, e força a compensação a ser idempotente por si só",
+                "o Catch de dois Tasks diferentes precisa apontar para o MESMO nome de estado — erro de digitação aqui quebra silenciosamente um dos dois caminhos"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que esta saga não paga",
+            "content": "Se o gateway ficar fora do ar por horas, CobrarPagamento esgota o Retry rápido — mas a compensação também vai falhar, e o volume de pedidos presos na fila humana cresce sem limite natural. Circuit breaker em CobrarPagamento, que corta a tentativa antes de esgotar o Retry quando o gateway já mostrou sinal de estar caído, é o L36, e ele evolui exatamente este ponto."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: as duas tabelas, a fila de entrada e a fila humana"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Nada aqui é exclusivo de saga — são as mesmas peças de qualquer sistema orientado a evento. O que muda é o propósito de cada uma: a fila de entrada existe para desacoplar, e a fila de compensação falhou existe para GARANTIR que uma falha dupla não desapareça num log."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "dados_e_fila.tf",
+            "code": "# dados_e_fila.tf — as duas tabelas, a fila de entrada e a DLQ de compensacao\n\n# Cada item guarda o proprio saldo E a lista de pedidos que ja reservaram dele.\n# E essa lista que sustenta a condicao de idempotencia da secao de codigo.\nresource \"aws_dynamodb_table\" \"estoque\" {\n  name         = \"cesta-estoque\"\n  billing_mode = \"PAY_PER_REQUEST\" # volume de pedidos varia por dia da semana; sem capacidade fixa a administrar\n  hash_key     = \"sku\"\n\n  attribute {\n    name = \"sku\"\n    type = \"S\"\n  }\n\n  point_in_time_recovery {\n    enabled = true\n  }\n}\n\n# pedidoId e a chave; o status muda ao longo da saga e o historico de quem\n# escreveu cada status vem do proprio execution history do Step Functions,\n# nao duplicado aqui.\nresource \"aws_dynamodb_table\" \"pedidos\" {\n  name         = \"cesta-pedidos\"\n  billing_mode = \"PAY_PER_REQUEST\"\n  hash_key     = \"pedidoId\"\n\n  attribute {\n    name = \"pedidoId\"\n    type = \"S\"\n  }\n\n  point_in_time_recovery {\n    enabled = true\n  }\n}\n\n# Desacopla a criacao do pedido do inicio da saga. Se o Iniciador cair depois\n# de consumir mas antes de chamar StartExecution, a visibilidade expira e a\n# mensagem volta — e o nome de execucao determinístico evita duplicar a saga.\nresource \"aws_sqs_queue\" \"pedidos_criados\" {\n  name                       = \"cesta-pedidos-criados\"\n  visibility_timeout_seconds = 30\n  message_retention_seconds  = 86400\n}\n\n# A fila que so existe porque este laboratorio leva a serio que compensacao\n# tambem falha. Nao ha redrive automatico dela: quem le esta fila e gente.\nresource \"aws_sqs_queue\" \"compensacao_falhou\" {\n  name                      = \"cesta-compensacao-falhou\"\n  message_retention_seconds = 1209600 # 14 dias — o maximo do SQS, porque o \"prazo de resposta\" aqui e humano\n}\n\n# O alarme e a razao pela qual esta fila nao e um cemiterio silencioso de\n# pedidos presos. Sem ele, \"REQUER_INTERVENCAO_HUMANA\" so e visto por acaso.\nresource \"aws_cloudwatch_metric_alarm\" \"compensacao_pendente\" {\n  alarm_name          = \"cesta-saga-compensacao-pendente\"\n  namespace           = \"AWS/SQS\"\n  metric_name         = \"ApproximateNumberOfMessagesVisible\"\n  statistic           = \"Maximum\"\n  period              = 300\n  evaluation_periods  = 1\n  threshold           = 0\n  comparison_operator = \"GreaterThanThreshold\"\n  treat_missing_data  = \"notBreaching\"\n\n  dimensions = {\n    QueueName = aws_sqs_queue.compensacao_falhou.name\n  }\n\n  alarm_actions = [aws_sns_topic.alertas_saga.arn]\n}\n\nresource \"aws_sns_topic\" \"alertas_saga\" {\n  name = \"cesta-saga-alertas\"\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que a condição de idempotência mora no item, não numa tabela separada",
+            "content": "Guardar as reservas dentro do próprio item de estoque, num mapa por pedidoId, evita uma segunda tabela e uma segunda escrita — e mantém a condição e o dado que ela protege na mesma operação atômica do DynamoDB. O custo é um item que cresce com o número de reservas simultâneas do mesmo SKU; para um catálogo de mercado, isso nunca chega perto do limite de 400 KB por item."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: a máquina de estados, em ASL real"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A saga inteira está aqui: três passos de negócio, duas compensações, e os dois destinos finais quando a automação não resolve sozinha. Leia de baixo para cima uma vez — o Catch de cada Task é o que define o comportamento, não a ordem em que os estados aparecem no arquivo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "json",
+            "filename": "saga-pedido.json",
+            "code": "{\n  \"Comment\": \"Cesta - saga do pedido: reservar estoque, cobrar, confirmar - com compensacao por passo\",\n  \"StartAt\": \"ReservarEstoque\",\n  \"States\": {\n    \"ReservarEstoque\": {\n      \"Type\": \"Task\",\n      \"Resource\": \"arn:aws:lambda:us-east-1:111122223333:function:cesta-reservar-estoque\",\n      \"Retry\": [\n        { \"ErrorEquals\": [\"EstoqueInsuficienteError\"], \"MaxAttempts\": 0 },\n        { \"ErrorEquals\": [\"States.TaskFailed\"], \"IntervalSeconds\": 1, \"MaxAttempts\": 2, \"BackoffRate\": 2.0 }\n      ],\n      \"Catch\": [\n        { \"ErrorEquals\": [\"States.ALL\"], \"ResultPath\": \"$.erro\", \"Next\": \"RegistrarFalhaSemCompensacao\" }\n      ],\n      \"Next\": \"CobrarPagamento\"\n    },\n    \"CobrarPagamento\": {\n      \"Type\": \"Task\",\n      \"Resource\": \"arn:aws:lambda:us-east-1:111122223333:function:cesta-cobrar-pagamento\",\n      \"Retry\": [\n        {\n          \"ErrorEquals\": [\"GatewayIndisponivelError\"],\n          \"IntervalSeconds\": 2,\n          \"MaxAttempts\": 4,\n          \"BackoffRate\": 2.0,\n          \"MaxDelaySeconds\": 15,\n          \"JitterStrategy\": \"FULL\"\n        },\n        { \"ErrorEquals\": [\"CartaoRecusadoError\"], \"MaxAttempts\": 0 }\n      ],\n      \"Catch\": [\n        { \"ErrorEquals\": [\"States.ALL\"], \"ResultPath\": \"$.erro\", \"Next\": \"LiberarEstoque\" }\n      ],\n      \"Next\": \"ConfirmarPedido\"\n    },\n    \"ConfirmarPedido\": {\n      \"Type\": \"Task\",\n      \"Resource\": \"arn:aws:lambda:us-east-1:111122223333:function:cesta-confirmar-pedido\",\n      \"Retry\": [\n        { \"ErrorEquals\": [\"States.TaskFailed\"], \"IntervalSeconds\": 1, \"MaxAttempts\": 2, \"BackoffRate\": 2.0 }\n      ],\n      \"Catch\": [\n        { \"ErrorEquals\": [\"States.ALL\"], \"ResultPath\": \"$.erro\", \"Next\": \"EstornarPagamento\" }\n      ],\n      \"End\": true\n    },\n    \"LiberarEstoque\": {\n      \"Comment\": \"Compensacao alcancada a partir de DOIS caminhos: Catch de CobrarPagamento (direto) e Next de EstornarPagamento (apos estornar). Por isso ela tem de ser idempotente por si so - nada aqui garante uma unica chamada.\",\n      \"Type\": \"Task\",\n      \"Resource\": \"arn:aws:lambda:us-east-1:111122223333:function:cesta-liberar-estoque\",\n      \"Retry\": [\n        {\n          \"ErrorEquals\": [\"States.TaskFailed\"],\n          \"IntervalSeconds\": 2,\n          \"MaxAttempts\": 3,\n          \"BackoffRate\": 2.0,\n          \"JitterStrategy\": \"FULL\"\n        }\n      ],\n      \"Catch\": [\n        { \"ErrorEquals\": [\"States.ALL\"], \"ResultPath\": \"$.erroCompensacao\", \"Next\": \"CompensacaoFalhouParaFilaHumana\" }\n      ],\n      \"Next\": \"RegistrarFalhaComEstoqueLiberado\"\n    },\n    \"EstornarPagamento\": {\n      \"Type\": \"Task\",\n      \"Resource\": \"arn:aws:lambda:us-east-1:111122223333:function:cesta-estornar-pagamento\",\n      \"Retry\": [\n        {\n          \"ErrorEquals\": [\"GatewayIndisponivelError\"],\n          \"IntervalSeconds\": 2,\n          \"MaxAttempts\": 4,\n          \"BackoffRate\": 2.0,\n          \"MaxDelaySeconds\": 15,\n          \"JitterStrategy\": \"FULL\"\n        }\n      ],\n      \"Catch\": [\n        { \"ErrorEquals\": [\"States.ALL\"], \"ResultPath\": \"$.erroCompensacao\", \"Next\": \"CompensacaoFalhouParaFilaHumana\" }\n      ],\n      \"Next\": \"LiberarEstoque\"\n    },\n    \"RegistrarFalhaSemCompensacao\": {\n      \"Type\": \"Task\",\n      \"Resource\": \"arn:aws:states:::dynamodb:putItem\",\n      \"Parameters\": {\n        \"TableName\": \"cesta-pedidos\",\n        \"Item\": {\n          \"pedidoId\": { \"S.$\": \"$.pedidoId\" },\n          \"status\": { \"S\": \"FALHOU_SEM_RESERVA\" },\n          \"motivo\": { \"S.$\": \"$.erro.Cause\" }\n        }\n      },\n      \"End\": true\n    },\n    \"RegistrarFalhaComEstoqueLiberado\": {\n      \"Type\": \"Task\",\n      \"Resource\": \"arn:aws:states:::dynamodb:putItem\",\n      \"Parameters\": {\n        \"TableName\": \"cesta-pedidos\",\n        \"Item\": {\n          \"pedidoId\": { \"S.$\": \"$.pedidoId\" },\n          \"status\": { \"S\": \"FALHOU_COMPENSADO\" },\n          \"motivo\": { \"S.$\": \"$.erro.Cause\" }\n        }\n      },\n      \"End\": true\n    },\n    \"CompensacaoFalhouParaFilaHumana\": {\n      \"Comment\": \"Aqui a saga desiste de se resolver sozinha. A mensagem carrega o pedidoId, o passo que falhou e o motivo da falha da PROPRIA compensacao.\",\n      \"Type\": \"Task\",\n      \"Resource\": \"arn:aws:states:::sqs:sendMessage\",\n      \"Parameters\": {\n        \"QueueUrl\": \"https://sqs.us-east-1.amazonaws.com/111122223333/cesta-compensacao-falhou\",\n        \"MessageBody\": {\n          \"pedidoId.$\": \"$.pedidoId\",\n          \"erroOriginal.$\": \"$.erro\",\n          \"erroDaCompensacao.$\": \"$.erroCompensacao\"\n        }\n      },\n      \"Next\": \"RegistrarRequerIntervencaoHumana\"\n    },\n    \"RegistrarRequerIntervencaoHumana\": {\n      \"Type\": \"Task\",\n      \"Resource\": \"arn:aws:states:::dynamodb:putItem\",\n      \"Parameters\": {\n        \"TableName\": \"cesta-pedidos\",\n        \"Item\": {\n          \"pedidoId\": { \"S.$\": \"$.pedidoId\" },\n          \"status\": { \"S\": \"REQUER_INTERVENCAO_HUMANA\" }\n        }\n      },\n      \"End\": true\n    }\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "O erro que este ASL existe para impedir",
+            "content": "Se o Catch de `ConfirmarPedido` apontasse direto para `RegistrarFalhaComEstoqueLiberado` em vez de para `EstornarPagamento`, o pedido ficaria marcado como falho SEM o dinheiro ser devolvido — o cliente cobrado por um pedido que a Cesta considera que nunca aconteceu. É o mesmo tipo de inconsistência do enunciado deste laboratório, só que medida no sentido contrário."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o papel mínimo da máquina, e por que ele não invoca \"qualquer Lambda\""
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A máquina de estados só precisa de três coisas: invocar as seis funções que ela orquestra, escrever nas duas tabelas via integração direta de serviço, e mandar mensagem para a fila humana. Nada mais."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "saga.tf",
+            "code": "# saga.tf — a maquina de estados e o papel minimo para rodar as Tasks\n\nresource \"aws_cloudwatch_log_group\" \"saga_pedido\" {\n  name              = \"/aws/vendedlogs/states/cesta-saga-pedido\"\n  retention_in_days = 30\n}\n\nresource \"aws_sfn_state_machine\" \"saga_pedido\" {\n  name     = \"cesta-saga-pedido\"\n  role_arn = aws_iam_role.saga_pedido.arn\n  type     = \"STANDARD\" # nao Express: a cobranca nao e idempotente por padrao no gateway,\n                         # e Standard garante exactly-once por Task (ver a secao de decisoes)\n\n  definition = file(\"${path.module}/asl/saga-pedido.json\")\n\n  # Sem isto, um pedido preso vira mistério: nenhum log fica alem do que a\n  # propria Lambda escreve. Com ALL, todo Retry e todo Catch fica no rastro.\n  logging_configuration {\n    log_destination        = \"${aws_cloudwatch_log_group.saga_pedido.arn}:*\"\n    include_execution_data = true\n    level                   = \"ALL\"\n  }\n}\n\n# O papel da MAQUINA, nao das Lambdas: ela so precisa invocar as seis funcoes\n# e escrever nas duas tabelas via integracao direta de servico (RegistrarFalha*).\ndata \"aws_iam_policy_document\" \"saga_pedido_assume\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sts:AssumeRole\"]\n    principals {\n      type        = \"Service\"\n      identifiers = [\"states.amazonaws.com\"]\n    }\n  }\n}\n\nresource \"aws_iam_role\" \"saga_pedido\" {\n  name               = \"cesta-saga-pedido-role\"\n  assume_role_policy = data.aws_iam_policy_document.saga_pedido_assume.json\n}\n\n# Recurso especifico por Lambda, nunca \"lambda:InvokeFunction\" com \"*\" — a\n# maquina so pode chamar as SEIS funcoes que ela de fato orquestra.\ndata \"aws_iam_policy_document\" \"saga_pedido_permissoes\" {\n  statement {\n    effect = \"Allow\"\n    actions = [\"lambda:InvokeFunction\"]\n    resources = [\n      aws_lambda_function.reservar_estoque.arn,\n      aws_lambda_function.cobrar_pagamento.arn,\n      aws_lambda_function.confirmar_pedido.arn,\n      aws_lambda_function.liberar_estoque.arn,\n      aws_lambda_function.estornar_pagamento.arn,\n    ]\n  }\n\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"dynamodb:PutItem\"]\n    resources = [aws_dynamodb_table.pedidos.arn]\n  }\n\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"sqs:SendMessage\"]\n    resources = [aws_sqs_queue.compensacao_falhou.arn]\n  }\n\n  statement {\n    effect = \"Allow\"\n    actions = [\n      \"logs:CreateLogDelivery\", \"logs:GetLogDelivery\", \"logs:UpdateLogDelivery\",\n      \"logs:DeleteLogDelivery\", \"logs:ListLogDeliveries\", \"logs:PutResourcePolicy\",\n      \"logs:DescribeResourcePolicies\", \"logs:DescribeLogGroups\",\n    ]\n    # As acoes de log delivery do Step Functions nao aceitam recurso especifico —\n    # e uma limitacao documentada da integracao com CloudWatch Logs, nao preguica.\n    resources = [\"*\"]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"saga_pedido_permissoes\" {\n  role   = aws_iam_role.saga_pedido.id\n  policy = data.aws_iam_policy_document.saga_pedido_permissoes.json\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O `*` que aparece na política, e por que ele se justifica",
+            "content": "As ações de entrega de log do CloudWatch (`logs:CreateLogDelivery` e as vizinhas) são parte da integração DOCUMENTADA entre Step Functions e CloudWatch Logs, e não aceitam recurso específico — não é a máquina de estados escolhendo um `Resource: \"*\"` por atalho. Todas as outras permissões desta política são restritas ao ARN exato do recurso: seis Lambdas nomeadas, uma tabela, uma fila."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: os passos de negócio e a compensação, pequenos e idempotentes"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada Lambda faz uma coisa e faz sozinha. O que vale a pena ler com atenção não é o tamanho — é onde cada uma decide se um erro é para tentar de novo ou para desistir e compensar, porque essa decisão é o que o ASL, sozinho, não pode tomar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "ReservarEstoqueFunction.cs",
+            "code": "// ReservarEstoqueFunction.cs — a condição é a idempotência, não um try/catch\n\npublic class ReservarEstoqueFunction\n{\n    private readonly IAmazonDynamoDB _dynamo;\n\n    public async Task<object> FunctionHandler(SagaInput evento, ILambdaContext ctx)\n    {\n        try\n        {\n            // A condição faz duas coisas ao mesmo tempo: garante saldo suficiente\n            // E garante que ESTE pedidoId ainda não está na lista de reservas do\n            // item. Um retry do Step Functions chama esta função de novo com o\n            // MESMO input — sem a segunda parte da condição, a segunda chamada\n            // reservaria uma unidade extra que ninguém pediu.\n            await _dynamo.UpdateItemAsync(new UpdateItemRequest\n            {\n                TableName = \"cesta-estoque\",\n                Key = new() { [\"sku\"] = new AttributeValue { S = evento.Sku } },\n                UpdateExpression = \"SET saldo = saldo - :qtd, reservas.#pedido = :qtd\",\n                ConditionExpression = \"saldo >= :qtd AND attribute_not_exists(reservas.#pedido)\",\n                ExpressionAttributeNames = new() { [\"#pedido\"] = evento.PedidoId },\n                ExpressionAttributeValues = new()\n                {\n                    [\":qtd\"] = new AttributeValue { N = evento.Quantidade.ToString() },\n                },\n            });\n\n            return new { evento.PedidoId, evento.Sku, evento.Quantidade, evento.ValorCentavos };\n        }\n        catch (ConditionalCheckFailedException) when (await JaReservadoParaEstePedido(evento))\n        {\n            // A CONDIÇÃO falhou porque a reserva JÁ EXISTE para este pedidoId —\n            // não porque o saldo é insuficiente. Isto é o retry chegando de novo,\n            // não um erro: devolvemos sucesso sem reservar nada a mais.\n            return new { evento.PedidoId, evento.Sku, evento.Quantidade, evento.ValorCentavos };\n        }\n        catch (ConditionalCheckFailedException)\n        {\n            // Aqui sim é o caso definitivo: saldo insuficiente. Nomear o erro\n            // como tal permite ao ASL configurar MaxAttempts=0 para ele — repetir\n            // uma reserva impossível não a torna possível.\n            throw new EstoqueInsuficienteError($\"sem saldo para {evento.Sku}\");\n        }\n    }\n\n    private async Task<bool> JaReservadoParaEstePedido(SagaInput evento)\n    {\n        var item = await _dynamo.GetItemAsync(new GetItemRequest\n        {\n            TableName = \"cesta-estoque\",\n            Key = new() { [\"sku\"] = new AttributeValue { S = evento.Sku } },\n        });\n        return item.Item.TryGetValue(\"reservas\", out var reservas)\n            && reservas.M.ContainsKey(evento.PedidoId);\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "csharp",
+            "filename": "CobrarPagamentoFunction.cs",
+            "code": "// CobrarPagamentoFunction.cs — dois erros com nomes diferentes, para o ASL decidir sozinho\n\npublic class CobrarPagamentoFunction\n{\n    private readonly IGatewayPagamento _gateway;\n\n    public async Task<object> FunctionHandler(SagaInput evento, ILambdaContext ctx)\n    {\n        try\n        {\n            // O token de idempotência é derivado do pedidoId, não gerado a cada\n            // chamada. Hipótese declarada deste laboratório: o gateway aceita um\n            // cabeçalho de idempotência e devolve o MESMO resultado para o MESMO\n            // token por 24h — como a maioria dos gateways reais faz. Sem isso, o\n            // Retry desta Task cobraria o cliente uma vez por tentativa.\n            var resultado = await _gateway.CobrarAsync(\n                token: $\"cesta-cobranca-{evento.PedidoId}\",\n                cartao: evento.CartaoToken,\n                valorCentavos: evento.ValorCentavos);\n\n            if (resultado.Recusado)\n                // Erro DEFINITIVO: cartão recusado não muda de resposta em uma\n                // segunda tentativa. O ASL marca MaxAttempts=0 para este nome.\n                throw new CartaoRecusadoError(evento.PedidoId);\n\n            return new { evento.PedidoId, resultado.IdTransacao };\n        }\n        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)\n        {\n            // Erro TRANSITÓRIO: rede, timeout, gateway fora do ar. O ASL faz\n            // Retry com backoff e jitter para este nome — jitter porque, se\n            // muitos pedidos cobrarem ao mesmo tempo, retries sincronizados\n            // martelariam o gateway exatamente enquanto ele se recupera.\n            throw new GatewayIndisponivelError(evento.PedidoId);\n        }\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "Distrator comum: nomear o erro errado",
+            "content": "Se `CobrarPagamento` lançasse `Exception` genérica tanto para timeout quanto para cartão recusado, o Retry do ASL trataria os dois igual — e tentaria de novo uma recusa definitiva, ou desistiria cedo demais de um erro transitório. O nome do erro é a interface entre o código C# e a política declarada no ASL; escrevê-lo errado quebra o contrato sem que nenhum teste unitário perceba."
+          }
+        },
+        {
+          "id": "b11_4",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "csharp",
+            "filename": "LiberarEstoqueFunction.cs",
+            "code": "// LiberarEstoqueFunction.cs — compensação chamada de DOIS caminhos; idempotente por si só\n\npublic class LiberarEstoqueFunction\n{\n    private readonly IAmazonDynamoDB _dynamo;\n\n    public async Task<object> FunctionHandler(SagaInput evento, ILambdaContext ctx)\n    {\n        // No ASL, este mesmo estado é o Next tanto do Catch de CobrarPagamento\n        // quanto do Next de EstornarPagamento. Nada no grafo impede que, num\n        // reprocessamento raro, ele seja alcançado mais de uma vez para o MESMO\n        // pedido — por isso a condição abaixo, e não um UpdateItem incondicional.\n        try\n        {\n            await _dynamo.UpdateItemAsync(new UpdateItemRequest\n            {\n                TableName = \"cesta-estoque\",\n                Key = new() { [\"sku\"] = new AttributeValue { S = evento.Sku } },\n                UpdateExpression = \"SET saldo = saldo + :qtd REMOVE reservas.#pedido\",\n                // Só libera se a reserva deste pedido AINDA existir. Chamar de\n                // novo depois de já ter liberado não soma saldo a mais — a\n                // condição falha, e tratamos isso como sucesso silencioso.\n                ConditionExpression = \"attribute_exists(reservas.#pedido)\",\n                ExpressionAttributeNames = new() { [\"#pedido\"] = evento.PedidoId },\n                ExpressionAttributeValues = new()\n                {\n                    [\":qtd\"] = new AttributeValue { N = evento.Quantidade.ToString() },\n                },\n            });\n        }\n        catch (ConditionalCheckFailedException)\n        {\n            // Já liberado por uma chamada anterior (o outro caminho do grafo, ou\n            // um retry). Não é falha: é a idempotência funcionando como desenhada.\n        }\n\n        return new { evento.PedidoId, Liberado = true };\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b11_5",
+          "type": "callout",
+          "position": 5,
+          "data": {
+            "variant": "success",
+            "title": "Por que esta função nunca lança \"já foi liberado\" como erro",
+            "content": "Ser alcançada duas vezes para o mesmo pedido é um cenário ESPERADO deste desenho — não uma falha. Tratar `ConditionalCheckFailedException` como sucesso silencioso é o que torna a compensação segura de chamar a partir de dois pontos diferentes do grafo, que é exatamente a situação criada por `EstornarPagamento` apontando para o mesmo `LiberarEstoque` que `CobrarPagamento` também alcança."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar que a compensação faz o que o ASL diz"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "implantar.sh",
+            "code": "#!/usr/bin/env bash\n# implantar.sh — publica as seis Lambdas, a maquina de estados e a fila\nset -euo pipefail\n\nPROJETO=\"cesta\"; REGIAO=\"us-east-1\"\n\nfor FN in reservar-estoque cobrar-pagamento confirmar-pedido liberar-estoque estornar-pagamento; do\n  dotnet publish \"Funcoes/${FN}\" -c Release -o \"build/${FN}\"\n  (cd \"build/${FN}\" && zip -qr \"../${FN}.zip\" .)\ndone\n\nterraform apply -auto-approve\n\necho \"maquina no ar: $(terraform output -raw arn_maquina_saga)\"\n"
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Seis provas. As três primeiras testam o caminho de negócio; a quarta reconfirma a idempotência de execução do L25 neste desenho novo; a quinta é a que mais laboratório nenhum desta série tinha feito até aqui — provar que a PRÓPRIA compensação, ao falhar, cai numa fila com alarme, e não em silêncio."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — seis medicoes; nenhuma aceita \"parece que funcionou\"\n\nPROJETO=cesta; REGIAO=us-east-1\nMAQUINA=$(aws stepfunctions list-state-machines \\\n  --query \"stateMachines[?name=='${PROJETO}-saga-pedido'].stateMachineArn\" --output text)\n\n# ── Prova 1: caminho feliz, execucao completa ────────────────────────────────\nEXEC=$(aws stepfunctions start-execution --state-machine-arn \"$MAQUINA\" \\\n  --name \"prova-feliz-p-1001\" \\\n  --input '{\"pedidoId\":\"p-1001\",\"sku\":\"sku-abc\",\"quantidade\":1,\"valorCentavos\":14000,\"cartaoToken\":\"tok-ok\"}' \\\n  --query executionArn --output text)\nsleep 6\naws stepfunctions describe-execution --execution-arn \"$EXEC\" --query status --output text\n# Esperado: SUCCEEDED. Confirme tambem que cesta-pedidos tem p-1001 com status CONFIRMADO.\n\n# ── Prova 2: falha injetada na cobranca — a compensacao roda e o estoque volta\nSALDO_ANTES=$(aws dynamodb get-item --table-name cesta-estoque \\\n  --key '{\"sku\":{\"S\":\"sku-abc\"}}' --query 'Item.saldo.N' --output text)\nEXEC2=$(aws stepfunctions start-execution --state-machine-arn \"$MAQUINA\" \\\n  --name \"prova-falha-cobranca-p-1002\" \\\n  --input '{\"pedidoId\":\"p-1002\",\"sku\":\"sku-abc\",\"quantidade\":1,\"valorCentavos\":14000,\"cartaoToken\":\"tok-forcar-recusa\"}' \\\n  --query executionArn --output text)\nsleep 6\naws stepfunctions get-execution-history --execution-arn \"$EXEC2\" \\\n  --query \"events[?type=='TaskSucceeded' && stateEnteredEventDetails.name=='LiberarEstoque']\" --output text\nSALDO_DEPOIS=$(aws dynamodb get-item --table-name cesta-estoque \\\n  --key '{\"sku\":{\"S\":\"sku-abc\"}}' --query 'Item.saldo.N' --output text)\n[ \"$SALDO_ANTES\" = \"$SALDO_DEPOIS\" ] \\\n  && echo \"OK: saldo voltou ao valor de antes — LiberarEstoque rodou de verdade\" \\\n  || echo \"FALHA DA PROVA: saldo nao voltou ($SALDO_ANTES -> $SALDO_DEPOIS)\"\n\n# ── Prova 3: falha DEPOIS da cobranca — as duas compensacoes rodam, na ordem\nEXEC3=$(aws stepfunctions start-execution --state-machine-arn \"$MAQUINA\" \\\n  --name \"prova-falha-confirmacao-p-1003\" \\\n  --input '{\"pedidoId\":\"p-1003\",\"sku\":\"sku-abc\",\"quantidade\":1,\"valorCentavos\":14000,\"cartaoToken\":\"tok-ok\",\"forcarFalhaConfirmar\":true}' \\\n  --query executionArn --output text)\nsleep 8\naws stepfunctions get-execution-history --execution-arn \"$EXEC3\" \\\n  --query \"events[?type=='TaskScheduled'].stateEnteredEventDetails.name\" --output text\n# Esperado: a sequencia inclui EstornarPagamento SEGUIDO de LiberarEstoque — nesta ordem.\n\n# ── Prova 4: execucao duplicada com o mesmo nome e recusada (herdado do L25) ──\naws stepfunctions start-execution --state-machine-arn \"$MAQUINA\" \\\n  --name \"prova-duplicata-p-1004\" --input '{\"pedidoId\":\"p-1004\"}' >/dev/null\naws stepfunctions start-execution --state-machine-arn \"$MAQUINA\" \\\n  --name \"prova-duplicata-p-1004\" --input '{\"pedidoId\":\"p-1004\"}' \\\n  && echo \"FALHA DA PROVA: a segunda chamada deveria ter sido recusada\" \\\n  || echo \"OK: ExecutionAlreadyExists — a saga nao duplicou\"\n\n# ── Prova 5: a PROPRIA compensacao falha — vai para a fila humana, nao se resolve sozinha\nEXEC5=$(aws stepfunctions start-execution --state-machine-arn \"$MAQUINA\" \\\n  --name \"prova-compensacao-falha-p-1005\" \\\n  --input '{\"pedidoId\":\"p-1005\",\"sku\":\"sku-abc\",\"quantidade\":1,\"valorCentavos\":14000,\"cartaoToken\":\"tok-ok\",\"forcarFalhaConfirmar\":true,\"forcarFalhaEstorno\":true}' \\\n  --query executionArn --output text)\nsleep 20\naws sqs receive-message --queue-url \"$(terraform output -raw url_fila_compensacao_falhou)\" \\\n  --query 'Messages[0].Body' --output text\n# Esperado: a mensagem existe, com pedidoId=p-1005. Se vier vazio, o Catch da\n# compensacao nao esta apontando para a fila — releia o ASL.\n\n# ── Prova 6: a arquitetura MINIMA, para comparacao — mate o processo no meio\n# (roda contra o desenho da secao anterior, nao contra a saga)\naws dynamodb get-item --table-name cesta-estoque --key '{\"sku\":{\"S\":\"sku-teste-minimo\"}}' \\\n  --query 'Item.{saldo:saldo.N,reservas:reservas.M}' --output json\naws dynamodb get-item --table-name cesta-pedidos --key '{\"pedidoId\":{\"S\":\"p-teste-minimo\"}}' \\\n  --query 'Item' --output json\n# Esperado: estoque mostra a reserva; pedidos nao tem NENHUM item com este id.\n# E o defeito que a saga elimina — os dois bancos, para o mesmo pedido, discordam.\n"
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Caminho feliz completo",
+                "`start-execution` + `describe-execution`",
+                "status SUCCEEDED, pedido CONFIRMADO na tabela",
+                "FAILED aqui, sem falha injetada, indica erro de permissão ou de nome de recurso no ASL"
+              ],
+              [
+                "2 · Falha na cobrança libera o estoque",
+                "comparar saldo antes e depois da execução",
+                "saldo idêntico ao de antes da reserva",
+                "saldo menor indica que `LiberarEstoque` não rodou, ou a condição não bateu com o item real"
+              ],
+              [
+                "3 · Falha após cobrança compensa em ordem",
+                "`get-execution-history`, lista de `TaskScheduled`",
+                "EstornarPagamento aparece ANTES de LiberarEstoque",
+                "ordem invertida indica Catch apontando para o estado errado"
+              ],
+              [
+                "4 · Execução duplicada é recusada",
+                "`start-execution` duas vezes com o mesmo `--name`",
+                "a segunda chamada falha com `ExecutionAlreadyExists`",
+                "se as duas passam, o nome de execução não está usando o pedidoId"
+              ],
+              [
+                "5 · Compensação que também falha vai para a fila humana",
+                "`receive-message` na fila de compensação",
+                "a mensagem existe, com o pedidoId e os dois motivos de erro",
+                "fila vazia indica que o Catch da compensação não está apontando para o envio à fila"
+              ],
+              [
+                "6 · A arquitetura mínima produz o defeito",
+                "ler os dois bancos após interromper o processo",
+                "estoque reservado, pedido inexistente — inconsistência permanente",
+                "se os dois bancos concordam, o teste não interrompeu o processo no ponto certo"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três acontecem de verdade em produção, e nenhuma delas é a falha de negócio que a saga já sabe tratar — são falhas na PRÓPRIA orquestração, que produzem sintoma parecido (\"o pedido ficou preso\") por causas diferentes."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Task de negócio sem Catch",
+                "remova o bloco Catch de `ConfirmarPedido` no ASL e force a falha desse passo",
+                "a execução inteira falha (FAILED) e o histórico não mostra nenhum estado de compensação",
+                "`get-execution-history`: só aparecem 2 ou 3 eventos, sem `EstornarPagamento` nem `LiberarEstoque`",
+                "todo Task com efeito colateral tem Catch apontando para a compensação daquele passo específico"
+              ],
+              [
+                "Reserva sem condição de idempotência",
+                "troque a `ConditionExpression` de `ReservarEstoque` por um `UpdateItem` incondicional e force um retry",
+                "o saldo do item diminui duas vezes para o mesmo pedido",
+                "compare o campo `reservas` no DynamoDB com o número de tentativas em `TaskScheduled` no histórico",
+                "condição que verifica `attribute_not_exists(reservas.#pedido)`, não só o saldo"
+              ],
+              [
+                "Fila de compensação sem alarme",
+                "remova o `aws_cloudwatch_metric_alarm` do Terraform e force uma falha dupla",
+                "pedidos acumulam em `REQUER_INTERVENCAO_HUMANA` por dias sem ninguém saber",
+                "consulte `ApproximateNumberOfMessagesVisible` da fila diretamente, sem esperar notificação",
+                "alarme em qualquer valor acima de zero, com ação de notificação configurada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A falha que nenhuma das três provas do módulo pega sozinha",
+            "content": "Um Catch apontando para o NOME ERRADO de estado — por exemplo, `ConfirmarPedido` apontando para `RegistrarFalhaSemCompensacao` em vez de `EstornarPagamento` — não produz erro de validação do ASL, porque o nome existe na máquina, só não é o correto para aquele caminho. A única forma de pegar isso é a prova 3: verificar que a SEQUÊNCIA de estados alcançados é a esperada, não só que a execução terminou."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Depois de separar Pedidos e Estoque em dois serviços com bancos próprios (L31), a Cesta cogita usar uma transação distribuída de duas fases (2PC) entre os dois bancos para garantir que estoque e cobrança nunca fiquem inconsistentes. Qual é o motivo técnico mais forte para preferir a saga ao 2PC neste cenário?",
+        "options": [
+          "A saga é mais simples de implementar porque dispensa qualquer tratamento de erro",
+          "2PC só funciona com bancos relacionais, e como um dos dois é DynamoDB (NoSQL), a escolha é apenas uma questão de compatibilidade de tecnologia",
+          "2PC não existe mais em nenhum banco de dados gerenciado moderno",
+          "2PC exige que o coordenador trave os recursos dos dois bancos até decidir, prendendo a disponibilidade de um serviço à saúde do outro — o mesmo acoplamento que separar os bancos tentou evitar"
+        ],
+        "correctIndex": 3,
+        "explanation": "O motivo real é arquitetural, não tecnológico: 2PC precisa que um coordenador trave os recursos envolvidos em AMBOS os bancos até o commit final, e um serviço lento ou fora do ar durante essa janela prende a disponibilidade do outro a ele — exatamente o acoplamento que a separação em dois bancos, feita no L31, existia para evitar. A saga troca esse lock por transações locais independentes mais compensação explícita, sem nenhum recurso travado entre os dois serviços.\n\nA primeira alternativa é uma afirmação absoluta e falsa: 2PC continua existindo e sendo usado dentro de bancos únicos, só não escala bem ENTRE serviços com bancos independentes. A terceira inverte o que a saga realmente exige: ela não dispensa tratamento de erro, ela É tratamento de erro explícito por passo — Retry e Catch em cada Task, mais o código de compensação. A quarta comete o erro de raciocínio mais comum sobre o tema: confunde uma limitação de COMPATIBILIDADE DE TECNOLOGIA (2PC clássico pede coordenador XA, que o DynamoDB não implementa) com o motivo ARQUITETURAL real, que se aplicaria mesmo se os dois bancos fossem relacionais — o problema é o lock cruzando fronteira de serviço, não o tipo de banco."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o que uma máquina de estados de dinheiro expõe"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Uma saga que cobra e estorna cartão é, por definição, uma máquina que move dinheiro. O risco novo em relação a uma fila comum não é o Step Functions em si — é a superfície de quem pode iniciar uma execução e o que trafega no input dela."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Número do cartão trafegando no input da execução",
+                "baixa",
+                "crítico",
+                "o front troca o número por um token com o gateway ANTES de chamar a Cesta; só o token entra no ASL",
+                "busca por padrão de número de cartão nos logs de execução do CloudWatch",
+                "revogar o token, notificar o cliente, auditar quem teve acesso ao log"
+              ],
+              [
+                "Qualquer identidade pode chamar StartExecution diretamente",
+                "média",
+                "alto",
+                "IAM restringe `states:StartExecution` só ao papel do Iniciador; ninguém mais tem a permissão",
+                "CloudTrail em `StartExecution` de fora da identidade esperada",
+                "revogar a credencial usada e auditar as execuções iniciadas por ela"
+              ],
+              [
+                "Compensação com permissão além do necessário",
+                "média",
+                "médio",
+                "a Lambda de estorno só tem permissão de chamar o gateway e escrever no item específico do pedido",
+                "IAM Access Analyzer sobre o uso real da função",
+                "derivar a política do uso medido, como o L41 recomenda"
+              ],
+              [
+                "Mensagem da fila humana com dado sensível em texto",
+                "baixa",
+                "médio",
+                "a fila usa criptografia gerenciada pela AWS (SSE-SQS); o corpo carrega pedidoId e motivo, não cartão",
+                "revisão do payload configurado em `MessageBody` no ASL",
+                "purgar a mensagem, corrigir o payload, reenviar sem o dado sensível"
+              ],
+              [
+                "Replay de evento da fila de entrada gera cobrança duplicada",
+                "baixa",
+                "alto",
+                "name = pedidoId em StartExecution bloqueia uma segunda saga para o mesmo pedido",
+                "contagem de `ExecutionAlreadyExists` no log do Iniciador — alto e esperado, não é falha",
+                "nenhuma: é a proteção funcionando; investigar só se o volume for muito acima do normal"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O `*` que NÃO aparece nesta política, e por que isso importa",
+            "content": "Diferente da política da máquina (seção anterior), nenhuma das seis Lambdas de negócio precisa de `Resource: \"*\"` em nenhuma ação: cada uma lê e escreve um item específico, chama um gateway externo por HTTPS, e nada mais. Onde uma política de laboratório anterior desta série precisou de `*` foi sempre uma operação de CONTA sem recurso específico — aqui não existe nenhuma, porque nada aqui é operação de conta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um painel de saga tem uma pergunta central que nenhum painel de fila comum precisa responder: quantos pedidos estão numa zona cinzenta AGORA, entre \"algo falhou\" e \"alguém resolveu\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "Quantas sagas esperam intervenção humana agora?",
+                "`ApproximateNumberOfMessagesVisible` da fila de compensação falhou",
+                "compensação que não se resolveu sozinha",
+                "> 0 por mais de 5 min"
+              ],
+              [
+                "A falha está mais na cobrança ou na confirmação?",
+                "contagem de `TaskSucceeded` de `LiberarEstoque` vs. de `EstornarPagamento`",
+                "se cobrança falha mais, o problema tende a ser o gateway; se confirmação falha mais, tende a ser o serviço de Pedidos",
+                "acompanhar tendência semanal, sem limiar fixo"
+              ],
+              [
+                "Quantas execuções falharam de vez, sem nem compensar?",
+                "`ExecutionsFailed` do namespace `AWS/States`",
+                "saga que não chegou a rodar nenhuma compensação — sintoma do \"Task sem Catch\" da seção anterior",
+                "qualquer valor acima de zero é investigável"
+              ],
+              [
+                "A saga está demorando mais que o normal?",
+                "`ExecutionTime` (duração) do namespace `AWS/States`",
+                "gateway lento consumindo o tempo em backoff do Retry",
+                "p99 acima do medido na linha de base — não copie um número de outro laboratório"
+              ],
+              [
+                "A idempotência de execução está protegendo de verdade?",
+                "contagem de `ExecutionAlreadyExists` no log do Iniciador",
+                "volume alto e estável é a fila reentregando mensagem — esperado, não é alarme",
+                "informativo; alarme só se crescer sem limite"
+              ],
+              [
+                "A fila de entrada está acumulando?",
+                "`ApproximateNumberOfMessagesVisible` de `cesta-pedidos-criados`",
+                "o Iniciador não está processando no ritmo em que pedidos chegam",
+                "crescendo sem redução por 10 min seguidos"
+              ],
+              [
+                "Quanto tempo o estoque fica reservado até compensar?",
+                "diferença entre `TaskFailed` do passo de negócio e `TaskSucceeded` da compensação",
+                "Retry com backoff alto atrasa o desfazimento, deixando estoque indisponível por mais tempo",
+                "derive do SLA de disponibilidade de estoque declarado pelo produto"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que parece alarme e não é",
+            "content": "`ExecutionAlreadyExists` alto não significa que algo está errado — significa que a proteção contra duplicidade está sendo acionada, provavelmente porque a fila de entrada está reentregando mensagens dentro da janela de visibilidade. Tratar isso como incidente leva a investigar o lugar errado; o lugar certo é conferir se o Iniciador está processando dentro do prazo de visibilidade configurado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão, e falha de AZ"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece com a saga",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 pedidos/dia",
+                "cada execução roda isolada, sem contenção",
+                "nada; é o cenário do laboratório",
+                "nada"
+              ],
+              [
+                "10 mil pedidos/dia (~7/min)",
+                "transições de estado do Standard Workflow somam no volume",
+                "custo por transição vira linha visível, ainda pequena",
+                "nada estrutural; acompanhar a fatura do Step Functions"
+              ],
+              [
+                "1 milhão de pedidos/dia (~12/s)",
+                "taxa de StartExecution se aproxima de cotas de conta da região",
+                "cada passo idempotente vira pré-requisito para considerar Express, não opcional",
+                "avaliar Express Workflow SÓ depois de toda compensação (não só o caminho feliz) ter proteção própria de idempotência"
+              ],
+              [
+                "Gateway de pagamento degradado",
+                "CobrarPagamento e EstornarPagamento esgotam o Retry na mesma janela de tempo",
+                "a fila de compensação falhou cresce ao mesmo tempo que o problema que a causou ainda existe",
+                "circuit breaker que corta a tentativa antes de esgotar o Retry (L36), em vez de esperar o backoff inteiro toda vez"
+              ],
+              [
+                "Pico sazonal (ex.: fim de semana de promoção)",
+                "mais execuções concorrentes tentando reservar os mesmos SKUs populares",
+                "contenção na condição de idempotência do item — reservas concorrentes disputam o mesmo item do DynamoDB",
+                "medir throttling da tabela; DynamoDB sob demanda absorve picos, mas o item quente ainda é um único item"
+              ],
+              [
+                "Falha de uma AZ inteira",
+                "Step Functions, Lambda, DynamoDB e SQS são serviços regionais, multi-AZ por padrão da AWS",
+                "nada estrutural — ao contrário dos laboratórios com ECS/ALB, não há sub-rede nem instância para perder",
+                "nenhuma ação de infraestrutura; é a vantagem de uma arquitetura inteiramente serverless"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A diferença de resiliência que este laboratório tem \"de graça\"",
+            "content": "Nos laboratórios com ECS Fargate e ALB, falha de AZ exige desenho explícito — sub-rede em duas AZs, tasks distribuídas. Aqui, Step Functions, Lambda, DynamoDB e SQS já são serviços regionais gerenciados pela AWS com redundância multi-AZ embutida. Não é mérito deste desenho: é uma propriedade da escolha de serviços inteiramente serverless, e vale saber nomear a diferença."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que uma saga acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O componente novo em relação a uma fila com Lambda simples é a cobrança por transição de estado do Standard Workflow — e ela cresce mais rápido no caminho de FALHA do que no caminho feliz, porque compensação são transições extras que o caminho feliz nunca paga."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "10 pedidos/dia, poucas falhas",
+                "algumas dezenas de transições de estado e Lambdas de milissegundos",
+                "desprezível",
+                "nenhuma; não há o que otimizar neste volume"
+              ],
+              [
+                "Produção da Cesta",
+                "3.200 pedidos/dia, falha de cobrança em uma fração pequena",
+                "transições do caminho feliz (3 Tasks) dominam; compensação soma pouco no total",
+                "previsível e baixa",
+                "nada especial — o custo já é pequeno comparado ao das duas tabelas e da fila"
+              ],
+              [
+                "Alta escala",
+                "1 milhão de pedidos/dia",
+                "transições de Standard Workflow tornam-se linha visível na fatura de Step Functions",
+                "cresce linear com o volume",
+                "considerar Express Workflow para o caminho feliz, DEPOIS de garantir idempotência em todo passo (nível 4 da evolução)"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Step Functions (Standard)",
+                "transição de estado",
+                "compensação em cascata (Estornar → Liberar) soma transições que o caminho feliz não tem"
+              ],
+              [
+                "Lambda",
+                "invocação e duração",
+                "as seis funções são pequenas e rápidas; nenhuma faz trabalho pesado"
+              ],
+              [
+                "DynamoDB sob demanda",
+                "leitura e escrita",
+                "a condição de idempotência não custa mais que uma escrita comum — é a MESMA operação, com uma cláusula a mais"
+              ],
+              [
+                "SQS",
+                "requisição",
+                "a fila de compensação falhou tem volume baixo por natureza; se estiver alta, o problema é o gateway, não o SQS"
+              ],
+              [
+                "CloudWatch Logs do Step Functions",
+                "GB ingerido e retido",
+                "`include_execution_data = true` grava o input e output de cada Task — útil para depurar, mais caro para reter"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O custo que este desenho evita, e que não aparece em nenhuma fatura da AWS",
+            "content": "Um estoque preso por dias, como no incidente que abriu este laboratório, tem custo de oportunidade: a unidade fica indisponível para qualquer outro cliente até alguém notar manualmente. Multiplicado pelo volume de pedidos da Cesta, esse custo nunca aparece numa fatura da AWS — aparece em vendas que não aconteceram."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "toda falha de negócio e de compensação tem destino auditável, com histórico de execução completo",
+                "ainda depende de uma pessoa responder ao alarme da fila humana",
+                "runbook documentado para os motivos mais comuns de intervenção",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "cartão nunca trafega como número, papéis restritos por recurso específico",
+                "a Lambda de estorno tem o mesmo blast radius que a de cobrança",
+                "política derivada do uso medido (L41), separando ainda mais os dois papéis",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "toda transação local tem compensação nomeada, com Retry e Catch próprios",
+                "gateway degradado pode gerar retry storm nas duas direções ao mesmo tempo",
+                "circuit breaker em CobrarPagamento e EstornarPagamento (L36)",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "Lambdas pequenas e rápidas, sem infraestrutura ociosa entre pedidos",
+                "contenção em item quente durante picos de reserva do mesmo SKU",
+                "avaliar sharding do item se um SKU concentrar volume desproporcional",
+                "baixa"
+              ],
+              [
+                "Otimização de custos",
+                "sem recurso ligado 24h; paga por transição e invocação",
+                "Standard Workflow custa mais por transição que Express em altíssimo volume",
+                "Express só depois de idempotência garantida em toda compensação",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "nenhum recurso ocioso; tudo escala a zero entre pedidos",
+                "retenção de log de execução com `include_execution_data` cresce com o volume",
+                "ajustar retenção do grupo de logs ao horizonte real de investigação",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho novo: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco real e compra outro — a coluna que raramente se escreve é exatamente essa."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Da chamada síncrona à saga com plataforma de sagas — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Duas chamadas síncronas entre serviços, sem compensação nenhuma. É o desenho mínimo deste laboratório, e ele é onde a Cesta estava.",
+                "note": "Risco resolvido: nenhum. Novo risco: estoque reservado sem cobrança fica órfão para sempre se o processo morre no meio. Custo: o mais baixo — nenhuma orquestração extra."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Saga orquestrada com Step Functions Standard, três passos de negócio, compensação nomeada em cada um, fila de intervenção humana com alarme.",
+                "note": "Risco resolvido: estoque órfão silencioso e compensação que falha sem ninguém notar. Novo risco: a saga é mais lenta que a chamada direta — cada transição de estado soma latência — e há mais peças para operar. Custo: transições de estado e Lambdas pequenas, ainda baixo."
+              },
+              {
+                "label": "Nível 3 — Produção resiliente ao gateway",
+                "instruction": "Circuit breaker em CobrarPagamento e EstornarPagamento (L36), com MaxDelaySeconds limitando quanto tempo o estoque fica reservado esperando um gateway instável.",
+                "note": "Risco resolvido: retry storm martelando um gateway já degradado, e estoque preso pelo tempo inteiro do backoff. Novo risco: circuito aberto rejeita pedido legítimo enquanto o gateway está só lento, não fora do ar. Custo: pouco — é configuração, não recurso novo."
+              },
+              {
+                "label": "Nível 4 — Alta escala",
+                "instruction": "Express Workflow para o caminho feliz de alto volume, com todo passo — inclusive as duas compensações — garantidamente idempotente; Standard reservado para a trilha de auditoria e compensação.",
+                "note": "Risco resolvido: custo por transição em milhões de execuções diárias. Novo risco: at-least-once do Express exige idempotência PERFEITA em todo passo, sem exceção — um único passo não idempotente reintroduz o defeito original deste laboratório. Custo: cai por execução; sobe a exigência de disciplina."
+              },
+              {
+                "label": "Nível 5 — Plataforma de sagas",
+                "instruction": "Biblioteca compartilhada de \"passos de saga\" (o padrão Task + Retry + Catch + compensação) reutilizável entre times, com a fila de intervenção humana centralizada por conta.",
+                "note": "Risco resolvido: cada time reinventa retry/catch com bugs diferentes, como o do L25 que motivou este módulo. Novo risco: mudar a biblioteca compartilhada afeta N sagas ao mesmo tempo — um bug nela não fica isolado. Custo: investimento único de plataforma, amortizado pelo número de sagas."
+              },
+              {
+                "label": "Nível 6 — Dados e IA",
+                "instruction": "Detecção de anomalia sobre a métrica de execuções compensadas por hora, para sinalizar degradação do gateway ANTES de a fila de compensação falhou acumular mensagem.",
+                "note": "Risco resolvido: reagir só depois que o alarme da fila humana já disparou, quando pedidos já estão presos. Novo risco: falso positivo pausa pedidos legítimos por uma anomalia que não era degradação real. Custo: baixo — a métrica já existe no CloudWatch; o que se paga é o modelo de detecção."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Express no nível 4 depende de idempotência que só existe porque o nível 2 já forçou cada passo — inclusive compensação — a lidar com ser chamado mais de uma vez. Quem tenta Express antes de ter essa disciplina troca exactly-once por at-least-once sem nenhuma rede de proteção embaixo, e reintroduz exatamente o defeito que este laboratório existe para eliminar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A decisão de QUAL compensação rodar, e em QUE ordem, é determinística e tem de continuar sendo: ela mexe com estoque e com dinheiro do cliente. Um modelo decidindo \"parece que devo estornar\" em vez de um Catch nomeado no ASL é o antipadrão que esta série inteira existe para evitar — não porque IA erre mais que código, mas porque um erro aqui tem custo financeiro direto e precisa ser auditável por design, não por explicabilidade de modelo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar honesto onde IA acrescentaria valor, e ele está fora do caminho crítico de dinheiro: detectar, na métrica de execuções compensadas por hora, uma tendência de alta ANTES de ela virar mensagem na fila humana — sinal de que o gateway está degradando gradualmente, não caindo de uma vez. É o nível 6 da evolução em níveis, e mesmo aí o modelo SUGERE atenção; não decide compensação nenhuma sozinho."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "antecipar degradação do gateway de pagamento antes do alarme reativo da fila de compensação disparar"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "uma regra de limiar fixo (ex.: \"mais de 5% de compensação numa hora\") cobre a maior parte dos casos; detecção de anomalia só se justifica se o volume normal variar tanto ao longo do dia que um limiar fixo gerar ruído demais"
+              ],
+              [
+                "De onde viriam os dados?",
+                "a métrica de TaskSucceeded de LiberarEstoque e EstornarPagamento, já emitida pelo Step Functions — nenhum dado novo a coletar"
+              ],
+              [
+                "Qual o risco?",
+                "falso positivo pausando aceite de novos pedidos por uma flutuação normal de fim de semana, não uma degradação real do gateway"
+              ],
+              [
+                "Por que não agora?",
+                "a Cesta tem 3.200 pedidos por dia — volume baixo demais para treinar um detector de anomalia com confiança; um limiar fixo revisado manualmente resolve o mesmo problema com muito menos risco"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo de linguagem para \"decidir se este pedido deve ser compensado, dado o contexto\" substitui uma decisão determinística — o Catch nomeado no ASL — por uma probabilística, exatamente no ponto em que dinheiro do cliente está em jogo. Mesmo que o modelo acerte 99% das vezes, o 1% que erra cobra ou deixa de estornar sem que o ASL, o CloudTrail ou o histórico de execução expliquem por quê."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Tentar 2PC/XA entre os dois bancos dos serviços",
+                "parece mais \"correto\" porque preserva a intuição de transação ACID vinda do banco único",
+                "trava recursos nos dois bancos até o coordenador decidir, prendendo a disponibilidade de um serviço à saúde do outro — o mesmo acoplamento que separar os bancos tentou evitar",
+                "timeout em cascata: um serviço lento derruba a disponibilidade do outro sem erro de lógica",
+                "saga com compensação explícita por passo",
+                "nunca entre serviços com bancos independentes; aceitável só DENTRO de uma transação única (ex.: TransactWriteItems na mesma tabela do DynamoDB)"
+              ],
+              [
+                "Achar que o Catch desfaz sozinho o que o Task fez",
+                "o nome \"compensação\" soa automático, como um rollback de banco relacional",
+                "compensação é código escrito à mão — sem um estado explícito no ASL apontado pelo Catch, nada é desfeito, e a reserva de estoque fica órfã",
+                "estoque reservado sem cobrança e sem nenhum estado de LiberarEstoque no histórico",
+                "todo Task com efeito colateral tem um Catch apontando para a compensação correspondente",
+                "nunca"
+              ],
+              [
+                "Compensação sem idempotência própria",
+                "parece que só roda uma vez, já que é \"o caminho de erro\"",
+                "o Retry da própria compensação, ou um reprocessamento, pode chamá-la mais de uma vez — estornar duas vezes é tão grave quanto cobrar duas vezes",
+                "cliente recebe dois estornos do mesmo pedido",
+                "condição de idempotência na escrita, como em LiberarEstoque neste laboratório",
+                "nunca"
+              ],
+              [
+                "Engolir a falha de compensação num log e seguir em frente",
+                "é o caminho mais rápido de fechar o try/catch sem travar o fluxo — é literalmente o que o código do L25 fazia antes deste laboratório",
+                "sem fila nem alarme, o estoque fica preso para um pedido que nunca foi cobrado, e ninguém percebe até o suporte notar — o incidente que abriu este módulo",
+                "estoque indisponível por dias sem nenhum alerta disparado",
+                "Catch da compensação aponta para uma fila de intervenção humana com alarme, não para um log",
+                "nunca em produção"
+              ],
+              [
+                "Saga de um passo só",
+                "parece suficiente porque resolve o sintoma imediato relatado no incidente",
+                "não é saga, é uma chamada única com nome emprestado — sem duas ou mais transações locais não há nada para coordenar nem compensar",
+                "o problema volta a aparecer assim que um segundo serviço entra no fluxo",
+                "saga existe a partir de duas transações locais que precisam ficar coerentes entre si",
+                "quando de fato há só um passo — aí a saga é desnecessária, e Step Functions é a ferramenta errada"
+              ],
+              [
+                "Coreografia sem correlação nem estado central",
+                "parece mais desacoplado, porque cada serviço só reage ao evento do anterior",
+                "sem um identificador comum amarrando os eventos ao mesmo pedido, ninguém responde \"onde a saga X parou\" sem juntar log de vários serviços à mão",
+                "suporte gasta horas cruzando log de três serviços para diagnosticar um pedido",
+                "orquestração com Step Functions (este laboratório), ou coreografia COM um identificador de correlação em todo evento e uma tabela de estado central",
+                "times autônomos e grandes, dispostos a pagar o custo de observabilidade distribuída"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os quatro casos abaixo têm sintoma parecido — \"o pedido ficou preso\" — e causas diferentes na orquestração, não no negócio."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Execução falha e o histórico não mostra compensação nenhuma",
+                "um Task de negócio específico não tem Catch — o erro se propaga como falha de execução",
+                "confira se TODO Task com efeito colateral tem um Catcher, não só o último da cadeia",
+                "a definição ASL do estado que falhou",
+                "adicionar Catch em CADA Task com efeito colateral, não só no que chamou atenção primeiro"
+              ],
+              [
+                "O mesmo pedido reserva duas unidades do mesmo SKU",
+                "ReservarEstoque não usa condição de idempotência, e um retry reservou de novo",
+                "compare o campo `reservas` no item do DynamoDB com o número de `TaskScheduled` no histórico",
+                "a `ConditionExpression` da Lambda de reserva",
+                "condição que só reserva se o pedidoId ainda não está na lista de reservas do item"
+              ],
+              [
+                "Pedido preso em REQUER_INTERVENCAO_HUMANA por dias, sem ninguém saber",
+                "a fila de compensação falhou não tem alarme associado",
+                "confira `ApproximateNumberOfMessagesVisible` da fila diretamente, sem esperar notificação",
+                "o console do SQS e a configuração do CloudWatch Alarm",
+                "alarme em qualquer valor acima de zero, com ação de notificação configurada"
+              ],
+              [
+                "Cliente é cobrado duas vezes pelo mesmo pedido",
+                "CobrarPagamento foi tentado de novo pelo Retry sem token de idempotência próprio no gateway",
+                "confira se a chamada ao gateway inclui um cabeçalho de idempotência derivado do pedidoId",
+                "o código da Lambda CobrarPagamento e a documentação do gateway sobre idempotência",
+                "gerar o token uma vez por pedido e reutilizá-lo em toda tentativa"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A frase que resolve metade destes casos antes de abrir o console",
+            "content": "Retry declarativo garante que o ESTADO roda de novo; não garante que a ação por trás dele é segura de repetir. Essa distinção, herdada do L25 e levada ao limite aqui, é o primeiro lugar a checar sempre que o sintoma envolve \"aconteceu duas vezes\" — reserva duplicada, cobrança duplicada, ou estorno duplicado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório é inteiramente serverless, então o risco de recurso esquecido cobrando parado é menor que nos laboratórios com ECS ou RDS — mas duas coisas sobrevivem ao "
+              },
+              {
+                "text": "terraform destroy",
+                "code": true
+              },
+              {
+                "text": " por desenho, não por acidente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Derrube o que o Terraform administra.\nterraform destroy -auto-approve\n\n# 2. GRUPO DE LOGS DO STEP FUNCTIONS: tem retencao propria (30 dias aqui) e\n#    pode nao ser removido pelo destroy dependendo do provider. Confirme.\naws logs describe-log-groups \\\n  --log-group-name-prefix /aws/vendedlogs/states/cesta-saga-pedido \\\n  --query \"logGroups[].logGroupName\" --output table\naws logs delete-log-group \\\n  --log-group-name /aws/vendedlogs/states/cesta-saga-pedido 2>/dev/null || true\n\n# 3. MENSAGENS NA FILA DE COMPENSACAO FALHOU: o destroy remove a FILA, mas se\n#    voce quer investigar antes de apagar, leia e exporte primeiro.\naws sqs receive-message \\\n  --queue-url \"$(terraform output -raw url_fila_compensacao_falhou)\" \\\n  --max-number-of-messages 10 --output json > mensagens-pendentes.json\n\n# 4. ITENS DE TESTE NAS TABELAS: o destroy remove as TABELAS inteiras, o que\n#    já leva os itens — mas se voce reaproveitar as tabelas entre execucoes do\n#    laboratorio, limpe os pedidos de teste manualmente.\naws dynamodb scan --table-name cesta-pedidos \\\n  --filter-expression \"begins_with(pedidoId, :prefixo)\" \\\n  --expression-attribute-values '{\":prefixo\":{\"S\":\"p-teste\"}}' \\\n  --query \"Items[].pedidoId.S\" --output table\n\n# 5. Prova final: nada com o nome do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=cesta \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Máquina de estados e as seis Lambdas",
+                "sim",
+                "não",
+                "nada aqui é cobrado por hora ligada — só por transição e invocação, que já pararam"
+              ],
+              [
+                "Grupo de logs do Step Functions",
+                "depende do provider/versão",
+                "sim, retenção",
+                "tem ciclo próprio de retenção; confirme explicitamente em vez de assumir"
+              ],
+              [
+                "Fila de compensação falhou",
+                "sim, junto com o conteúdo",
+                "não após removida",
+                "se você quer investigar mensagens pendentes, exporte ANTES de destruir"
+              ],
+              [
+                "Tabelas DynamoDB",
+                "sim",
+                "não após removidas",
+                "sob demanda não cobra por capacidade parada; mas os DADOS somem com a tabela"
+              ],
+              [
+                "Alarme e tópico SNS",
+                "sim se em Terraform",
+                "centavos",
+                "alarme criado à mão no console não aparece no estado do Terraform"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Estoque reservado sem cobrança, para sempre",
+                "Catch de CobrarPagamento → LiberarEstoque",
+                "compensação nomeada roda automaticamente onde antes não havia nenhuma reação"
+              ],
+              [
+                "Dinheiro cobrado sem pedido confirmado",
+                "Catch de ConfirmarPedido → EstornarPagamento → LiberarEstoque",
+                "a ordem de desfazer espelha a ordem de fazer; as duas compensações rodam, nesta sequência"
+              ],
+              [
+                "Duas sagas para o mesmo pedido",
+                "StartExecution com name = pedidoId",
+                "idempotência de execução sem tabela nem lógica extra, herdada do L25"
+              ],
+              [
+                "Retry cobrando duas vezes",
+                "token de idempotência derivado do pedidoId no gateway",
+                "Retry declarativo garante que o ESTADO roda de novo, não que a ação seja segura de repetir"
+              ],
+              [
+                "Reserva duplicada por retry",
+                "ConditionExpression com pedidoId na condição",
+                "a condição substitui um lock distribuído sem precisar de um"
+              ],
+              [
+                "Compensação também falhando em silêncio",
+                "Catch da compensação → fila humana + alarme",
+                "o incidente que abriu este módulo era exatamente esta ausência"
+              ],
+              [
+                "Compensação chamada de dois caminhos diferentes",
+                "LiberarEstoque idempotente por condição",
+                "ser alcançada duas vezes é esperado pelo desenho, não uma falha a evitar"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Estoque órfão após falha de cobrança",
+                "Catch de CobrarPagamento apontando para LiberarEstoque",
+                "gateway indisponível também para o estorno — precisa da fila humana"
+              ],
+              [
+                "Cobrança sem pedido confirmado",
+                "EstornarPagamento antes de LiberarEstoque, em sequência",
+                "reembolso que o gateway processa com atraso — o dinheiro pode levar dias para voltar ao cliente"
+              ],
+              [
+                "Cobrança duplicada por retry",
+                "token de idempotência no gateway",
+                "gateway que não suporta ou não respeita o cabeçalho — é a hipótese declarada que precisa ser confirmada"
+              ],
+              [
+                "Saga duplicada para o mesmo pedido",
+                "nome de execução = pedidoId",
+                "dois pedidos legitimamente diferentes com o mesmo identificador por erro de geração"
+              ],
+              [
+                "Compensação que falha sem ninguém notar",
+                "fila de intervenção humana com alarme",
+                "quanto tempo até uma PESSOA de fato responder ao alarme — isso é processo, não arquitetura"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "O cliente cria o pedido; a API publica na fila e responde 202 de imediato.",
+              "O Iniciador consome a mensagem e chama StartExecution com nome = pedidoId.",
+              "ReservarEstoque grava a reserva com condição de idempotência.",
+              "CobrarPagamento chama o gateway com um token de idempotência derivado do pedido.",
+              "Se a cobrança falha, LiberarEstoque desfaz a reserva e o pedido é marcado como falho.",
+              "Se a cobrança tem sucesso, ConfirmarPedido grava o status final.",
+              "Se a confirmação falha depois da cobrança, EstornarPagamento roda primeiro.",
+              "Em seguida, o mesmo LiberarEstoque roda de novo — e é seguro rodar duas vezes.",
+              "Se qualquer compensação também esgota o Retry, a saga escreve na fila humana.",
+              "O alarme do CloudWatch avisa uma pessoa; a partir daqui, ninguém finge que está resolvido."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "O que é o padrão saga e por que ele substitui o 2PC entre microsserviços?",
+            "answer": "Saga é uma sequência de transações locais, cada uma com uma compensação definida antecipadamente, usada porque duas fases de commit (2PC) exigem que um coordenador trave recursos nos bancos de todos os serviços envolvidos até decidir — o que prende a disponibilidade de um serviço à saúde do outro. Quando cada serviço tem seu próprio banco, como depois de aplicar database-per-service, não existe mais uma transação ACID cruzando os dois, e a maioria dos bancos gerenciados na nuvem, incluindo o DynamoDB, nem oferece transação distribuída entre contas ou serviços independentes. A saga troca o lock por código explícito: se o passo 3 falha, os passos 1 e 2 são desfeitos executando a compensação de cada um, e não um rollback automático do banco."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Step Functions desfaz uma transação sozinho quando um passo falha?",
+            "answer": "Não — cada Task precisa de um `Catch` explícito apontando para o estado de compensação correspondente, e sem isso nada é desfeito automaticamente. É a confusão mais comum de quem chega de banco de dados relacional para orquestração de microsserviços: um `Catch` só decide para ONDE a máquina de estados vai quando aquele Task específico falha, e o que acontece lá é código escrito à mão, com o próprio `Retry` e o próprio `Catch`. Se um Task tem efeito colateral e não tem `Catch`, uma falha nele propaga como falha de execução e nenhuma compensação roda — é exatamente o defeito que a arquitetura mínima deste laboratório expõe."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Saga orquestrada ou coreografada: qual escolher entre dois serviços?",
+            "answer": "Orquestrada, quando o número de serviços é pequeno e auditar \"onde a saga parou\" num lugar só importa mais do que desacoplar os serviços entre si — que é exatamente o caso de dois serviços e um time pequeno. A orquestrada usa um maestro central, como o Step Functions, que conhece a ordem de ida e a ordem de volta, e o histórico de execução responde ao suporte sem precisar juntar log de serviços diferentes. A coreografada depende de eventos que cada serviço publica e consome sozinho, sem coordenador — ela compensa a falta de acoplamento com a exigência de um identificador de correlação em todo evento, sem o qual rastrear um pedido específico vira trabalho manual."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "O que acontece se a compensação da saga também falhar?",
+            "answer": "Ela segue o mesmo tratamento de erro que qualquer outro passo: um `Retry` com backoff tenta de novo algumas vezes, e se ainda assim falhar, um `Catch` redireciona a execução para uma fila de intervenção humana com alarme, em vez de tentar para sempre ou desistir em silêncio. Tratar a falha da compensação como um caso especial resolvido — \"ela vai funcionar eventualmente\" — é o incidente que motiva este laboratório: sem fila e sem alarme, um estoque reservado sem cobrança fica preso por dias sem que ninguém perceba, porque cada lado do sistema está tecnicamente correto do próprio ponto de vista."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Preciso de idempotência mesmo usando o Retry do Step Functions?",
+            "answer": "Sim — o Retry declarativo garante que o ESTADO da máquina roda de novo quando falha, mas não garante que a ação por trás dele é segura de repetir. Uma chamada de cobrança sem token de idempotência próprio, tentada duas vezes pelo Retry porque a primeira resposta se perdeu por timeout, cobra o cliente duas vezes por um problema de rede, não de lógica de negócio. A proteção correta fica no código que faz a chamada — um token derivado do identificador do pedido, reutilizado em toda tentativa — e não em nenhum campo do ASL, porque o Step Functions não tem visibilidade sobre o que o passo faz do outro lado da chamada."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Por que reservar estoque antes de cobrar o cartão, e não o contrário?",
+            "answer": "Porque a ordem determina qual compensação é necessária quando algo falha, e reservar primeiro produz a falha mais barata de desfazer. Se a cobrança falhar depois de reservar, a única compensação é liberar uma reserva — uma operação local, sem custo de terceiros. Se a ordem fosse invertida e a reserva falhasse depois de cobrar, seria preciso estornar dinheiro por causa de um problema que não teve nada a ver com o cliente nem com o cartão dele — pior experiência e mais uma chamada externa arriscada no caminho de reversão. A regra geral é começar pela transação local mais fácil de desfazer e deixar a chamada externa mais cara para depois."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Express ou Standard Workflow para uma saga de pagamento?",
+            "answer": "Standard, enquanto algum passo da saga — inclusive as compensações — não tiver proteção de idempotência própria e comprovada. Express Workflows têm semântica at-least-once: um passo pode ser executado mais de uma vez sem que a máquina de estados perceba, o que é seguro para um passo idempotente e perigoso para uma cobrança que não é. Standard garante execução exactly-once por Task, ao custo de um preço por transição mais alto. A migração para Express só faz sentido depois de garantir, e testar, que absolutamente todo passo — reservar, cobrar, confirmar e as duas compensações — pode rodar duas vezes sem produzir um efeito duplicado."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Como saber em qual passo da saga um pedido específico parou?",
+            "answer": "Consultando o histórico de execução do Step Functions pelo nome, que é o próprio identificador do pedido — `get-execution-history` mostra, em ordem, cada Task tentado, cada Retry disparado e cada Catch acionado, sem precisar juntar log de serviços diferentes. É essa auditabilidade num lugar só, e não desempenho ou custo, o principal motivo para escolher orquestração em vez de coreografia com apenas dois serviços: numa saga coreografada, a mesma pergunta exigiria cruzar eventos publicados por cada serviço separadamente, correlacionados por um identificador que precisa existir em todos eles."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Na saga da Cesta, CobrarPagamento é bem-sucedido, mas ConfirmarPedido falha depois de esgotar o Retry. Segundo o desenho deste laboratório, qual é a sequência correta de compensação?",
+            "options": [
+              "EstornarPagamento roda primeiro, e o mesmo estado LiberarEstoque é reaproveitado em seguida — as duas compensações desfazem cada mudança que realmente aconteceu",
+              "Só LiberarEstoque roda, porque o estoque foi o primeiro passo a mudar de estado",
+              "Nenhuma compensação roda, porque ConfirmarPedido é o último passo e a saga já está praticamente completa",
+              "A saga reinicia do começo automaticamente e tenta ConfirmarPedido de novo indefinidamente"
+            ],
+            "correctIndex": 0,
+            "explanation": "Como a cobrança já teve sucesso quando ConfirmarPedido falha, existem DUAS mudanças reais para desfazer: o dinheiro cobrado e a unidade reservada. O Catch de ConfirmarPedido aponta primeiro para EstornarPagamento, que por sua vez aponta para o mesmo estado LiberarEstoque já usado quando a cobrança falha sozinha — a ordem de desfazer espelha a ordem inversa de fazer.\n\nA primeira alternativa reproduz exatamente o incidente que motivou este laboratório: compensar só o passo mais próximo do erro e ignorar que um passo ANTERIOR (a cobrança) também teve efeito real, deixando o cliente cobrado por um pedido não confirmado. A terceira comete o erro oposto — supor que estar perto do fim da saga reduz a necessidade de compensação, quando na verdade uma falha tardia geralmente significa MAIS efeitos colaterais acumulados para desfazer, não menos. A quarta inventa um comportamento que o ASL não tem: o Retry de um Task é limitado por MaxAttempts e, ao esgotar, o controle passa para o Catch — não existe reinício automático da execução inteira a partir do começo."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "A Lambda EstornarPagamento tenta desfazer uma cobrança, mas o gateway de pagamento está fora do ar e todas as tentativas do Retry se esgotam. O que o desenho deste laboratório faz em seguida?",
+            "options": [
+              "O Step Functions tenta a compensação para sempre, em intervalos cada vez maiores, até o gateway voltar",
+              "A saga apaga o registro do pedido no DynamoDB para evitar que a cobrança duplicada apareça em relatórios",
+              "O Catch de EstornarPagamento redireciona para um estado que envia a mensagem para uma fila de compensação falhou, e um alarme do CloudWatch avisa uma pessoa — não há mais tentativa automática",
+              "A execução é encerrada como bem-sucedida, porque a cobrança em si já havia sido feita como planejado"
+            ],
+            "correctIndex": 2,
+            "explanation": "O Catch de EstornarPagamento aponta para `CompensacaoFalhouParaFilaHumana`, que envia o pedidoId e os dois motivos de erro — o original e o da compensação — para a fila de intervenção humana, e o alarme configurado nela avisa uma pessoa. A partir desse ponto, a saga para de tentar sozinha: não há mais automação prevista para este caso, de propósito.\n\nA primeira alternativa confunde \"a chamada ao gateway aconteceu\" com \"a saga terminou corretamente\": um cliente cobrado por um pedido que a Cesta nunca confirmou é exatamente a inconsistência que este módulo existe para tratar, não para ignorar. A terceira inventa um Retry sem fim que o ASL não tem — MaxAttempts é sempre finito por desenho, e um Retry infinito manteria a execução aberta indefinidamente escondendo que uma decisão humana é necessária, em vez de expô-la. A quarta imagina uma \"solução\" que nunca aparece neste desenho e que seria ativamente prejudicial: apagar o registro do pedido destruiria o rastro necessário para reconciliar a cobrança manualmente, trocando um problema visível por um invisível."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L25 (Step Functions: retry e catch) no ar, e o conceito de database-per-service do L31"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "por que 2PC não escala entre serviços com bancos independentes; a diferença entre saga orquestrada e coreografada; compensação como código explícito com Retry e Catch próprios; por que uma compensação também precisa ser idempotente; e como tratar a falha da própria compensação como caso de primeira classe"
+              ],
+              [
+                "Limitação que fica",
+                "esta saga não protege contra um gateway indisponível por horas: o Retry esgota rápido, mas nada aqui reduz a frequência de tentativa quando o gateway já mostrou sinal de estar caído — é o circuit breaker que falta, e é o L36"
+              ],
+              [
+                "Também consistente com",
+                "quem consultar o pedido enquanto a saga ainda roda vê um estado intermediário legítimo — reservado, mas ainda não confirmado. Explicar essa janela ao usuário, em vez de escondê-la, é o assunto do L37, que evolui diretamente deste laboratório"
+              ],
+              [
+                "Próximo laboratório recomendado",
+                "L37 — consistência eventual do ponto de vista do usuário. Reaproveita a mesma saga: o pedido \"reservado, ainda não confirmado\" é exatamente o estado intermediário que o L37 ensina a comunicar sem parecer bug"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L36 (retry, backoff e circuit breaker no .NET) protege CobrarPagamento e EstornarPagamento de um gateway degradado; L38 (multi-tenant) reaproveita o padrão de compensação quando o isolamento entre inquilinos também precisa de desfazimento"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "AWS Prescriptive Guidance — Saga orchestration pattern",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "Saga choreography pattern",
+                "code": true
+              },
+              {
+                "text": " — a definição do padrão, a diferença entre as duas topologias e o papel da compensação; e "
+              },
+              {
+                "text": "AWS Step Functions Developer Guide — Handling errors in Step Functions workflows",
+                "code": true
+              },
+              {
+                "text": " — os campos exatos de `Retry` e `Catch` usados neste módulo: `ErrorEquals`, `IntervalSeconds` (padrão 1 s), `MaxAttempts` (padrão 3), `BackoffRate` (padrão 2.0), `MaxDelaySeconds`, `JitterStrategy` (padrão `NONE`), `States.ALL` e `States.TaskFailed` como curingas, e `ResultPath` em `Catch`. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "A hipótese central deste laboratório — que o gateway de pagamento aceita um cabeçalho de idempotência e devolve o mesmo resultado para o mesmo token por 24h — não foi verificada contra nenhum gateway específico, porque este módulo usa um gateway fictício. A maioria dos gateways reais oferece esse mecanismo, mas o nome do cabeçalho, a janela de validade do token e o comportamento exato variam por fornecedor: confirme na documentação do SEU gateway antes de copiar o desenho de `CobrarPagamento`. Da mesma forma, os valores de `MaxDelaySeconds` e `IntervalSeconds` usados no ASL são ponto de partida razoável, não medição da sua carga — derive-os do tempo real que seu produto tolera com estoque reservado e não confirmado."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -11,7 +11,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { fetchArticleWithBlocks } from '@/lib/curriculum-api';
-import { updateArticleMetadata, saveArticleBlocks, deleteArticle, type BlockInput } from '@/lib/admin-curriculum-api';
+import { updateArticleMetadata, saveArticleBlocks, deleteArticle, revalidarModulo, type BlockInput } from '@/lib/admin-curriculum-api';
 import type { ArticleWithBlocks } from '@/components/article/blocks/schemas';
 
 export default function EditPage() {
@@ -116,9 +116,20 @@ function EditClient({ slug }: { slug: string }) {
       return;
     }
 
-    setStatus(`✓ Salvo (${blocksResult.count} blocks)`);
+    // O conteúdo JÁ está gravado. A revalidação só encurta a espera de até 1h
+    // do ISR — por isso a falha dela vira aviso, e nunca erro de salvamento:
+    // dizer "falhou" aqui faria alguém salvar de novo achando que perdeu a
+    // edição.
+    setStatus('Publicando…');
+    const revalidou = await revalidarModulo(slug);
+
+    setStatus(
+      revalidou
+        ? `✓ Salvo e publicado (${blocksResult.count} blocks)`
+        : `✓ Salvo (${blocksResult.count} blocks) — a página pública atualiza em até 1h`,
+    );
     setSaving(false);
-    setTimeout(() => setStatus(null), 2500);
+    setTimeout(() => setStatus(null), revalidou ? 2500 : 6000);
   }, [article, slug, title, difficulty, xp, readTime, order, published, blocksJson]);
 
   const handleDelete = useCallback(async () => {
@@ -260,7 +271,7 @@ function EditClient({ slug }: { slug: string }) {
           onClick={handleSave}
           disabled={saving}
           className="px-5 py-2 rounded-md text-sm font-semibold disabled:opacity-50"
-          style={{ background: 'var(--ffv-blue)', color: 'white' }}
+          style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
         >
           {saving ? 'Salvando…' : 'Salvar mudanças'}
         </button>
@@ -288,12 +299,17 @@ function EditClient({ slug }: { slug: string }) {
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  // `<fieldset>`+`<legend>`, não `<div>`+`<label>` solto: `Field` recebe o
+  // controle pronto via `children` (input/select/textarea de cada call
+  // site), então `<label>` sem `htmlFor` não associa nada — 6 controles sem
+  // nome acessível, medido em 11/ago/2026. `<legend>` nomeia o grupo sem
+  // precisar tocar cada call site.
   return (
-    <div>
-      <label className="text-xs uppercase tracking-widest font-semibold mb-1 block" style={{ color: 'var(--ffv-muted)' }}>
+    <fieldset className="border-0 p-0 m-0">
+      <legend className="text-xs uppercase tracking-widest font-semibold mb-1 block" style={{ color: 'var(--ffv-muted)' }}>
         {label}
-      </label>
+      </legend>
       {children}
-    </div>
+    </fieldset>
   );
 }

@@ -43,6 +43,7 @@ export default function AdminUsersPage() {
       <div className="flex gap-2 items-center">
         <input
           type="text"
+          aria-label="Buscar email ou nome"
           placeholder="Buscar email ou nome..."
           value={search}
           onChange={e => {
@@ -53,6 +54,7 @@ export default function AdminUsersPage() {
           style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)' }}
         />
         <select
+          aria-label="Filtrar por role"
           value={role}
           onChange={e => {
             setPage(0);
@@ -67,7 +69,7 @@ export default function AdminUsersPage() {
         </select>
       </div>
 
-      <div className="rounded-xl overflow-x-auto" style={{ border: '1px solid var(--ffv-border)' }}>
+      <div tabIndex={0} role="group" aria-label="Tabela, rolável na horizontal" className="rounded-xl overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ffv-blue)]" style={{ border: '1px solid var(--ffv-border)' }}>
         <table className="w-full text-xs">
           <thead style={{ background: 'var(--ffv-bg2)' }}>
             <tr>

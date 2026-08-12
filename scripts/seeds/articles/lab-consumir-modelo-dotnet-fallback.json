@@ -1,0 +1,2060 @@
+{
+  "slug": "lab-consumir-modelo-dotnet-fallback",
+  "title": null,
+  "blocks": [
+    {
+      "type": "section",
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório continua de onde o "
+              },
+              {
+                "text": "L74",
+                "code": true
+              },
+              {
+                "text": " parou. A Cadência separou os quatro modos de servir o modelo de cancelamento em produção — e o painel de atendimento, onde um vendedor abre um pedido e vê a pontuação de risco ao lado, ficou no modo de tempo real: um endpoint SageMaker ("
+              },
+              {
+                "text": "ml.g4dn.xlarge",
+                "code": true
+              },
+              {
+                "text": ") com janela de disponibilidade reduzida, escalando a zero fora do horário comercial para não pagar GPU ociosa 24 horas por dia."
+              }
+            ]
+          },
+          "id": "b0_0",
+          "position": 0
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O "
+              },
+              {
+                "text": "ClienteTempoReal.cs",
+                "code": true
+              },
+              {
+                "text": " escrito naquele laboratório já tem um orçamento: "
+              },
+              {
+                "text": "Timeout = TimeSpan.FromMilliseconds(300)",
+                "code": true
+              },
+              {
+                "text": ", porque o vendedor não pode ficar com a tela travada enquanto o modelo pensa. O que o L74 deixou em aberto, de propósito, foi o que acontece quando esses 300 ms realmente se esgotam — porque naquele módulo o objetivo era medir o caminho feliz dos quatro modos, não construir o caminho de falha de nenhum deles."
+              }
+            ]
+          },
+          "id": "b0_1",
+          "position": 1
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O caminho de falha apareceu sozinho. O "
+              },
+              {
+                "text": "EventBridge Scheduler",
+                "code": true
+              },
+              {
+                "text": " do L74 aquece o endpoint às 8h45, quinze minutos antes do expediente — mas um vendedor que abre o primeiro pedido do dia às 8h40, ou um pico de atendimento fora da janela prevista, ainda encontra o endpoint frio. A chamada estoura os 300 ms, o "
+              },
+              {
+                "text": "TaskCanceledException",
+                "code": true
+              },
+              {
+                "text": " sobe sem nenhum tratamento, e a tela do pedido inteira falha — não só o campo de pontuação, que era só um dado auxiliar para o vendedor decidir se vale revisar o pedido com mais calma."
+              }
+            ]
+          },
+          "id": "b0_2",
+          "position": 2
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O padrão tem nome, e não é o mesmo do retry storm do "
+              },
+              {
+                "text": "L36",
+                "code": true
+              },
+              {
+                "text": ". Ali o problema era volume: 800 invocações concorrentes multiplicando carga contra um parceiro sob pico. Aqui o volume é baixo — cerca de 200 chamadas por dia, medidas no L74 — e o problema é OUTRO: uma falha determinística e previsível (cold start fora da janela) sem NENHUM tratamento, derrubando uma tela inteira por causa de um dado que nunca deveria ser bloqueante."
+              }
+            ]
+          },
+          "id": "b0_3",
+          "position": 3
+        },
+        {
+          "type": "key_value",
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado — depende do L36 (Polly) e do L74 (o endpoint e o cliente que este laboratório modifica)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L74 concluído (endpoint cadencia-cancelamento-tempo-real no ar, ClienteTempoReal.cs), L36 concluído (Polly, retry, disjuntor), .NET 8"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 35 min · implementação 1 h 30 a 2 h"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Muito baixo: Polly é biblioteca; a fila SQS de revisão é o único recurso novo, e cobra por mensagem, não por hora ligada"
+              },
+              {
+                "k": "Serviços",
+                "v": "SageMaker endpoint (do L74, reaproveitado), Polly (biblioteca .NET, retry e disjuntor), ALB, ECS Fargate, SQS, CloudWatch, SNS"
+              },
+              {
+                "k": "Volume medido no L74",
+                "v": "≈ 200 chamadas de pontuação por dia, concentradas no expediente (9h–18h)"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "o timeout do endpoint não pode derrubar a requisição inteira do vendedor, e a pontuação é auxiliar — nunca bloqueante"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "a duração do cold start (até ≈2,85 s, medida no L74) é o parâmetro que calibra o disjuntor deste módulo — meça a sua antes de copiar"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "o cliente .NET do L74 com timeout, retry restrito e caminho degradado explícito, com o cold start reproduzido e o fallback medido antes e depois"
+              }
+            ]
+          },
+          "id": "b0_4",
+          "position": 4
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é sobre escolher entre os quatro modos de inferência — isso já foi decidido no L74, e o modo tempo real é o correto para o painel de atendimento porque a chamada é bloqueante por natureza. Não é sobre retry storm sob carga alta — o volume aqui é baixo, e o problema é uma falha PREVISÍVEL (cold start) sem nenhum tratamento, não uma multiplicação de tentativas como no L36. E não é sobre re-treinar ou avaliar o modelo — isso é o L73 e o L78. Este laboratório resolve uma coisa: o que o cliente .NET faz quando a chamada síncrona ao endpoint não volta a tempo."
+          },
+          "id": "b0_5",
+          "position": 5
+        }
+      ],
+      "id": "b0",
+      "position": 0
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando ou uma medição na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          },
+          "id": "b1_0",
+          "position": 0
+        },
+        {
+          "type": "list",
+          "data": {
+            "ordered": true,
+            "items": [
+              "Reproduzir a requisição do vendedor derrubada por inteiro quando o endpoint está frio, com o erro e o tempo medidos.",
+              "Explicar por que retentar um TaskCanceledException contra um endpoint em cold start não ajuda, e por que retentar HttpRequestException ajuda.",
+              "Configurar um circuit breaker calibrado pelo volume real do consumidor, não pelo volume de outro laboratório.",
+              "Construir um caminho degradado explícito: pedido aceito, pontuação marcada como pendente, id publicado numa fila de revisão.",
+              "Orçar o pior caso do pipeline de resiliência dentro do teto de 300 ms herdado do L74, com a conta explícita.",
+              "Medir, com números, quanto o disjuntor economiza de espera numa rajada de chamadas durante o mesmo cold start.",
+              "Distinguir o que este laboratório resolve (experiência do vendedor) do que o L36 resolve (proteção do downstream)."
+            ]
+          },
+          "id": "b1_1",
+          "position": 1
+        }
+      ],
+      "id": "b1",
+      "position": 1
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Timeout de cliente HTTP/SDK",
+                "DVA-C02",
+                "timeout reduzido para 220 ms, deixando margem para uma retentativa restrita dentro do orçamento de 300 ms",
+                "que timeout mal calibrado é tão defeito quanto ausência de timeout"
+              ],
+              [
+                "Degradação graciosa (graceful degradation)",
+                "DVA-C02, SAP-C02",
+                "a tela do pedido carrega mesmo sem a pontuação, com o dado marcado como pendente",
+                "que \"funcionar parcialmente\" é sempre melhor que \"falhar por inteiro\" quando o dado é auxiliar"
+              ],
+              [
+                "Retry seletivo por tipo de exceção",
+                "DVA-C02",
+                "`ShouldHandle` exclui timeout e retenta só falha de conexão",
+                "que retentar toda exceção igualmente é o antipadrão, não a regra"
+              ],
+              [
+                "Circuit breaker aplicado à latência do cliente, não só à saúde do servidor",
+                "SAP-C02",
+                "o disjuntor evita que cada requisição de uma rajada pague o timeout inteiro sozinha",
+                "que o valor do disjuntor aqui é poupar o CHAMADOR, não só proteger o downstream"
+              ],
+              [
+                "Least privilege em InvokeEndpoint",
+                "DVA-C02, SAP-C02",
+                "IAM policy restrita ao ARN do endpoint específico, não a `sagemaker:*`",
+                "que endpoint de SageMaker é recurso nomeável, e `Resource: \"*\"` nele é adorno de rigor"
+              ]
+            ]
+          },
+          "id": "b2_0",
+          "position": 0
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve um cliente que já tem timeout configurado e ainda assim trava a experiência do usuário sob carga intermitente, e pede a causa. A resposta esperada não é \"reduzir mais o timeout\" — é que falta um caminho explícito para quando o timeout estoura: sem fallback, timeout apenas troca \"trava para sempre\" por \"falha rápido e ainda assim quebra a tela\". O erro de raciocínio mais comum é tratar \"tem timeout\" como sinônimo de \"resiliente\"."
+          },
+          "id": "b2_1",
+          "position": 1
+        }
+      ],
+      "id": "b2",
+      "position": 2
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Requisito não funcional que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          },
+          "id": "b3_0",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Vendedor não pode esperar mais que 300 ms pela tela, herdado do L74",
+                "obrigatório, 300 ms",
+                "timeout por chamada reduzido para 220 ms, sobrando margem para uma retentativa restrita"
+              ],
+              [
+                "Timeout do endpoint não pode derrubar a requisição inteira",
+                "obrigatório",
+                "try/catch ao redor de todo o pipeline Polly; nenhuma exceção chega ao controller sem decisão tomada"
+              ],
+              [
+                "Retry só é seguro contra falha rápida de conexão, não contra timeout",
+                "obrigatório",
+                "`ShouldHandle` exclui `TaskCanceledException`; retentar um cold start com o mesmo timeout só dobra a espera"
+              ],
+              [
+                "Vários vendedores no mesmo cold start não podem pagar 220 ms cada um",
+                "requisito operacional, medido",
+                "circuit breaker com janela curta (10 s) e `MinimumThroughput` calibrado pelo volume do vendedor, não pelo de campanha"
+              ],
+              [
+                "Pedido não pode ficar bloqueado pela pontuação, que é auxiliar",
+                "obrigatório",
+                "caminho degradado: aceita o pedido, marca a pontuação como pendente, publica o id na fila de revisão"
+              ],
+              [
+                "Fallback não pode virar \"a pontuação sempre falha e ninguém percebe\"",
+                "requisito operacional",
+                "métrica de uso do fallback publicada a cada ocorrência, com alarme quando ultrapassa o esperado de um cold start isolado"
+              ],
+              [
+                "Endpoint SageMaker só pode ser chamado pela API de atendimento",
+                "segurança",
+                "IAM policy restrita a `sagemaker:InvokeEndpoint` no ARN do endpoint específico"
+              ],
+              [
+                "Fila de revisão guarda referência ao pedido, não dado sensível do cliente",
+                "privacidade",
+                "mensagem carrega só o id do pedido, sem nome, documento ou valor"
+              ]
+            ]
+          },
+          "id": "b3_1",
+          "position": 1
+        }
+      ],
+      "id": "b3",
+      "position": 3
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Arquitetura mínima: o timeout que ninguém pega"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Este é exatamente o desenho que sobrou do L74 — não um desenho ingênuo escrito de propósito para este laboratório, mas o estado real em que aquele módulo deixou o cliente. Ele é legítimo como ponto de partida: funciona perfeitamente todo dia, na janela em que o endpoint está quente. O laboratório começa medindo o que acontece fora dela."
+              }
+            ]
+          },
+          "id": "b4_0",
+          "position": 0
+        },
+        {
+          "type": "arch_diagram",
+          "data": {
+            "title": "O timeout que existe, e a exceção que ninguém pega",
+            "caption": "O cliente do L74 já tem um orçamento de 300 ms — e isso não é o defeito. O defeito é que, quando o orçamento se esgota, a exceção sobe sem nenhum tratamento e derruba a requisição INTEIRA do vendedor, não só o campo de pontuação. Percorra os passos e repare onde a falha deixa de ser \"um dado ausente\" e passa a ser \"a tela inteira quebrou\".",
+            "groups": [
+              {
+                "label": "Quem abre o pedido",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "vendedor",
+                    "service": "browser",
+                    "label": "Navegador do vendedor",
+                    "note": "abre a tela do pedido e espera a pontuação de cancelamento aparecer junto, mesmo sendo só um dado auxiliar"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — API de atendimento",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB da API de atendimento",
+                    "note": "único ponto de entrada HTTP; encaminha toda chamada de tela de pedido para o serviço abaixo"
+                  },
+                  {
+                    "id": "api",
+                    "service": "fargate",
+                    "label": "API de atendimento (.NET 8)",
+                    "note": "chama o ClienteTempoReal do L74 sem nenhum try/catch ao redor — a exceção de timeout se propaga inteira"
+                  }
+                ]
+              },
+              {
+                "label": "Modelo servido, do L74",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sagemaker",
+                    "service": "sagemaker",
+                    "label": "Endpoint cadencia-cancelamento-tempo-real",
+                    "note": "ml.g4dn.xlarge com scale-to-zero fora da janela de 9h às 18h; paga cold start ao acordar, medido em até 2,85 s"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "vendedor",
+                "to": "alb",
+                "label": "abre o pedido, aguarda a tela inteira responder",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "api",
+                "label": "encaminha a requisição HTTP do pedido",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "sagemaker",
+                "label": "InvokeEndpointAsync, timeout de 300 ms herdado do L74, sem tratamento de exceção",
+                "style": "solid"
+              },
+              {
+                "from": "sagemaker",
+                "to": "api",
+                "label": "pontuação, ou estouro do timeout após 300 ms",
+                "style": "dashed"
+              },
+              {
+                "from": "api",
+                "to": "alb",
+                "label": "a exceção sobe sem tratamento; a API responde 500 para o pedido inteiro",
+                "style": "dashed"
+              },
+              {
+                "from": "alb",
+                "to": "vendedor",
+                "label": "erro genérico chega à tela, mesmo o pedido em si sendo válido",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Vendedor abre o pedido; a chamada atravessa o ALB",
+                "detail": "É o fluxo comum, sem nada de errado ainda: o navegador do vendedor faz uma requisição HTTP simples para abrir a tela de um pedido específico.",
+                "nodes": [
+                  "vendedor",
+                  "alb"
+                ],
+                "edges": [
+                  "vendedor>alb"
+                ]
+              },
+              {
+                "label": "A API repete o cliente síncrono do L74, sem nenhuma mudança",
+                "detail": "O `ServicoPontuacao` chama diretamente o `ClienteTempoReal` construído no laboratório anterior — que já tinha `Timeout = 300ms`, mas nunca precisou de mais que isso porque aquele módulo só media o caminho feliz.",
+                "nodes": [
+                  "alb",
+                  "api"
+                ],
+                "edges": [
+                  "alb>api"
+                ]
+              },
+              {
+                "label": "InvokeEndpointAsync corre contra um endpoint que pode estar frio",
+                "detail": "Fora da janela de aquecimento (9h–18h) ou nos minutos antes da chamada de aquecimento do EventBridge Scheduler, o endpoint está com zero instâncias — `min_instance_count = 0`, do L74.",
+                "nodes": [
+                  "api",
+                  "sagemaker"
+                ],
+                "edges": [
+                  "api>sagemaker"
+                ]
+              },
+              {
+                "label": "O cold start ultrapassa os 300 ms configurados",
+                "detail": "O SageMaker precisa subir um container antes de responder. Medido no L74, essa primeira chamada pode passar de 2,85 s — muito acima dos 300 ms que o `HttpClient`/SDK está configurado para esperar.",
+                "nodes": [
+                  "sagemaker",
+                  "api"
+                ],
+                "edges": [
+                  "sagemaker>api"
+                ]
+              },
+              {
+                "label": "A TaskCanceledException sobe sem nenhum try/catch — a API inteira falha",
+                "detail": "Não existe nenhum bloco de tratamento entre o `PontuarPedidoAsync` e o controller. A exceção do timeout se propaga pela pilha inteira, e o ASP.NET Core devolve um 500 para a requisição completa de abrir o pedido.",
+                "nodes": [
+                  "api",
+                  "alb"
+                ],
+                "edges": [
+                  "api>alb"
+                ]
+              },
+              {
+                "label": "O vendedor vê um erro genérico, mesmo o pedido em si sendo válido",
+                "detail": "O dado do pedido já estava carregado do banco antes da chamada ao modelo — só a pontuação, um campo auxiliar, dependia do endpoint. Mas a falta de tratamento fez a peça auxiliar derrubar a peça principal.",
+                "nodes": [
+                  "alb",
+                  "vendedor"
+                ],
+                "edges": [
+                  "alb>vendedor"
+                ]
+              }
+            ]
+          },
+          "id": "b4_1",
+          "position": 1
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O número que importa não é \"existe um timeout\" — é o que acontece DEPOIS que ele estoura. Meça antes de mudar qualquer coisa: é o que torna o defeito discutível, em vez de uma sensação de que \"às vezes a tela do pedido falha\"."
+              }
+            ]
+          },
+          "id": "b4_2",
+          "position": 2
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "csharp",
+            "code": "// ServicoPontuacao.cs (antes) — o cliente do L74, chamado sem rede de\n// seguranca nenhuma. Funciona perfeitamente dentro da janela de aquecimento\n// (9h as 18h); fora dela, uma unica chamada fria derruba a tela inteira do\n// pedido, nao so o campo de pontuacao.\n\npublic class ServicoPontuacao\n{\n    // ClienteTempoReal e exatamente a classe do L74: Timeout = 300ms, SEM\n    // retry (retry ali estouraria o orcamento de latencia do vendedor).\n    private readonly ClienteTempoReal _cliente = new();\n\n    public async Task<double> PontuarPedidoAsync(string payloadJson)\n    {\n        // Se InvokeEndpointAsync lancar TaskCanceledException apos os 300ms,\n        // ela sobe direto — nao ha nenhum catch aqui nem no controller.\n        return await _cliente.PontuarAsync(payloadJson);\n    }\n}\n\npublic static class PedidosEndpoint // ASP.NET Core minimal API, simplificado\n{\n    public static async Task<IResult> AbrirPedido(\n        string pedidoId, ServicoPontuacao pontuacao, PedidoRepositorio repo)\n    {\n        var pedido = await repo.CarregarAsync(pedidoId);\n\n        // A pontuacao e so um campo AUXILIAR da tela do vendedor — mas uma\n        // excecao aqui derruba a resposta INTEIRA, inclusive os dados do\n        // pedido que ja estavam prontos e carregados do banco.\n        pedido.PontuacaoCancelamento = await pontuacao.PontuarPedidoAsync(pedido.ParaJson());\n\n        return Results.Ok(pedido);\n    }\n}\n",
+            "filename": "ServicoPontuacao.cs (antes)"
+          },
+          "id": "b4_3",
+          "position": 3
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "danger",
+            "title": "Timeout sem fallback não é resiliência — é só uma falha mais previsível",
+            "content": "Configurar `Timeout = 300ms` no L74 foi necessário, mas não é suficiente: um timeout sem nenhum tratamento troca \"a tela trava indefinidamente\" por \"a tela falha em exatos 300 ms\", e nenhuma das duas experiências é aceitável para um dado que é só auxiliar. O timeout limita QUANTO tempo se espera; ele não decide o que fazer quando o tempo se esgota — essa decisão é o que este laboratório constrói."
+          },
+          "id": "b4_4",
+          "position": 4
+        }
+      ],
+      "id": "b4",
+      "position": 4
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. O endpoint e a janela de scale-to-zero são os MESMOS do L74 — o que muda é inteiramente o comportamento do cliente, e é isso que a comparação com a Figura 1 mede."
+              }
+            ]
+          },
+          "id": "b5_0",
+          "position": 0
+        },
+        {
+          "type": "arch_diagram",
+          "data": {
+            "title": "A chamada que já sabe que vai falhar não precisa esperar de novo",
+            "caption": "O endpoint e a janela de aquecimento são os MESMOS da Figura 1 — o que muda é que agora existe uma decisão antes, durante e depois de cada tentativa. A peça nova mais importante não é o retry: é o disjuntor decidindo, para a SEGUNDA chamada de uma rajada em diante, nem esperar o timeout de novo. Percorra os passos: cada peça nova rastreia a um requisito da tabela ao lado.",
+            "groups": [
+              {
+                "label": "Quem abre o pedido",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "vendedor",
+                    "service": "browser",
+                    "label": "Navegador do vendedor",
+                    "note": "mesma ação de abrir o pedido, para comparar diretamente com o resultado da Figura 1"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — API de atendimento, com pipeline Polly",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB da API de atendimento",
+                    "note": "mesmo ponto de entrada da Figura 1; o que muda é o que o serviço atrás dele faz com a falha"
+                  },
+                  {
+                    "id": "api",
+                    "service": "fargate",
+                    "label": "API de atendimento (timeout + retry restrito + disjuntor)",
+                    "note": "decide em até ~255 ms: chamar, retentar uma falha rápida de conexão, ou já aceitar o pedido com pontuação pendente"
+                  }
+                ]
+              },
+              {
+                "label": "Modelo servido, do L74",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sagemaker",
+                    "service": "sagemaker",
+                    "label": "Endpoint cadencia-cancelamento-tempo-real",
+                    "note": "mesmo endpoint e mesma janela de scale-to-zero; o que muda é quantas vezes a API espera o timeout inteiro"
+                  }
+                ]
+              },
+              {
+                "label": "Caminho degradado — revisão assíncrona",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sqs",
+                    "service": "sqs",
+                    "label": "Fila de revisão de pontuação pendente",
+                    "note": "recebe o id do pedido sempre que o fallback é usado, para um consumidor futuro fechar o ciclo"
+                  }
+                ]
+              },
+              {
+                "label": "Observação do disjuntor e do fallback",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Métrica: circuito e uso do fallback",
+                    "note": "publicada a cada abertura do circuito e a cada vez que o caminho degradado responde no lugar do modelo"
+                  },
+                  {
+                    "id": "sns",
+                    "service": "sns",
+                    "label": "Alerta: fallback sustentado",
+                    "note": "dispara quando o fallback é usado além do que um único cold start isolado explica"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "vendedor",
+                "to": "alb",
+                "label": "abre o pedido, mesma ação da Figura 1",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "api",
+                "label": "encaminha a requisição HTTP do pedido",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "sagemaker",
+                "label": "tentativa com timeout de 220 ms — só corre se o circuito estiver fechado",
+                "style": "dashed"
+              },
+              {
+                "from": "sagemaker",
+                "to": "api",
+                "label": "pontuação, falha rápida de conexão (retentada uma vez), ou timeout",
+                "style": "dashed"
+              },
+              {
+                "from": "api",
+                "to": "sqs",
+                "label": "id do pedido, publicado sempre que o fallback decide por pontuação pendente",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "cw",
+                "label": "publica a transição do circuito e cada uso do fallback",
+                "style": "solid"
+              },
+              {
+                "from": "cw",
+                "to": "sns",
+                "label": "alarme quando o fallback passa do limiar numa janela de 10 minutos",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Vendedor abre o pedido; a chamada atravessa o mesmo ALB da Figura 1",
+                "detail": "Nada muda do lado do vendedor: a URL, o método e a tela são idênticos. A diferença inteira está no que a API faz atrás do ALB.",
+                "nodes": [
+                  "vendedor",
+                  "alb"
+                ],
+                "edges": [
+                  "vendedor>alb"
+                ]
+              },
+              {
+                "label": "O pipeline Polly decide: o circuito está fechado?",
+                "detail": "Antes de qualquer chamada de rede, o `ResiliencePipeline` consulta o estado do disjuntor. Só se estiver FECHADO ou MEIO-ABERTO a chamada ao SageMaker acontece de verdade.",
+                "nodes": [
+                  "alb",
+                  "api"
+                ],
+                "edges": [
+                  "alb>api"
+                ]
+              },
+              {
+                "label": "Se fechado, tenta com timeout de 220 ms — reduzido para caber uma retentativa",
+                "detail": "Cortado dos 300 ms originais do L74 de propósito: com uma retentativa restrita disponível, sobra orçamento sem estourar o teto que o vendedor não pode ultrapassar.",
+                "nodes": [
+                  "api",
+                  "sagemaker"
+                ],
+                "edges": [
+                  "api>sagemaker"
+                ]
+              },
+              {
+                "label": "Falha de conexão retenta uma vez; timeout NÃO retenta — vai direto ao fallback",
+                "detail": "É a distinção central deste laboratório: `ShouldHandle` retenta `HttpRequestException` (falha rápida de rede), mas exclui `TaskCanceledException` — retentar um cold start com o MESMO timeout só dobraria a espera do vendedor sem ganhar nada.",
+                "nodes": [
+                  "sagemaker",
+                  "api"
+                ],
+                "edges": [
+                  "sagemaker>api"
+                ]
+              },
+              {
+                "label": "Circuito aberto ou tentativas esgotadas: o pedido segue com pontuação pendente",
+                "detail": "A API nunca deixa a exceção chegar ao controller. Em vez disso, aceita o pedido normalmente, marca a pontuação como pendente, e publica o id na fila de revisão para um consumidor futuro fechar o ciclo.",
+                "nodes": [
+                  "api",
+                  "sqs"
+                ],
+                "edges": [
+                  "api>sqs"
+                ]
+              },
+              {
+                "label": "Toda decisão do circuito e todo uso do fallback são publicados como métrica",
+                "detail": "Sem isso, o efeito observável de um fallback funcionando é só a AUSÊNCIA de erro — que, num painel que só mede erro 500, parece sucesso total, escondendo que o modelo não está respondendo.",
+                "nodes": [
+                  "api",
+                  "cw"
+                ],
+                "edges": [
+                  "api>cw"
+                ]
+              },
+              {
+                "label": "O alarme cobre o caso em que o fallback vira rotina, não exceção",
+                "detail": "Um cold start isolado gera um punhado de fallbacks e para. Fallback constante por horas é sinal de que o endpoint não está voltando — e essa distinção exige alguém olhar, não mais uma retentativa automática.",
+                "nodes": [
+                  "cw",
+                  "sns"
+                ],
+                "edges": [
+                  "cw>sns"
+                ]
+              }
+            ]
+          },
+          "id": "b5_1",
+          "position": 1
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural não é um nó a mais: são DUAS peças novas com papéis diferentes — o disjuntor, que decide ANTES de discar, e o caminho degradado (fila de revisão), que decide o que fazer quando a decisão foi não discar. Sem a segunda peça, o disjuntor sozinho só trocaria \"500 depois de 220 ms\" por \"500 depois de 1 ms\" — mais rápido, mas ainda quebrando a tela inteira."
+              }
+            ]
+          },
+          "id": "b5_2",
+          "position": 2
+        },
+        {
+          "type": "annotated_formula",
+          "data": {
+            "title": "O pior caso do pipeline tem de caber no orçamento de 300 ms herdado do L74",
+            "formula": "pior_caso ≈ falha_de_conexão_rápida + espera_com_jitter + timeout_da_retentativa",
+            "parts": [
+              {
+                "symbol": "falha_de_conexão_rápida",
+                "name": "≤ 20 ms, típico de um `HttpRequestException`",
+                "description": "É o único tipo de falha que dispara retentativa aqui. Uma falha de conexão real (reset, DNS) costuma se resolver bem antes do timeout completo — diferente de um cold start, que ocupa o timeout inteiro."
+              },
+              {
+                "symbol": "espera_com_jitter",
+                "name": "≤ 15 ms, com `UseJitter = true`",
+                "description": "Pequena de propósito: o objetivo do jitter aqui não é o mesmo do L36 (evitar sincronizar centenas de clientes contra um parceiro), é apenas não somar uma espera fixa ao orçamento já apertado."
+              },
+              {
+                "symbol": "timeout_da_retentativa",
+                "name": "220 ms, o mesmo timeout da primeira tentativa",
+                "description": "Reduzido dos 300 ms originais do L74. Se a retentativa também esgotar o timeout, o total chega a ≈255 ms — dentro do teto, com folga de ≈45 ms.",
+                "highlight": true
+              },
+              {
+                "symbol": "caminho_só_de_timeout",
+                "name": "quando a PRIMEIRA tentativa já estoura por timeout",
+                "description": "Não há retentativa nesse caminho — `ShouldHandle` a exclui de propósito — então o pior caso ali é só os 220 ms da própria tentativa, mais curto que o caminho com falha de conexão."
+              }
+            ]
+          },
+          "id": "b5_3",
+          "position": 3
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "success",
+            "title": "O que o disjuntor entrega aqui que o L36 não precisou entregar",
+            "content": "No L36, o disjuntor protegia o DOWNSTREAM de receber tráfego demais. Aqui, o downstream (o endpoint SageMaker) não está sob ataque de volume — o problema é que CADA vendedor que abre um pedido durante o mesmo cold start pagaria os 220 ms inteiros, sozinho, sem saber que os outros também estão pagando. O disjuntor aberto poupa o CHAMADOR: a partir da segunda chamada da rajada, a resposta degradada chega em microssegundos, não em 220 ms."
+          },
+          "id": "b5_4",
+          "position": 4
+        }
+      ],
+      "id": "b5",
+      "position": 5
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "O caminho de uma pontuação, do clique do vendedor à decisão do disjuntor"
+      },
+      "children": [
+        {
+          "type": "flow_diagram",
+          "data": {
+            "title": "Uma pontuação, do clique do vendedor à tela pronta",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1. Vendedor clica para abrir um pedido",
+                "desc": "A API de atendimento recebe a requisição e já começa a carregar os dados do pedido do banco, em paralelo à chamada de pontuação."
+              },
+              {
+                "label": "2. O pipeline Polly verifica: o circuito está fechado?",
+                "desc": "Se ABERTO, pula direto para o passo 5 sem tocar a rede — a decisão de não chamar já foi tomada antes desta invocação, com base em falhas recentes."
+              },
+              {
+                "label": "3. Tentativa 1 ao endpoint SageMaker, timeout de 220 ms",
+                "desc": "Se a resposta chegar com `IsSuccessStatusCode`, a pontuação é extraída do corpo JSON e a função retorna com sucesso."
+              },
+              {
+                "label": "4. Falhou: o tipo da exceção decide o que acontece a seguir",
+                "desc": "`HttpRequestException` (falha de conexão) aciona uma retentativa única, com jitter de até 15 ms. `TaskCanceledException` (timeout) NÃO retenta — vai direto ao caminho degradado."
+              },
+              {
+                "label": "5. Caminho degradado: pedido aceito, pontuação marcada como pendente",
+                "desc": "O id do pedido é publicado na fila de revisão, e a resposta ao vendedor segue normalmente — só que com um campo `pontuacaoPendente: true` em vez do valor numérico."
+              },
+              {
+                "label": "6. A transição do circuito e o uso do fallback são publicados como métrica",
+                "desc": "Log estruturado com o evento (`CIRCUITO_PONTUACAO_ABERTO`, `FALLBACK_PONTUACAO_USADO`), que o metric filter do Terraform (seção de construção) transforma em número."
+              },
+              {
+                "label": "7. A tela do pedido carrega — com ou sem a pontuação",
+                "desc": "O vendedor nunca vê um erro genérico por causa de um dado auxiliar. No pior caso, ele vê \"pontuação em revisão\" em vez do número, e segue trabalhando."
+              }
+            ]
+          },
+          "id": "b6_0",
+          "position": 0
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O log estruturado abaixo é o que o caminho degradado escreve sempre que decide aceitar o pedido sem a pontuação. É texto de log, não uma chamada de API adicional — o metric filter do Terraform, na seção de construção, é quem o transforma em número que um alarme pode observar."
+              }
+            ]
+          },
+          "id": "b6_1",
+          "position": 1
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "json",
+            "code": "{\n  \"evento\": \"FALLBACK_PONTUACAO_USADO\",\n  \"timestamp\": \"2026-08-08T08:41:12.204Z\",\n  \"motivo\": \"TaskCanceledException: timeout apos 220ms\",\n  \"pedidoId\": \"8f1c2a90-...\",\n  \"circuitoEstava\": \"Closed\",\n  \"_comentario\": \"Log escrito no catch do pipeline Polly. O metric filter do Terraform casa em '$.evento = FALLBACK_PONTUACAO_USADO' e vira contagem no CloudWatch — nenhuma chamada de API extra.\"\n}\n",
+            "filename": "evento-fallback-usado.json"
+          },
+          "id": "b6_2",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "O caminho degradado é uma resposta de sucesso, não um erro disfarçado",
+            "content": "A API responde 200 para o vendedor mesmo quando usa o fallback — porque, do ponto de vista do pedido, nada falhou: os dados carregaram, o pedido foi aceito, e só a pontuação auxiliar ficou pendente. Tratar isso como erro 5xx confundiria o painel de observabilidade da API (que mede disponibilidade do serviço) com o painel do disjuntor (que mede saúde do modelo) — são duas perguntas diferentes."
+          },
+          "id": "b6_3",
+          "position": 3
+        }
+      ],
+      "id": "b6",
+      "position": 6
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "type": "decision_box",
+          "data": {
+            "scenario": "O painel de atendimento da Cadência (L74) depende de um endpoint SageMaker com scale-to-zero fora do expediente, cujo cold start pode passar de 2,85 s — muito acima do orçamento de 300 ms que o cliente já respeita. Sem tratamento, esse estouro derruba a requisição inteira do vendedor por causa de um dado auxiliar.",
+            "winner": "Polly: timeout reduzido + retry restrito a falha de conexão + circuit breaker + caminho degradado explícito (pontuação pendente, publicada numa fila de revisão), tudo dentro do processo .NET, sem infraestrutura nova além da fila",
+            "why": "As quatro peças resolvem quatro problemas diferentes que coexistem aqui: o timeout reduzido garante margem para uma decisão sem estourar o orçamento; o retry seletivo recupera a fração de falhas que uma segunda tentativa realmente resolve (conexão), sem desperdiçar tempo na fração que não resolve (cold start); o disjuntor poupa a segunda chamada em diante de uma rajada de pagar o timeout inteiro sozinha; e o caminho degradado é o que impede a falha do modelo de virar falha do pedido. Nenhuma das quatro sozinha resolve o problema declarado — só o conjunto entrega degradação graciosa de verdade.",
+            "alternatives": [
+              {
+                "name": "Aumentar o timeout do cliente (para 1 s, por exemplo)",
+                "downside": "Reduz a frequência de estouro, mas não elimina o cold start de 2,85 s, e ainda quebra o orçamento de 300 ms que o L74 declarou não-negociável para a experiência do vendedor."
+              },
+              {
+                "name": "Manter o endpoint sempre ligado, sem scale-to-zero",
+                "downside": "Elimina o cold start por completo, mas desfaz a economia que o próprio L74 conquistou (≈59% menos horas-instância) — trocaria um problema de latência por um problema de custo já resolvido."
+              },
+              {
+                "name": "Cachear a última pontuação conhecida do pedido",
+                "downside": "Parece razoável para pedidos já vistos antes, mas um pedido novo nunca tem cache — e servir uma pontuação DESATUALIZADA sem sinalizar isso é mais perigoso que marcar como pendente, porque parece um dado atual e confiável."
+              },
+              {
+                "name": "Mover a chamada de pontuação para fora do caminho síncrono da tela",
+                "downside": "Resolveria o problema de raiz — mas exige redesenhar a experiência do vendedor (a tela abriria sem a pontuação e ela apareceria depois), uma mudança de produto maior que este laboratório, registrada como extensão possível."
+              }
+            ]
+          },
+          "id": "b7_0",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Timeout por tentativa",
+                "220 ms (reduzido dos 300 ms do L74)",
+                "300 ms (original); 100 ms (agressivo)",
+                "sobra orçamento para uma retentativa restrita sem estourar o teto do vendedor",
+                "uma resposta legítima que leva 250 ms passa a contar como falha e aciona o fallback"
+              ],
+              [
+                "O que o retry trata",
+                "só `HttpRequestException` (falha de conexão)",
+                "toda exceção, como no antipadrão que o L36 nomeia",
+                "retentar timeout com o mesmo timeout dobra a espera sem ganhar chance real de sucesso",
+                "uma falha de rede momentânea que por acaso demorasse mais de 220 ms não seria distinguida de um cold start"
+              ],
+              [
+                "Limiar do disjuntor",
+                "50% de falha em janela de 10 s, mínimo de 5 chamadas",
+                "20 chamadas (limiar do L36); sem mínimo de amostra",
+                "o volume do vendedor (≈200/dia) nunca atingiria um mínimo de 20 numa janela de 10 s",
+                "com amostra de 5, uma sequência de falhas isoladas (não um cold start real) pode abrir o circuito antes da hora"
+              ],
+              [
+                "Duração da pausa do disjuntor",
+                "5 s antes de testar recuperação",
+                "15 s (padrão do L36); 60 s",
+                "o cold start medido no L74 resolve em até ≈2,85 s — 5 s já dá margem sem manter o disjuntor aberto além do necessário",
+                "se um cold start específico demorar mais que 5 s, o disjuntor testa cedo e reabre, gastando uma chamada de teste extra"
+              ],
+              [
+                "Onde a pontuação pendente é resolvida",
+                "fila de revisão assíncrona, sem consumidor neste laboratório",
+                "resolver na hora, bloqueando até o modelo responder",
+                "a fila desacopla \"aceitar o pedido\" de \"processar a pontuação\", que é exatamente a degradação graciosa que o requisito pede",
+                "até o próximo laboratório da evolução, os pedidos pendentes se acumulam sem um processo que os feche — declarado como limitação, não escondido"
+              ]
+            ]
+          },
+          "id": "b7_1",
+          "position": 1
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este laboratório não paga",
+            "content": "A fila de revisão de pontuação pendente é criada e recebe mensagens, mas NENHUM consumidor as processa neste laboratório — o entregável aqui é o cliente .NET com timeout, retry e caminho degradado, não o ciclo completo de revisão. Um pedido marcado como pendente fica pendente até alguém implantar o consumidor, que é o Nível 3 da escada de evolução, adiante nesta página."
+          },
+          "id": "b7_2",
+          "position": 2
+        }
+      ],
+      "id": "b7",
+      "position": 7
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Construir: o pipeline Polly com timeout, retry restrito e caminho degradado"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O pipeline é construído UMA VEZ, como campo estático — o mesmo cuidado do L36. O timeout por tentativa vive na configuração do cliente do SDK, não como estratégia Polly separada — assim cada retentativa paga o timeout de novo, em vez de o timeout total valer para o pipeline inteiro."
+              }
+            ]
+          },
+          "id": "b8_0",
+          "position": 0
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "csharp",
+            "code": "// ServicoPontuacao.cs (depois) — pipeline Polly como campo estatico, com\n// caminho degradado explicito. O orcamento de 300ms do L74 continua valendo;\n// o que muda e que nenhuma excecao chega ao controller sem decisao tomada.\n\nusing Polly;\nusing Polly.CircuitBreaker;\nusing Polly.Retry;\nusing Amazon.SageMakerRuntime;\nusing Amazon.SageMakerRuntime.Model;\n\npublic class ServicoPontuacao\n{\n    private readonly AmazonSageMakerRuntimeClient _cliente = new(new AmazonSageMakerRuntimeConfig\n    {\n        // Reduzido dos 300ms do L74 de proposito: com retentativa restrita\n        // disponivel, sobra orcamento sem estourar o teto do vendedor. Cada\n        // retentativa paga este timeout de novo, porque ele vive aqui — no\n        // cliente do SDK — e nao como estrategia Timeout do Polly envolvendo\n        // o pipeline inteiro.\n        Timeout = TimeSpan.FromMilliseconds(220),\n    });\n\n    private readonly IFilaRevisao _filaRevisao; // publica o id do pedido pendente\n\n    private static readonly ResiliencePipeline<double> _resiliencia =\n        new ResiliencePipelineBuilder<double>()\n            .AddRetry(new RetryStrategyOptions<double>\n            {\n                // O PONTO CENTRAL deste laboratorio: retenta SO falha rapida\n                // de conexao. TaskCanceledException (o timeout de 220ms do\n                // cliente acima) NAO entra aqui — retentar um cold start com\n                // o MESMO timeout so dobraria a espera do vendedor sem ganhar\n                // nenhuma chance real de sucesso.\n                ShouldHandle = new PredicateBuilder<double>()\n                    .Handle<HttpRequestException>(),\n                MaxRetryAttempts = 1,\n                Delay = TimeSpan.FromMilliseconds(15),\n                // Varios vendedores abrindo pedido no MESMO cold start nao\n                // sincronizam a retentativa no mesmo instante — mesmo motivo\n                // do L36, numa escala de tempo muito menor.\n                UseJitter = true,\n                OnRetry = args =>\n                {\n                    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new\n                    {\n                        evento = \"RETRY_PONTUACAO_TENTATIVA\",\n                        espera_ms = args.RetryDelay.TotalMilliseconds,\n                    }));\n                    return default;\n                },\n            })\n            .AddCircuitBreaker(new CircuitBreakerStrategyOptions<double>\n            {\n                ShouldHandle = new PredicateBuilder<double>()\n                    .Handle<HttpRequestException>()\n                    .Handle<TaskCanceledException>(),\n                // Janela curta e amostra baixa: o volume do vendedor e de\n                // ~200 chamadas/dia (do L74), nao os 800 concorrentes de\n                // campanha do L36. Copiar o limiar de la deixaria o disjuntor\n                // inerte durante o proprio cold start que deveria pegar.\n                FailureRatio = 0.5,\n                SamplingDuration = TimeSpan.FromSeconds(10),\n                MinimumThroughput = 5,\n                // Cold start medido no L74 resolve em ate ~2,85s — 5s de\n                // pausa da margem sem manter o disjuntor aberto alem do\n                // necessario.\n                BreakDuration = TimeSpan.FromSeconds(5),\n                OnOpened = args =>\n                {\n                    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new\n                    {\n                        evento = \"CIRCUITO_PONTUACAO_ABERTO\",\n                        motivo = args.Outcome.Exception?.GetType().Name ?? \"limiar de falha atingido\",\n                    }));\n                    return default;\n                },\n                OnClosed = args =>\n                {\n                    Console.WriteLine(\"{\\\"evento\\\":\\\"CIRCUITO_PONTUACAO_FECHADO\\\"}\");\n                    return default;\n                },\n            })\n            .Build();\n\n    public async Task<ResultadoPontuacao> PontuarPedidoAsync(string pedidoId, string payloadJson)\n    {\n        try\n        {\n            var score = await _resiliencia.ExecuteAsync(async ct =>\n            {\n                var resposta = await _cliente.InvokeEndpointAsync(new InvokeEndpointRequest\n                {\n                    EndpointName = \"cadencia-cancelamento-tempo-real\", // do L74\n                    ContentType  = \"application/json\",\n                    Body         = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(payloadJson)),\n                }, ct);\n\n                using var leitor = new StreamReader(resposta.Body);\n                var corpo = await leitor.ReadToEndAsync(ct);\n                return System.Text.Json.JsonDocument.Parse(corpo).RootElement.GetProperty(\"score\").GetDouble();\n            });\n\n            return ResultadoPontuacao.Pronta(score);\n        }\n        catch (Exception ex) when (ex is BrokenCircuitException or HttpRequestException or TaskCanceledException)\n        {\n            // O CAMINHO DEGRADADO explicito. O pedido segue sem travar; a\n            // pontuacao fica marcada como pendente; alguem processa depois.\n            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new\n            {\n                evento = \"FALLBACK_PONTUACAO_USADO\",\n                pedidoId,\n                motivo = ex.GetType().Name,\n            }));\n            await _filaRevisao.PublicarAsync(pedidoId);\n            return ResultadoPontuacao.Pendente();\n        }\n    }\n}\n\npublic readonly record struct ResultadoPontuacao(double? Score, bool Pendente)\n{\n    public static ResultadoPontuacao Pronta(double score) => new(score, false);\n    public static ResultadoPontuacao Pendente() => new(null, true);\n}\n",
+            "filename": "ServicoPontuacao.cs (depois)"
+          },
+          "id": "b8_1",
+          "position": 1
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "Por que o timeout não é uma estratégia Polly aqui",
+            "content": "No L36, o timeout vivia na configuração do `HttpClient`, fora do pipeline Polly — e este laboratório repete a mesma escolha, por um motivo concreto: uma estratégia `AddTimeout` do Polly, se colocada como a primeira do pipeline, envolveria RETRY e CIRCUIT BREAKER juntos dentro de um único orçamento de 220 ms — sem sobrar tempo nenhum para a retentativa existir de fato. Deixar o timeout no cliente do SDK garante que cada tentativa individual, inclusive a retentativa, tenha seu próprio orçamento de 220 ms."
+          },
+          "id": "b8_2",
+          "position": 2
+        }
+      ],
+      "id": "b8",
+      "position": 8
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Construir: ALB, fila de revisão e observabilidade"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "A API de atendimento reaproveita o cluster ECS e a VPC já criados no L01 — só o serviço, o ALB dedicado a ele e a fila de revisão são novos."
+              }
+            ]
+          },
+          "id": "b9_0",
+          "position": 0
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "hcl",
+            "code": "# atendimento.tf -- ALB e servico ECS Fargate da API de atendimento\n# Reaproveita cluster e VPC do L01; a imagem vem do ECR ja existente\n# (referenciado, nao criado aqui).\n\nresource \"aws_lb\" \"atendimento\" {\n  name               = \"${var.projeto}-atendimento\"\n  internal           = true # so trafego interno da Cadencia chega ao painel\n  load_balancer_type = \"application\"\n  subnets            = aws_subnet.privada[*].id\n  security_groups    = [aws_security_group.atendimento_alb.id]\n}\n\nresource \"aws_lb_target_group\" \"atendimento\" {\n  name        = \"${var.projeto}-atendimento-api\"\n  port        = 8080\n  protocol    = \"HTTP\"\n  vpc_id      = aws_vpc.principal.id\n  target_type = \"ip\"\n\n  health_check {\n    path                = \"/health\" # nao toca o SageMaker -- so confirma o processo de pe\n    interval            = 10\n    healthy_threshold   = 2\n    unhealthy_threshold = 2\n  }\n}\n\nresource \"aws_ecs_task_definition\" \"atendimento\" {\n  family                   = \"${var.projeto}-atendimento\"\n  requires_compatibilities = [\"FARGATE\"]\n  network_mode             = \"awsvpc\"\n  cpu                      = 512\n  memory                   = 1024\n  execution_role_arn       = aws_iam_role.execucao.arn\n  task_role_arn            = aws_iam_role.atendimento_task.arn # invoca o SageMaker e publica na fila\n\n  container_definitions = jsonencode([{\n    name         = \"api\"\n    image        = \"${data.aws_ecr_repository.principal.repository_url}:${var.sha_atendimento}\"\n    essential    = true\n    portMappings = [{ containerPort = 8080, protocol = \"tcp\" }]\n    environment = [\n      { name = \"ENDPOINT_SAGEMAKER\", value = \"cadencia-cancelamento-tempo-real\" },\n      { name = \"FILA_REVISAO_URL\", value = aws_sqs_queue.revisao_pontuacao.url },\n    ]\n    logConfiguration = {\n      logDriver = \"awslogs\"\n      options = {\n        \"awslogs-group\"         = aws_cloudwatch_log_group.atendimento.name\n        \"awslogs-region\"        = var.regiao\n        \"awslogs-stream-prefix\" = \"api\"\n      }\n    }\n  }])\n}\n\nresource \"aws_ecs_service\" \"atendimento\" {\n  name            = \"${var.projeto}-atendimento\"\n  cluster         = aws_ecs_cluster.principal.id\n  task_definition = aws_ecs_task_definition.atendimento.arn\n  desired_count   = 2 # duas AZs, uma task cada, para o teste de cold start nao depender de uma unica task\n  launch_type     = \"FARGATE\"\n\n  network_configuration {\n    subnets          = aws_subnet.privada[*].id\n    security_groups  = [aws_security_group.atendimento_api.id]\n    assign_public_ip = false\n  }\n\n  load_balancer {\n    target_group_arn = aws_lb_target_group.atendimento.arn\n    container_name   = \"api\"\n    container_port   = 8080\n  }\n}\n",
+            "filename": "atendimento.tf"
+          },
+          "id": "b9_1",
+          "position": 1
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "hcl",
+            "code": "# fila-revisao.tf -- fila de revisao de pontuacao pendente\n# Sem consumidor neste laboratorio -- ver a limitacao registrada na secao\n# de decisoes e no Nivel 3 da evolucao.\n\nresource \"aws_sqs_queue\" \"revisao_pontuacao\" {\n  name                       = \"${var.projeto}-revisao-pontuacao-pendente\"\n  visibility_timeout_seconds = 60\n  message_retention_seconds  = 1209600 # 14 dias -- ate o consumidor do Nivel 3 existir\n  kms_master_key_id          = aws_kms_key.atendimento.arn # so o id do pedido trafega, mas cifrado por padrao\n}\n\nresource \"aws_kms_key\" \"atendimento\" {\n  description         = \"cifra a fila de revisao de pontuacao da API de atendimento\"\n  enable_key_rotation = true\n}\n",
+            "filename": "fila-revisao.tf"
+          },
+          "id": "b9_2",
+          "position": 2
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "hcl",
+            "code": "# observabilidade-pontuacao.tf -- circuito e fallback, visiveis sem abrir codigo\n\nresource \"aws_sns_topic\" \"fallback_pontuacao\" {\n  name = \"${var.projeto}-fallback-pontuacao-sustentado\"\n}\n\nresource \"aws_cloudwatch_log_metric_filter\" \"fallback_usado\" {\n  name            = \"${var.projeto}-fallback-pontuacao-usado\"\n  log_group_name  = aws_cloudwatch_log_group.atendimento.name\n  pattern         = \"{ $.evento = \\\"FALLBACK_PONTUACAO_USADO\\\" }\"\n\n  metric_transformation {\n    name      = \"FallbackPontuacaoUsado\"\n    namespace = \"${var.projeto}/pontuacao\"\n    value     = \"1\"\n    unit      = \"Count\"\n  }\n}\n\n# Nao dispara num cold start isolado -- isso e o fallback fazendo o trabalho\n# dele. Dispara quando o fallback e usado com frequencia incomum numa janela\n# de 10 minutos, sinal de que o endpoint nao esta so frio, esta fora.\nresource \"aws_cloudwatch_metric_alarm\" \"fallback_sustentado\" {\n  alarm_name          = \"${var.projeto}-fallback-pontuacao-sustentado\"\n  namespace           = \"${var.projeto}/pontuacao\"\n  metric_name         = \"FallbackPontuacaoUsado\"\n  statistic           = \"Sum\"\n  period              = 600\n  evaluation_periods  = 1\n  threshold           = 15 # acima do que um unico cold start explica, dado o volume do L74\n  comparison_operator = \"GreaterThanOrEqualToThreshold\"\n  treat_missing_data  = \"notBreaching\"\n\n  alarm_actions = [aws_sns_topic.fallback_pontuacao.arn]\n}\n",
+            "filename": "observabilidade-pontuacao.tf"
+          },
+          "id": "b9_3",
+          "position": 3
+        }
+      ],
+      "id": "b9",
+      "position": 9
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Implantar, e provar que o fallback poupa o vendedor do cold start"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Cinco medições. Nenhuma conclusão vem de \"a tela carregou\" sem um número atrelado — é a diferença entre demonstrar e afirmar."
+              }
+            ]
+          },
+          "id": "b10_0",
+          "position": 0
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "csharp",
+            "code": "// TesteColdStart/Program.cs -- forca o endpoint a ficar ocioso, dispara uma\n// rajada de chamadas simulando 5 vendedores abrindo pedido no mesmo minuto,\n// e mede quanto cada um espera -- com o cliente ingenuo (antes) e com o\n// pipeline Polly (depois).\n\nvar usaPolly = Environment.GetEnvironmentVariable(\"USA_POLLY\") == \"true\";\nvar servico = usaPolly ? (IServicoPontuacao)new ServicoPontuacao() : new ServicoPontuacaoIngenuo();\n\n// Espere o endpoint escalar a zero (fora da janela de 9h-18h, ou aguarde o\n// timeout de ociosidade) antes de rodar -- senao a rajada inteira mede\n// container ja quente.\nvar relogios = new List<(bool sucesso, double ms)>();\nvar inicio = System.Diagnostics.Stopwatch.StartNew();\n\nvar tarefas = Enumerable.Range(0, 5).Select(async i =>\n{\n    var relogio = System.Diagnostics.Stopwatch.StartNew();\n    var resultado = await servico.PontuarPedidoAsync($\"PED-{i}\", \"{\\\"valor_total\\\":199.90}\");\n    relogio.Stop();\n    return (sucesso: resultado != null, ms: relogio.Elapsed.TotalMilliseconds);\n});\nrelogios.AddRange(await Task.WhenAll(tarefas));\ninicio.Stop();\n\nvar modo = usaPolly ? \"polly\" : \"ingenuo\";\nConsole.WriteLine($\"modo: {modo}\");\nforeach (var (sucesso, ms) in relogios.OrderBy(r => r.ms))\n{\n    var rotulo = sucesso ? \"ok\" : \"erro/fallback\";\n    Console.WriteLine($\"  chamada: {ms:F0} ms, resultado: {rotulo}\");\n}\n// Medido no ambiente de exemplo da Cadencia, endpoint frio:\n//   ingenuo: 5 chamadas, cada uma esperando ~300ms e terminando em erro 500\n//   polly:   1a chamada ~220ms (paga o timeout, abre o circuito); as 4\n//            seguintes respondem em menos de 5ms cada, com pontuacao pendente\n",
+            "filename": "TesteColdStart/Program.cs"
+          },
+          "id": "b10_1",
+          "position": 1
+        },
+        {
+          "type": "list",
+          "data": {
+            "ordered": true,
+            "items": [
+              "Prova 1 — a falha sem fallback é reproduzida: force o endpoint a escalar a zero (fora de 9h–18h) e chame `PontuarPedidoAsync` do `ServicoPontuacao` original. Esperado, medido no ambiente de exemplo: erro após ≈300 ms, com `TaskCanceledException` não tratada subindo até o controller.",
+              "Prova 2 — o mesmo cenário, com o pipeline Polly: rode `TesteColdStart` com `USA_POLLY=true` contra o mesmo endpoint frio. Esperado: toda chamada retorna com sucesso HTTP, a primeira com pontuação pendente em ≈220 ms, sem nenhum erro 500.",
+              "Prova 3 — o disjuntor poupa a rajada, não só a primeira chamada: rode as 5 chamadas concorrentes do harness acima. Esperado no ambiente de exemplo: a primeira chamada leva ≈220 ms (paga o timeout e abre o circuito); as 4 seguintes retornam em menos de 5 ms cada, porque o circuito já estava aberto.",
+              "Prova 4 — retry ajuda conexão, não cold start: derrube a conectividade de rede da task por 50 ms (não o endpoint) e confirme, pelos logs `RETRY_PONTUACAO_TENTATIVA`, que a retentativa dispara e tem sucesso. Repita contra o endpoint frio e confirme que NENHUM `RETRY_PONTUACAO_TENTATIVA` aparece — só `FALLBACK_PONTUACAO_USADO`.",
+              "Prova 5 — a métrica reflete o fallback em tempo real: confira `aws cloudwatch get-metric-statistics --namespace \"${var.projeto}/pontuacao\" --metric-name FallbackPontuacaoUsado` durante o teste de cold start. Ausência de dado aqui, com o fallback sendo usado, significa que o metric filter não está casando o log — revise o `pattern` contra o formato exato do log estruturado."
+            ]
+          },
+          "id": "b10_2",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi medido em produção real",
+            "content": "Os números de latência (≈220 ms na primeira chamada de uma rajada fria, <5 ms nas seguintes) vêm de uma execução de exemplo contra o endpoint da Cadência em ambiente de laboratório, não de um pico real de atendimento. A duração do cold start em si (até ≈2,85 s) é a medida do L74 — meça a sua antes de calibrar `BreakDuration` e `MinimumThroughput` para produção."
+          },
+          "id": "b10_3",
+          "position": 3
+        }
+      ],
+      "id": "b10",
+      "position": 10
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Falha provocada",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Incluir `TaskCanceledException` no `ShouldHandle` do retry",
+                "toda chamada fria dobra de espera: 220 ms + 220 ms antes do fallback, quase estourando os 300 ms do L74",
+                "log `RETRY_PONTUACAO_TENTATIVA` aparecendo em chamadas que também geram `FALLBACK_PONTUACAO_USADO` logo depois",
+                "remova `TaskCanceledException` do `ShouldHandle`; retentar timeout não recupera cold start, só adia o fallback"
+              ],
+              [
+                "Reduzir `MinimumThroughput` para 1",
+                "o circuito abre com uma única chamada isolada e lenta, mesmo o endpoint estando saudável na maior parte do tempo",
+                "métrica `CIRCUITO_PONTUACAO_ABERTO` sobe mesmo fora da janela de cold start conhecida",
+                "suba o limiar para uma amostra que represente tendência — 5 foi calibrado para o volume real do vendedor, não para ruído isolado"
+              ],
+              [
+                "Remover a fila de revisão e devolver um valor fixo (ex.: `0`) no fallback",
+                "todo pedido com pontuação pendente parece ter risco zero, e nenhum é revisado depois",
+                "nenhuma mensagem chega em `revisao_pontuacao`, mesmo com `FALLBACK_PONTUACAO_USADO` subindo no CloudWatch",
+                "volte a publicar o id na fila sempre que o fallback for usado; um valor fixo esconde a degradação em vez de sinalizá-la"
+              ]
+            ]
+          },
+          "id": "b11_0",
+          "position": 0
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "danger",
+            "title": "Fallback que devolve um score fixo é pior que nenhum fallback",
+            "content": "Um valor numérico fixo no lugar da pontuação parece um dado válido para quem lê a tela — e se esse número for interpretado como \"baixo risco\", um pedido que nunca foi avaliado pode ser aprovado automaticamente sem revisão nenhuma. A marcação explícita de \"pendente\" existe exatamente para impedir que ausência de dado seja confundida com dado favorável."
+          },
+          "id": "b11_1",
+          "position": 1
+        }
+      ],
+      "id": "b11",
+      "position": 11
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Segurança: o que o cliente do endpoint expõe"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Policy IAM da API sem `Resource` específico, podendo invocar qualquer endpoint SageMaker da conta",
+                "média",
+                "alto — pode chamar endpoint de outro modelo, gerando custo e dado indevido",
+                "Resource com o ARN do endpoint `cadencia-cancelamento-tempo-real`, nunca `sagemaker:*`",
+                "CloudTrail mostrando `InvokeEndpoint` fora do endpoint esperado",
+                "revogar a policy ampla e reemitir com o ARN restrito"
+              ],
+              [
+                "Fallback tratado como aprovação automática por um sistema downstream",
+                "baixa, mas grave quando ocorre",
+                "alto — pedido de risco real aprovado sem revisão",
+                "campo `pontuacaoPendente` explícito, nunca um score que pareça válido",
+                "taxa de pedidos com pontuação pendente que foram aprovados sem passar pela fila de revisão",
+                "bloquear aprovação automática sempre que `pontuacaoPendente = true`"
+              ],
+              [
+                "Timeout do cliente configurado acima do orçamento por engano",
+                "baixa",
+                "médio — volta ao problema original: tela travando por mais tempo",
+                "revisar a fórmula do orçamento a cada mudança de `Timeout` ou `MaxRetryAttempts`",
+                "p99 de \"abrir pedido\" subindo acima de 300 ms",
+                "reduzir de volta ao valor validado nesta seção"
+              ]
+            ]
+          },
+          "id": "b12_0",
+          "position": 0
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "json",
+            "code": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Sid\": \"InvocarSomenteEndpointDePontuacao\",\n      \"Effect\": \"Allow\",\n      \"Action\": \"sagemaker:InvokeEndpoint\",\n      \"Resource\": \"arn:aws:sagemaker:*:*:endpoint/cadencia-cancelamento-tempo-real\"\n    },\n    {\n      \"Sid\": \"PublicarSomenteNaFilaDeRevisao\",\n      \"Effect\": \"Allow\",\n      \"Action\": \"sqs:SendMessage\",\n      \"Resource\": \"arn:aws:sqs:*:*:cadencia-revisao-pontuacao-pendente\"\n    }\n  ]\n}\n",
+            "filename": "atendimento-task-policy.json"
+          },
+          "id": "b12_1",
+          "position": 1
+        }
+      ],
+      "id": "b12",
+      "position": 12
+    },
+    {
+      "type": "quiz",
+      "data": {
+        "question": "O pipeline Polly deste laboratório retenta `HttpRequestException` mas exclui `TaskCanceledException` do retry. Um endpoint em cold start demora 2,4 s para responder, e o timeout do cliente é 220 ms. O que acontece na primeira chamada de um vendedor que abre um pedido nesse momento?",
+        "options": [
+          "A chamada falha por timeout após 220 ms, não é retentada, e o caminho degradado assume — pedido aceito com pontuação pendente",
+          "A chamada é retentada automaticamente até ter sucesso, mesmo que isso ultrapasse o orçamento de 300 ms",
+          "O circuit breaker impede a chamada de sequer acontecer, porque já sabe que o endpoint está frio",
+          "A chamada espera os 2,4 s completos do cold start, porque o timeout do cliente não se aplica a chamadas de SDK"
+        ],
+        "correctIndex": 0,
+        "explanation": "O timeout de 220 ms do cliente do SDK dispara antes dos 2,4 s de cold start, gerando uma exceção que o `ShouldHandle` deste laboratório deliberadamente NÃO trata como retentável — é o ponto central do módulo: retentar um timeout com o mesmo timeout dobraria a espera sem nenhuma chance real de sucesso, porque o container continua frio no instante seguinte. Sem retentativa, o `catch` do caminho degradado assume: o pedido é aceito, a pontuação marcada como pendente, e o id publicado na fila de revisão.\n\nA primeira alternativa inventa um comportamento que o `ShouldHandle` deste laboratório explicitamente evita — retentar até ter sucesso ignoraria o orçamento de 300 ms e é exatamente o antipadrão que a tabela de anti-padrões nomeia. A terceira erra o estado do circuito: para o circuito abrir, é preciso primeiro OBSERVAR falhas dentro de uma janela — a primeira chamada de uma rajada sempre paga o timeout, porque é ela quem gera a primeira observação de falha. A quarta inverte o papel do timeout do SDK: ele existe justamente para NÃO deixar a chamada esperar o cold start inteiro, e é a peça que o L74 já havia configurado."
+      },
+      "id": "b24_0",
+      "position": 13
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "type": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "O circuito está aberto agora, e há quanto tempo?",
+              "Quantos vendedores nas últimas 10 minutos receberam pontuação pendente em vez do valor real?",
+              "O fallback ocorreu numa rajada curta (cold start isolado) ou está sustentado por horas?",
+              "Quantas mensagens estão acumuladas na fila de revisão, sem consumidor ainda?",
+              "A latência p99 da tela de \"abrir pedido\" está dentro dos 300 ms mesmo quando o modelo está saudável?"
+            ]
+          },
+          "id": "b13_0",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Alarme",
+              "Métrica",
+              "Limiar inicial",
+              "Por que esse limiar"
+            ],
+            "rows": [
+              [
+                "Fallback sustentado",
+                "soma de `FallbackPontuacaoUsado` (custom)",
+                "≥ 15 em 10 min",
+                "um cold start isolado gera um punhado de fallbacks numa rajada e para; 15 numa janela de 10 min aponta degradação além disso"
+              ],
+              [
+                "Circuito reabrindo repetidamente",
+                "contagem de `CIRCUITO_PONTUACAO_ABERTO` (custom)",
+                "≥ 3 janelas de 1 min seguidas",
+                "não dispara na primeira abertura — isso é o disjuntor funcionando; dispara quando ele não fica fechado"
+              ],
+              [
+                "Fila de revisão sem consumo",
+                "`ApproximateNumberOfMessagesVisible` (SQS)",
+                "> 500 mensagens",
+                "sinaliza que a limitação declarada (sem consumidor neste laboratório) precisa avançar para o Nível 3 da evolução"
+              ],
+              [
+                "Tempo de resposta perto do orçamento",
+                "p99 de latência do endpoint `/pedidos`",
+                "> 280 ms",
+                "avisa ANTES da tela realmente estourar os 300 ms, com margem para investigar"
+              ]
+            ]
+          },
+          "id": "b13_1",
+          "position": 1
+        }
+      ],
+      "id": "b13",
+      "position": 14
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão, e falha de AZ"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Cenário",
+              "O que muda",
+              "Onde a arquitetura sente primeiro"
+            ],
+            "rows": [
+              [
+                "10 pedidos/dia",
+                "o disjuntor quase nunca atinge `MinimumThroughput`",
+                "a proteção vem quase só do timeout reduzido e do fallback, não do circuito em si"
+              ],
+              [
+                "200 chamadas/dia distribuídas no expediente (o volume medido no L74)",
+                "vários vendedores voltando do almoço podem abrir pedido no mesmo minuto de um cold start",
+                "é exatamente o cenário que este laboratório mede — o disjuntor entra em ação em segundos"
+              ],
+              [
+                "1 milhão de pedidos/dia (hipotético, fora do perfil atual da Cadência)",
+                "um único endpoint de tempo real não escala nesse volume, mesmo sem cold start",
+                "a decisão deixa de ser \"fallback do cliente\" e vira \"quantas instâncias o endpoint precisa\" — tema do L74/L80, não deste módulo"
+              ],
+              [
+                "Falha de AZ do endpoint SageMaker",
+                "as chamadas falham de forma SUSTENTADA, não só durante um cold start pontual",
+                "o circuito abre e permanece aberto além do esperado; o alarme de \"fallback sustentado\" é quem distingue isso de um cold start isolado"
+              ]
+            ]
+          },
+          "id": "b14_0",
+          "position": 0
+        }
+      ],
+      "id": "b14",
+      "position": 15
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Polly é biblioteca: zero custo de infraestrutura por si só. A fila de revisão cobra por mensagem, não por hora ligada. Use o AWS Pricing Calculator para o seu volume; nenhum valor absoluto aqui envelhece bem."
+              }
+            ]
+          },
+          "id": "b15_0",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Cenário",
+              "Dimensões que pesam",
+              "Custo oculto"
+            ],
+            "rows": [
+              [
+                "Sem fallback (estado herdado do L74)",
+                "nenhum custo de infraestrutura novo",
+                "o custo é indireto: vendedor bloqueado, pedido perdido ou reaberto manualmente, que não aparece em nenhuma fatura da AWS"
+              ],
+              [
+                "Com Polly, sem consumidor da fila de revisão",
+                "SQS cobra por mensagem publicada, valor desprezível no volume do L74",
+                "pedidos \"pendentes\" nunca revisados é dívida que não aparece em dólar nenhum, mas aparece em risco de crédito não avaliado"
+              ],
+              [
+                "Com o consumidor implantado (Nível 3 da evolução)",
+                "um Lambda a mais processando a fila",
+                "custo desprezível comparado ao endpoint GPU que já existe desde o L74 — a peça cara da arquitetura continua sendo o modelo, não a resiliência"
+              ]
+            ]
+          },
+          "id": "b15_1",
+          "position": 1
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "O custo que ninguém mede: reabertura manual do pedido",
+            "content": "Antes deste laboratório, um vendedor que via a tela travar reabria o pedido manualmente, às vezes mais de uma vez, até o cold start terminar. Esse tempo perdido não aparece em nenhuma fatura da AWS, mas é o custo real que a degradação graciosa elimina."
+          },
+          "id": "b15_2",
+          "position": 2
+        }
+      ],
+      "id": "b15",
+      "position": 16
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação",
+              "Risco",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "timeout estoura sem nenhum log de decisão na mínima",
+                "ninguém sabe que o vendedor está vendo erro até ele reclamar",
+                "log estruturado + métrica a cada fallback e a cada transição do circuito",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "policy IAM da task pode ficar ampla demais se copiada de outro laboratório",
+                "API invoca endpoint ou fila que não deveria",
+                "Resource restrito ao ARN do endpoint e da fila específicos",
+                "alta"
+              ],
+              [
+                "Confiabilidade",
+                "timeout sem fallback derruba a requisição inteira por um dado auxiliar",
+                "experiência do vendedor quebrada por algo que não deveria ser bloqueante",
+                "timeout reduzido + retry seletivo + circuit breaker + caminho degradado, como este laboratório constrói",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "timeout de 220 ms escolhido sem medir a latência normal do endpoint quente",
+                "chamadas legítimas mas um pouco mais lentas contam como falha desnecessariamente",
+                "validar 220 ms contra o p50/p99 medidos com o endpoint aquecido",
+                "média"
+              ],
+              [
+                "Otimização de custo",
+                "fallback sem fila de revisão esconderia pedidos nunca avaliados",
+                "risco de crédito não revisado se acumula sem custo visível em dólar",
+                "fila de revisão com alarme de acúmulo, e o consumidor do Nível 3 como próximo passo",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "disjuntor evita chamadas que já se sabe que vão falhar",
+                "sem ele, cada vendedor da rajada gastaria CPU e rede numa chamada fadada ao timeout",
+                "circuit breaker reduz trabalho descartado de rede e de CPU da task, não só a espera percebida",
+                "baixa"
+              ]
+            ]
+          },
+          "id": "b16_0",
+          "position": 0
+        }
+      ],
+      "id": "b16",
+      "position": 17
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco deste módulo e compra outro — até o ponto em que a mesma decisão de resiliência se repete sobre um modelo que já não é mais um classificador tabular, e sim um LLM."
+              }
+            ]
+          },
+          "id": "b17_0",
+          "position": 0
+        },
+        {
+          "type": "layer_stack",
+          "data": {
+            "title": "Do timeout sem tratamento à mesma decisão de resiliência aplicada a um modelo generativo",
+            "layers": [
+              {
+                "label": "Nível 1 — Timeout sem fallback (o estado herdado do L74)",
+                "instruction": "O cliente tem `Timeout = 300ms`, mas nenhum tratamento ao redor. Funciona todo dia dentro da janela quente; fora dela, uma única chamada fria derruba a tela inteira.",
+                "note": "Risco resolvido: nenhum. Novo risco: cold start fora da janela de aquecimento quebra a experiência do vendedor por um dado auxiliar. Custo: nenhum adicional além do que o L74 já paga."
+              },
+              {
+                "label": "Nível 2 — Este laboratório: timeout reduzido, retry restrito e caminho degradado",
+                "instruction": "Timeout de 220 ms, retry só para falha de conexão, circuit breaker calibrado pelo volume do vendedor, e fallback explícito que aceita o pedido com pontuação pendente.",
+                "note": "Risco resolvido: timeout derrubando a requisição inteira. Novo risco: fallback mal calibrado esconde degradação real, e um valor fixo poderia parecer aprovação automática. Custo: desprezível — fila pequena, cobrada por mensagem."
+              },
+              {
+                "label": "Nível 3 — Consumidor da fila de revisão",
+                "instruction": "Um Lambda processa as mensagens pendentes e atualiza o pedido com a pontuação real assim que o endpoint volta a responder — fechando o ciclo que este laboratório deixa aberto.",
+                "note": "Risco resolvido: pedidos pendentes acumulados sem nenhum processo que os feche. Novo risco: se o consumidor atrasar, o vendedor trabalha por mais tempo com informação desatualizada. Custo: um Lambda pequeno, padrão do L22."
+              },
+              {
+                "label": "Nível 4 — Disjuntor compartilhado entre instâncias do Fargate",
+                "instruction": "Estado do circuito centralizado (ex.: ElastiCache/Redis) em vez de local a cada task — mesmo ponto que o L36 registrou como dívida, agora aplicado aqui.",
+                "note": "Risco resolvido: tasks concorrentes divergindo sobre se o circuito está aberto. Novo risco: o armazenamento compartilhado vira dependência crítica, com a mesma disciplina de resiliência exigida dele. Custo: uma dependência nova, pequena e constante."
+              },
+              {
+                "label": "Nível 5 — Fallback em cascata entre os modos do L74",
+                "instruction": "Antes de aceitar \"pendente\", tenta uma vez o endpoint serverless (mais lento, mas sem o mesmo cold start correlacionado ao expediente) como segunda chance real.",
+                "note": "Risco resolvido: fallback estático demais, quando um caminho alternativo genuíno já existe desde o L74. Novo risco: decidir entre dois modos sob pressão de tempo aumenta a complexidade do cliente. Custo: uma chamada adicional, só quando necessário."
+              },
+              {
+                "label": "Nível 6 — Dados e IA: o mesmo cliente, servindo um modelo generativo",
+                "instruction": "Quando o \"modelo\" servido deixa de ser um classificador tabular e passa a ser um LLM via Bedrock, chamado pela mesma API de atendimento — é o L81, primeira chamada ao Bedrock do .NET 8, herdando este mesmo pipeline de resiliência.",
+                "note": "Risco resolvido: tratar timeout, retry e fallback como exclusivos de modelo clássico — a mesma decisão se repete em qualquer chamada síncrona a um modelo, clássico ou generativo. Novo risco: streaming de resposta do Bedrock muda o que \"timeout\" significa — não é mais um valor único, é a lacuna entre tokens. Custo: cobrança por token, diferente da cobrança por hora do SageMaker."
+              }
+            ]
+          },
+          "id": "b17_1",
+          "position": 1
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Ligar o fallback (Nível 2) antes de reduzir o timeout (parte do mesmo nível, mas logicamente primeiro) deixaria o disjuntor abrindo depois de esperas de 300 ms em vez de 220 ms — funcionaria, mas gastaria mais orçamento do vendedor por chamada do que o necessário antes de decidir parar de tentar."
+          },
+          "id": "b17_2",
+          "position": 2
+        }
+      ],
+      "id": "b17",
+      "position": 18
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "O modelo já é a peça de IA aqui — o que este laboratório NÃO faz é decidir o fallback com IA",
+            "content": "A pontuação de cancelamento em si já é o ponto de entrada de IA nesta arquitetura, herdado do L73/L74. O que este módulo resolve é puramente mecânico e determinístico: timeout, retry seletivo e circuit breaker são fórmulas auditáveis, iguais ao L36. \"Usar um segundo modelo para prever se vale a pena esperar pela resposta do primeiro\" substituiria uma regra simples e previsível por uma caixa-preta, sem ganho mensurado — e uma decisão de fallback errada por previsão ruim é mais perigosa que uma decisão por janela de contagem simples."
+          },
+          "id": "b18_0",
+          "position": 0
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O ponto de entrada legítimo de MAIS IA nesta cadeia é o Nível 6 da escada de evolução acima, e é o L81: quando o modelo servido deixa de ser o classificador de cancelamento e passa a ser um LLM via Bedrock, o mesmo pipeline de resiliência construído aqui — timeout, retry seletivo, disjuntor, fallback explícito — se aplica de novo, com uma diferença concreta que o L81 trata: streaming de resposta muda o que \"timeout\" significa."
+              }
+            ]
+          },
+          "id": "b18_1",
+          "position": 1
+        }
+      ],
+      "id": "b18",
+      "position": 19
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Antipadrão",
+              "Por que alguém faz",
+              "Sintoma em produção",
+              "Forma correta"
+            ],
+            "rows": [
+              [
+                "Deixar o timeout do L74 sem try/catch ao redor",
+                "parece já resolvido porque o timeout existe — \"já tem timeout, então é seguro\"",
+                "TaskCanceledException sobe e derruba a tela inteira do pedido, não só a pontuação",
+                "envolver a chamada com Polly e sempre ter um fallback explícito, nunca deixar uma exceção de rede chegar ao controller"
+              ],
+              [
+                "Retentar timeout como se fosse qualquer outra falha",
+                "generaliza `ShouldHandle` para \"qualquer exceção\", copiando o hábito sem revisar o caso",
+                "a retentativa espera o MESMO timeout do endpoint que ainda está frio, dobrando a espera do vendedor sem ganhar chance real",
+                "excluir `TaskCanceledException` do retry; contra cold start, retentar não ajuda, só adia o fallback"
+              ],
+              [
+                "Circuit breaker calibrado com o volume de pico de campanha, copiado do L36",
+                "copiar o número que já funcionou em outro laboratório parece mais seguro que calcular de novo",
+                "com poucas chamadas de vendedor por minuto, `MinimumThroughput` nunca é atingido e o disjuntor fica inerte durante o próprio cold start que deveria pegar",
+                "calibrar pelo volume REAL deste consumidor (≈200/dia), não pelo de outro caso da série"
+              ],
+              [
+                "Fallback que devolve um valor fixo sem marcar para revisão",
+                "parece suficiente porque a tela não trava mais, e é menos código que publicar numa fila",
+                "pedidos de risco alto nunca são revisados, e ninguém percebe que o modelo está fora do ar",
+                "publicar o id na fila de revisão sempre que o fallback for usado, e marcar o campo como pendente, nunca com um número"
+              ],
+              [
+                "Aumentar o timeout do cliente em vez de tratar a falha",
+                "é a mudança de uma linha, sem entender o orçamento de 300 ms que o L74 declarou",
+                "todo vendedor volta a esperar mais, mesmo quando o endpoint está saudável na maior parte do tempo",
+                "manter o orçamento de 300 ms herdado do L74 e resolver com fallback, não com mais paciência do cliente"
+              ]
+            ]
+          },
+          "id": "b19_0",
+          "position": 0
+        }
+      ],
+      "id": "b19",
+      "position": 20
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Log/métrica",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Tela do vendedor mostra erro genérico ao abrir pedido fora do horário de aquecimento",
+                "o try/catch do pipeline Polly não está ativo no deploy — regressão para o comportamento do L74",
+                "comparar o horário do erro com a janela de scale-to-zero (9h–18h) do endpoint",
+                "TaskCanceledException nos logs SEM `FALLBACK_PONTUACAO_USADO` correspondente",
+                "confirmar que `ServicoPontuacao` (depois) está de fato implantado, não a versão do L74 sem tratamento"
+              ],
+              [
+                "Fallback usado quase toda chamada, mesmo dentro da janela quente",
+                "timeout de 220 ms configurado abaixo da latência normal real do endpoint aquecido",
+                "comparar o p50/p99 medido do endpoint quente com o timeout configurado",
+                "proporção alta de `FALLBACK_PONTUACAO_USADO` mesmo com o endpoint fora da janela de cold start",
+                "aumentar o timeout por tentativa dentro do orçamento de 300 ms, revisando a fórmula do pior caso"
+              ],
+              [
+                "Circuito nunca abre durante um cold start observado",
+                "`MinimumThroughput` alto demais para o volume real de vendedor",
+                "comparar o número de chamadas numa janela de 10 s com o `MinimumThroughput` configurado",
+                "métrica `CIRCUITO_PONTUACAO_ABERTO` ausente durante um cold start confirmado por outro sinal",
+                "reduza `MinimumThroughput` para o volume real medido — 5 é o ponto de partida, não um valor universal"
+              ],
+              [
+                "Fila de revisão cresce sem nunca ser processada",
+                "o consumidor da fila (Nível 3 da evolução) ainda não foi implantado",
+                "checar `ApproximateNumberOfMessagesVisible` da fila no CloudWatch",
+                "contagem subindo sem nunca descer",
+                "declarar a limitação explicitamente até o Nível 3 ser implantado — não é bug, é o escopo deste laboratório"
+              ]
+            ]
+          },
+          "id": "b20_0",
+          "position": 0
+        }
+      ],
+      "id": "b20",
+      "position": 21
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "type": "code_block",
+          "data": {
+            "language": "bash",
+            "code": "#!/usr/bin/env bash\nset -euo pipefail\n\n# A ordem importa: o ALB e o servico ECS nao tem dependente fora deste\n# modulo, mas o log group e a fila sobrevivem ao destroy se nao estiverem\n# no mesmo state.\nterraform destroy \\\n  -target=aws_ecs_service.atendimento \\\n  -target=aws_ecs_task_definition.atendimento \\\n  -target=aws_lb_target_group.atendimento \\\n  -target=aws_lb.atendimento \\\n  -auto-approve\n\nterraform destroy -auto-approve\n\necho \"Confira manualmente:\"\necho \"  - log group /aws/ecs/<projeto>-atendimento nao e removido por este destroy\"\necho \"  - a fila de revisao de pontuacao pode ter mensagens nao processadas;\"\necho \"    o destroy remove a fila JUNTO com as mensagens, sem processa-las\"\n",
+            "filename": "limpar.sh"
+          },
+          "id": "b21_0",
+          "position": 0
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "O que o destroy NÃO leva",
+            "content": "O ALB (`aws_lb.atendimento`) e o serviço ECS são removidos pelo `destroy` acima, e são os únicos recursos deste laboratório que cobram hora ligada parada. A fila SQS não cobra parada — só por mensagem publicada — mas `terraform destroy` remove a fila JUNTO com qualquer mensagem de revisão ainda não processada, sem nenhum aviso além deste. Se houver pedidos pendentes de verdade, drene a fila antes de destruir o ambiente."
+          },
+          "id": "b21_1",
+          "position": 1
+        }
+      ],
+      "id": "b21",
+      "position": 22
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Motivo"
+            ],
+            "rows": [
+              [
+                "Timeout do L74 sem nenhum tratamento",
+                "try/catch ao redor do pipeline Polly",
+                "nenhuma exceção de rede chega ao controller sem uma decisão explícita tomada"
+              ],
+              [
+                "Retentar cold start com o mesmo timeout não ajuda",
+                "`ShouldHandle` exclui `TaskCanceledException`",
+                "retry só recupera o tipo de falha que uma segunda tentativa realmente resolve"
+              ],
+              [
+                "Vários vendedores pagando o mesmo timeout na mesma rajada",
+                "circuit breaker calibrado pelo volume do vendedor",
+                "a partir da segunda chamada de uma rajada, o disjuntor aberto poupa o timeout inteiro"
+              ],
+              [
+                "Pedido não pode ficar bloqueado pela pontuação auxiliar",
+                "caminho degradado explícito, com fila de revisão",
+                "separa \"aceitar o pedido\" de \"avaliar o risco\", em vez de amarrar os dois"
+              ],
+              [
+                "Fallback pode virar rotina sem ninguém perceber",
+                "métrica de uso do fallback + alarme",
+                "transforma um estado interno do processo em dado observável, distinguindo cold start isolado de degradação sustentada"
+              ],
+              [
+                "Pipeline de retry pode estourar o orçamento de 300 ms do L74",
+                "orçamento explícito (timeout + jitter + retentativa)",
+                "torna o limite verificável em vez de descoberto quando o vendedor reclamar"
+              ]
+            ]
+          },
+          "id": "b22_0",
+          "position": 0
+        },
+        {
+          "type": "list",
+          "data": {
+            "ordered": true,
+            "items": [
+              "Vendedor clica para abrir um pedido; a API começa a carregar os dados do banco.",
+              "O pipeline Polly verifica: o circuito está fechado?",
+              "Se sim, tenta o endpoint com timeout de 220 ms.",
+              "Falha de conexão retenta uma vez com jitter; timeout vai direto ao fallback.",
+              "Circuito aberto ou tentativas esgotadas: pedido aceito, pontuação marcada como pendente, id publicado na fila de revisão.",
+              "Toda decisão do circuito e todo uso do fallback viram métrica.",
+              "A tela do pedido carrega — com a pontuação real, ou com \"em revisão\" no lugar dela."
+            ]
+          },
+          "id": "b22_1",
+          "position": 1
+        }
+      ],
+      "id": "b22",
+      "position": 23
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Por que o cliente do L74 já tinha timeout e mesmo assim quebrava a tela do vendedor?",
+            "answer": "Porque timeout sozinho decide QUANDO desistir de esperar, não O QUE fazer depois de desistir. O ClienteTempoReal do L74 tinha Timeout = 300ms, mas nenhum tratamento ao redor da chamada — então, quando o tempo se esgotava, a exceção de timeout subia sem nenhum catch e derrubava a requisição inteira de abrir o pedido, não só o campo de pontuação que dependia do modelo. Timeout limita a espera; ele não substitui um caminho de resposta para quando a espera não é suficiente."
+          },
+          "id": "b23_0",
+          "position": 0
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Por que o retry deste laboratório ignora timeout e só retenta falha de conexão?",
+            "answer": "Porque retentar um timeout com o mesmo timeout dobra a espera do vendedor sem ganhar nenhuma chance real de sucesso: se o endpoint está em cold start, ele continua frio no milissegundo seguinte, e a segunda tentativa também esgota os 220 ms configurados. Uma falha de conexão é diferente — costuma se resolver antes do timeout completo, então uma retentativa rápida, com jitter, tem chance real de recuperar o pedido sem estourar o orçamento de 300 ms herdado do L74."
+          },
+          "id": "b23_1",
+          "position": 1
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "O que o circuit breaker economiza aqui, se o volume de chamadas é baixo?",
+            "answer": "Ele economiza o tempo do CHAMADOR, não a capacidade do downstream — diferença central em relação ao L36. Quando vários vendedores abrem pedido durante o mesmo cold start, a primeira chamada paga os 220 ms inteiros e abre o circuito; a partir da segunda, cada requisição seguinte recebe a pontuação pendente em poucos milissegundos, em vez de esperar o timeout completo sozinha. Num volume baixo como o da Cadência, essa economia por chamador importa mais que proteger o modelo de sobrecarga."
+          },
+          "id": "b23_2",
+          "position": 2
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Por que o fallback marca a pontuação como pendente em vez de usar um valor fixo?",
+            "answer": "Porque um valor numérico fixo, como zero, pareceria um dado válido para quem lê a tela — e se fosse interpretado como baixo risco, um pedido nunca avaliado pelo modelo poderia ser aprovado automaticamente sem revisão nenhuma. Marcar o campo explicitamente como pendente, e publicar o id do pedido na fila de revisão, é o que impede a ausência de dado de ser confundida com um dado favorável, mantendo o pedido rastreável até alguém revisá-lo de verdade."
+          },
+          "id": "b23_3",
+          "position": 3
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Quem consome a fila de revisão de pontuação pendente criada neste laboratório?",
+            "answer": "Ninguém, ainda — e essa limitação é declarada de propósito, não escondida. O entregável deste laboratório é o cliente .NET com timeout, retry restrito e caminho degradado; fechar o ciclo com um processo que lê a fila e atualiza a pontuação real assim que o endpoint volta a responder é um passo seguinte, deliberadamente adiado para não misturar duas decisões de arquitetura diferentes num único módulo."
+          },
+          "id": "b23_4",
+          "position": 4
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Por que o timeout foi reduzido para 220 ms em vez dos 300 ms originais do L74?",
+            "answer": "Porque 220 ms deixa margem para uma retentativa restrita sem estourar o orçamento de 300 ms que o L74 declarou não-negociável para a experiência do vendedor. No pior caso considerado — uma falha rápida de conexão seguida de uma segunda tentativa que também esgota o timeout — o total fica perto de 255 ms, ainda dentro do teto, com folga de cerca de 45 ms para o resto do processamento da API."
+          },
+          "id": "b23_5",
+          "position": 5
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "O que diferencia o disjuntor deste laboratório do disjuntor construído no L36?",
+            "answer": "O que cada um protege. No L36, o disjuntor protege o PARCEIRO de pagamento de receber tráfego demais durante uma degradação sustentada, calibrado para centenas de chamadas concorrentes de campanha. Aqui, ele protege o VENDEDOR de pagar o timeout inteiro repetidas vezes durante o mesmo cold start, calibrado para um volume muito menor. Copiar o limiar do L36 para este cenário deixaria o disjuntor praticamente inerte, porque o volume necessário para atingir o mínimo de amostra nunca apareceria numa janela de 10 segundos."
+          },
+          "id": "b23_6",
+          "position": 6
+        }
+      ],
+      "id": "b23",
+      "position": 24
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "type": "quiz",
+          "data": {
+            "question": "Um engenheiro copia o circuit breaker do L36 para este laboratório — `FailureRatio=0.5`, `SamplingDuration=10s` — mas mantém `MinimumThroughput=20` (do L36). O volume de chamadas de pontuação da Cadência é de ≈200/dia, concentradas no expediente. Qual é o efeito mais provável dessa escolha durante um cold start real?",
+            "options": [
+              "O circuito abre mais rápido que o calibrado neste laboratório, porque `MinimumThroughput` alto acelera a detecção de falha",
+              "O circuito abre imediatamente na primeira falha, ignorando o `FailureRatio` configurado",
+              "Nenhum efeito — `MinimumThroughput` só importa em volumes de campanha, não no dia a dia do vendedor",
+              "O circuito nunca atinge a amostra mínima de 20 chamadas numa janela de 10 s, e fica inerte mesmo com o endpoint genuinamente frio"
+            ],
+            "correctIndex": 3,
+            "explanation": "`MinimumThroughput` exige um número mínimo de chamadas REAIS dentro da `SamplingDuration` antes de o disjuntor sequer considerar abrir — é a proteção contra confundir uma amostra pequena demais com uma tendência real. Com ≈200 chamadas/dia distribuídas ao longo do expediente, a chance de 20 chamadas caírem na MESMA janela de 10 segundos é baixíssima, mesmo durante um cold start — então o circuito nunca teria amostra suficiente para abrir, e cada vendedor da rajada pagaria o timeout completo sozinho, exatamente o problema que o disjuntor existe para evitar.\n\nA primeira alternativa erra o mecanismo: `MinimumThroughput` importa em QUALQUER volume — é a relação entre ele e o volume real do consumidor que decide se o disjuntor funciona ou fica inerte, e é por isso que este laboratório calibra para 5, em vez de copiar o 20 do L36. A segunda inverte a lógica: `MinimumThroughput` alto RETARDA a detecção, porque exige mais amostra antes de decidir, não acelera nada. A quarta descreve um circuito sem `MinimumThroughput` nenhum, que não é o que foi configurado — o parâmetro existe precisamente para IMPEDIR abertura numa única falha isolada."
+          },
+          "id": "b24_1",
+          "position": 0
+        },
+        {
+          "type": "quiz",
+          "data": {
+            "question": "O timeout por tentativa é 220 ms, e a única retentativa acontece só para `HttpRequestException` (falha de conexão), com espera de até 15 ms de jitter. Um engenheiro decide \"simplificar\" e passa a retentar TAMBÉM `TaskCanceledException`, mantendo os mesmos parâmetros. Qual é o efeito mais provável durante um cold start medido em 2,4 s?",
+            "options": [
+              "Nenhum — o Polly aborta a retentativa automaticamente se detectar que o endpoint está frio",
+              "O disjuntor abre imediatamente, porque `TaskCanceledException` passa a contar em dobro para o `FailureRatio`",
+              "A latência cai, porque duas tentativas em paralelo respondem mais rápido que uma",
+              "O pior caso do pipeline passa a somar até dois timeouts completos (220 ms + 220 ms) mais o jitter, aproximando-se ou ultrapassando o orçamento de 300 ms herdado do L74"
+            ],
+            "correctIndex": 3,
+            "explanation": "Incluir `TaskCanceledException` no `ShouldHandle` do retry soma um segundo timeout completo ao pior caso: 220 ms da primeira tentativa, mais até 15 ms de jitter, mais 220 ms da retentativa — cerca de 455 ms, bem acima dos 300 ms que o L74 declarou como orçamento não-negociável para a tela do vendedor. É exatamente o cálculo que a seção de orçamento deste laboratório faz para justificar por que `TaskCanceledException` fica de fora do retry: contra um cold start, a segunda tentativa tem a MESMA chance de sucesso que a primeira, porque o container continua frio.\n\nA primeira alternativa inventa um comportamento que o Polly não tem — ele não \"sabe\" que o endpoint está frio, só executa o `ShouldHandle` configurado, cegamente, sobre o tipo da exceção. A terceira confunde `FailureRatio` (que decide quando o CIRCUITO abre) com o comportamento do RETRY — são estratégias diferentes do mesmo pipeline, e uma não dobra a contagem da outra. A quarta descreve chamadas em paralelo, que não é o que uma retentativa sequencial do Polly faz: a segunda tentativa só começa depois que a primeira termina, então nunca reduz a latência somada."
+          },
+          "id": "b24_2",
+          "position": 1
+        }
+      ],
+      "id": "b24",
+      "position": 25
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L74 (endpoint cadencia-cancelamento-tempo-real e o ClienteTempoReal.cs no ar), L36 (Polly, retry, jitter, circuit breaker), .NET 8"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "por que timeout sem tratamento ainda é uma falha, só que mais previsível; retry seletivo por tipo de exceção; circuit breaker calibrado pelo volume real do consumidor; caminho degradado explícito como contrato, não como acidente; orçamento de latência com retentativa restrita"
+              ],
+              [
+                "Limitação que fica",
+                "a fila de revisão de pontuação pendente não tem consumidor neste laboratório — pedidos marcados como pendentes ficam pendentes até o Nível 3 da evolução ser implantado"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L81 — Primeira chamada ao Bedrock do .NET 8. Reutiliza o mesmo raciocínio de timeout, retry e streaming, agora contra um modelo generativo em vez de um classificador tabular"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "o padrão de orçamento de latência com retentativa restrita se aplica a qualquer outra chamada síncrona e bloqueante da Cadência a um serviço gerenciado; o consumidor da fila de revisão (Nível 3) depende do contrato de mensagem definido aqui"
+              ],
+              [
+                "Data da última validação técnica",
+                "8 de agosto de 2026"
+              ]
+            ]
+          },
+          "id": "b25_0",
+          "position": 0
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Polly — pollydocs.org",
+                "code": true
+              },
+              {
+                "text": " (estratégias Retry e Circuit Breaker, `PredicateBuilder`, os quatro estados do disjuntor); "
+              },
+              {
+                "text": "AWS SDK for .NET — Amazon SageMaker Runtime",
+                "code": true
+              },
+              {
+                "text": " (`InvokeEndpointAsync`, `AmazonSageMakerRuntimeConfig.Timeout`); e "
+              },
+              {
+                "text": "SageMaker AI — Real-time inference e managed instance scaling",
+                "code": true
+              },
+              {
+                "text": ", a mesma referência do L74 para o comportamento de scale-to-zero e cold start. Nenhum valor em dólar aparece neste módulo por decisão: os números de latência e volume são medições do cenário de exemplo da Cadência, e mudam por região e por acordo de conta — confira o AWS Pricing Calculator para o valor atual."
+              }
+            ]
+          },
+          "id": "b25_1",
+          "position": 1
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "A duração do cold start (até ≈2,85 s) e o volume de ≈200 chamadas/dia são medições de exemplo herdadas do L74, não constantes universais do SageMaker. Os limiares do disjuntor deste módulo (`MinimumThroughput=5`, `BreakDuration=5s`) foram calibrados para ESSE volume específico — meça o seu antes de levar os mesmos números para produção. O comportamento exato de `managed_instance_scaling` com `min_instance_count = 0` também depende da versão do provider Terraform, como já registrado no L74."
+          },
+          "id": "b25_2",
+          "position": 2
+        }
+      ],
+      "id": "b25",
+      "position": 26
+    }
+  ]
+}

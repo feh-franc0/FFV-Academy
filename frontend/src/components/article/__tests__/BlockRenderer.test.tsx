@@ -254,10 +254,37 @@ describe('BlockRenderer — adapters por tipo', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it.skip('split_flow — adapter atual incompatível com primitive (TODO fix)', () => {
-    // BlockRenderer adapter passa left/right como ARRAY, mas SplitFlow primitive
-    // espera OBJETO { label, items: [] }. Teste documentado mas skipado até
-    // adapter ser realinhado com o primitive (criar issue de tracking).
+  // Este teste ficou pulado por meses com a nota "adapter passa ARRAY, primitive
+  // espera OBJETO — skipado até realinhar". O adapter já normaliza os dois
+  // formatos há tempo, então o que restava era um teste desligado guardando uma
+  // premissa falsa: ninguém revisita `it.skip`, e ele passou a documentar um
+  // problema que não existia mais. Reativado em ago/2026, cobrindo as duas formas.
+  it('split_flow aceita coluna como objeto {label, items}', () => {
+    render(
+      <BlockRenderer
+        block={b('split_flow', {
+          title: 'Divisão',
+          left: { label: 'Antes', items: [{ label: 'monolito', sub: 'um deploy' }] },
+          right: { label: 'Depois', items: [{ label: 'serviços', sub: 'deploy por time' }] },
+        })}
+      />,
+    );
+    expect(screen.getByText('Antes')).toBeInTheDocument();
+    expect(screen.getByText('monolito')).toBeInTheDocument();
+    expect(screen.getByText('serviços')).toBeInTheDocument();
+  });
+
+  it('split_flow aceita coluna como array direto', () => {
+    const { container } = render(
+      <BlockRenderer
+        block={b('split_flow', {
+          left: [{ label: 'a' }],
+          right: [{ label: 'b' }],
+        })}
+      />,
+    );
+    expect(container.firstChild).not.toBeNull();
+    expect(screen.getByText('a')).toBeInTheDocument();
   });
 
   it('layer_stack renderiza layers (sem crashar)', () => {

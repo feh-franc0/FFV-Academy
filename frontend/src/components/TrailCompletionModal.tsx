@@ -16,10 +16,23 @@
  */
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
-import { BADGES_DEF, CURRICULUM, type Trail } from '@/lib/curriculum';
-import { Certificate } from '@/components/Certificate';
+import dynamic from 'next/dynamic';
+import { useEffect, useRef, useState } from 'react';
+import { BADGES_DEF } from '@/lib/curriculum/badges';
+import type { Trail } from '@/lib/curriculum';
+// Índice leve — só usado para achar a PRÓXIMA trilha por posição quando o
+// chamador não passa `nextTrail` explicitamente. Só precisa de
+// id/href/icon/name/color, que `CURRICULO_LEVE` carrega sem os ~92 KB gz de
+// `desc`/`keywords` do currículo completo.
+import { CURRICULO_LEVE } from '@/lib/curriculum/indice-leve';
 import { ShareSocial } from '@/components/ShareSocial';
+import { readableTextColor } from '@/lib/readable-text';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
+
+// Este modal aparece em toda página de artigo (via ConcluirModulo), mas só
+// RENDERIZA quando uma trilha inteira é concluída — evento raro. `Certificate`
+// só é preciso se o usuário clicar "Ver certificado" dentro do modal.
+const Certificate = dynamic(() => import('@/components/Certificate').then(m => ({ default: m.Certificate })), { ssr: false });
 
 export interface TrailCompletionModalProps {
   trail: Trail | null;
@@ -43,6 +56,8 @@ export function TrailCompletionModal({
 }: TrailCompletionModalProps) {
   const [certOpen, setCertOpen] = useState(false);
   const [shareExpanded, setShareExpanded] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, !!trail);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -60,8 +75,8 @@ export function TrailCompletionModal({
   const computedNext = nextTrail !== undefined
     ? nextTrail
     : (() => {
-        const idx = CURRICULUM.findIndex(t => t.id === trail.id);
-        return idx >= 0 && idx < CURRICULUM.length - 1 ? CURRICULUM[idx + 1] : null;
+        const idx = CURRICULO_LEVE.findIndex(t => t.id === trail.id);
+        return idx >= 0 && idx < CURRICULO_LEVE.length - 1 ? CURRICULO_LEVE[idx + 1] : null;
       })();
 
   const badges = newBadges
@@ -80,9 +95,11 @@ export function TrailCompletionModal({
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label={`Trilha ${trail.name} concluída`}
+      tabIndex={-1}
       className="fixed inset-0 z-[95] flex items-center justify-center px-4"
       style={{
         background: 'color-mix(in srgb, #000 65%, transparent)',
@@ -152,8 +169,8 @@ export function TrailCompletionModal({
           }}
         >
           <div
-            className="font-mono uppercase"
-            style={{ fontSize: 10, letterSpacing: '0.18em', color: trail.color, fontWeight: 700, marginBottom: 12 }}
+            className="font-mono uppercase ffv-acento-texto"
+            style={{ fontSize: 10, letterSpacing: '0.18em', '--ffv-acento': trail.color, fontWeight: 700, marginBottom: 12 } as React.CSSProperties}
           >
             TRILHA COMPLETA
           </div>
@@ -201,7 +218,7 @@ export function TrailCompletionModal({
               className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold"
               style={{
                 background: trail.color,
-                color: '#0d1117',
+                color: readableTextColor(trail.color),
                 fontSize: 14,
                 border: 'none',
                 cursor: 'pointer',
@@ -288,7 +305,7 @@ export function TrailCompletionModal({
                     <div style={{ fontSize: 13, fontWeight: 700 }}>{computedNext.name}</div>
                   </div>
                 </div>
-                <span style={{ color: computedNext.color, fontWeight: 700 }}>→</span>
+                <span className="ffv-acento-texto" style={{ '--ffv-acento': computedNext.color, fontWeight: 700 } as React.CSSProperties}>→</span>
               </Link>
             )}
 

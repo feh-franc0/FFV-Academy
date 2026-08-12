@@ -51,6 +51,12 @@ type MagicTokenStore interface {
 	// Retorna ErrNotFound se não existe (expirado ou nunca criado).
 	Consume(ctx context.Context, email Email) (MagicToken, error)
 
+	// Peek recupera o token SEM deletar — usado para validar o código antes
+	// de queimá-lo. Um palpite errado não pode invalidar o código correto
+	// pendente; só Consume (chamado após o match confirmado) apaga o token.
+	// Retorna ErrNotFound se não existe (expirado ou nunca criado).
+	Peek(ctx context.Context, email Email) (MagicToken, error)
+
 	// IncrAttempts incrementa o contador de tentativas para o email.
 	// Retorna o número atual de tentativas.
 	IncrAttempts(ctx context.Context, email Email) (int64, error)

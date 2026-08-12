@@ -10,6 +10,7 @@ import {
   type MyRankByPeriod,
 } from '@/lib/leaderboard-api';
 import { HUBS } from '@/lib/curriculum';
+import { FalhaAoCarregar } from '@/components/estado/FalhaAoCarregar';
 
 const PERIODS: { id: RankPeriod; label: string; short: string; emoji: string }[] = [
   { id: 'all-time', label: 'Geral', short: 'GERAL', emoji: '👑' },
@@ -22,6 +23,11 @@ export function RankingClient() {
   const [period, setPeriod] = useState<RankPeriod>('all-time');
   const [entries, setEntries] = useState<PublicLeaderboardEntry[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [falhou, setFalhou] = useState(false);
+  // contador de tentativa: `setPeriod(p => p)` não refaria o fetch, porque o React
+  // descarta atualização de estado com o mesmo valor. Incrementar isto é o que
+  // torna o botão "tentar novamente" funcional de fato.
+  const [tentativa, setTentativa] = useState(0);
   const [periodLabel, setPeriodLabel] = useState<string>('');
   const [myRanks, setMyRanks] = useState<MyRankByPeriod[]>([]);
   const [hubFilter, setHubFilter] = useState<string>('all');
@@ -29,16 +35,21 @@ export function RankingClient() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    getPublicLeaderboard(period, 100).then(data => {
+    setFalhou(false);
+    getPublicLeaderboard(period, 100).then(resultado => {
       if (cancelled) return;
-      setEntries(data?.entries ?? null);
-      setPeriodLabel(formatPeriodLabel(period, data?.periodStart, data?.periodEnd));
+      // 'falhou' é distinto de 'vazio': servidor fora não significa que ninguém
+      // pontuou. Antes os dois caíam no mesmo EmptyState.
+      setFalhou(resultado.status === 'falhou');
+      const dados = resultado.status === 'ok' ? resultado.dados : null;
+      setEntries(dados?.entries ?? null);
+      setPeriodLabel(formatPeriodLabel(period, dados?.periodStart, dados?.periodEnd));
       setLoading(false);
     });
     return () => {
       cancelled = true;
     };
-  }, [period]);
+  }, [period, tentativa]);
 
   // Carrega rank em todos os períodos uma vez (só funciona se autenticado)
   useEffect(() => {
@@ -208,6 +219,12 @@ export function RankingClient() {
         <div className="max-w-5xl mx-auto">
           {loading ? (
             <SkeletonGrid />
+          ) : falhou ? (
+            <FalhaAoCarregar
+              title="Não conseguimos carregar o ranking"
+              description="O servidor não respondeu. O ranking existe e seu XP está salvo — o que falhou foi a consulta."
+              onRetry={() => setTentativa(n => n + 1)}
+            />
           ) : entries && entries.length >= 3 ? (
             <>
               <Podium top3={entries.slice(0, 3)} />
@@ -315,8 +332,8 @@ function MobilePodiumRow({ entry, place }: { entry: PublicLeaderboardEntry; plac
         <div className="flex items-center gap-2 mb-1">
           <span className="text-2xl">{config.emoji}</span>
           <p
-            className="font-mono text-[11px]"
-            style={{ color: config.color, letterSpacing: '0.08em', fontWeight: 700 }}
+            className="font-mono text-[11px] ffv-acento-texto"
+            style={{ '--ffv-acento': config.color, letterSpacing: '0.08em', fontWeight: 700 } as React.CSSProperties}
           >
             {config.label}
           </p>
@@ -324,7 +341,7 @@ function MobilePodiumRow({ entry, place }: { entry: PublicLeaderboardEntry; plac
         <p className="font-bold text-base truncate">{entry.name}</p>
       </div>
       <div className="text-right flex-shrink-0">
-        <p className="font-mono text-xl font-bold" style={{ color: config.color }}>
+        <p className="font-mono text-xl font-bold ffv-acento-texto" style={{ '--ffv-acento': config.color } as React.CSSProperties}>
           {entry.xpGained.toLocaleString('pt-BR')}
         </p>
         <p
@@ -391,8 +408,8 @@ function PodiumCard({ entry, place }: { entry: PublicLeaderboardEntry; place: 1 
         <div>
           <div className="text-3xl md:text-4xl mb-2">{config.emoji}</div>
           <p
-            className="font-mono text-[10px] mb-2"
-            style={{ color: config.color, letterSpacing: '0.08em', fontWeight: 700 }}
+            className="font-mono text-[10px] mb-2 ffv-acento-texto"
+            style={{ '--ffv-acento': config.color, letterSpacing: '0.08em', fontWeight: 700 } as React.CSSProperties}
           >
             {config.label}
           </p>
@@ -405,8 +422,8 @@ function PodiumCard({ entry, place }: { entry: PublicLeaderboardEntry; place: 1 
         </div>
         <div>
           <p
-            className="font-mono text-2xl md:text-3xl font-bold"
-            style={{ color: config.color }}
+            className="font-mono text-2xl md:text-3xl font-bold ffv-acento-texto"
+            style={{ '--ffv-acento': config.color } as React.CSSProperties}
           >
             {entry.xpGained.toLocaleString('pt-BR')}
           </p>
@@ -493,7 +510,7 @@ function MyRankCard({ rank, xp, entries }: { rank: number; xp: number; entries: 
         className="w-14 h-14 rounded-full flex items-center justify-center text-lg font-bold"
         style={{
           background: 'linear-gradient(135deg, var(--ffv-blue), var(--ffv-purple))',
-          color: '#fff',
+          color: 'var(--primary-foreground)',
         }}
       >
         EU

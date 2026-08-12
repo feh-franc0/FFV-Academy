@@ -8,12 +8,13 @@
  * - Campos desconhecidos (prototype pollution) são rejeitados em strict()
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   GameStateSchema, ReferralRecordSchema, DailyModuleStoredSchema, safeParseJSON,
   emailSchema, phoneBRSchema, UserProfileSchema, SimuladoAttemptSchema,
   CertificateRecordSchema,
 } from '../../lib/schemas';
+import { loadState } from '../../lib/engine';
 
 const VALID_STATE = {
   schemaVersion: 2,
@@ -29,7 +30,22 @@ const VALID_STATE = {
   articleProgress: {},
 };
 
-describe('GameStateSchema', () => {
+describe('GameStateSchema — contrato com a interface GameState', () => {
+  beforeEach(() => localStorage.clear());
+
+  // `.strict()` rejeita QUALQUER chave que o schema não declara. Isso é uma
+  // faca de dois gumes: protege contra prototype pollution, mas também
+  // significa que um campo NOVO adicionado à interface `GameState` (em
+  // engine.ts) e esquecido em `schemas.ts` faz `importState`/`exportState`
+  // falharem em SILÊNCIO para todo usuário real — só um teste que usa o
+  // shape REAL (não um literal escrito à mão, que fica desatualizado do
+  // mesmo jeito que o schema) pega esse drift.
+  it('o estado real produzido por loadState() (todos os campos de GameState) passa no schema', () => {
+    const real = loadState();
+    const r = GameStateSchema.safeParse(real);
+    expect(r.success).toBe(true);
+  });
+
   it('aceita estado válido', () => {
     const r = GameStateSchema.safeParse(VALID_STATE);
     expect(r.success).toBe(true);

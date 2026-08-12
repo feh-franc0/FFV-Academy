@@ -16,26 +16,28 @@ export function ComunidadeAutor() {
             className="font-mono uppercase tracking-widest text-xs mb-3"
             style={{ color: 'var(--ffv-muted)', letterSpacing: '0.12em' }}
           >
-            Por que essa plataforma existe
+            Nossa proposta
           </p>
-          <h3 className="font-bold text-xl mb-4">
-            Tecnologia só faz sentido quando vira{' '}
-            <span style={{ color: 'var(--ffv-blue)' }}>produto que entrega valor.</span>
+          <h3 className="font-bold text-xl mb-4" style={{ lineHeight: 1.3 }}>
+            Formar os engenheiros da era da IA —{' '}
+            <span style={{ color: 'var(--ffv-blue)' }}>de graça, sem hype.</span>
           </h3>
           <p className="text-sm mb-4" style={{ color: 'var(--ffv-muted)', lineHeight: 1.75 }}>
-            Esse é o foco daqui. Nada de aprender frameworks pelo framework, nada de stack pela stack —
-            tudo é meio para construir produtos digitais que pessoas usam de verdade. A nova era da IA
-            não substitui essa lógica: ela exponencia. Quem entende isso primeiro sai na frente.
+            A gente acredita numa coisa simples: na era da IA, quem entende como as coisas funcionam
+            por dentro sai na frente de quem só copia e cola de chatbot. Enquanto o mercado vende
+            curso de &ldquo;ganhe dinheiro com ChatGPT&rdquo;, aqui você aprende a construir de verdade.
           </p>
           <p className="text-sm mb-5" style={{ color: 'var(--ffv-muted)', lineHeight: 1.75 }}>
-            FFV Academy ensina o que importa para construir, lançar e evoluir produtos digitais com IA
-            no centro: dos fundamentos técnicos à comunicação, da AWS ao marketing, da arquitetura ao
-            empreendedorismo digital. Tudo conectado, tudo gratuito, tudo em PT-BR.
+            O foco é claro: <strong style={{ color: 'var(--foreground)' }}>Claude &amp; Anthropic no
+            centro</strong>, IA aplicada (RAG, agents, evals), AWS em produção e a engenharia que
+            sustenta tudo isso. Do primeiro &ldquo;o que é um token&rdquo; até o seu agente rodando em
+            produção — em trilhas ordenadas, gamificadas e 100% em português.
           </p>
           <div className="flex flex-wrap gap-2">
-            <Tag>Construído por dev brasileiro 🇧🇷</Tag>
+            <Tag>Feito por dev brasileiro 🇧🇷</Tag>
             <Tag>Atualizado toda semana</Tag>
             <Tag>Sem hype</Tag>
+            <Tag>100% gratuito</Tag>
           </div>
         </article>
 
@@ -52,13 +54,14 @@ export function ComunidadeAutor() {
             className="font-mono uppercase tracking-widest text-xs mb-3"
             style={{ color: 'var(--ffv-blue)', letterSpacing: '0.12em' }}
           >
-            Acompanhe a evolução
+            Faça parte
           </p>
-          <h3 className="font-bold text-xl mb-3">Newsletter semanal direta na caixa</h3>
+          <h3 className="font-bold text-xl mb-3">Aqui você não estuda sozinho.</h3>
           <p className="text-sm mb-6" style={{ color: 'var(--ffv-muted)', lineHeight: 1.7 }}>
-            Um artigo profundo por semana sobre IA, engenharia, AWS e produtos digitais. Atualizações
-            de novas trilhas, frameworks e tendências do mercado. Sem spam, sem promoção — só conteúdo
-            que importa.
+            Toda semana entram mais devs aprendendo a construir com IA de verdade. Você ganha XP
+            junto, disputa o ranking, mantém a streak e caminha lado a lado com quem está na mesma
+            jornada. A newsletter traz um artigo profundo por semana; o Discord da comunidade está
+            chegando. Sem spam — só o que importa.
           </p>
           <div className="flex flex-wrap gap-3 items-center">
             <a
@@ -68,7 +71,7 @@ export function ComunidadeAutor() {
               className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-opacity hover:opacity-80"
               style={{
                 background: 'var(--ffv-blue)',
-                color: '#0d1117',
+                color: 'var(--primary-foreground)',
               }}
             >
               Assinar newsletter →

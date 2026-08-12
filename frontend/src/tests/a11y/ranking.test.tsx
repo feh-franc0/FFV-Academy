@@ -19,15 +19,20 @@ import { getPublicLeaderboard, getMyRankAll } from '@/lib/leaderboard-api';
 
 describe('a11y · <RankingClient>', () => {
   beforeEach(() => {
+    // shape novo: resultado discriminado, para 'falhou' não virar 'vazio'
     vi.mocked(getPublicLeaderboard).mockResolvedValue({
-      entries: [
-        { rank: 1, name: 'Alice', xpGained: 1200, avatarInitials: 'AL' },
-        { rank: 2, name: 'Bob', xpGained: 900, avatarInitials: 'BO' },
-        { rank: 3, name: 'Carol', xpGained: 700, avatarInitials: 'CA' },
-        { rank: 4, name: 'Dan', xpGained: 500, avatarInitials: 'DA' },
-      ],
-      periodStart: '2026-04-01',
-      periodEnd: '2026-04-30',
+      status: 'ok',
+      dados: {
+        period: 'all-time',
+        entries: [
+          { rank: 1, name: 'Alice', xpGained: 1200, avatarInitials: 'AL' },
+          { rank: 2, name: 'Bob', xpGained: 900, avatarInitials: 'BO' },
+          { rank: 3, name: 'Carol', xpGained: 700, avatarInitials: 'CA' },
+          { rank: 4, name: 'Dan', xpGained: 500, avatarInitials: 'DA' },
+        ],
+        periodStart: '2026-04-01',
+        periodEnd: '2026-04-30',
+      },
     });
     vi.mocked(getMyRankAll).mockResolvedValue([]);
   });

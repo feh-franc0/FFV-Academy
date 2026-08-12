@@ -1,14 +1,15 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { CURRICULUM, HUBS, type Module, type Trail } from '@/lib/curriculum';
 import { useGameState } from '@/hooks/useGameState';
 import { recordArticleVisit } from '@/lib/engine';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 
 type Step = 'intro' | 'q-level' | 'q-goal' | 'q-time' | 'choose';
 
 type Level = 'beginner' | 'intermediate' | 'advanced';
-type Goal = 'ia' | 'aws' | 'engenharia' | 'claude';
+type Goal = 'ia' | 'aws' | 'engenharia' | 'ia-aws';
 
 interface TimeOption {
   value: number; // daily goal (modules/day)
@@ -27,10 +28,12 @@ const TIME_OPTIONS: TimeOption[] = [
 function recommendHub(level: Level | null, goal: Goal | null): string | null {
   if (!goal) return null;
   const hubByGoal: Record<Goal, string> = {
-    ia: level === 'advanced' ? 'claude-anthropic' : 'ia',
+    // Quem quer IA e já é avançado é mandado para a junção, não para os
+    // fundamentos: `ia-aws` é onde a teoria vira arquitetura sobre serviço.
+    ia: level === 'advanced' ? 'ia-aws' : 'ia',
     aws: 'aws',
     engenharia: 'engenharia',
-    claude: 'claude-anthropic',
+    'ia-aws': 'ia-aws',
   };
   return hubByGoal[goal];
 }
@@ -92,7 +95,7 @@ const GOAL_OPTIONS: { value: Goal; label: string; desc: string; icon: string; hu
   { value: 'ia', label: 'Entender IA de verdade', desc: 'LLMs, transformers, RAG, agents — a fundo, sem hype.', icon: '🤖', hub: 'ia' },
   { value: 'aws', label: 'Dominar a AWS', desc: 'Cloud Practitioner, Solutions Architect — certificações e arquitetura real.', icon: '☁️', hub: 'aws' },
   { value: 'engenharia', label: 'Ser engenheiro de software melhor', desc: 'DevOps, sistemas distribuídos, SRE, engenharia moderna.', icon: '🔧', hub: 'engenharia' },
-  { value: 'claude', label: 'Dominar o Claude & Anthropic', desc: 'Claude Code, API, agents, MCP, skills — o ecossistema completo para devs.', icon: '⊕', hub: 'claude-anthropic' },
+  { value: 'ia-aws', label: 'Colocar IA em produção na AWS', desc: 'Bedrock, Knowledge Bases, agents e AgentCore — da primeira chamada à arquitetura.', icon: '◈', hub: 'ia-aws' },
 ];
 
 export function OnboardingModal() {
@@ -102,6 +105,8 @@ export function OnboardingModal() {
   const [selectedLevel, setSelectedLevel] = useState<Level | null>(null);
   const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
   const [selectedTime, setSelectedTime] = useState<number | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, open);
 
   useEffect(() => {
     if (!state) return;
@@ -190,9 +195,11 @@ export function OnboardingModal() {
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label="Boas-vindas ao FFV Academy"
+      tabIndex={-1}
       className="fixed inset-x-0 bottom-0 z-[90] flex items-center justify-center px-4"
       style={{
         top: 'calc(56px + env(safe-area-inset-top, 0px))',
@@ -295,7 +302,7 @@ export function OnboardingModal() {
                   type="button"
                   onClick={() => setStep('q-level')}
                   className="flex-1 py-3 rounded-xl font-semibold"
-                  style={{ background: 'var(--ffv-blue)', color: '#0d1117', fontSize: 14 }}
+                  style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)', fontSize: 14 }}
                 >
                   Vamos lá →
                 </button>
@@ -487,13 +494,13 @@ export function OnboardingModal() {
                       }}
                     >
                       <div
-                        className="flex items-center justify-center flex-shrink-0 font-mono"
+                        className="flex items-center justify-center flex-shrink-0 font-mono ffv-acento-texto"
                         style={{
                           width: 28, height: 28, borderRadius: 8,
                           background: `color-mix(in srgb, ${recommendedHub.color} 14%, transparent)`,
-                          color: recommendedHub.color,
+                          '--ffv-acento': recommendedHub.color,
                           fontSize: 12, fontWeight: 700,
-                        }}
+                        } as React.CSSProperties}
                       >
                         {idx + 1}
                       </div>
@@ -507,8 +514,8 @@ export function OnboardingModal() {
                       </div>
                       {idx === 0 && (
                         <span
-                          className="font-mono uppercase"
-                          style={{ fontSize: 9, letterSpacing: '0.12em', color: recommendedHub.color, fontWeight: 700 }}
+                          className="font-mono uppercase ffv-acento-texto"
+                          style={{ fontSize: 9, letterSpacing: '0.12em', '--ffv-acento': recommendedHub.color, fontWeight: 700 } as React.CSSProperties}
                         >
                           Começar
                         </span>
@@ -553,7 +560,7 @@ export function OnboardingModal() {
                         <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--foreground)' }}>{h.name}</div>
                         <div style={{ fontSize: 12, color: 'var(--ffv-muted)', marginTop: 2 }}>{h.tagline}</div>
                       </div>
-                      <span style={{ color: h.color, fontSize: 16, fontWeight: 700 }}>→</span>
+                      <span className="ffv-acento-texto" style={{ '--ffv-acento': h.color, fontSize: 16, fontWeight: 700 } as React.CSSProperties}>→</span>
                     </button>
                   ))}
                   <button

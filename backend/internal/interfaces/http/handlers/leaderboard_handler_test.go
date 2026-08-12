@@ -142,6 +142,50 @@ func Test_LeaderboardHandler_GetWeekly_WithEntries_Returns200(t *testing.T) {
 	}
 }
 
+// GetWeekly é autenticado, mas não pode devolver o userId de TERCEIROS — só
+// da própria linha do requisitante (para o client destacar "essa linha sou
+// eu"). Antes desta correção, qualquer conta free logada via top-50 coletava
+// o UUID de todo mundo na lista.
+func Test_LeaderboardHandler_GetWeekly_DoesNotExposeThirdPartyUserID(t *testing.T) {
+	me := shared.NewUserID()
+	other := shared.NewUserID()
+	repo := &mockLeaderboardRepo{
+		weeklyEntries: []domleaderboard.RankEntry{
+			{UserID: other, DisplayName: "Bruno Costa", XPGained: 1500, Rank: 1},
+			{UserID: me, DisplayName: "Eu Mesmo", XPGained: 900, Rank: 2},
+		},
+	}
+	h := handlers.NewLeaderboardHandler(repo)
+
+	ctx := context.WithValue(context.Background(), middleware.CtxKeyUserID, me)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard", http.NoBody).WithContext(ctx)
+	w := httptest.NewRecorder()
+	h.GetWeekly(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Entries []struct {
+			UserID   string `json:"userId"`
+			UserName string `json:"userName"`
+		} `json:"entries"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("JSON inválido: %v", err)
+	}
+	if len(resp.Entries) != 2 {
+		t.Fatalf("esperado 2 entries, got %d", len(resp.Entries))
+	}
+	if resp.Entries[0].UserName != "Bruno Costa" || resp.Entries[0].UserID != "" {
+		t.Fatalf("esperado userId vazio para terceiro (Bruno), got %q", resp.Entries[0].UserID)
+	}
+	if resp.Entries[1].UserName != "Eu Mesmo" || resp.Entries[1].UserID != me.String() {
+		t.Fatalf("esperado userId=%s na própria linha (Eu Mesmo), got %q", me.String(), resp.Entries[1].UserID)
+	}
+}
+
 // Test 3: GET /leaderboard com erro no repo → não deve retornar 200
 func Test_LeaderboardHandler_GetWeekly_RepoError_Returns5xx(t *testing.T) {
 	repo := &mockLeaderboardRepo{

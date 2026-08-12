@@ -11,6 +11,7 @@ import {
   type CertReadiness,
 } from '@/lib/cert-prep';
 import { CURRICULUM } from '@/lib/curriculum';
+import { readableTextColor } from '@/lib/readable-text';
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
@@ -318,7 +319,7 @@ function CertCard({
       <button
         onClick={onSelect}
         className="w-full py-2 rounded-lg text-sm font-semibold transition-colors hover:opacity-90"
-        style={{ background: cert.color, color: '#fff' }}
+        style={{ background: cert.color, color: readableTextColor(cert.color) }}
       >
         Começar prep
       </button>
@@ -472,7 +473,7 @@ function CertDetailWithScores({
             <Link
               href={`/simulados/${cert.simuladoId}`}
               className="px-4 py-2 rounded-lg text-sm font-semibold transition-colors hover:opacity-90"
-              style={{ background: 'var(--ffv-blue)', color: '#fff' }}
+              style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
             >
               Fazer simulado
             </Link>

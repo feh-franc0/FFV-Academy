@@ -13,7 +13,7 @@ import {
 beforeEach(() => localStorage.clear());
 
 describe('Export/Import — preservação de estado', () => {
-  it('round-trip preserva XP, badges, streaks, cards, quizScores', () => {
+  it('round-trip preserva XP, badges, streaks, cards, quizScores', async () => {
     // Popula o estado com dados variados
     completeModule({
       slug: 'o-que-e-ia', title: 'O que é IA?', trailColor: '#58a6ff',
@@ -31,7 +31,7 @@ describe('Export/Import — preservação de estado', () => {
 
     // Wipe e importa
     localStorage.clear();
-    const result = importState(exported);
+    const result = await importState(exported);
     expect(result.ok).toBe(true);
 
     const after = loadState();
@@ -42,21 +42,21 @@ describe('Export/Import — preservação de estado', () => {
     expect(after.streak).toBe(before.streak);
   });
 
-  it('import de arquivo inválido mantém estado anterior intacto', () => {
+  it('import de arquivo inválido mantém estado anterior intacto', async () => {
     completeModule({
       slug: 'o-que-e-ia', title: 'O que é IA?', trailColor: '#58a6ff',
       readTime: 6, quiz: [], quizScore: 1.0,
     });
     const xpBefore = loadState().xp;
 
-    const result = importState('{"xp": "invalido"}');
+    const result = await importState('{"xp": "invalido"}');
     expect(result.ok).toBe(false);
 
     // Estado NÃO foi sobrescrito
     expect(loadState().xp).toBe(xpBefore);
   });
 
-  it('import com campos novos (upgrade v1→v2) aceita e preenche defaults', () => {
+  it('import com campos novos (upgrade v1→v2) aceita e preenche defaults', async () => {
     // Simula export de uma versão anterior sem perfectQuizStreak/earlyMorningDays/trailStartedAt
     const legacy = JSON.stringify({
       schemaVersion: 1, xp: 50, level: 1, streak: 0, lastStudyDate: null,
@@ -65,7 +65,7 @@ describe('Export/Import — preservação de estado', () => {
       freezes: 0, dailyGoal: 3, lastReviewDate: null, lastArticle: null,
       preferredHub: null, onboardedAt: null, articleProgress: {},
     });
-    const result = importState(legacy);
+    const result = await importState(legacy);
     expect(result.ok).toBe(true);
     const state = loadState();
     expect(state.perfectQuizStreak).toBe(0);

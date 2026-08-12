@@ -73,6 +73,7 @@ export function AdminPagination({ total, page, pageSize, onPage, onPageSize }: P
       <div className="flex items-center gap-1 ml-auto">
         <span style={{ color: 'var(--ffv-muted)', fontSize: 12 }}>por página:</span>
         <select
+          aria-label="Itens por página"
           value={pageSize}
           onChange={e => {
             onPage(0);

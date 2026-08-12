@@ -1,0 +1,2633 @@
+{
+  "slug": "lab-upload-direto-s3-url-assinada",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência — a mesma equipe de duas pessoas do "
+              },
+              {
+                "text": "L01",
+                "code": true
+              },
+              {
+                "text": " e do "
+              },
+              {
+                "text": "L03",
+                "code": true
+              },
+              {
+                "text": " — abriu no aplicativo das lojas um recurso novo: reivindicação de garantia. O lojista anexa um laudo técnico do produto — um PDF com fotos e um vídeo curto de manuseio, tudo junto — e a Cadência encaminha ao fabricante. Alguns laudos passam de 200 MB."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O endpoint foi escrito do mesmo jeito que todo o resto da API: recebe o "
+              },
+              {
+                "text": "IFormFile",
+                "code": true
+              },
+              {
+                "text": ", materializa em memória, reenvia ao S3. Funcionou nos testes, onde ninguém anexou vídeo. Em produção, a terceira loja que tentou enviar um laudo de verdade derrubou a task — e como o `deregistration_delay` do "
+              },
+              {
+                "text": "L03",
+                "code": true
+              },
+              {
+                "text": " foi calculado para uma API sem requisição longa, a queda apareceu também como 502 no painel de deploy, num lugar que já estava resolvido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O conserto óbvio — aumentar o limite do Kestrel e a memória da task — teria funcionado até o próximo laudo maior. Não é um problema de tamanho de limite: é a aplicação estar no caminho físico do byte quando ela não precisa estar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Intermediário — depende do L05 (domínio, TLS e CloudFront já resolvidos)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L05 no ar, L01 concluído, Docker local, Terraform, Git"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 45 min · implementação 2 h a 2 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo: dois buckets, uma fila pequena e eventos do EventBridge; o item que pode surpreender é armazenamento de multipart abandonado, e a seção de limpeza mostra por quê"
+              },
+              {
+                "k": "Serviços",
+                "v": "S3 (dois buckets), EventBridge, SQS, DynamoDB, KMS, CloudFront (do L05)"
+              },
+              {
+                "k": "Volume atual",
+                "v": "30 lojas (8 fora do Brasil), cerca de 40 laudos por dia, pico às 18h quando as lojas fecham o caixa"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "laudo de até 200 MB chega ao S3 sem estourar a task, com controle de quem pode enviar e para qual loja"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "o laudo nunca excede 220 MB nesta fase — o vídeo de manuseio é limitado a 3 min em 1080p pelo próprio app da loja; se esse limite de gravação mudar, o teto de bytes deste módulo também muda"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "upload de 200 MB sem tocar memória da task, com teto de tamanho imposto pelo S3 e validação de tipo e antivírus rodando depois, de forma assíncrona"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é o pipeline que interpreta o laudo — extrair dado da nota fiscal, decidir se a garantia procede, acionar o fabricante. Isso é trabalho de negócio disparado pelo mesmo evento que este módulo já produz, e é o L28. Também não é um antivírus de verdade: o verificador aqui confere a assinatura binária do arquivo e chama um ponto de extensão para varredura, sem prescrever qual motor usar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que uma URL PUT pré-assinada comum não impõe teto de tamanho nenhum.",
+              "Configurar uma política POST com `content-length-range` e provar que o S3 recusa o arquivo fora da faixa antes de gravar qualquer byte.",
+              "Assinar uma requisição a partir de credenciais temporárias e demonstrar que o prazo pedido é limitado pela vida da própria credencial.",
+              "Configurar CORS no bucket e diagnosticar por que um erro de CORS parece falha genérica de rede, mesmo com o objeto já gravado.",
+              "Explicar por que multipart não tem condição de tamanho, e implementar controle de admissão por soma de partes na aplicação.",
+              "Configurar a regra de ciclo de vida que aborta multipart incompleto, e medir seu efeito na fatura de armazenamento.",
+              "Desenhar a cadeia de validação assíncrona — EventBridge, fila, DLQ — que substitui a validação síncrona que saiu da API.",
+              "Provar, com medição, que a memória da task deixou de variar com o tamanho do laudo."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "URL pré-assinada (presigned URL)",
+                "CLF-C02, DVA-C02",
+                "a API assina uma política em vez de transportar o arquivo",
+                "a URL herda a permissão de quem assina, e nunca de quem a usa"
+              ],
+              [
+                "Expiração ligada à credencial",
+                "DVA-C02, SAP-C02",
+                "credencial temporária da task expira antes do prazo pedido",
+                "IAM user chega a 7 dias; credencial temporária nunca passa da própria vida"
+              ],
+              [
+                "`content-length-range` em política POST",
+                "DVA-C02",
+                "único caminho que barra tamanho ANTES de gravar",
+                "a diferença entre isso e um `PUT` assinado sem cabeçalho de tamanho"
+              ],
+              [
+                "Upload multipart",
+                "DVA-C02, SAA-C03",
+                "admissão por soma de partes, porque o S3 não valida tamanho aqui",
+                "faixa de 5 MiB a 5 GiB por parte, até 10.000 partes, sem mínimo na última"
+              ],
+              [
+                "CORS em bucket S3",
+                "DVA-C02",
+                "obrigatório porque a requisição de upload é cross-origin",
+                "por que a ausência de CORS pode deixar o objeto gravado e o cliente achando que falhou"
+              ],
+              [
+                "Notificação de evento do S3 via EventBridge",
+                "DVA-C02, SAA-C03",
+                "gatilho da validação assíncrona, filtrado por prefixo",
+                "a diferença entre notificação direta do bucket e passar pelo EventBridge"
+              ],
+              [
+                "Ciclo de vida de bucket",
+                "CLF-C02, SAA-C03",
+                "`abort_incomplete_multipart_upload` custeando parte abandonada",
+                "que multipart incompleto cobra armazenamento até algo o apagar"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve uma URL pré-assinada e pergunta \"qual o tamanho máximo do upload?\" como se fosse propriedade da URL. Não é: depende inteiramente de qual condição foi assinada dentro dela. Sem `content-length-range` (POST) ou `Content-Length` nos cabeçalhos assinados (PUT), a resposta correta é \"não há teto\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Laudo até 200 MB sem estourar a task",
+                "sim, sempre",
+                "a task sai do caminho do byte; upload vai direto ao S3"
+              ],
+              [
+                "Teto de tamanho aplicado ANTES de gravar",
+                "obrigatório",
+                "política POST com `content-length-range`, não PUT simples"
+              ],
+              [
+                "Só o dono do laudo pode enviar para a chave dele",
+                "obrigatório",
+                "chave do objeto escolhida pela API, nunca pelo cliente; cota por loja no DynamoDB"
+              ],
+              [
+                "Arquivo malicioso não fica acessível",
+                "obrigatório",
+                "dois buckets — quarentena e publicado — e cópia só após aprovação"
+              ],
+              [
+                "Banda da loja não trava a aplicação",
+                "a mais lenta tem 8 Mbit/s de subida",
+                "upload sai do caminho da task; prazo de assinatura com folga sobre o tempo estimado"
+              ],
+              [
+                "Custo de armazenamento não pode crescer sem controle",
+                "orçamento fixo mensal",
+                "ciclo de vida com `abort_incomplete_multipart_upload` e expiração de quarentena órfã"
+              ],
+              [
+                "Equipe de duas pessoas, sem plantão",
+                "igual ao L03",
+                "DLQ mais alarme, para não depender de alguém olhando a fila o tempo todo"
+              ],
+              [
+                "Domínio único para front e API",
+                "herdado do L05",
+                "a rota de assinatura fica na mesma origem do site; só o upload ao S3 é cross-origin"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: a aplicação como cano"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem hoje, e ele é legítimo como ponto de partida: sobe laudo de verdade, com poucas linhas. O laboratório começa por medir o defeito dele — porque um número torna o problema discutível, e \"a task caiu\" não."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A aplicação como cano: o arquivo entra pela API",
+            "caption": "Este desenho funciona, e é por isso que ele está em produção em tanto lugar: são vinte linhas de C# e nenhum recurso novo. Conclua daqui que o defeito não é de configuração — é de posição: a task está no caminho do byte, e paga memória, CPU e ocupação por isso. Percorra os passos e repare que o terceiro problema não é de upload nenhum: é o deploy do L03 quebrando.",
+            "groups": [
+              {
+                "label": "Loja",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "nav",
+                    "service": "browser",
+                    "label": "Navegador da loja",
+                    "note": "envia o laudo por formulário multipart; o link da loja tem 8 Mbit/s de subida, e é essa banda que decide quanto tempo a task fica presa"
+                  }
+                ]
+              },
+              {
+                "label": "Borda (vem do L05)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cf",
+                    "service": "cloudfront",
+                    "label": "CloudFront, rota /api/*",
+                    "note": "encaminha a requisição inteira até a origem sem armazenar nada; não protege a task de receber os 200 MB"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB",
+                    "note": "mantém a conexão aberta pelos 200 s do envio; para ele isso é uma requisição longa e legítima, e não há erro a reportar"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "task",
+                    "service": "fargate",
+                    "label": "API .NET 8 (0,5 vCPU / 1 GB)",
+                    "note": "recebe o corpo, materializa o arquivo e só então o reenvia; é aqui que o limite de 30 MB do Kestrel e o limite de memória da task aparecem"
+                  },
+                  {
+                    "id": "nat",
+                    "service": "natgateway",
+                    "label": "NAT Gateway",
+                    "note": "por onde o byte sai de novo para o S3, e onde ele é cobrado por GB processado uma segunda vez"
+                  }
+                ]
+              },
+              {
+                "label": "Armazenamento (regional)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3",
+                    "service": "s3",
+                    "label": "Bucket de laudos",
+                    "note": "recebe o arquivo já com a chave que a aplicação escolheu; do ponto de vista do S3 nada aqui está errado"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "nav",
+                "to": "cf",
+                "label": "POST multipart/form-data, 200 MB",
+                "style": "solid"
+              },
+              {
+                "from": "cf",
+                "to": "alb",
+                "label": "repassa o corpo sem armazenar",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "task",
+                "label": "conexão presa por ~200 s",
+                "style": "solid"
+              },
+              {
+                "from": "task",
+                "to": "nat",
+                "label": "os mesmos bytes, agora saindo",
+                "style": "solid"
+              },
+              {
+                "from": "nat",
+                "to": "s3",
+                "label": "PutObject com a chave escolhida pela API",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O corpo inteiro atravessa a borda e o balanceador",
+                "detail": "Nem o CloudFront nem o ALB seguram o arquivo: os dois repassam. A borda que o L05 colocou na frente serve páginas de graça e não muda nada aqui — upload não é armazenável em cache, e a rota `/api/*` foi configurada exatamente para não ser armazenada.",
+                "nodes": [
+                  "nav",
+                  "cf"
+                ],
+                "edges": [
+                  "nav>cf"
+                ]
+              },
+              {
+                "label": "O primeiro teto que aparece não é o seu",
+                "detail": "O Kestrel recusa corpo acima de 30.000.000 bytes por padrão e devolve 413. Quem levanta esse limite sem pensar troca um erro claro por um problema de memória silencioso — e é o passo seguinte.",
+                "nodes": [
+                  "task"
+                ],
+                "edges": [
+                  "alb>task"
+                ]
+              },
+              {
+                "label": "A memória estoura por causa de UMA linha do tutorial",
+                "detail": "O `IFormFile` do ASP.NET Core já derrama para arquivo temporário acima de 64 KB; quem estoura a memória é a linha seguinte, `await arquivo.CopyToAsync(ms)` com `ms` sendo um `MemoryStream`. Três envios simultâneos de 200 MB pedem 600 MB só de buffer numa task de 1 GB, e o contêiner morre com código 137 — que é o cgroup matando o processo, não uma exceção do .NET.",
+                "nodes": [
+                  "task"
+                ],
+                "edges": [
+                  "task>nat"
+                ]
+              },
+              {
+                "label": "O byte é pago duas vezes e transportado duas vezes",
+                "detail": "Ele sobe da loja até a task e desce da task até o S3. A segunda perna atravessa o NAT Gateway, que cobra por GB processado, e ocupa vCPU-segundo de Fargate para a task fazer o trabalho de um cano. O tempo total também dobra na pior hipótese: nada é enviado ao S3 antes de o cliente terminar.",
+                "nodes": [
+                  "nat",
+                  "s3"
+                ],
+                "edges": [
+                  "nat>s3"
+                ]
+              },
+              {
+                "label": "O defeito que ninguém liga ao upload: o deploy volta a dar 502",
+                "detail": "O L03 derivou `deregistration_delay = 30` de uma hipótese escrita: nenhuma rota faz upload longo. Esta rota revoga essa hipótese. Agora existe requisição de 200 s em voo, a drenagem de 30 s a corta, e o sintoma aparece como 502 durante o deploy — longe da tela de upload, num lugar que já estava resolvido.",
+                "nodes": [
+                  "alb",
+                  "task"
+                ],
+                "edges": [
+                  "alb>task"
+                ]
+              },
+              {
+                "label": "Por que alguém publica assim",
+                "detail": "Porque é o menor número de linhas que funciona, e porque funciona de verdade até os 5 MB de um PDF. O desenho não é ingênuo: ele é a extrapolação de um caso em que estava certo. A pergunta útil não é \"quem fez isso\", é \"a partir de qual tamanho isto deixa de valer\" — e a resposta se mede.",
+                "nodes": [
+                  "nav",
+                  "task"
+                ],
+                "edges": [
+                  "nav>cf"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "O que \"código 137\" realmente significa, e por que ninguém vê exceção",
+            "content": "Quando o cgroup mata o processo por estouro de memória, o .NET não recebe chance de lançar uma exceção tratável — o contêiner simplesmente some. O log da aplicação fica limpo, exatamente como no 503 do L03, e a investigação começa pelo `stoppedReason` da task no ECS, não pelo `try/catch` que todo mundo procura primeiro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção: a aplicação assina"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. Se você não conseguir apontar o requisito, a peça é adorno — e este desenho não tem nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A aplicação assina; o byte vai direto; o evento valida depois",
+            "caption": "Não é o desenho anterior com uma caixa a mais: o caminho do byte mudou de lugar e a validação mudou de tempo. Conclua daqui que separar autorizar de transportar cria uma terceira obrigação — validar depois do fato — e que ela é o que torna o desenho honesto. Percorra os passos: cada peça nova rastreia a um requisito da tabela anterior.",
+            "groups": [
+              {
+                "label": "Loja",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "nav",
+                    "service": "browser",
+                    "label": "Navegador da loja",
+                    "note": "faz duas requisições a hosts diferentes: uma ao seu domínio, outra ao S3 — e é essa segunda que precisa de CORS no bucket"
+                  }
+                ]
+              },
+              {
+                "label": "Borda (vem do L05)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cf",
+                    "service": "cloudfront",
+                    "label": "CloudFront",
+                    "note": "serve o front e a rota de assinatura no MESMO nome, o que faz o pedido de assinatura ser mesma-origem e não gastar preflight"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — quem autoriza, e não transporta",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "api",
+                    "service": "fargate",
+                    "label": "API .NET 8 — só assina",
+                    "note": "valida a sessão, escolhe a chave do objeto, aplica a cota da loja e devolve política assinada; nunca vê o corpo do arquivo"
+                  }
+                ]
+              },
+              {
+                "label": "Armazenamento (regional)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "quar",
+                    "service": "s3",
+                    "label": "Bucket de quarentena",
+                    "note": "único destino que a assinatura autoriza; nada aqui é servido ao público, e a regra de ciclo de vida aborta multipart incompleto em 1 dia"
+                  },
+                  {
+                    "id": "pub",
+                    "service": "s3",
+                    "label": "Bucket publicado",
+                    "note": "recebe só o que passou pela validação; a separação física é o que impede servir arquivo não verificado por engano"
+                  }
+                ]
+              },
+              {
+                "label": "Validação depois do fato",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "eb",
+                    "service": "eventbridge",
+                    "label": "EventBridge",
+                    "note": "converte \"objeto criado\" em gatilho com filtro por prefixo; desacopla o S3 de quem consome, o que permite acrescentar consumidor sem tocar no bucket"
+                  },
+                  {
+                    "id": "fila",
+                    "service": "sqs",
+                    "label": "Fila + DLQ",
+                    "note": "absorve o pico das 18h e guarda o que falhou; sem ela, um erro no verificador perde o evento e o arquivo fica órfão sem ninguém notar"
+                  },
+                  {
+                    "id": "worker",
+                    "service": "fargate",
+                    "label": "Verificador",
+                    "note": "lê os primeiros bytes para conferir o tipo real, roda o antivírus e só então copia para o bucket publicado; é aqui que mora a validação que saiu da API"
+                  }
+                ]
+              },
+              {
+                "label": "Índice e chaves",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "db",
+                    "service": "dynamodb",
+                    "label": "Tabela de laudos",
+                    "note": "guarda chave, dono, tamanho e estado; é a única fonte que diz se um objeto foi aprovado, porque o bucket não guarda esse julgamento"
+                  },
+                  {
+                    "id": "kms",
+                    "service": "kms",
+                    "label": "Chave gerenciada",
+                    "note": "cifra em repouso nos dois buckets; quem recebe a URL assinada não recebe permissão de decifrar nada"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "nav",
+                "to": "cf",
+                "label": "POST /api/laudos/assinatura (mesma origem)",
+                "style": "solid"
+              },
+              {
+                "from": "cf",
+                "to": "api",
+                "label": "pedido de autorização, alguns KB",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "nav",
+                "label": "política assinada: chave, teto e prazo",
+                "style": "dashed"
+              },
+              {
+                "from": "nav",
+                "to": "quar",
+                "label": "POST do arquivo direto ao S3 (cross-origin)",
+                "style": "solid"
+              },
+              {
+                "from": "quar",
+                "to": "eb",
+                "label": "Object Created com chave e tamanho",
+                "style": "solid"
+              },
+              {
+                "from": "eb",
+                "to": "fila",
+                "label": "entrega filtrada por prefixo",
+                "style": "solid"
+              },
+              {
+                "from": "fila",
+                "to": "worker",
+                "label": "uma mensagem por objeto novo",
+                "style": "solid"
+              },
+              {
+                "from": "worker",
+                "to": "quar",
+                "label": "lê os 512 primeiros bytes e o tamanho real",
+                "style": "dashed"
+              },
+              {
+                "from": "worker",
+                "to": "pub",
+                "label": "copia o que foi aprovado",
+                "style": "solid"
+              },
+              {
+                "from": "worker",
+                "to": "db",
+                "label": "grava o veredito e o tamanho",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "db",
+                "label": "consulta a cota antes de assinar",
+                "style": "solid"
+              },
+              {
+                "from": "kms",
+                "to": "quar",
+                "label": "cifra o objeto na escrita",
+                "style": "dashed"
+              },
+              {
+                "from": "pub",
+                "to": "cf",
+                "label": "origem do download, com acesso de origem",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A aplicação decide, e a decisão cabe em alguns KB",
+                "detail": "A requisição de assinatura leva nome, tamanho declarado e tipo. A API confere a sessão, a cota da loja e o teto contratado, e devolve uma política assinada. Este é o único momento em que a aplicação está no caminho — e o que passa por ela é metadado, não conteúdo.",
+                "nodes": [
+                  "api",
+                  "cf"
+                ],
+                "edges": [
+                  "cf>api",
+                  "api>nav"
+                ]
+              },
+              {
+                "label": "Quem escolhe a chave do objeto é o servidor",
+                "detail": "A chave sai de `lojas/{lojaId}/laudos/{ano}/{uuid}` com a extensão derivada do tipo aceito — nunca do nome que o cliente mandou. Duas coisas se resolvem de uma vez: nome com `../` deixa de ter efeito, e um cliente para de poder sobrescrever o objeto de outro adivinhando a chave.",
+                "nodes": [
+                  "api",
+                  "quar"
+                ],
+                "edges": [
+                  "api>nav"
+                ]
+              },
+              {
+                "label": "O byte não passa pela sua conta de computação",
+                "detail": "O navegador envia o arquivo ao endpoint do S3. A task não gasta memória, não gasta vCPU-segundo proporcional ao tamanho e não fica presa pela banda da loja. Como esta requisição vai para outro host, ela é cross-origin — e é por isso que o bucket precisa de CORS, sem o qual o navegador nem chega a enviar.",
+                "nodes": [
+                  "nav",
+                  "quar"
+                ],
+                "edges": [
+                  "nav>quar"
+                ]
+              },
+              {
+                "label": "O teto de tamanho é condição da política, não código seu",
+                "detail": "A política assinada carrega `content-length-range` com mínimo e máximo em bytes. É o S3 que recusa o arquivo grande, antes de armazenar, com 400 e código de entidade grande demais. Se este envio fosse por `PUT` assinado simples, não haveria teto nenhum — e essa diferença tem seção própria mais adiante.",
+                "nodes": [
+                  "quar",
+                  "nav"
+                ],
+                "edges": [
+                  "nav>quar"
+                ]
+              },
+              {
+                "label": "A validação não desapareceu: mudou de tempo e de lugar",
+                "detail": "Tipo real do arquivo, antivírus, dimensão de imagem e duração de vídeo passam a ser trabalho disparado por evento. O objeto nasce em quarentena e só é copiado para o bucket publicado depois de aprovado. Quem esquece esta etapa não simplificou o upload: apenas deixou de validar.",
+                "nodes": [
+                  "eb",
+                  "fila",
+                  "worker"
+                ],
+                "edges": [
+                  "quar>eb",
+                  "eb>fila",
+                  "fila>worker",
+                  "worker>pub"
+                ]
+              },
+              {
+                "label": "O estado do laudo vive na tabela, não no bucket",
+                "detail": "O S3 não guarda \"aprovado\" ou \"recusado\" de forma consultável em escala, e listar bucket para descobrir estado é o antipadrão que a seção de escala trata. O verificador grava o veredito, o tamanho medido e o motivo da recusa, e é isso que a tela da loja lê.",
+                "nodes": [
+                  "worker",
+                  "db"
+                ],
+                "edges": [
+                  "worker>db",
+                  "api>db"
+                ]
+              },
+              {
+                "label": "O download volta pela borda, não pelo bucket",
+                "detail": "Servir direto do S3 público desfaria o cuidado todo. O bucket publicado continua privado e a distribuição do L05 lê dele com acesso de origem; para arquivo restrito, uma URL assinada de leitura com prazo curto resolve — mesma mecânica deste módulo, sentido contrário.",
+                "nodes": [
+                  "pub",
+                  "cf"
+                ],
+                "edges": [
+                  "pub>cf"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "O que sai do orçamento de computação da Cadência",
+            "content": "vCPU-segundo e memória da task deixam de crescer com o tamanho do laudo — o que sobra é o custo, muito menor, de assinar alguns KB de metadado. O byte também para de pagar NAT Gateway duas vezes, porque não sai mais da VPC para entrar de novo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de um upload, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os oito passos abaixo separam duas fases que o desenho mínimo misturava numa só: \"autorizar\" e \"transportar\". A aplicação só participa da primeira."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Um laudo, do clique ao veredito",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1. O navegador pede autorização",
+                "desc": "Envia nome, tamanho declarado e tipo MIME a `/api/laudos/assinatura`, na mesma origem servida pelo CloudFront do L05 — sem preflight de CORS nesta etapa."
+              },
+              {
+                "label": "2. A API decide e assina, sem tocar o arquivo",
+                "desc": "Confere sessão e cota, escolhe a chave do objeto, monta a política com `content-length-range` e prazo curto, e assina com a credencial da própria task."
+              },
+              {
+                "label": "3. O navegador envia o arquivo direto ao S3",
+                "desc": "Um POST multipart/form-data para o endpoint do bucket, host diferente do domínio da loja — o bucket precisa de CORS para aceitar a leitura da resposta."
+              },
+              {
+                "label": "4. O S3 aplica a condição de tamanho antes de gravar",
+                "desc": "Se o corpo não couber em `content-length-range`, o S3 recusa com 400 e nenhum byte é armazenado. Se couber, o objeto nasce no bucket de quarentena."
+              },
+              {
+                "label": "5. O S3 anuncia o objeto criado ao EventBridge",
+                "desc": "A notificação carrega bucket, chave e tamanho — não o conteúdo. É o gatilho que desacopla \"o arquivo chegou\" de \"alguém vai processá-lo\"."
+              },
+              {
+                "label": "6. A fila absorve o volume e entrega ao verificador",
+                "desc": "Uma mensagem por objeto. Se o verificador cair, a mensagem volta a ficar visível e é tentada de novo — até o limite que manda a mensagem para a DLQ."
+              },
+              {
+                "label": "7. O verificador confere o tipo real e decide",
+                "desc": "Lê poucos bytes, confirma a assinatura binária do arquivo, aciona a checagem de antivírus e só então copia para o bucket publicado ou descarta."
+              },
+              {
+                "label": "8. O veredito fica na tabela, não no bucket",
+                "desc": "O S3 nunca soube que estava \"em análise\". Quem sabe é a linha do DynamoDB que a tela da loja consulta para mostrar aprovado, recusado ou em processamento."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "json",
+            "filename": "resposta-assinatura.json",
+            "code": "// O que /api/laudos/assinatura devolve ao navegador. Repare no que NÃO está\n// aqui: nenhum byte do arquivo, nenhuma credencial de longa duração — só uma\n// política que o navegador reproduz de volta ao fazer o POST ao S3.\n{\n  \"url\": \"https://ffv-lab-laudos-quarentena.s3.sa-east-1.amazonaws.com/\",\n  \"campos\": {\n    \"key\": \"lojas/lj_0231/laudos/2026/6f1a9e2c8b0d4a3e.pdf\",\n    \"policy\": \"eyJleHBpcmF0aW9uIjoiMjAyNi0wOC0wN1QxNTozMjowMFoiLCJjb25kaXRpb25zIjpb...\",\n    \"x-amz-algorithm\": \"AWS4-HMAC-SHA256\",\n    \"x-amz-credential\": \"ASIAEXAMPLE.../20260807/sa-east-1/s3/aws4_request\",\n    \"x-amz-date\": \"20260807T151700Z\",\n    \"x-amz-signature\": \"6d6c9e1f...\",\n    \"x-amz-meta-loja-id\": \"lj_0231\",\n    \"x-amz-security-token\": \"IQoJb3JpZ2luX2VjEA...(token da task role)\"\n  },\n  // O que o navegador NÃO recebe e não precisa saber: o teto de 220 MB está\n  // DENTRO de \"policy\" (base64), assinado — mexer nele invalida \"x-amz-signature\".\n  \"validoAte\": \"2026-08-07T15:32:00Z\"\n}"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "Por que a política vai em base64 dentro de \"policy\"",
+            "content": "O campo `policy` é a especificação JSON das condições — bucket, prefixo da chave, faixa de tamanho, prazo — codificada em base64. O S3 decodifica, reconstrói a assinatura com a chave derivada do `x-amz-credential` e compara com `x-amz-signature`. Qualquer byte diferente no `policy` recebido muda a assinatura esperada, e a requisição é recusada antes de qualquer condição interna ser avaliada."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Trinta lojas da Cadência (8 fora do Brasil) enviam laudos técnicos de garantia — PDF com fotos e um vídeo curto de manuseio — de até 200 MB, pela conexão da própria loja, sem equipe de infraestrutura dedicada e sem orçamento para um serviço de antivírus corporativo.",
+            "winner": "URL de POST pré-assinada com `content-length-range`, bucket de quarentena separado do publicado, e validação assíncrona disparada por EventBridge e SQS",
+            "why": "O POST assinado resolve o problema declarado — 200 MB não pode mais estourar a task — sem exigir nenhum recurso novo além do que já muda de lugar: a validação, que sempre existiu, só passa a acontecer depois do upload em vez de durante. O teto de tamanho vira condição do S3, não código que se esquece de atualizar. Multipart resolveria o mesmo problema de memória, mas cobraria a aplicação com um controle de admissão que o S3 não oferece — e 200 MB cabe folgado num único POST, que tem teto de operação em 5 GB. A complexidade de multipart só se paga quando o arquivo típico cresce ou quando retomar upload interrompido importa mais que a simplicidade — é a seção de multipart adiante.",
+            "alternatives": [
+              {
+                "name": "PUT pré-assinado simples, sem Content-Length assinado",
+                "downside": "É o caminho mais copiado de tutorial, e é exatamente o que este laboratório mostra que NÃO impõe teto nenhum: qualquer tamanho passa, porque não há condição nenhuma amarrada à assinatura."
+              },
+              {
+                "name": "Multipart upload desde o primeiro byte",
+                "downside": "Resolve memória da task, mas empurra o controle de tamanho para a aplicação somar partes — mais código para um arquivo que cabe inteiro num único POST. Vale a pena a partir de vídeos maiores, e a seção 12 mostra como fazer certo."
+              },
+              {
+                "name": "Amazon GuardDuty Malware Protection for S3 no lugar do verificador caseiro",
+                "downside": "Tira a manutenção de um scanner de antivírus das suas mãos, mas cobra por GB varrido e reduz o controle fino sobre o veredito. Vale reconsiderar quando o volume de laudos justificar não manter a lógica de sniff de tipo em casa — confira o nome e a cobertura atuais do recurso antes de decidir."
+              },
+              {
+                "name": "Upload continua pela API, só que em streaming (sem materializar em memória)",
+                "downside": "Reduziria o estouro de memória sem tirar a task do caminho, mas mantém o tempo de conexão presa à banda da loja e a cobrança dupla de NAT Gateway. Resolve um sintoma do desenho mínimo sem resolver a posição errada da task."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Mecanismo de upload",
+                "POST com política assinada",
+                "PUT assinado simples; PUT com Content-Length assinado",
+                "único caminho com teto de tamanho verificado pelo S3 antes de gravar",
+                "a política POST é mais verbosa de montar do que uma URL PUT"
+              ],
+              [
+                "Separação de buckets",
+                "quarentena e publicado, físicos",
+                "um bucket só com prefixo \"aprovado/\" e \"pendente/\"",
+                "objeto não aprovado nunca fica alcançável pelo caminho que serve o público",
+                "duas políticas de ciclo de vida e duas configurações de CORS para manter"
+              ],
+              [
+                "Onde validar tipo e antivírus",
+                "depois do upload, por evento",
+                "validar no navegador antes de enviar",
+                "validação no cliente é sugestão, não controle — o servidor não pode confiar nela",
+                "o laudo malicioso ocupa espaço em quarentena por alguns segundos a minutos"
+              ],
+              [
+                "Desacoplar S3 de quem consome",
+                "EventBridge entre o bucket e a fila",
+                "notificação direta do S3 para a fila",
+                "permite acrescentar um segundo consumidor (auditoria, métricas) sem tocar no bucket",
+                "mais um salto e mais uma peça para explicar a quem só quer \"avisar a fila\""
+              ],
+              [
+                "Tamanho até 220 MB",
+                "POST simples, sem multipart",
+                "multipart desde o primeiro byte",
+                "cabe folgado no teto de operação única do S3 (5 GB); multipart cobraria admissão própria sem necessidade",
+                "se o laudo típico crescer, a decisão precisa ser revisitada — é a seção 12"
+              ],
+              [
+                "Prazo de assinatura",
+                "10 minutos",
+                "1 hora (padrão do console); 7 dias (máximo da SDK)",
+                "cobre a banda mais lenta da Cadência com folga sem deixar a URL válida por muito tempo",
+                "loja com internet muito instável pode precisar pedir nova assinatura"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este desenho não paga",
+            "content": "A cota de laudos por loja é lida antes de assinar, mas nada impede que a mesma loja peça cem assinaturas em paralelo antes de qualquer uma virar objeto — a contagem só atualiza quando o veredito é gravado. Um limite de requisições por minuto na rota de assinatura fecha essa lacuna, e não está neste módulo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: os buckets, o CORS e o ciclo de vida"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Dois buckets, uma chave KMS compartilhada, e duas regras de ciclo de vida que fazem o trabalho que \"lembrar de limpar depois\" nunca faz de forma confiável."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "buckets.tf",
+            "code": "# buckets.tf — quarentena, publicado, CORS, e o ciclo de vida que paga a\n# multipart abandonada se ninguem configurar isto\n\nresource \"aws_kms_key\" \"laudos\" {\n  description         = \"Cifra os buckets de laudos da Cadencia\"\n  enable_key_rotation = true\n}\n\nresource \"aws_s3_bucket\" \"quarentena\" {\n  bucket = \"${var.projeto}-laudos-quarentena\"\n}\n\nresource \"aws_s3_bucket_public_access_block\" \"quarentena\" {\n  bucket                  = aws_s3_bucket.quarentena.id\n  block_public_acls       = true\n  block_public_policy     = true\n  ignore_public_acls      = true\n  restrict_public_buckets = true\n}\n\nresource \"aws_s3_bucket_server_side_encryption_configuration\" \"quarentena\" {\n  bucket = aws_s3_bucket.quarentena.id\n  rule {\n    apply_server_side_encryption_by_default {\n      sse_algorithm     = \"aws:kms\"\n      kms_master_key_id = aws_kms_key.laudos.arn\n    }\n  }\n}\n\n# CORS e' o que faz o NAVEGADOR aceitar ler a resposta de um host diferente do\n# seu. Sem isto, o formulario nao \"falha bonito\": o upload pode ate ter sido\n# aceito pelo S3, e o navegador ainda assim reporta erro de rede generico —\n# e' a seccao de seguranca que detalha por que o sintoma engana tanto.\nresource \"aws_s3_bucket_cors_configuration\" \"quarentena\" {\n  bucket = aws_s3_bucket.quarentena.id\n  cors_rule {\n    allowed_methods = [\"POST\", \"PUT\"]\n    allowed_origins = [\"https://${var.dominio}\"] # o mesmo dominio resolvido no L05; nunca \"*\"\n    allowed_headers = [\"*\"]\n    expose_headers  = [\"ETag\"] # sem isto o JS nao le o ETag da resposta do S3\n    max_age_seconds = 3000\n  }\n}\n\nresource \"aws_s3_bucket_lifecycle_configuration\" \"quarentena\" {\n  bucket = aws_s3_bucket.quarentena.id\n\n  rule {\n    id     = \"aborta-multipart-incompleto\"\n    status = \"Enabled\"\n    # Uma parte enviada e nunca concluida (aba fechada, rede caiu na loja)\n    # continua ocupando armazenamento e sendo cobrada — o S3 NAO a apaga\n    # sozinho. E' o achado de custo mais caro deste laboratorio, e sem esta\n    # regra ele nasce sem protecao nenhuma.\n    abort_incomplete_multipart_upload {\n      days_after_initiation = 1\n    }\n  }\n\n  rule {\n    id     = \"remove-quarentena-orfa\"\n    status = \"Enabled\"\n    # Se o verificador falhar em laco e a mensagem esgotar as tentativas ate\n    # a DLQ, o objeto fica em quarentena sem veredito para sempre. Este prazo\n    # e' o backstop de TEMPO; a DLQ e' o backstop de ALARME — sao proteccoes\n    # diferentes, e a tabela de seguranca cobre as duas.\n    expiration {\n      days = 3\n    }\n  }\n}\n\nresource \"aws_s3_bucket\" \"publicado\" {\n  bucket = \"${var.projeto}-laudos-publicados\"\n}\n\nresource \"aws_s3_bucket_public_access_block\" \"publicado\" {\n  bucket                  = aws_s3_bucket.publicado.id\n  block_public_acls       = true\n  block_public_policy     = true\n  ignore_public_acls      = true\n  restrict_public_buckets = true\n}\n\nresource \"aws_s3_bucket_server_side_encryption_configuration\" \"publicado\" {\n  bucket = aws_s3_bucket.publicado.id\n  rule {\n    apply_server_side_encryption_by_default {\n      sse_algorithm     = \"aws:kms\"\n      kms_master_key_id = aws_kms_key.laudos.arn\n    }\n  }\n}\n\n# O bucket publicado tambem recebe multipart em tese (copia grande do\n# verificador), entao a mesma protecao de custo se aplica aqui.\nresource \"aws_s3_bucket_lifecycle_configuration\" \"publicado\" {\n  bucket = aws_s3_bucket.publicado.id\n  rule {\n    id     = \"aborta-multipart-incompleto\"\n    status = \"Enabled\"\n    abort_incomplete_multipart_upload {\n      days_after_initiation = 1\n    }\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Multipart incompleto cobra até alguém apagar",
+            "content": "Cada parte enviada de um multipart upload é armazenamento cobrado, mesmo que o upload nunca seja concluído. Um formulário mal implementado que reinicia o upload sem abortar o anterior, ou um usuário que fecha a aba no meio, deixa partes órfãs que não aparecem em nenhuma listagem comum de objetos — só em `list-multipart-uploads`. Sem `abort_incomplete_multipart_upload`, essa dívida cresce sozinha, mês após mês, sem nenhum alarme avisando."
+          }
+        },
+        {
+          "id": "b8_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "CORS restrito ao domínio, nunca `*`",
+            "content": "Um bucket com `allowed_origins = [\"*\"]` aceita upload iniciado por JavaScript rodando em QUALQUER site que tenha conseguido uma assinatura válida — e como a assinatura em si já limita chave e tamanho, a tentação de liberar CORS geral parece inofensiva. Não é: ela também permite que um site hostil leia a resposta do S3 via JavaScript, incluindo o ETag, e use isso para inferir se um objeto já existe."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o gatilho de validação, e os dois papéis IAM"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O S3 não fala com a fila diretamente aqui: o EventBridge fica no meio para que um segundo consumidor — auditoria, métricas, o L28 — possa se inscrever sem alterar o bucket nem a fila existente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "eventos.tf",
+            "code": "# eventos.tf — o gatilho que desacopla o S3 de quem consome\n\nresource \"aws_s3_bucket_notification\" \"quarentena_para_eventbridge\" {\n  bucket      = aws_s3_bucket.quarentena.id\n  eventbridge = true # delega ao EventBridge em vez de assinar SNS/SQS direto na notificacao\n}\n\nresource \"aws_cloudwatch_event_rule\" \"laudo_criado\" {\n  name = \"${var.projeto}-laudo-criado\"\n  event_pattern = jsonencode({\n    source        = [\"aws.s3\"]\n    detail-type   = [\"Object Created\"]\n    detail = {\n      bucket = { name = [aws_s3_bucket.quarentena.id] }\n      object = { key = [{ prefix = \"lojas/\" }] }\n    }\n  })\n}\n\nresource \"aws_cloudwatch_event_target\" \"para_fila\" {\n  rule = aws_cloudwatch_event_rule.laudo_criado.name\n  arn  = aws_sqs_queue.verificacao.arn\n}\n\nresource \"aws_sqs_queue\" \"verificacao_dlq\" {\n  name                      = \"${var.projeto}-laudos-verificacao-dlq\"\n  message_retention_seconds = 1209600 # 14 dias — tempo de sobra para investigar antes de perder o evento\n}\n\nresource \"aws_sqs_queue\" \"verificacao\" {\n  name = \"${var.projeto}-laudos-verificacao\"\n  # >= tempo que o worker leva para ler o cabecalho, rodar o antivirus e\n  # copiar. Curto demais reentrega a MESMA mensagem enquanto ainda esta sendo\n  # processada, e dois workers competem pelo mesmo laudo.\n  visibility_timeout_seconds = 120\n\n  redrive_policy = jsonencode({\n    deadLetterTargetArn = aws_sqs_queue.verificacao_dlq.arn\n    maxReceiveCount      = 5\n  })\n}\n\nresource \"aws_sqs_queue_policy\" \"permite_eventbridge\" {\n  queue_url = aws_sqs_queue.verificacao.id\n  policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect    = \"Allow\"\n      Principal = { Service = \"events.amazonaws.com\" }\n      Action    = \"sqs:SendMessage\"\n      Resource  = aws_sqs_queue.verificacao.arn\n      Condition = {\n        ArnEquals = { \"aws:SourceArn\" = aws_cloudwatch_event_rule.laudo_criado.arn }\n      }\n    }]\n  })\n}\n\n# O alarme que fecha o laco: mensagem parada na DLQ e' um laudo que ninguem\n# vai processar sozinho. Sem isto, a fila 3 desta seccao vira um cemiterio\n# silencioso.\nresource \"aws_cloudwatch_metric_alarm\" \"dlq_com_mensagem\" {\n  alarm_name          = \"${var.projeto}-laudos-dlq-com-mensagem\"\n  namespace           = \"AWS/SQS\"\n  metric_name         = \"ApproximateNumberOfMessagesVisible\"\n  statistic           = \"Maximum\"\n  period              = 300\n  evaluation_periods  = 1\n  threshold           = 0\n  comparison_operator = \"GreaterThanThreshold\"\n  dimensions          = { QueueName = aws_sqs_queue.verificacao_dlq.name }\n  alarm_actions       = [aws_sns_topic.alertas.arn]\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "hcl",
+            "filename": "iam.tf",
+            "code": "# iam.tf — dois papeis, dois raciocinios de menor privilegio\n\n# A API SO PRECISA poder assinar o que a propria credencial autoriza — porque\n# a assinatura HERDA exatamente essa permissao (e' o que a documentacao de\n# presigned URL confirma: \"limited by the permissions of the user who\n# creates it\"). Escopar ao prefixo \"lojas/\" e' o que garante que um bug na\n# aplicacao que esqueca o `starts-with` na politica nao alcance o bucket\n# inteiro — so alcancaria a arvore de prefixos que a IAM ja autoriza.\ndata \"aws_iam_policy_document\" \"api_assina\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"s3:PutObject\"]\n    resources = [\"${aws_s3_bucket.quarentena.arn}/lojas/*\"]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"dynamodb:GetItem\", \"dynamodb:Query\"]\n    resources = [aws_dynamodb_table.laudos.arn, \"${aws_dynamodb_table.laudos.arn}/index/*\"]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"api_assina\" {\n  role   = aws_iam_role.api_task.id\n  policy = data.aws_iam_policy_document.api_assina.json\n}\n\n# O verificador le e apaga da quarentena, escreve no publicado, consome a\n# fila e grava o veredito. Nenhuma dessas quatro acoes precisa da OUTRA\n# permissao — e' a mesma logica de execution role vs task role do L03,\n# aplicada a um segundo servico com responsabilidade diferente.\ndata \"aws_iam_policy_document\" \"worker_verifica\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"s3:GetObject\", \"s3:DeleteObject\"]\n    resources = [\"${aws_s3_bucket.quarentena.arn}/*\"]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"s3:PutObject\"]\n    resources = [\"${aws_s3_bucket.publicado.arn}/*\"]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"sqs:ReceiveMessage\", \"sqs:DeleteMessage\", \"sqs:GetQueueAttributes\"]\n    resources = [aws_sqs_queue.verificacao.arn]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"dynamodb:PutItem\", \"dynamodb:UpdateItem\"]\n    resources = [aws_dynamodb_table.laudos.arn]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"kms:Decrypt\", \"kms:GenerateDataKey\"]\n    resources = [aws_kms_key.laudos.arn]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"worker_verifica\" {\n  role   = aws_iam_role.worker_task.id\n  policy = data.aws_iam_policy_document.worker_verifica.json\n}\n"
+          }
+        },
+        {
+          "id": "b9_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "Por que a permissão de assinar é o verdadeiro limite, não só a política",
+            "content": "A política POST que a API monta é a fronteira que o CLIENTE não pode mover. Mas existe uma fronteira anterior: a API só consegue assinar operações que a PRÓPRIA task role permite. Se essa role tivesse `s3:PutObject` no bucket inteiro em vez de escopado a `lojas/*`, um bug que esquecesse o `starts-with` na política teria alcance total — a IAM é a rede sob a rede, não um detalhe de menor privilégio genérico."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: a API que só assina"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O SDK da AWS para .NET não tem um método pronto equivalente ao `generate_presigned_post` do boto3 — por isso a assinatura é montada com a cadeia de HMAC do próprio SigV4, o mesmo processo documentado para qualquer requisição assinada."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "AssinadorPostS3.cs",
+            "code": "// AssinadorPostS3.cs — a API decide e assina; nunca ve o corpo do arquivo\n\nusing System.Security.Cryptography;\nusing System.Text;\nusing System.Text.Json;\nusing Amazon.Runtime;\n\nnamespace Cadencia.Api.Laudos;\n\npublic sealed record PostAssinado(string Url, Dictionary<string, string> Campos, DateTimeOffset ValidoAte);\n\npublic sealed class AssinadorPostS3\n{\n    // 220 MiB: o laudo declarado nunca passa de 200 MB, e a folga cobre o\n    // overhead do multipart/form-data (campos, boundary) sem abrir mao do\n    // teto. O numero vem da hipotese declarada na abertura do modulo — se a\n    // sua maior peca do laudo mudar (por exemplo, video em resolucao maior),\n    // este valor tem de ser revisado, nao herdado.\n    public const long TamanhoMaximoLaudoBytes = 230_686_720;\n    private const long TamanhoMinimoBytes = 1024; // barra so o POST vazio ou de teste\n\n    private readonly string _bucket;\n    private readonly string _regiao;\n\n    public AssinadorPostS3(string bucket, string regiao) => (_bucket, _regiao) = (bucket, regiao);\n\n    // O SDK da AWS para .NET NAO tem um `generate_presigned_post` pronto\n    // como o boto3 tem em Python — por isso a cadeia de HMAC abaixo e'\n    // montada a mao, seguindo o MESMO processo de assinatura que qualquer\n    // requisicao SigV4 usa. Aqui o \"corpo\" assinado e' a politica JSON, nao\n    // uma requisicao HTTP inteira.\n    public async Task<PostAssinado> AssinarAsync(string chaveObjeto, string lojaId, TimeSpan validade)\n    {\n        var credenciais = await ObterCredenciaisDaTaskAsync();\n\n        var agora = DateTimeOffset.UtcNow;\n        var dataCurta = agora.ToString(\"yyyyMMdd\");\n        var dataCompleta = agora.ToString(\"yyyyMMddTHHmmssZ\");\n        var escopo = $\"{dataCurta}/{_regiao}/s3/aws4_request\";\n        var credencial = $\"{credenciais.AccessKey}/{escopo}\";\n\n        // Cada condicao aqui e' uma fronteira que o CLIENTE nao pode mover:\n        // a politica inteira e' o que se assina, entao mexer em qualquer\n        // campo — inclusive o teto de tamanho — invalida a assinatura.\n        var condicoes = new List<object>\n        {\n            new Dictionary<string, string> { [\"bucket\"] = _bucket },\n            new object[] { \"starts-with\", \"$key\", chaveObjeto },\n            new object[] { \"content-length-range\", TamanhoMinimoBytes, TamanhoMaximoLaudoBytes },\n            new Dictionary<string, string> { [\"x-amz-meta-loja-id\"] = lojaId },\n            new Dictionary<string, string> { [\"x-amz-algorithm\"] = \"AWS4-HMAC-SHA256\" },\n            new Dictionary<string, string> { [\"x-amz-credential\"] = credencial },\n            new Dictionary<string, string> { [\"x-amz-date\"] = dataCompleta },\n        };\n        if (!string.IsNullOrEmpty(credenciais.Token))\n            condicoes.Add(new Dictionary<string, string> { [\"x-amz-security-token\"] = credenciais.Token });\n\n        var politica = new Dictionary<string, object>\n        {\n            // O prazo e' curto de proposito: 10 min cobre o tempo de UM\n            // upload na banda mais lenta que a Cadencia suporta hoje (8\n            // Mbit/s de subida, ~200 s para 200 MB), com folga — nao\n            // verifiquei se a AWS reavalia a expiracao so no INICIO da\n            // requisicao ou durante toda a transferencia, entao a folga e'\n            // deliberada, nao um numero decorado.\n            [\"expiration\"] = agora.Add(validade).ToString(\"yyyy-MM-ddTHH:mm:ss.fffZ\"),\n            [\"conditions\"] = condicoes,\n        };\n        var politicaJson = JsonSerializer.Serialize(politica);\n        var politicaBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(politicaJson));\n\n        static byte[] Hmac(byte[] chave, string dado) =>\n            new HMACSHA256(chave).ComputeHash(Encoding.UTF8.GetBytes(dado));\n\n        // A cadeia de derivacao do SigV4: quatro HMACs encadeados, cada um\n        // amarrando a assinatura a uma dimensao (dia, regiao, servico, tipo\n        // de request) sem nunca reusar a chave secreta diretamente.\n        var kData = Hmac(Encoding.UTF8.GetBytes(\"AWS4\" + credenciais.SecretKey), dataCurta);\n        var kRegiao = Hmac(kData, _regiao);\n        var kServico = Hmac(kRegiao, \"s3\");\n        var kAssinatura = Hmac(kServico, \"aws4_request\");\n        var assinatura = Convert.ToHexString(Hmac(kAssinatura, politicaBase64)).ToLowerInvariant();\n\n        var campos = new Dictionary<string, string>\n        {\n            [\"key\"] = chaveObjeto,\n            [\"policy\"] = politicaBase64,\n            [\"x-amz-algorithm\"] = \"AWS4-HMAC-SHA256\",\n            [\"x-amz-credential\"] = credencial,\n            [\"x-amz-date\"] = dataCompleta,\n            [\"x-amz-signature\"] = assinatura,\n            [\"x-amz-meta-loja-id\"] = lojaId,\n        };\n        if (!string.IsNullOrEmpty(credenciais.Token))\n            campos[\"x-amz-security-token\"] = credenciais.Token;\n\n        return new PostAssinado($\"https://{_bucket}.s3.{_regiao}.amazonaws.com/\", campos, agora.Add(validade));\n    }\n\n    private static async Task<ImmutableCredentials> ObterCredenciaisDaTaskAsync()\n    {\n        var credenciais = FallbackCredentialsFactory.GetCredentials();\n        return await credenciais.GetCredentialsAsync();\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "csharp",
+            "filename": "Program.cs (trecho)",
+            "code": "// Program.cs (trecho) — a rota que so assina, nunca le o arquivo\n\napp.MapPost(\"/api/laudos/assinatura\", async (\n    PedidoAssinatura pedido, ClaimsPrincipal usuario, AppDb db, AssinadorPostS3 assinador) =>\n{\n    var lojaId = usuario.FindFirstValue(\"loja_id\")\n        ?? throw new InvalidOperationException(\"sessao sem loja associada\");\n\n    // A cota impede que uma loja sozinha consuma o orcamento mensal de\n    // armazenamento das outras 29 — controle de negocio, nao de bytes.\n    var cota = await db.CotasDeLoja.FindAsync(lojaId);\n    if (cota is null || cota.LaudosNoMes >= cota.LimiteMensal)\n        return Results.Json(new { erro = \"cota mensal de laudos atingida\" }, statusCode: 429);\n\n    if (pedido.TamanhoDeclaradoBytes is < 1024 or > AssinadorPostS3.TamanhoMaximoLaudoBytes)\n        return Results.BadRequest(new { erro = \"tamanho declarado fora da faixa aceita\" });\n\n    // A extensao vem do TIPO ACEITO pela aplicacao, nunca do nome que o\n    // cliente mandou — e' o mesmo raciocinio do L03 para tag de imagem:\n    // identidade decidida pelo servidor, nao aceita por confianca no cliente.\n    var extensao = ExtensaoParaTipo(pedido.TipoMime)\n        ?? throw new ArgumentException($\"tipo nao aceito: {pedido.TipoMime}\");\n    var chave = $\"lojas/{lojaId}/laudos/{DateTime.UtcNow:yyyy}/{Guid.NewGuid():N}.{extensao}\";\n\n    var assinado = await assinador.AssinarAsync(chave, lojaId, TimeSpan.FromMinutes(10));\n\n    return Results.Ok(new\n    {\n        url = assinado.Url,\n        campos = assinado.Campos,\n        validoAte = assinado.ValidoAte,\n    });\n});\n\npublic sealed record PedidoAssinatura(long TamanhoDeclaradoBytes, string TipoMime);\n"
+          }
+        },
+        {
+          "id": "b10_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "A chave secreta nunca sai do processo, e é isso que sustenta o desenho",
+            "content": "A `SecretKey` usada nos HMACs vem da credencial temporária da própria task — ela nunca é enviada ao navegador nem aparece na resposta. O que sai é só o resultado: a assinatura hexadecimal e a política em base64. Se algum dia essa função vazar a chave secreta num log de depuração, qualquer pessoa com o log consegue assinar políticas arbitrárias até a credencial expirar — trate isso como exposição de credencial, não como bug de log."
+          }
+        },
+        {
+          "id": "b10_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "O prazo pedido pode não ser o prazo entregue",
+            "content": "Se a task role da API girar a cada 2 horas — dentro da faixa de 1 a 6 h que o ECS documenta — uma assinatura pedida por 10 minutos nunca sente esse limite. Mas se alguém copiar este código para um contexto que usa `AssumeRole` com sessão de 1 hora, e pedir uma validade de 2 horas por engano, a URL morre com a sessão, não com o valor pedido — silenciosamente, sem nenhum erro no momento da assinatura."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: multipart, e o controle de admissão que falta"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os laudos de hoje cabem no POST simples. Esta seção existe porque a certificação cobra multipart, e porque o dia em que um vídeo de manuseio passar de alguns gigabytes chega — e nesse dia, o teto de tamanho deixa de ser algo que o S3 verifica sozinho."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Item",
+              "Limite confirmado na documentação"
+            ],
+            "rows": [
+              [
+                "Tamanho de objeto",
+                "até 48,8 TiB"
+              ],
+              [
+                "Tamanho de cada parte",
+                "5 MiB a 5 GiB — sem mínimo na última parte"
+              ],
+              [
+                "Número de partes",
+                "até 10.000 por upload"
+              ],
+              [
+                "Condição de tamanho na iniciação ou nas partes",
+                "nenhuma — é o ponto central desta seção"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "csharp",
+            "filename": "Multipart.cs",
+            "code": "// Multipart.cs — quando o POST simples nao basta, e o teto de tamanho vira\n// DECISAO DA APLICACAO, porque o S3 nao oferece condicao nenhuma para isso\n\nusing System.Collections.Concurrent;\nusing Amazon.S3;\nusing Amazon.S3.Model;\n\nnamespace Cadencia.Api.Laudos;\n\n// Em producao isto e' uma linha por upload no DynamoDB com TTL, nao memoria\n// do processo — a task pode reiniciar no meio de um upload de 40 minutos, e\n// o contador precisa sobreviver a isso.\npublic sealed class ControleDeAdmissaoMultipart\n{\n    private readonly ConcurrentDictionary<string, long> _bytesDeclaradosPorUpload = new();\n\n    public bool AutorizarParte(string uploadId, long tamanhoDaParteBytes, long tetoTotalBytes)\n    {\n        var acumulado = _bytesDeclaradosPorUpload.AddOrUpdate(\n            uploadId, tamanhoDaParteBytes, (_, atual) => atual + tamanhoDaParteBytes);\n\n        // O S3 aceitaria a parte de qualquer jeito: multipart nao tem\n        // `content-length-range`. Quem recusa aqui e' a aplicacao, ANTES de\n        // emitir a URL assinada da parte seguinte — recusar so na conclusao,\n        // depois de todos os bytes ja terem subido, nao economiza nada.\n        if (acumulado > tetoTotalBytes)\n        {\n            _bytesDeclaradosPorUpload.TryRemove(uploadId, out _);\n            return false;\n        }\n        return true;\n    }\n\n    public void Concluir(string uploadId) => _bytesDeclaradosPorUpload.TryRemove(uploadId, out _);\n}\n\npublic static class RotasMultipart\n{\n    public static void Mapear(WebApplication app)\n    {\n        app.MapPost(\"/api/laudos/multipart/iniciar\", async (\n            PedidoIniciarMultipart pedido, IAmazonS3 s3, ClaimsPrincipal usuario) =>\n        {\n            var lojaId = usuario.FindFirstValue(\"loja_id\")!;\n            var chave = $\"lojas/{lojaId}/laudos/{DateTime.UtcNow:yyyy}/{Guid.NewGuid():N}.mp4\";\n\n            var resposta = await s3.InitiateMultipartUploadAsync(new InitiateMultipartUploadRequest\n            {\n                BucketName = ConfigLaudos.BucketQuarentena,\n                Key = chave,\n                ServerSideEncryptionMethod = ServerSideEncryptionMethod.AWSKMS,\n            });\n\n            return Results.Ok(new { uploadId = resposta.UploadId, chave });\n        });\n\n        app.MapPost(\"/api/laudos/multipart/parte\", (\n            PedidoParte pedido, IAmazonS3 s3, ControleDeAdmissaoMultipart controle) =>\n        {\n            if (!controle.AutorizarParte(pedido.UploadId, pedido.TamanhoDeclaradoBytes,\n                    AssinadorPostS3.TamanhoMaximoLaudoBytes))\n            {\n                // A soma passou do teto: aborta o upload INTEIRO agora, nao so\n                // recusa a parte. Uma parte recusada sem abortar deixa as\n                // anteriores penduradas, cobrando ate o ciclo de vida\n                // alcanca-las em 1 dia — este cancelamento e' o que evita essa\n                // espera.\n                s3.AbortMultipartUploadAsync(ConfigLaudos.BucketQuarentena, pedido.Chave, pedido.UploadId);\n                return Results.BadRequest(new { erro = \"soma das partes excede o limite do laudo\" });\n            }\n\n            var url = s3.GetPreSignedURL(new GetPreSignedUrlRequest\n            {\n                BucketName = ConfigLaudos.BucketQuarentena,\n                Key = pedido.Chave,\n                Verb = HttpVerb.PUT,\n                Expires = DateTime.UtcNow.AddMinutes(10),\n                UploadId = pedido.UploadId,\n                PartNumber = pedido.NumeroDaParte,\n            });\n\n            return Results.Ok(new { url });\n        });\n\n        app.MapPost(\"/api/laudos/multipart/concluir\", async (\n            PedidoConcluirMultipart pedido, IAmazonS3 s3, ControleDeAdmissaoMultipart controle) =>\n        {\n            var req = new CompleteMultipartUploadRequest\n            {\n                BucketName = ConfigLaudos.BucketQuarentena,\n                Key = pedido.Chave,\n                UploadId = pedido.UploadId,\n                PartETags = pedido.Partes.Select(p => new PartETag(p.NumeroDaParte, p.ETag)).ToList(),\n            };\n            await s3.CompleteMultipartUploadAsync(req);\n            controle.Concluir(pedido.UploadId);\n            return Results.Ok();\n        });\n    }\n}\n\npublic sealed record PedidoIniciarMultipart(long TamanhoTotalDeclaradoBytes);\npublic sealed record PedidoParte(string UploadId, string Chave, int NumeroDaParte, long TamanhoDeclaradoBytes);\npublic sealed record PedidoConcluirMultipart(string UploadId, string Chave, List<ParteConcluida> Partes);\npublic sealed record ParteConcluida(int NumeroDaParte, string ETag);\n"
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "Sem admissão própria, multipart não tem teto nenhum",
+            "content": "Nem `InitiateMultipartUpload`, nem `UploadPart`, nem `CompleteMultipartUpload` aceitam uma condição de tamanho total. Um cliente pode enviar 10.000 partes de 5 GiB cada — os 48,8 TiB do limite de objeto — e o S3 completa o upload sem reclamar. A única fronteira é a que a aplicação constrói somando o que cada parte declara, e recusando ANTES de emitir a URL da parte seguinte."
+          }
+        },
+        {
+          "id": "b11_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "Abortar o upload é parte do controle, não um extra",
+            "content": "Recusar a parte sem chamar `AbortMultipartUploadAsync` deixa as partes já aceitas penduradas no S3, cobrando armazenamento até a regra de ciclo de vida alcançá-las — até 24 horas depois, no desenho deste módulo. Abortar na hora fecha a cobrança no mesmo instante em que a decisão foi tomada."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Construir: o verificador"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um serviço de fundo, sem rota HTTP, que só existe para transformar \"objeto apareceu\" em \"objeto está apto\". Ele lê pouco, decide, e apaga o que processou."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "ConsumidorDeLaudos.cs",
+            "code": "// ConsumidorDeLaudos.cs — le a fila, decide, e so entao move o objeto\n\nusing System.Text.Json;\nusing Amazon.S3;\nusing Amazon.S3.Model;\nusing Amazon.SQS;\nusing Amazon.SQS.Model;\n\nnamespace Cadencia.Worker.Laudos;\n\npublic sealed class ConsumidorDeLaudos(\n    IAmazonSQS sqs, IAmazonS3 s3, ILogger<ConsumidorDeLaudos> log) : BackgroundService\n{\n    protected override async Task ExecuteAsync(CancellationToken ct)\n    {\n        while (!ct.IsCancellationRequested)\n        {\n            var resposta = await sqs.ReceiveMessageAsync(new ReceiveMessageRequest\n            {\n                QueueUrl = ConfigLaudos.FilaVerificacaoUrl,\n                MaxNumberOfMessages = 5,\n                WaitTimeSeconds = 20, // long poll: menos requisicoes vazias, que custam o mesmo\n            }, ct);\n\n            foreach (var msg in resposta.Messages)\n            {\n                try\n                {\n                    await ProcessarAsync(msg, ct);\n                    await sqs.DeleteMessageAsync(ConfigLaudos.FilaVerificacaoUrl, msg.ReceiptHandle, ct);\n                }\n                catch (Exception ex)\n                {\n                    // NAO deleta: a mensagem volta a ficar visivel apos o\n                    // timeout, e depois de 5 tentativas vai para a DLQ. Sem\n                    // essa fila, um erro aqui perde o evento e o laudo fica\n                    // orfao em quarentena sem ninguem notar.\n                    log.LogError(ex, \"falha ao verificar laudo, mensagem retorna a fila\");\n                }\n            }\n        }\n    }\n\n    private async Task ProcessarAsync(Message msg, CancellationToken ct)\n    {\n        var evento = JsonSerializer.Deserialize<EventoObjetoCriado>(msg.Body)!;\n        var bucketOrigem = evento.Detail.Bucket.Name;\n        var chave = evento.Detail.Object.Key;\n\n        // Le so os primeiros 512 bytes: o bastante para conferir a\n        // assinatura binaria (numero magico) do arquivo sem baixar 200 MB\n        // para decidir se o tipo declarado bate com o tipo real.\n        using var cabecalho = await s3.GetObjectAsync(new GetObjectRequest\n        {\n            BucketName = bucketOrigem,\n            Key = chave,\n            ByteRange = new ByteRange(0, 511),\n        }, ct);\n\n        var tipoReal = SniffarTipo(cabecalho.ResponseStream);\n        var tipoOk = TipoEhAceito(tipoReal);\n        var antivirusOk = tipoOk && await ChecarAntivirusAsync(bucketOrigem, chave, ct);\n        var aprovado = tipoOk && antivirusOk;\n\n        if (aprovado)\n        {\n            await s3.CopyObjectAsync(new CopyObjectRequest\n            {\n                SourceBucket = bucketOrigem,\n                SourceKey = chave,\n                DestinationBucket = ConfigLaudos.BucketPublicado,\n                DestinationKey = chave,\n                ServerSideEncryptionMethod = ServerSideEncryptionMethod.AWSKMS,\n            }, ct);\n        }\n\n        // O objeto some da quarentena nos dois casos: aprovado, porque ja foi\n        // copiado; recusado, porque quarentena nao e' deposito permanente de\n        // arquivo malicioso.\n        await s3.DeleteObjectAsync(bucketOrigem, chave, ct);\n\n        await GravarVeredictoAsync(chave, aprovado, tipoReal, evento.Detail.Object.Size, ct);\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "Por que ler 512 bytes basta para o sniff de tipo",
+            "content": "A assinatura binária que identifica a maioria dos formatos — PDF, JPEG, MP4, ZIP — está nos primeiros bytes do arquivo. Ler um `ByteRange` pequeno em vez do objeto inteiro é o que faz o verificador continuar barato mesmo quando o laudo tem 200 MB: o custo de processá-lo deixou de crescer com o tamanho, exatamente como o custo de recebê-lo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Implantar, e provar que o byte não passou pela task"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. A terceira é a que mais gente pula, e é a que sustenta o achado central do módulo: sem nenhuma configuração adicional, uma URL PUT assinada aceita qualquer tamanho."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "#!/usr/bin/env bash\n# provas.sh — cinco medicoes; nenhuma conclusao vem de \"parece que funcionou\"\nset -euo pipefail\n\nDOMINIO=\"$(terraform output -raw dominio)\"\nBUCKET_QUAR=\"$(terraform output -raw bucket_quarentena)\"\nFILA=\"$(terraform output -raw fila_verificacao_url)\"\n\n# ── Prova 1: a memoria da task NAO se move mais com o tamanho do arquivo ────\n# Gera um laudo de 200 MB e envia PELA URL ASSINADA. Observe a memoria da\n# task da API enquanto o upload roda: ela nao deve variar com o tamanho.\ndd if=/dev/urandom of=/tmp/laudo-200mb.pdf bs=1M count=200\nASSINATURA=$(curl -s -X POST \"https://${DOMINIO}/api/laudos/assinatura\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"tamanhoDeclaradoBytes\": 209715200, \"tipoMime\": \"application/pdf\"}')\nURL=$(echo \"$ASSINATURA\" | jq -r '.url')\n# ... monta o multipart/form-data com os campos de \"campos\" e faz o POST ...\n# Esperado: MemoryUtilized da task da API (CloudWatch Container Insights)\n# continua achatada durante o upload inteiro — quem sobe e desce e' o S3.\n\n# ── Prova 2: o teto de tamanho e' recusado pelo S3, nao pela aplicacao ──────\n# Um arquivo de 250 MB, acima dos 220 MB assinados, tem de ser recusado ANTES\n# de qualquer byte ser gravado.\ndd if=/dev/urandom of=/tmp/laudo-250mb.pdf bs=1M count=250\n# Reusa a mesma assinatura (que permite ate 220 MB) e tenta enviar o de 250.\n# Esperado: HTTP 400 do S3, com <Code>EntityTooLarge</Code> no corpo XML.\n# Se isto passar como 200, a condicao content-length-range nao foi aplicada.\n\n# ── Prova 3: PUT assinado SEM Content-Length nao tem teto nenhum ────────────\n# A comparacao que sustenta o achado central do modulo.\npython3 - <<'PY'\nimport boto3\ns3 = boto3.client(\"s3\")\nprint(s3.generate_presigned_url(\"put_object\",\n      Params={\"Bucket\": \"ffv-lab-laudos-quarentena\", \"Key\": \"teste/sem-teto.bin\"},\n      ExpiresIn=600))\nPY\n# Envie um arquivo de qualquer tamanho pela URL acima com curl -T. Esperado:\n# aceita 500 MB do mesmo jeito que aceitaria 5 KB — nao ha condicao de\n# tamanho embutida numa PUT assinada sem cabecalhos adicionais.\n\n# ── Prova 4: o multipart incompleto realmente cobra, e a regra o mata ───────\naws s3api create-multipart-upload --bucket \"$BUCKET_QUAR\" \\\n  --key \"teste/abandonado.bin\" --query 'UploadId' --output text\n# NAO conclua o upload. Espere 25h e confira:\naws s3api list-multipart-uploads --bucket \"$BUCKET_QUAR\" \\\n  --query 'Uploads[?Key==`teste/abandonado.bin`]'\n# Esperado apos 25h: lista vazia — a regra de ciclo de vida de 1 dia abortou.\n# Antes das 25h, o upload aparece, e cada parte enviada esta sendo cobrada.\n\n# ── Prova 5: o veredito chega, e o tempo entre upload e aprovacao e' medido ─\nINICIO=$(date +%s)\n# ... repita o upload da prova 1 ...\naws sqs receive-message --queue-url \"$FILA\" --wait-time-seconds 20 >/dev/null\nFIM=$(date +%s)\necho \"latencia de validacao: $((FIM - INICIO))s\"\n# Nao ha SLA documentado para isto — meca a distribuicao real no seu ambiente\n# antes de prometer um numero a quem consome o veredito.\n"
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Memória não varia com o tamanho",
+                "Container Insights durante o upload",
+                "linha achatada de `MemoryUtilized` na task da API",
+                "memória subindo com o tamanho do arquivo indica que o byte ainda passa pela task"
+              ],
+              [
+                "2 · Teto aplicado antes de gravar",
+                "envio de arquivo maior que o assinado",
+                "400 com `EntityTooLarge`, nenhum objeto criado",
+                "se o objeto aparece no bucket, `content-length-range` não foi assinada corretamente"
+              ],
+              [
+                "3 · PUT sem teto realmente não tem teto",
+                "PUT assinado sem cabeçalho extra",
+                "arquivo de qualquer tamanho é aceito",
+                "se isso te surpreendeu, é exatamente o achado que este módulo existe para provar"
+              ],
+              [
+                "4 · Multipart incompleto cobra até ser abortado",
+                "`list-multipart-uploads` após 25h",
+                "lista vazia — a regra de 1 dia abortou",
+                "se a parte ainda aparece, a regra de ciclo de vida não está aplicada ao bucket certo"
+              ],
+              [
+                "5 · O veredito chega em tempo mensurável",
+                "cronômetro entre upload e mensagem",
+                "um número, não uma sensação",
+                "sem medir, \"a validação está lenta\" não tem como virar decisão de capacidade"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "A equipe da Cadência gera uma URL `PUT` pré-assinada informando apenas bucket, chave e prazo de expiração — sem nenhum cabeçalho adicional assinado. Um laudo de 5 GB é enviado por essa URL, mesmo a aplicação esperando no máximo 200 MB. O que acontece?",
+        "options": [
+          "O S3 recusa automaticamente, porque toda URL pré-assinada respeita o Content-Length declarado no momento em que foi gerada",
+          "O upload é aceito, porque nenhuma condição de tamanho foi incluída na assinatura — o teto teria de vir de um Content-Length assinado ou de uma política POST com content-length-range",
+          "O upload falha, porque PUT nunca aceita arquivos acima de 100 MB, que é o limite em que a AWS recomenda multipart",
+          "O upload falha, porque o bucket tem bloqueio de acesso público habilitado, o que também restringe o tamanho de objetos aceitos"
+        ],
+        "correctIndex": 1,
+        "explanation": "O S3 só recusa por tamanho quando existe uma condição de tamanho DENTRO do que foi assinado. Uma URL PUT gerada sem cabeçalhos adicionais não carrega condição nenhuma, então qualquer tamanho passa — inclusive 5 GB, que ainda está dentro do teto de operação única do S3 (5 GB). É exatamente o achado central deste módulo: o teto de tamanho não é propriedade automática de uma URL assinada.\n\nA primeira alternativa inventa um comportamento que não existe: não há Content-Length implícito numa URL que não o incluiu como cabeçalho assinado — \"respeitar\" algo que nunca foi declarado não é possível. A terceira confunde uma RECOMENDAÇÃO de quando considerar multipart (a partir de 100 MB, por praticidade) com um LIMITE que o S3 impõe — não existe tal limite para PUT de operação única, que vai até 5 GB. A quarta mistura dois controles sem relação: bloqueio de acesso público protege contra exposição pública do bucket, e não tem nenhuma ligação com o tamanho de um objeto individual sendo gravado."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três produzem o mesmo sintoma superficial no navegador — \"não consegui enviar\" — e são causas completamente diferentes."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "CORS ausente no bucket",
+                "remova o `aws_s3_bucket_cors_configuration` e tente enviar pelo navegador",
+                "erro de rede genérico no console; às vezes o objeto aparece no bucket mesmo assim",
+                "aba Network do navegador: a requisição ao S3 mostra `blocked by CORS policy`",
+                "configurar CORS com o domínio exato da loja em `allowed_origins`"
+              ],
+              [
+                "Content-length-range mal calculado",
+                "assine a política com máximo em bytes, mas envie um valor em bits por engano",
+                "todo upload é recusado com `EntityTooLarge`, mesmo arquivos pequenos",
+                "decodifique o campo `policy` (base64) e confira o array de `content-length-range`",
+                "unidade correta é byte, não bit nem MB — confira o cálculo antes de assinar"
+              ],
+              [
+                "Task role de assinatura ampla demais",
+                "dê `s3:PutObject` no bucket inteiro à task da API, sem prefixo",
+                "nenhum sintoma imediato — o desenho continua funcionando igual",
+                "IAM Access Analyzer, ou revisão manual de `resources` na policy",
+                "restringir a `arn:...:bucket/lojas/*`, para que um bug de política não vire acesso total"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A falha que não aparece em nenhum log até o incidente",
+            "content": "Uma task role de assinatura ampla é invisível em operação normal: tudo continua funcionando, porque a política assinada de qualquer upload legítimo já restringe a chave. O problema só se manifesta se um bug de código — um `starts-with` esquecido, uma condição comentada durante um debug e não devolvida — deixar de restringir a chave na política. Nesse dia, a única coisa que ainda protege o resto do bucket é a IAM, e não o código que todo mundo revisou."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Segurança: o que muda quando o cliente fala direto com o S3"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A superfície deixa de ser \"quem pode chamar minha API\" e passa a incluir \"o que alguém consegue fazer com uma assinatura legítima, mas usada de um jeito que a aplicação não previu\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Arquivo malicioso publicado sem verificação",
+                "baixa",
+                "alto",
+                "quarentena separada; cópia ao bucket público só após veredito aprovado",
+                "métricas do verificador e da DLQ",
+                "remover objeto do bucket publicado; investigar como passou pela checagem"
+              ],
+              [
+                "Upload de tamanho não previsto pela banda estimada",
+                "média",
+                "baixo",
+                "`content-length-range` recusa antes de gravar",
+                "alarme de `EntityTooLarge` no CloudTrail de eventos de dados do S3",
+                "revisar o teto com a distribuição real de tamanho medida"
+              ],
+              [
+                "Assinatura reaproveitada após o prazo",
+                "baixa",
+                "baixo",
+                "validade curta (10 min) e `x-amz-date` amarrado à assinatura",
+                "o próprio S3 recusa com `RequestTimeTooSkewed` ou expiração",
+                "nenhuma — a URL simplesmente para de funcionar"
+              ],
+              [
+                "Loja esgotando cota das outras 29 com envios paralelos",
+                "média",
+                "médio",
+                "este laboratório NÃO resolve — falta limite de requisições na rota de assinatura",
+                "contagem de assinaturas emitidas por loja por minuto",
+                "aplicar limite de requisições; é dívida registrada na seção de decisões"
+              ],
+              [
+                "Objeto órfão em quarentena por falha do verificador",
+                "média",
+                "baixo",
+                "DLQ com alarme; expiração de 3 dias no ciclo de vida da quarentena",
+                "alarme de mensagem visível na DLQ",
+                "reprocessar da DLQ manualmente após corrigir a causa"
+              ],
+              [
+                "Task role de assinatura mais ampla que o necessário",
+                "baixa",
+                "alto",
+                "escopo por prefixo `lojas/*`, nunca o bucket inteiro",
+                "IAM Access Analyzer sobre uso real",
+                "restringir o `Resource` da policy ao prefixo — é o L41"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "CORS não é controle de segurança contra servidor a servidor",
+            "content": "CORS é aplicado pelo NAVEGADOR, não pelo S3. Um script rodando fora de um navegador — um `curl`, um worker em outra conta — ignora CORS completamente e usa a URL assinada normalmente. A proteção real contra uso indevido da URL é o prazo curto e as condições da política, não a origem declarada em CORS."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Como a validação agora é assíncrona, o painel tem uma responsabilidade nova: dizer se um laudo está preso entre \"chegou\" e \"foi decidido\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "A task da API voltou a crescer em memória com upload?",
+                "`MemoryUtilized` da task",
+                "algum caminho voltou a materializar o arquivo em memória",
+                "variação > 20% durante upload"
+              ],
+              [
+                "Quantos laudos estão presos entre upload e veredito?",
+                "`ApproximateNumberOfMessagesVisible`",
+                "backlog do verificador crescendo mais rápido do que ele processa",
+                "> 50 por 5 min"
+              ],
+              [
+                "Algum laudo está definitivamente perdido?",
+                "`ApproximateNumberOfMessagesVisible` na DLQ",
+                "o verificador falhou 5 vezes seguidas no mesmo objeto",
+                "qualquer valor > 0"
+              ],
+              [
+                "Quanto tempo entre upload e veredito?",
+                "diferença de timestamp entre evento e gravação no Dynamo",
+                "a fila está saudável mas o verificador está lento",
+                "p95 acima de 2 min"
+              ],
+              [
+                "Quantos uploads estão sendo recusados por tamanho?",
+                "contagem de 400 `EntityTooLarge` no S3",
+                "lojas tentando enviar acima do esperado — hipótese do módulo pode estar errada",
+                "> 5% dos uploads no dia"
+              ],
+              [
+                "Há multipart abandonado se acumulando?",
+                "`list-multipart-uploads` periódico",
+                "a regra de ciclo de vida não está aplicada ou não está funcionando",
+                "qualquer upload com mais de 25h"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que não existe: \"upload em andamento\"",
+            "content": "Como o byte vai direto ao S3, a aplicação não sabe que um upload está em progresso até ele terminar — ou até nunca terminar. Não há evento de \"início de upload\" nem \"progresso\", só \"objeto criado\". Quem precisa de barra de progresso confiável para o usuário depende do próprio navegador medir, não do backend."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "40 laudos/dia, pico às 18h",
+                "a fila absorve o pico sem esforço",
+                "nada; é o cenário deste laboratório",
+                "nada"
+              ],
+              [
+                "500 laudos/dia",
+                "o verificador com um único worker começa a atrasar no pico",
+                "latência de veredito sobe, mas nada quebra — a fila segura o volume",
+                "aumentar `desired_count` do serviço verificador, que é sem estado"
+              ],
+              [
+                "10 mil laudos/dia",
+                "concorrência de assinatura na API cresce junto",
+                "a tabela de cota no DynamoDB pode virar hot partition se a chave for só `lojaId`",
+                "confirmar padrão de acesso e considerar sufixo de particionamento por dia"
+              ],
+              [
+                "1 milhão de laudos/dia (hipotético, fora da escala da Cadência)",
+                "volume de eventos do EventBridge e mensagens SQS em outra ordem de grandeza",
+                "custo de EventBridge por evento processado passa a aparecer na fatura",
+                "considerar Batch Operations do S3 ou agregação de eventos antes de disparar por objeto"
+              ],
+              [
+                "Falha de uma AZ",
+                "S3, SQS, EventBridge e DynamoDB são serviços regionais",
+                "nada estrutural — ao contrário do ALB/ECS do L03, não há pinning de sub-rede aqui",
+                "nada a fazer neste desenho; é uma simplificação real, não uma omissão"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O upload em si não tem limite de taxa por conta documentado como fixo",
+            "content": "O S3 escala automaticamente a taxa de requisições PUT por prefixo, mas ainda vale espalhar a carga: a chave `lojas/{lojaId}/laudos/{ano}/{uuid}` já distribui por loja e ano, o que evita que todos os objetos do dia colidam no mesmo prefixo quente. Não testei o comportamento sob os 500 uploads simultâneos — meça antes de prometer."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A troca de desenho não é gratuita: ela move o custo de computação (task) para algumas dimensões novas, quase todas pequenas — exceto uma, se ninguém configurar o ciclo de vida."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Hoje",
+                "40 laudos/dia, ~200 MB médios",
+                "armazenamento dos dois buckets, poucas centenas de eventos e mensagens por dia",
+                "desprezível frente ao custo da task que deixou de estourar",
+                "nenhuma; otimizar aqui é atenção gasta onde não há dinheiro"
+              ],
+              [
+                "Se 20% dos uploads forem abandonados sem a regra de ciclo de vida",
+                "8 uploads/dia nunca concluídos, partes de até 200 MB cada",
+                "armazenamento de multipart incompleto crescendo todo dia, sem limite",
+                "linear e sem teto — é o cenário que a regra de ciclo de vida existe para evitar",
+                "a única otimização real é a regra em si; sem ela não há ajuste fino que resolva"
+              ],
+              [
+                "Alta escala hipotética (10 mil laudos/dia)",
+                "volume de eventos do EventBridge e mensagens SQS cresce proporcionalmente",
+                "linha visível de EventBridge e SQS na fatura, além do armazenamento",
+                "cresce com o volume de laudos, não com o tamanho deles",
+                "agregar eventos ou filtrar mais cedo reduz o número de mensagens processadas"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b18_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Armazenamento S3 (dois buckets)",
+                "GB-mês, e por classe de armazenamento",
+                "quarentena deveria ter volume médio baixo — objeto aprovado sai rápido; objeto preso ali por muito tempo é sintoma, não custo normal"
+              ],
+              [
+                "Partes de multipart incompleto",
+                "GB-mês, cobrado como se fosse objeto completo",
+                "é a linha que cresce sozinha sem a regra de ciclo de vida — o achado de custo mais caro deste módulo"
+              ],
+              [
+                "Requisições PUT/POST ao S3",
+                "por mil requisições",
+                "proporcional ao número de laudos, não ao tamanho — 200 MB custa o mesmo que 1 KB nesta dimensão"
+              ],
+              [
+                "EventBridge e SQS",
+                "por evento e por requisição, respectivamente",
+                "uma mensagem por objeto novo; não escala com o tamanho do laudo"
+              ],
+              [
+                "Computação do verificador (Fargate)",
+                "vCPU-segundo e GB-segundo",
+                "lê só 512 bytes por laudo mais o tempo de cópia — muito menor que materializar o arquivo inteiro, que era o custo do desenho mínimo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b18_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O custo que desapareceu, e onde ele estava escondido",
+            "content": "No desenho mínimo, cada laudo pagava NAT Gateway duas vezes — na entrada até a task e na saída até o S3 — além de vCPU-segundo proporcional ao tempo de upload inteiro. Esse custo nunca apareceu como linha isolada na fatura; estava diluído no total de Fargate e de processamento de dados do NAT. Ele não aparece mais, e não há como medi-lo depois de removido — só antes, se alguém tivesse isolado a métrica."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "fila com DLQ e alarme dão visibilidade de falha assíncrona",
+                "ninguém drena a DLQ até o alarme disparar",
+                "playbook de redrive documentado e testado",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "assinatura escopada por IAM, CORS restrito, validação depois do fato",
+                "sem limite de requisições na rota de assinatura",
+                "limite de taxa por loja na rota de assinatura",
+                "alta"
+              ],
+              [
+                "Confiabilidade",
+                "falha do verificador não perde o evento — ele volta à fila e depois vai à DLQ",
+                "objeto pode ficar em quarentena até 3 dias se a DLQ não for drenada",
+                "reduzir a janela de expiração da quarentena com dado real de tempo de resposta",
+                "média"
+              ],
+              [
+                "Eficiência de performance",
+                "upload não é mais limitado pela capacidade da task nem pela banda dela",
+                "multipart ainda é sequencial no cliente de exemplo, sem paralelismo de partes",
+                "paralelizar upload de partes no navegador para laudos grandes",
+                "baixa"
+              ],
+              [
+                "Otimização de custos",
+                "byte não passa mais por NAT nem ocupa vCPU-segundo por transporte",
+                "multipart incompleto sem a regra de ciclo de vida cresceria sem teto",
+                "a regra já cobre; revisar o prazo de 1 dia com dado real de abandono",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "byte sobe uma vez e é copiado uma vez — não sobe e desce mais pela task",
+                "a cópia de quarentena para publicado duplica temporariamente o armazenamento",
+                "considerar mover em vez de copiar quando o SDK suportar de forma atômica",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do upload pela API à plataforma de laudos com IA — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Upload pela própria API, arquivo materializado em memória. É onde a Cadência estava, e continua legítimo para arquivo pequeno em ambiente de teste.",
+                "note": "Risco resolvido: nenhum. Novo risco: task morre com arquivo grande, sem exceção tratável. Custo: o mais baixo em recursos novos — e o mais caro em incidente."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "URL POST assinada com teto de tamanho, dois buckets, validação assíncrona por EventBridge e SQS, admissão própria para multipart.",
+                "note": "Risco resolvido: task fora do caminho do byte; teto de tamanho garantido pelo S3. Novo risco: objeto pode ficar preso em quarentena se o verificador falhar sem DLQ monitorada. Custo: armazenamento de dois buckets mais eventos — pequeno, exceto multipart abandonado sem ciclo de vida."
+              },
+              {
+                "label": "Nível 3 — Verificação gerenciada",
+                "instruction": "Troca o verificador caseiro por um serviço gerenciado de varredura (por exemplo, GuardDuty Malware Protection for S3) mantendo a mesma cadeia de eventos.",
+                "note": "Risco resolvido: manter motor de antivírus atualizado deixa de ser trabalho da equipe. Novo risco: menos controle fino sobre o veredito, e custo por GB varrido. Custo: cresce com volume de dados, não com número de eventos."
+              },
+              {
+                "label": "Nível 4 — Processamento de negócio pleno",
+                "instruction": "O mesmo evento de objeto aprovado dispara extração de dado do laudo e decisão de garantia — é o L28.",
+                "note": "Risco resolvido: laudo aprovado ainda exigia alguém abrir e ler manualmente. Novo risco: pipeline de negócio errado processa dado errado em escala. Custo: cresce com a complexidade da extração, não com o upload em si."
+              },
+              {
+                "label": "Nível 5 — Alcance internacional",
+                "instruction": "S3 Transfer Acceleration para as 8 lojas fora do Brasil, cujo upload de 200 MB sofre mais com a distância até a região.",
+                "note": "Risco resolvido: latência de upload internacional penalizando lojas fora do país. Novo risco: custo adicional por GB acelerado, que só se paga se a distância realmente doer. Custo: por GB transferido com aceleração, além do padrão."
+              },
+              {
+                "label": "Nível 6 — Dados e IA sobre o laudo",
+                "instruction": "Extração de dano por IA a partir das fotos e do vídeo, com revisão humana no desenho — é o território do L92.",
+                "note": "Risco resolvido: leitura manual de laudo não escala com o volume de lojas. Novo risco: decisão automatizada de garantia sem trilha auditável é o assunto do L97. Custo: por token e por página processada, variável com a complexidade do laudo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Extrair dado de um laudo (nível 4 ou 6) não faz sentido sobre um arquivo que pode ainda estar malicioso ou corrompido — por isso esses níveis dependem do bucket publicado deste módulo, que só recebe o que passou pela validação. Pular direto para IA sobre o bucket de quarentena processaria arquivo que nunca deveria ter sido aceito."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não resolve o problema central, e forçá-la seria o antipadrão que a própria série critica. \"Como tirar a aplicação do caminho do byte\" tem resposta determinística: assinatura com condição de tamanho, e validação por evento. Um modelo não melhora nenhuma dessas duas coisas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar em que IA acrescentaria valor real, e ele não é este módulo: é ler o CONTEÚDO do laudo aprovado — extrair o defeito relatado, cruzar com a nota fiscal, sugerir se a garantia procede. Isso pede compreensão de linguagem natural e de imagem, que regra determinística não cobre bem. É exatamente o L92 (IDP: documento → extração → interpretação → revisão humana), e ele depende deste laboratório — só faz sentido processar um laudo que já passou pela quarentena."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b21_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria aqui?",
+                "nenhum diretamente — assinatura e validação de tipo são determinísticas por design, e é isso que as torna auditáveis"
+              ],
+              [
+                "Por que não usar IA para decidir se o arquivo é malicioso?",
+                "a checagem de tipo real por assinatura binária já é determinística e barata; IA entraria só se o objetivo fosse classificar conteúdo, não verificar formato"
+              ],
+              [
+                "Onde IA realmente ajuda nesta cadeia?",
+                "depois da aprovação: interpretar o conteúdo do laudo, no L92"
+              ],
+              [
+                "Qual seria o risco de forçar IA aqui?",
+                "trocar uma verificação de tipo exata e auditável por uma resposta probabilística para um problema que não precisa de uma"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b21_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"olhar o arquivo e dizer se parece seguro\" troca uma checagem de assinatura binária — determinística, rápida, auditável — por um julgamento probabilístico que ainda precisaria de um antivírus de verdade por trás. A pergunta \"este arquivo é do tipo que eu esperava?\" tem resposta exata; reservar IA para ela é gastar latência e orçamento num lugar que não precisa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Upload direto pela API/contêiner",
+                "é o menor número de linhas que funciona, e funciona de verdade até uns 5 MB",
+                "a task materializa o arquivo em memória e paga banda e tempo de conexão do cliente",
+                "contêiner morto com código 137 sem exceção nos logs",
+                "URL assinada; a task nunca vê o corpo",
+                "arquivo pequeno e previsível, como avatar de perfil"
+              ],
+              [
+                "PUT assinado sem Content-Length nem POST com content-length-range",
+                "é o exemplo mais copiado de tutorial, e \"parece\" ter um limite porque pede um tamanho",
+                "não impõe teto nenhum de verdade — qualquer tamanho passa",
+                "upload muito maior que o esperado aceito sem erro",
+                "POST com política assinada quando o teto importa",
+                "download, ou upload onde tamanho não é preocupação (ex.: log interno confiável)"
+              ],
+              [
+                "Confiar na extensão do nome do arquivo enviado pelo cliente",
+                "parece suficiente, e \"o cliente não vai mentir de propósito\"",
+                "nome de arquivo é dado do cliente, não fato — abre caminho para tipo forjado",
+                "objeto salvo com extensão que não corresponde ao conteúdo real",
+                "extensão derivada do tipo MIME aceito pela aplicação, decidida no servidor",
+                "nunca, quando o tipo do arquivo importa para segurança ou processamento"
+              ],
+              [
+                "CORS com `allowed_origins = [\"*\"]`",
+                "resolve o erro de CORS rápido, \"e depois eu aperto\"",
+                "permite que qualquer site consiga usar uma assinatura vazada e leia a resposta do S3",
+                "nada visível até um incidente de uso indevido de assinatura",
+                "origem exata do domínio da aplicação",
+                "nunca em bucket com upload autenticado; talvez em conteúdo público de leitura"
+              ],
+              [
+                "Multipart sem regra de ciclo de vida para partes incompletas",
+                "ninguém pensa em \"o que acontece quando falha\" até a fatura aparecer",
+                "parte enviada e nunca concluída continua sendo cobrada indefinidamente",
+                "crescimento de armazenamento sem correspondência em objetos visíveis",
+                "`abort_incomplete_multipart_upload` com prazo curto",
+                "nunca — o custo de configurar é uma linha de Terraform"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Erro genérico de rede no navegador, upload \"falha\"",
+                "bucket sem CORS ou origem errada em `allowed_origins`",
+                "confira a aba Network; procure \"blocked by CORS policy\"",
+                "console do navegador; configuração de CORS do bucket",
+                "ajustar `allowed_origins` para o domínio exato, sem barra final"
+              ],
+              [
+                "Objeto aparece no bucket mesmo com erro reportado ao usuário",
+                "o upload em si funcionou; o navegador não conseguiu LER a resposta por falta de CORS",
+                "confirme se o objeto existe no S3 apesar do erro na tela",
+                "listagem do bucket vs. mensagem de erro no app",
+                "mesmo ajuste de CORS acima; o upload nunca foi o problema"
+              ],
+              [
+                "S3 recusa com EntityTooLarge mesmo em arquivo pequeno",
+                "faixa de `content-length-range` calculada em unidade errada (bits em vez de bytes)",
+                "decodifique o campo `policy` em base64 e confira os números",
+                "código que monta a política assinada",
+                "usar bytes de forma consistente; considere uma constante nomeada, não literal repetido"
+              ],
+              [
+                "PUT aceita arquivo muito maior que o esperado",
+                "ausência de `Content-Length` nos cabeçalhos assinados, ou uso de PUT em vez de POST",
+                "gere a mesma URL e envie um arquivo grande de teste",
+                "código que gera a URL — verifique se há `SignedHeaders` além do mínimo",
+                "migrar para POST com `content-length-range` quando o teto importar"
+              ],
+              [
+                "Verificador nunca processa o objeto novo",
+                "notificação do S3 para o EventBridge desabilitada, ou padrão de evento errado",
+                "confira métricas de invocação do EventBridge para a regra",
+                "`aws_s3_bucket_notification` e `event_pattern` da regra",
+                "habilitar `eventbridge = true` no bucket; revisar o prefixo do padrão"
+              ],
+              [
+                "Fila cresce sem parar (backlog)",
+                "worker mais lento que a chegada de eventos no pico das 18h",
+                "compare `NumberOfMessagesSent` com `NumberOfMessagesDeleted` ao longo do dia",
+                "métricas da fila no CloudWatch",
+                "aumentar o número de instâncias do verificador; ele é sem estado"
+              ],
+              [
+                "Objeto aprovado nunca aparece no bucket publicado",
+                "exceção durante a cópia foi engolida, ou permissão de PutObject falta no bucket destino",
+                "logs do verificador; confira se a mensagem foi deletada mesmo com falha",
+                "logs da aplicação e a policy IAM do worker",
+                "não deletar a mensagem da fila em caso de falha; corrigir a policy"
+              ],
+              [
+                "Upload falha com URL expirada antes do fim, em loja com internet lenta",
+                "prazo de assinatura menor que o tempo real de upload na banda daquela loja",
+                "compare o tempo estimado de upload (tamanho / banda) com a validade pedida",
+                "valor de `validade` passado a `AssinarAsync`",
+                "aumentar a folga sobre a banda mínima suportada, não sobre a banda média"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "O objeto chegou a existir no S3, mesmo que por um instante? Se sim, o problema está do lado de CORS ou de leitura da resposta, não do upload em si — o byte já passou. Se não, o problema está na assinatura: condição errada, permissão IAM insuficiente, ou prazo expirado antes do envio começar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório cria pouco recurso que cobra por hora, mas o que sobrevive ao "
+              },
+              {
+                "text": "terraform destroy",
+                "code": true
+              },
+              {
+                "text": " aqui é armazenamento — e ele cresce sozinho se ninguém olhar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Derrube o que o Terraform administra.\nterraform destroy -auto-approve\n\n# 2. MULTIPART INCOMPLETO: o destroy do bucket falha se houver upload\n#    multipart em andamento, a menos que force_destroy esteja ligado.\naws s3api list-multipart-uploads --bucket ffv-lab-laudos-quarentena \\\n  --query \"Uploads[].{Chave:Key,Iniciado:Initiated}\" --output table\nfor upload in $(aws s3api list-multipart-uploads --bucket ffv-lab-laudos-quarentena \\\n                  --query \"Uploads[].UploadId\" --output text); do\n  aws s3api abort-multipart-upload --bucket ffv-lab-laudos-quarentena \\\n    --key \"$(aws s3api list-multipart-uploads --bucket ffv-lab-laudos-quarentena \\\n              --query \"Uploads[?UploadId=='$upload'].Key | [0]\" --output text)\" \\\n    --upload-id \"$upload\"\ndone\n\n# 3. OBJETOS RESIDUAIS nos dois buckets: destroy sem force_destroy nao\n#    remove bucket com objeto dentro.\naws s3 rm s3://ffv-lab-laudos-quarentena --recursive\naws s3 rm s3://ffv-lab-laudos-publicados --recursive\n\n# 4. FILA E DLQ: nao cobram paradas em valor relevante, mas confirme\n#    que sumiram — mensagem presa numa fila orfa nao aparece em nenhum\n#    painel depois que o Terraform sair do estado.\naws sqs list-queues --queue-name-prefix ffv-lab-laudos\n\n# 5. Prova final: nada com o nome do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table"
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Buckets de laudos",
+                "só com `force_destroy`",
+                "sim, GB-mês",
+                "o destroy falha se houver objeto dentro; interrupção no meio deixa tudo de pé"
+              ],
+              [
+                "Partes de multipart incompleto",
+                "não é removido pelo destroy do bucket sozinho",
+                "sim, GB-mês",
+                "a regra de ciclo de vida cuida disso em produção; ao encerrar o laboratório, aborte à mão"
+              ],
+              [
+                "Chave KMS",
+                "entra em janela de exclusão agendada",
+                "sim, valor pequeno por mês na janela",
+                "exclusão de chave KMS nunca é imediata — é proteção contra apagar por engano"
+              ],
+              [
+                "Fila e DLQ",
+                "sim",
+                "não",
+                "sem custo relevante parada; confirme que sumiram do estado"
+              ],
+              [
+                "Regra do EventBridge",
+                "sim",
+                "não",
+                "sem custo por regra parada"
+              ],
+              [
+                "O que veio do L05",
+                "não faz parte deste destroy",
+                "sim, por hora e por GB servido",
+                "CloudFront e o domínio continuam cobrando — não são deste laboratório"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Task estourando memória com arquivo de 200 MB",
+                "URL POST pré-assinada",
+                "tira a aplicação do caminho do byte sem tirá-la da decisão de quem pode enviar"
+              ],
+              [
+                "PUT assinado não impõe teto nenhum",
+                "`content-length-range` na política POST",
+                "único caminho que o S3 verifica ANTES de gravar o objeto"
+              ],
+              [
+                "Cliente escolhendo o caminho do objeto",
+                "chave montada pela API, com UUID",
+                "fecha path traversal e sobrescrita entre lojas, sem depender do cliente se comportar"
+              ],
+              [
+                "Upload cross-origin sendo bloqueado ou lido errado",
+                "CORS restrito ao domínio exato",
+                "permite o navegador ler a resposta do S3 sem abrir para qualquer origem"
+              ],
+              [
+                "Multipart sem controle de tamanho",
+                "admissão por soma de partes na aplicação",
+                "o S3 não oferece condição nenhuma aqui — o teto só existe se alguém o escrever"
+              ],
+              [
+                "Parte de multipart nunca concluída cobrando para sempre",
+                "`abort_incomplete_multipart_upload` no ciclo de vida",
+                "fecha a cobrança sem depender de alguém lembrar"
+              ],
+              [
+                "Validação que a API não pode mais fazer em tempo real",
+                "EventBridge, fila e verificador assíncrono",
+                "move a checagem para depois do fato, sem perder o evento"
+              ],
+              [
+                "Objeto malicioso alcançável antes de aprovado",
+                "bucket de quarentena separado do publicado",
+                "separação física impede servir o que não foi checado, mesmo com bug de lógica"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Task morrendo por estouro de memória",
+                "byte fora do caminho da aplicação",
+                "nada — este risco simplesmente deixou de existir neste desenho"
+              ],
+              [
+                "Upload maior que o esperado",
+                "`content-length-range`",
+                "multipart, que não tem essa condição — precisa de admissão própria"
+              ],
+              [
+                "Arquivo malicioso servido ao público",
+                "quarentena separada do publicado",
+                "arquivo malicioso ainda ocupa espaço em quarentena até o verificador decidir"
+              ],
+              [
+                "Evento perdido por falha do verificador",
+                "fila com redrive para DLQ",
+                "objeto ficar preso em quarentena além do prazo, se a DLQ não for drenada"
+              ],
+              [
+                "Assinatura usada além do prazo pedido",
+                "validade curta",
+                "assinatura usada dentro do prazo por alguém que não deveria ter recebido a URL"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "O navegador pede autorização à API, na mesma origem do domínio da loja.",
+              "A API confere sessão e cota, escolhe a chave do objeto e assina a política.",
+              "O navegador envia o arquivo direto ao S3, num host diferente — por isso o CORS.",
+              "O S3 aplica `content-length-range` antes de gravar; fora da faixa, recusa com 400.",
+              "O objeto criado dispara uma notificação ao EventBridge, filtrada por prefixo.",
+              "A notificação vira mensagem na fila, entregue ao verificador.",
+              "O verificador lê os primeiros bytes, confere o tipo real e aciona o antivírus.",
+              "Aprovado, o objeto é copiado ao bucket publicado; reprovado, é descartado.",
+              "O veredito é gravado no DynamoDB — é o que a tela da loja consulta.",
+              "A quarentena é limpa: o objeto original é apagado nos dois casos."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b26_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Uma URL S3 pré-assinada tem limite de tamanho de upload por padrão?",
+            "answer": "Não, e esse é o ponto que mais tutorial deixa passar. Uma URL `PUT` pré-assinada gerada do jeito mais comum — só bucket, chave e prazo — não carrega nenhuma condição de tamanho: o S3 aceita qualquer quantidade de bytes que o cliente enviar. Teto de tamanho real só existe em dois caminhos: uma política `POST` assinada com a condição `content-length-range`, que o S3 verifica antes de gravar o objeto, ou um `PUT` em que o cabeçalho `Content-Length` foi incluído nos cabeçalhos assinados, o que fixa um valor exato — não uma faixa — e exige saber o tamanho de antemão."
+          }
+        },
+        {
+          "id": "b26_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Por que minha URL pré-assinada expira antes do prazo que eu configurei?",
+            "answer": "Porque o prazo pedido nunca supera a vida da credencial usada para assinar. Uma URL assinada com credencial temporária — papel do IAM, credencial de task do ECS, sessão do STS — expira junto com essa credencial, mesmo que se peça um prazo maior explicitamente. A própria AWS documenta a rotação típica: credencial de task do ECS gira a cada 1 a 6 horas, e uma sessão padrão de `AssumeRole` do STS dura 1 hora. Só uma credencial de IAM user de longa duração sustenta o máximo de 7 dias que o SDK permite configurar."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Preciso de multipart upload para um arquivo de 200 MB?",
+            "answer": "Tecnicamente não: o S3 aceita upload de operação única até 5 GB, então 200 MB cabe folgado num `PUT` ou `POST` simples. A AWS recomenda considerar multipart a partir de 100 MB, mas por resiliência e paralelismo, não porque o tamanho exija — se a conexão cair aos 190 MB de um upload simples, tudo se perde e recomeça do zero, enquanto multipart permite reenviar só a parte que falhou. A decisão vira compensar essa reenvio contra a complexidade extra de controlar o tamanho por conta própria, porque multipart não tem `content-length-range`."
+          }
+        },
+        {
+          "id": "b26_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Por que meu upload aparece bem-sucedido no S3, mas o usuário vê erro no navegador?",
+            "answer": "Porque CORS controla o que o NAVEGADOR pode LER da resposta, não o que o S3 aceita gravar. Sem CORS configurado no bucket para a origem correta, o S3 pode processar o POST e criar o objeto normalmente, e ainda assim o JavaScript que fez a requisição recebe um erro de rede genérico ao tentar ler os cabeçalhos da resposta — porque o navegador bloqueia essa leitura cross-origin sem o cabeçalho `Access-Control-Allow-Origin`. O sintoma no app parece \"upload falhou\"; o fato é \"upload funcionou, leitura da confirmação falhou\"."
+          }
+        },
+        {
+          "id": "b26_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Multipart upload tem alguma condição para limitar o tamanho total do arquivo?",
+            "answer": "Não. Nem `InitiateMultipartUpload`, nem `UploadPart`, nem `CompleteMultipartUpload` aceitam uma condição de tamanho — o único teto documentado é estrutural: partes de 5 MiB a 5 GiB, até 10.000 partes, somando um objeto de até 48,8 TiB. Se a sua aplicação precisa de um limite menor que isso, ela mesma precisa somar o que cada parte declara e recusar autorizar a próxima assim que a soma passar do teto — e abortar o upload inteiro nesse momento, não só recusar a parte, para não deixar partes já aceitas cobrando armazenamento sem necessidade."
+          }
+        },
+        {
+          "id": "b26_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "O que acontece com um multipart upload que nunca é concluído?",
+            "answer": "As partes já enviadas continuam sendo cobradas como armazenamento, indefinidamente, até algo as remover — o S3 não expira automaticamente um multipart abandonado. É uma das linhas de custo mais fáceis de esquecer, porque essas partes não aparecem numa listagem comum de objetos, só em `list-multipart-uploads`. A correção é configurar a regra de ciclo de vida `abort_incomplete_multipart_upload` no bucket, com um prazo curto — a AWS não cobra para configurá-la, e ela remove automaticamente qualquer multipart iniciado e nunca concluído depois do número de dias definido."
+          }
+        },
+        {
+          "id": "b26_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Por que a chave do objeto é escolhida pela aplicação, não pelo nome enviado?",
+            "answer": "Porque o nome de arquivo é dado fornecido pelo cliente, não um fato em que confiar. Se a aplicação usasse o nome enviado diretamente como chave, um cliente poderia tentar `../outra-loja/arquivo.pdf` para influenciar o caminho, ou simplesmente reenviar o mesmo nome de um laudo de outra loja e sobrescrevê-lo, já que o S3 substitui um objeto existente na mesma chave sem aviso. Gerar a chave no servidor — com o ID da loja, o ano e um identificador único, como `lojas/{lojaId}/laudos/{ano}/{uuid}` — elimina os dois problemas de uma vez, sem exigir validação alguma do nome recebido."
+          }
+        },
+        {
+          "id": "b26_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "CORS no bucket S3 é suficiente para impedir que qualquer site use minha URL assinada?",
+            "answer": "Não. CORS é imposto pelo navegador do usuário, não pelo S3 — qualquer requisição feita fora de um navegador, como um `curl` ou um script rodando em outro servidor, ignora CORS por completo e consegue usar uma URL assinada válida normalmente. A proteção real contra uso indevido de uma URL vazada é o prazo curto de validade e as condições amarradas à assinatura, como a faixa de tamanho e o prefixo da chave — CORS só resolve o problema de qual site consegue LER a resposta a partir do navegador do usuário legítimo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b27_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Um pipeline de upload usa multipart, e cerca de 30% das tentativas são abandonadas pelo cliente antes do `CompleteMultipartUpload` (aba fechada, conexão perdida). Seis meses depois, a fatura de armazenamento do bucket está anormalmente alta, mesmo com o verificador aprovando e apagando corretamente todo objeto completo. Qual é a causa mais provável, e a correção?",
+            "options": [
+              "O KMS está cobrando por cada parte recriptografada a cada nova tentativa de envio do mesmo arquivo",
+              "A tabela do DynamoDB está com capacidade provisionada alta demais para o volume real de laudos",
+              "A fila SQS está retendo mensagens por 14 dias na DLQ, e isso está sendo cobrado por gigabyte armazenado",
+              "As partes dos uploads nunca concluídos continuam sendo cobradas como armazenamento; falta a regra de ciclo de vida abort_incomplete_multipart_upload"
+            ],
+            "correctIndex": 3,
+            "explanation": "É exatamente o achado de custo que o módulo nomeia: partes de multipart enviadas e nunca concluídas continuam ocupando armazenamento — o S3 não as remove sozinho, e elas nem aparecem numa listagem comum de objetos, só em `list-multipart-uploads`. Sem a regra `abort_incomplete_multipart_upload` no ciclo de vida do bucket, 30% de abandono ao longo de seis meses acumula um volume real de dado morto sendo pago todo mês.\n\nA primeira alternativa inventa um mecanismo de cobrança que não existe: o KMS cobra por chamada de API de criptografia, não por \"recriptografar\" uma parte reenviada, e de qualquer forma isso não explicaria uma fatura de ARMAZENAMENTO. A terceira muda de serviço sem motivo: capacidade do DynamoDB aparece como linha própria e distinta na fatura, e o enunciado já isola o problema em armazenamento do bucket. A quarta confunde a ordem de grandeza: retenção de mensagem no SQS custa por armazenamento de mensagem, que é minúsculo comparado a partes de um arquivo de até 200 MB — não é essa a fonte de uma fatura \"anormalmente alta\"."
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "A equipe da Cadência migrou o upload de laudos para a URL assinada, mas esqueceu de configurar CORS no bucket de quarentena. O que os usuários relatam, e por que o sintoma engana o diagnóstico?",
+            "options": [
+              "O upload demora exatamente o dobro do tempo esperado, porque o navegador tenta enviar automaticamente duas vezes quando detecta ausência de CORS",
+              "Usuários reportam erro genérico de rede ao enviar, mesmo quando o objeto às vezes já aparece no bucket — porque o navegador não consegue LER a resposta cross-origin sem cabeçalhos CORS, mesmo que o S3 tenha aceitado o upload",
+              "A assinatura da política expira imediatamente, porque CORS e o prazo de expiração da assinatura são verificados pelo mesmo mecanismo no S3",
+              "O S3 recusa criar o objeto e devolve 403 imediatamente, então o erro aparece de forma clara nos logs da própria aplicação da Cadência"
+            ],
+            "correctIndex": 1,
+            "explanation": "CORS é aplicado pelo NAVEGADOR do usuário, não pelo S3: o S3 recebe o POST, avalia as condições da política assinada, e grava o objeto normalmente se elas baterem — nada nisso depende de CORS. O que falha é o passo seguinte, invisível para quem só olha o S3: o navegador tenta ler a resposta HTTP para confirmar sucesso, e o bloqueio de CORS impede essa leitura, entregando ao JavaScript um erro de rede genérico. O resultado é o pior tipo de bug para diagnosticar: o efeito colateral (objeto gravado) e o sintoma relatado (erro no envio) parecem contraditórios.\n\nA segunda alternativa erra o mecanismo: CORS não é avaliado pelo S3 ao decidir gravar o objeto, e como a aplicação da Cadência nunca recebe o corpo do upload, não há nenhum log dela para mostrar esse erro — a requisição inteira acontece entre o navegador e o S3. A terceira inventa um retry automático que não existe: ausência de CORS não aciona reenvio nenhum, apenas bloqueia a leitura da resposta já recebida. A quarta confunde dois mecanismos completamente independentes: CORS é imposto pelo navegador sobre a LEITURA da resposta, e o prazo de expiração da política é verificado pelo S3 sobre a ASSINATURA da requisição — nenhum dos dois depende do outro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b28",
+      "type": "section",
+      "position": 29,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b28_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L05 no ar (domínio, TLS, CloudFront), L01 concluído, noções de IAM e de fila"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "a diferença real entre PUT e POST assinados quanto a teto de tamanho; por que credencial temporária limita a expiração da assinatura; por que multipart não tem condição de tamanho e como suprir isso na aplicação; por que erro de CORS pode esconder um upload que já funcionou"
+              ],
+              [
+                "Limitação que fica",
+                "sem limite de requisições na rota de assinatura, uma loja pode pedir muitas assinaturas em paralelo antes de a cota ser atualizada"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L28 — processar o arquivo que acabou de chegar. Reaproveita a cadeia de EventBridge e fila deste módulo para acionar trabalho de negócio sobre o laudo aprovado"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L92 (documento → extração → interpretação → revisão humana) depende deste laboratório para ter um bucket publicado confiável de onde ler"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b28_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Uploading objects with presigned URLs",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "Download and upload objects with presigned URLs",
+                "code": true
+              },
+              {
+                "text": " — geração de URL PUT, a tabela de tipo de credencial contra prazo de expiração, e a FAQ que confirma a rotação de 1 a 6 h da credencial de task do ECS; a referência de `sigv4-HTTPPOSTConstructPolicy` — sintaxe de `content-length-range`; "
+              },
+              {
+                "text": "Amazon S3 multipart upload limits",
+                "code": true
+              },
+              {
+                "text": " — os números de tamanho de objeto, de parte e de contagem de partes. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b28_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "Não confirmei se a expiração de uma política POST é avaliada só no início da requisição ou durante toda a transferência — a documentação de download descreve o primeiro comportamento para GET, e o módulo assume algo parecido para POST, sem fonte que o afirme diretamente. Também não testei o nome e a cobertura atuais do GuardDuty Malware Protection for S3, citado como alternativa ao verificador caseiro. E o teto de 220 MB deste módulo vem da hipótese declarada sobre o limite de vídeo do app da loja — se essa hipótese mudar, o número tem de ser revisado, não herdado."
+          }
+        }
+      ]
+    }
+  ]
+}

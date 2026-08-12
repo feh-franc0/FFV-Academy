@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SimuladoQuestion } from '@/lib/simulados';
 import { askTutor, type TutorKind } from '@/lib/tutor-api';
 import { hasBackend } from '@/lib/api-client';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 
 interface Props {
   question: SimuladoQuestion;
@@ -30,6 +31,8 @@ export function TutorChat({ question, onClose }: Props) {
     },
   ]);
   const [loading, setLoading] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, true);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -91,9 +94,11 @@ export function TutorChat({ question, onClose }: Props) {
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label="Chat com tutor"
+      tabIndex={-1}
       className="fixed inset-0 z-[90] flex justify-end"
       style={{ background: 'rgba(0,0,0,0.5)' }}
       onClick={e => e.target === e.currentTarget && onClose()}

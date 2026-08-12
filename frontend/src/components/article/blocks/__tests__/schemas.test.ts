@@ -125,7 +125,7 @@ describe('CodeBlockSchema', () => {
 });
 
 describe('ComparisonTableSchema', () => {
-  it('aceita 2-6 columns + ≥1 row', () => {
+  it('aceita 2-8 columns + ≥1 row', () => {
     const r = ComparisonTableSchema.safeParse({
       columns: ['a', 'b'],
       rows: [['x', 'y']],
@@ -136,10 +136,26 @@ describe('ComparisonTableSchema', () => {
     const r = ComparisonTableSchema.safeParse({ columns: ['a'], rows: [['x']] });
     expect(r.success).toBe(false);
   });
-  it('rejeita mais de 6 colunas', () => {
+  it('aceita 7 e 8 colunas — desktop rola em overflow-x, mobile vira cards', () => {
+    // Regressão: o cap de 6 descartava silenciosamente tabelas legítimas
+    // (comparação de modelos de embedding, specs de Apple Silicon). Bloco
+    // inválido volta null no BlockRenderer, então a tabela desaparecia da
+    // página sem erro nenhum.
+    for (const n of [7, 8]) {
+      const cols = Array.from({ length: n }, (_, i) => `c${i}`);
+      const r = ComparisonTableSchema.safeParse({ columns: cols, rows: [cols] });
+      expect(r.success, `${n} colunas deveria passar`).toBe(true);
+    }
+  });
+  it('rejeita mais de 8 colunas', () => {
+    const cols = Array.from({ length: 9 }, (_, i) => `c${i}`);
+    const r = ComparisonTableSchema.safeParse({ columns: cols, rows: [cols] });
+    expect(r.success).toBe(false);
+  });
+  it('rejeita cabeçalho vazio — inclusive a célula de canto de matriz', () => {
     const r = ComparisonTableSchema.safeParse({
-      columns: ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
-      rows: [['1', '2', '3', '4', '5', '6', '7']],
+      columns: ['', 'Opção A', 'Opção B'],
+      rows: [['Custo', 'alto', 'baixo']],
     });
     expect(r.success).toBe(false);
   });

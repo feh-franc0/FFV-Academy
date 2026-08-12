@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { BackButton } from '@/components/BackButton';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { getSimulado, getExplanationText } from '@/lib/simulados';
@@ -21,9 +22,9 @@ export function SimuladoDetailClient({ slug }: Props) {
     return (
       <div className="max-w-2xl mx-auto px-6 py-20 text-center">
         <p className="text-lg" style={{ color: 'var(--ffv-muted)' }}>Simulado não encontrado.</p>
-        <Link href="/simulados" className="inline-block mt-6 text-sm font-semibold" style={{ color: 'var(--ffv-blue)' }}>
-          ← Voltar ao catálogo
-        </Link>
+        <BackButton href="/simulados" className="inline-flex items-center gap-1.5 mt-6 text-sm font-semibold">
+          Voltar ao catálogo
+        </BackButton>
       </div>
     );
   }

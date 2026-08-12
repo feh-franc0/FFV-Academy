@@ -53,7 +53,7 @@ describe('Tamper em UserProfile via localStorage', () => {
 });
 
 describe('Tamper via importState', () => {
-  it('importState rejeita JSON que injeta campo desconhecido isAdmin', () => {
+  it('importState rejeita JSON que injeta campo desconhecido isAdmin', async () => {
     const evil = JSON.stringify({
       xp: 9999, level: 20, streak: 0, lastStudyDate: null,
       completedModules: [], quizScores: {}, badges: [],
@@ -65,11 +65,11 @@ describe('Tamper via importState', () => {
       articleProgress: {},
       isAdmin: true,
     });
-    const r = importState(evil);
+    const r = await importState(evil);
     expect(r.ok).toBe(false);
   });
 
-  it('importState rejeita payload com campo proibido', () => {
+  it('importState rejeita payload com campo proibido', async () => {
     const evil = JSON.stringify({
       xp: 100, level: 1, streak: 0, lastStudyDate: null,
       completedModules: [], quizScores: {}, badges: [],
@@ -82,7 +82,7 @@ describe('Tamper via importState', () => {
       // paidProducts aqui seria um tamper tentando dar acesso pago
       paidProducts: ['simulado-aws-practitioner'],
     });
-    const r = importState(evil);
+    const r = await importState(evil);
     // GameStateSchema não tem paidProducts → strict() rejeita
     expect(r.ok).toBe(false);
   });

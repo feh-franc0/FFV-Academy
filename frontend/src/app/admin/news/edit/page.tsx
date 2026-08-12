@@ -4,7 +4,7 @@
  * /admin/news/edit?slug=xxx — editor de news. Modo "new" se slug ausente.
  */
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createNews, updateNews, type NewsInput } from '@/lib/admin-content-api';
 
@@ -102,7 +102,7 @@ export default function NewsEditPage() {
       </label>
 
       <div className="flex gap-3 pt-3 border-t" style={{ borderColor: 'var(--ffv-border)' }}>
-        <button onClick={handleSave} disabled={busy} className="px-5 py-2 rounded-md text-sm font-semibold disabled:opacity-50" style={{ background: 'var(--ffv-blue)', color: 'white' }}>
+        <button onClick={handleSave} disabled={busy} className="px-5 py-2 rounded-md text-sm font-semibold disabled:opacity-50" style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}>
           {busy ? 'Salvando…' : (editingSlug ? 'Salvar' : 'Criar')}
         </button>
         {error && <span className="text-sm" style={{ color: 'var(--ffv-red, #dc2626)' }}>{error}</span>}
@@ -112,10 +112,11 @@ export default function NewsEditPage() {
 }
 
 function Input({ label, value, onChange, disabled }: { label: string; value: string; onChange: (v: string) => void; disabled?: boolean }) {
+  const id = useId();
   return (
     <div>
-      <label className="text-xs uppercase tracking-widest font-semibold mb-1 block" style={{ color: 'var(--ffv-muted)' }}>{label}</label>
-      <input value={value} onChange={e => onChange(e.target.value)} disabled={disabled}
+      <label htmlFor={id} className="text-xs uppercase tracking-widest font-semibold mb-1 block" style={{ color: 'var(--ffv-muted)' }}>{label}</label>
+      <input id={id} value={value} onChange={e => onChange(e.target.value)} disabled={disabled}
         className="w-full px-3 py-2 rounded-md text-sm disabled:opacity-50"
         style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)' }} />
     </div>
@@ -123,10 +124,11 @@ function Input({ label, value, onChange, disabled }: { label: string; value: str
 }
 
 function Textarea({ label, value, onChange, rows = 4 }: { label: string; value: string; onChange: (v: string) => void; rows?: number }) {
+  const id = useId();
   return (
     <div>
-      <label className="text-xs uppercase tracking-widest font-semibold mb-1 block" style={{ color: 'var(--ffv-muted)' }}>{label}</label>
-      <textarea value={value} onChange={e => onChange(e.target.value)} rows={rows}
+      <label htmlFor={id} className="text-xs uppercase tracking-widest font-semibold mb-1 block" style={{ color: 'var(--ffv-muted)' }}>{label}</label>
+      <textarea id={id} value={value} onChange={e => onChange(e.target.value)} rows={rows}
         className="w-full p-3 rounded-md text-sm"
         style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)' }} />
     </div>
@@ -134,10 +136,11 @@ function Textarea({ label, value, onChange, rows = 4 }: { label: string; value: 
 }
 
 function Select({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: string[] }) {
+  const id = useId();
   return (
     <div>
-      <label className="text-xs uppercase tracking-widest font-semibold mb-1 block" style={{ color: 'var(--ffv-muted)' }}>{label}</label>
-      <select value={value} onChange={e => onChange(e.target.value)}
+      <label htmlFor={id} className="text-xs uppercase tracking-widest font-semibold mb-1 block" style={{ color: 'var(--ffv-muted)' }}>{label}</label>
+      <select id={id} value={value} onChange={e => onChange(e.target.value)}
         className="w-full px-3 py-2 rounded-md text-sm"
         style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)' }}>
         {options.map(o => <option key={o} value={o}>{o}</option>)}

@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { listComments, createComment, deleteComment, type CommentDTO } from '@/lib/comments-api';
 import { useAuth } from '@/hooks/useAuth';
+import { FalhaAoCarregar } from '@/components/estado/FalhaAoCarregar';
 
 type TargetType = 'article' | 'trail' | 'block';
 
@@ -25,6 +26,10 @@ export function CommentSection({ targetType, targetId }: Props) {
   const [items, setItems] = useState<CommentDTO[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  // `listComments` já distingue falha (null) de vazio ([]) — o defeito estava
+  // aqui, tratando os dois caso do mesmo jeito e mostrando "seja o primeiro"
+  // com o backend fora do ar, e ainda oferecendo um formulário que ia falhar.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [draft, setDraft] = useState('');
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +40,9 @@ export function CommentSection({ targetType, targetId }: Props) {
     if (res) {
       setItems(res.data);
       setTotal(res.total);
+      setLoadFailed(false);
+    } else {
+      setLoadFailed(true);
     }
     setLoading(false);
   }, [targetType, targetId]);
@@ -87,13 +95,18 @@ export function CommentSection({ targetType, targetId }: Props) {
       </h2>
 
       <form onSubmit={handleSubmit} className="mb-6">
+        <label htmlFor={`comment-draft-${targetType}-${targetId}`} className="sr-only">
+          Escrever comentário
+        </label>
         <textarea
+          id={`comment-draft-${targetType}-${targetId}`}
           value={draft}
           onChange={e => setDraft(e.target.value)}
           placeholder={isLoggedIn ? 'Escreva um comentário...' : 'Faça login para comentar...'}
           rows={3}
           maxLength={4000}
-          className="w-full p-3 rounded-md text-sm resize-y"
+          disabled={loadFailed}
+          className="w-full p-3 rounded-md text-sm resize-y disabled:opacity-50"
           style={{
             background: 'var(--ffv-bg2)',
             border: '1px solid var(--ffv-border)',
@@ -112,9 +125,9 @@ export function CommentSection({ targetType, targetId }: Props) {
           </span>
           <button
             type="submit"
-            disabled={posting || draft.trim().length === 0}
+            disabled={posting || draft.trim().length === 0 || loadFailed}
             className="px-4 py-2 rounded-md text-sm font-semibold disabled:opacity-50"
-            style={{ background: 'var(--ffv-blue)', color: 'white' }}
+            style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
           >
             {posting ? 'Enviando…' : 'Comentar'}
           </button>
@@ -127,7 +140,16 @@ export function CommentSection({ targetType, targetId }: Props) {
         </p>
       )}
 
-      {!loading && items.length === 0 && (
+      {!loading && loadFailed && (
+        <FalhaAoCarregar
+          compact
+          title="Não conseguimos carregar os comentários"
+          description="O servidor não respondeu. Tente novamente."
+          onRetry={refresh}
+        />
+      )}
+
+      {!loading && !loadFailed && items.length === 0 && (
         <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
           Nenhum comentário ainda. Seja o primeiro.
         </p>

@@ -1,0 +1,2537 @@
+{
+  "slug": "lab-glue-catalog-crawler-job-idempotente",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência é um marketplace de material de construção com 40 lojistas parceiros. O time de dados tem três pessoas e mantém um lake em camadas no S3 — bronze, prata e ouro, do "
+              },
+              {
+                "text": "L62",
+                "code": true
+              },
+              {
+                "text": " — onde pedidos chegam brutos em "
+              },
+              {
+                "text": "bronze/pedidos/dt=",
+                "code": true
+              },
+              {
+                "text": " e saem tratados em "
+              },
+              {
+                "text": "prata/pedidos/dt=",
+                "code": true
+              },
+              {
+                "text": ". Duda escreveu, seis meses atrás, o script que faz essa conversão."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Duda mudou de squad na semana passada. Theo, analista novo, precisa montar um relatório sobre os mesmos pedidos e não tem acesso ao código dela — só a um documento de arquitetura que ninguém atualiza há meses. Ele tenta consultar a tabela no Athena com uma definição copiada desse documento, e a consulta falha numa coluna que existe no arquivo mas não na definição: `canal_pedido`, adicionada há duas semanas pelo time de produto."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O problema não é a ausência de Duda — é que o schema nunca existiu em lugar nenhum além do código dela. Um catálogo central resolveria isso de um jeito que nenhuma wiki resolve: sendo alimentado automaticamente, e não por alguém lembrando de atualizar um documento."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Básico — depende do L62 e não pressupõe experiência prévia com Spark"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L62 (data lake em camadas): este módulo assume que `bronze/pedidos/dt=` já existe; qualquer bucket particionado por data serve para acompanhar"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 40 min · implementação 1 h 30 a 2 h"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo: crawler e job rodam minutos por dia; o que mais pesa já é o S3 do lake"
+              },
+              {
+                "k": "Serviços",
+                "v": "Glue Data Catalog, Glue Crawler, Glue ETL Job, Glue Workflow, S3, Athena, EventBridge, SNS"
+              },
+              {
+                "k": "Volume atual",
+                "v": "18 mil pedidos/dia, cerca de 48 arquivos bronze por dia, 5 a 6 MB cada"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "qualquer analista descobre o schema consultando, não perguntando a alguém"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "os arquivos de origem já chegam prontos (JSON/Parquet) — conversão de formato e tamanho de arquivo é o L64, não este módulo"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "uma tabela no catálogo sempre atual e um job que roda duas vezes sobre o mesmo dia sem duplicar uma linha, com a prova gravada"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é sobre formato de arquivo ou tamanho de partição (isso é o L64, e este módulo assume que ele já foi resolvido). Não é sobre qualidade de dado com contrato e quarentena (L70) — aqui o job faz um cast explícito e para; validar o VALOR do dado é outro laboratório. E não é sobre quem pode ver qual coluna (L69) — o catálogo deste módulo é lido por qualquer pessoa com acesso ao banco, sem permissão fina nenhuma ainda."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que o Athena não encontra dado que já está fisicamente no S3.",
+              "Diferenciar o papel do crawler (inferir e popular) do papel do catálogo (armazenar e servir).",
+              "Configurar a política de mudança de schema do crawler e justificar UPDATE_IN_DATABASE contra LOG, e DEPRECATE_IN_DATABASE contra DELETE_FROM_DATABASE.",
+              "Encadear crawler e job por evento, dentro de um Glue Workflow, sem depender de dois agendamentos coincidirem.",
+              "Escrever um job de ETL que roda duas vezes sobre o mesmo dia sem duplicar uma linha.",
+              "Distinguir o que Job Bookmarks protegem do que a sobrescrita de partição protege.",
+              "Atualizar a tabela do catálogo a partir do próprio job, sem uma segunda varredura completa.",
+              "Provar idempotência com número — contagem de linha e de arquivo antes e depois de um rerun."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Papel do Glue Data Catalog",
+                "DEA-C01, SAA-C03",
+                "metastore central, compatível com Hive Metastore",
+                "que Athena, EMR e Redshift Spectrum leem a MESMA tabela, sem cópia de metadado"
+              ],
+              [
+                "Crawler: o que ele infere e o que decide",
+                "DEA-C01, DAS-C01",
+                "varre o S3, infere schema, aplica SchemaChangePolicy",
+                "que a inferência pode errar, e que a política decide o que fazer quando erra"
+              ],
+              [
+                "UpdateBehavior / DeleteBehavior",
+                "DEA-C01",
+                "UPDATE_IN_DATABASE, DEPRECATE_IN_DATABASE, explícitos",
+                "a diferença entre aceitar mudança de tipo e apagar registro de partição sumida"
+              ],
+              [
+                "Glue Workflows e gatilhos",
+                "DEA-C01",
+                "gatilho agendado inicia o crawler; condicional inicia o job por estado",
+                "que a dependência crawler→job é do próprio serviço, não de coordenação de horário"
+              ],
+              [
+                "Job Bookmarks vs idempotência de escrita",
+                "DEA-C01",
+                "bookmark evita reler arquivo; overwrite de partição evita duplicar rerun",
+                "que são mecanismos diferentes, para riscos diferentes"
+              ],
+              [
+                "Atualização de catálogo pelo próprio job",
+                "DEA-C01",
+                "enableUpdateCatalog + updateBehavior no sink",
+                "que evita um segundo crawler só para o catálogo \"perceber\" uma partição nova"
+              ],
+              [
+                "Particionamento e catálogo",
+                "DEA-C01, DAS-C01",
+                "push_down_predicate lendo só a partição do dia",
+                "que a leitura filtrada depende de a partição já estar catalogada"
+              ],
+              [
+                "Custo de crawler por frequência",
+                "DEA-C01",
+                "agendado 1x/dia, não por evento de arquivo",
+                "schema muda raramente comparado à chegada de dado; crawlear por arquivo multiplica custo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve um crawler que \"apagou tabelas que existiam ontem\" depois de uma mudança de configuração e pede a causa. A resposta é a política de exclusão: com `DELETE_FROM_DATABASE`, o crawler remove do catálogo tudo que não encontrou na varredura mais recente — mesmo que os arquivos continuem no S3, mesmo que a ausência seja só um erro temporário no caminho configurado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não muda uma linha de configuração é intenção, não requisito. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Schema descoberto por consulta, não por pergunta",
+                "qualquer analista, sem depender de pessoa",
+                "obriga Glue Data Catalog central, alimentado por crawler — não DDL manual em wiki"
+              ],
+              [
+                "Mais de um motor lendo a mesma tabela",
+                "Athena hoje; Redshift Spectrum é meta do L68",
+                "catálogo compatível com Hive Metastore, um único registro, sem cópia de metadado por motor"
+              ],
+              [
+                "Reprocessar um dia não pode duplicar pedido",
+                "zero duplicata sob rerun",
+                "job com apagar-e-reescrever a partição inteira, não escrita por acréscimo"
+              ],
+              [
+                "Mudança de schema não trava o pipeline em silêncio",
+                "decisão explícita, não default implícito",
+                "SchemaChangePolicy declarada — UpdateBehavior e DeleteBehavior, cada um por escrito"
+              ],
+              [
+                "Custo do crawler contido",
+                "crawler roda 1x por dia, não por arquivo",
+                "gatilho agendado do Workflow, não crawler disparado por evento de PutObject"
+              ],
+              [
+                "Falha do pipeline gera alerta, não silêncio",
+                "antes de uma hora de atraso perceptível",
+                "regra do EventBridge em Glue Job State Change = FAILED, com SNS"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o schema que só existe numa cabeça"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tinha até a semana passada, e ele é legítimo como ponto de partida: converte dado de verdade, todos os dias, com poucas linhas. O laboratório começa reproduzindo o defeito, porque um erro reproduzível é mais convincente que \"a Duda sabia\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O schema que só existe na cabeça de quem escreveu o script",
+            "caption": "Este desenho publica dado de verdade, todo dia, com poucas linhas de Python. O defeito não é o script — é que nada além dele sabe o que ele decidiu sobre nome e tipo de coluna. Percorra os passos e repare que a consulta de Theo não falha por acaso: ela falha porque não existe onde perguntar.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "duda",
+                    "service": "ide",
+                    "label": "Notebook da Duda",
+                    "note": "escreveu o script de conversão seis meses atrás; mudou de time — o schema mora nos comentários dela, em lugar nenhum consultável"
+                  },
+                  {
+                    "id": "theo",
+                    "service": "user",
+                    "label": "Theo, analista novo",
+                    "note": "precisa de um relatório sobre o mesmo dado e não tem acesso ao código nem à Duda"
+                  }
+                ]
+              },
+              {
+                "label": "Job sem orquestração",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cron",
+                    "service": "ec2",
+                    "label": "Instância com cron do script",
+                    "note": "roda `pandas`/`pyarrow` uma vez por dia; ninguém além dela decide tipo de coluna"
+                  }
+                ]
+              },
+              {
+                "label": "S3 — lake em camadas (L62)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3_bronze",
+                    "service": "s3",
+                    "label": "bronze/pedidos/dt=",
+                    "note": "recebe o pedido bruto do dia; formato e nome de coluna vêm do produtor upstream"
+                  },
+                  {
+                    "id": "s3_prata",
+                    "service": "s3",
+                    "label": "prata/pedidos/dt=",
+                    "note": "recebe o Parquet convertido; o schema físico do arquivo é a única fonte de verdade, e ela não é consultável por fora do script"
+                  }
+                ]
+              },
+              {
+                "label": "Consulta manual",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "athena",
+                    "service": "athena",
+                    "label": "Athena, tabela criada à mão",
+                    "note": "Theo copiou um `CREATE EXTERNAL TABLE` de um documento de seis meses atrás — ele não sabe se ainda é verdade"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "duda",
+                "to": "cron",
+                "label": "escreveu e agenda o script; o schema vive nos comentários dele",
+                "style": "solid"
+              },
+              {
+                "from": "cron",
+                "to": "s3_bronze",
+                "label": "lê o pedido bruto do dia",
+                "style": "dashed"
+              },
+              {
+                "from": "cron",
+                "to": "s3_prata",
+                "label": "grava Parquet convertido, sem registrar em catálogo nenhum",
+                "style": "solid"
+              },
+              {
+                "from": "theo",
+                "to": "athena",
+                "label": "copia um CREATE EXTERNAL TABLE de um documento antigo",
+                "style": "solid"
+              },
+              {
+                "from": "athena",
+                "to": "s3_prata",
+                "label": "consulta pelo caminho, com o schema que Theo escreveu à mão",
+                "style": "dashed"
+              },
+              {
+                "from": "duda",
+                "to": "theo",
+                "label": "nenhuma passagem de conhecimento formal acontece aqui",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O schema mora só na cabeça de quem escreveu o script",
+                "detail": "Não existe documento vivo, não existe tabela: existe o código da Duda, e o que ele decidiu sobre nome e tipo de cada coluna nunca saiu dali. Enquanto ela está no time, isso funciona. No dia em que ela muda de squad, a decisão vai junto.",
+                "nodes": [
+                  "duda",
+                  "cron"
+                ],
+                "edges": [
+                  "duda>cron"
+                ]
+              },
+              {
+                "label": "O script lê e grava sem que nada além dele saiba a forma do dado",
+                "detail": "O arquivo Parquet resultante SABE o próprio schema — é um formato autodescritivo. O que não existe é um serviço que responda \"quais colunas tem a tabela prata de pedidos\" sem abrir um arquivo e olhar.",
+                "nodes": [
+                  "cron",
+                  "s3_bronze",
+                  "s3_prata"
+                ],
+                "edges": [
+                  "cron>s3_bronze",
+                  "cron>s3_prata"
+                ]
+              },
+              {
+                "label": "Theo reconstrói de memória alheia, com um documento desatualizado",
+                "detail": "Sem catálogo, a única forma de o Athena enxergar uma tabela é alguém escrever a definição à mão. Theo faz o que qualquer pessoa razoável faria: procura a documentação mais recente que encontra — que já não é recente.",
+                "nodes": [
+                  "theo",
+                  "athena"
+                ],
+                "edges": [
+                  "theo>athena"
+                ]
+              },
+              {
+                "label": "A consulta expõe o defeito, e não o esconde",
+                "detail": "Uma coluna adicionada há duas semanas, `canal_pedido`, não existe na definição de Theo — a consulta falha com coluna não encontrada. O caso pior nem aparece aqui: um tipo levemente errado não falha, devolve valor incorreto sem aviso nenhum.",
+                "nodes": [
+                  "athena",
+                  "s3_prata"
+                ],
+                "edges": [
+                  "athena>s3_prata"
+                ]
+              },
+              {
+                "label": "Por que a equipe pequena convive com isso",
+                "detail": "Porque documentar um schema que já está \"funcionando\" parece trabalho sem retorno imediato — até a primeira pessoa nova. Com duas ou três pessoas que sempre conversam, o catálogo informal (perguntar) é mais rápido que escrever um. O defeito só aparece quando o time cresce ou alguém sai.",
+                "nodes": [
+                  "duda",
+                  "theo"
+                ],
+                "edges": [
+                  "duda>theo"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "reproduzir-o-defeito.sh",
+            "code": "# DDL escrita a mao, com o schema de seis meses atras (5 colunas).\naws athena start-query-execution --query-string \"\n  CREATE EXTERNAL TABLE pedidos (\n    pedido_id string, loja_id string, valor_centavos double,\n    status string, criado_em string\n  )\n  STORED AS PARQUET\n  LOCATION 's3://cadencia-lake/prata/pedidos/'\" \\\n  --result-configuration OutputLocation=s3://cadencia-lake/atenas-resultados/\n\naws athena start-query-execution \\\n  --query-string \"SELECT canal_pedido FROM pedidos LIMIT 1\" \\\n  --result-configuration OutputLocation=s3://cadencia-lake/atenas-resultados/\n# Esperado: COLUMN_NOT_FOUND. A coluna existe no arquivo Parquet ha duas\n# semanas — so nao existe na definicao que Theo escreveu."
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "A falha visível não é a pior — a silenciosa é",
+            "content": "Um `COLUMN_NOT_FOUND` pelo menos avisa. O caso que a Cadência não percebeu por três semanas foi outro: a DDL antiga declarava `valor_centavos` como `double`, mas o produtor mudou para inteiro em centavos. A consulta não falhou — devolveu um número plausível e errado, e um relatório de faturamento saiu com a casa decimal deslocada, sem nenhum erro no console."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A troca não é \"acrescentar um crawler\" ao desenho anterior — é trocar \"alguém sabe\" por \"o catálogo sabe\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O catálogo como única verdade, alimentado por evento, nunca por memória",
+            "caption": "A troca não é \"acrescentar um crawler\" ao desenho anterior — é substituir \"alguém sabe\" por \"o catálogo sabe\", e \"grava de novo\" por \"redesenha a partição inteira\". Percorra os passos: cada peça nova resolve exatamente um requisito da seção anterior.",
+            "groups": [
+              {
+                "label": "Aterrissagem (do L62)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3_bronze",
+                    "service": "s3",
+                    "label": "bronze/pedidos/dt=",
+                    "note": "já existe pelo L62; este módulo não muda como o dado chega, só como ele passa a ser conhecido"
+                  }
+                ]
+              },
+              {
+                "label": "Catalogação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "crawler",
+                    "service": "glue",
+                    "label": "Glue Crawler",
+                    "note": "varre o prefixo, infere schema por arquivo e decide, pela SchemaChangePolicy, o que fazer com mudança"
+                  },
+                  {
+                    "id": "catalog",
+                    "service": "glue",
+                    "label": "Glue Data Catalog",
+                    "note": "metastore compatível com Hive: a mesma tabela é lida por Athena, EMR e Redshift Spectrum, sem cópia de metadado"
+                  }
+                ]
+              },
+              {
+                "label": "Transformação idempotente",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "job",
+                    "service": "glue",
+                    "label": "Glue ETL Job",
+                    "note": "lê a partição do dia pelo catálogo, apaga e reescreve o destino inteiro — rodar duas vezes não duplica linha"
+                  },
+                  {
+                    "id": "s3_prata",
+                    "service": "s3",
+                    "label": "prata/pedidos/dt=",
+                    "note": "destino particionado por dia; cada execução bem-sucedida redesenha a partição, nunca acrescenta"
+                  }
+                ]
+              },
+              {
+                "label": "Observação e falha",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "alarme",
+                    "service": "sns",
+                    "label": "Alerta de falha (SNS)",
+                    "note": "dispara quando o Glue Job State Change chega como FAILED — é o sinal de que a partição do dia não foi atualizada"
+                  }
+                ]
+              },
+              {
+                "label": "Consulta",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "athena",
+                    "service": "athena",
+                    "label": "Athena",
+                    "note": "consulta a tabela do catálogo diretamente — sem DDL manual, sem depender de quem escreveu o job"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "crawler",
+                "to": "s3_bronze",
+                "label": "lista e amostra arquivos por partição",
+                "style": "dashed"
+              },
+              {
+                "from": "crawler",
+                "to": "catalog",
+                "label": "cria ou atualiza a tabela raw, conforme a SchemaChangePolicy",
+                "style": "solid"
+              },
+              {
+                "from": "crawler",
+                "to": "job",
+                "label": "gatilho condicional do Workflow: crawl_state = SUCCEEDED inicia o job",
+                "style": "solid"
+              },
+              {
+                "from": "job",
+                "to": "s3_bronze",
+                "label": "lê a partição do dia via from_catalog",
+                "style": "dashed"
+              },
+              {
+                "from": "job",
+                "to": "s3_prata",
+                "label": "apaga e reescreve a partição do dia inteira",
+                "style": "solid"
+              },
+              {
+                "from": "job",
+                "to": "catalog",
+                "label": "atualiza a tabela prata no mesmo passo (updateBehavior no sink)",
+                "style": "solid"
+              },
+              {
+                "from": "job",
+                "to": "alarme",
+                "label": "Glue Job State Change = FAILED, via regra do EventBridge",
+                "style": "dashed"
+              },
+              {
+                "from": "athena",
+                "to": "catalog",
+                "label": "consulta metadados: nome, tipo, localização",
+                "style": "dashed"
+              },
+              {
+                "from": "athena",
+                "to": "s3_prata",
+                "label": "lê os arquivos Parquet indicados pelo catálogo",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O crawler não cataloga o arquivo; cataloga a tabela",
+                "detail": "Ele varre o prefixo bronze/pedidos/, infere schema a partir de uma amostra dos arquivos e registra (ou atualiza) UMA tabela no catálogo — uma entidade lógica que representa todos os arquivos daquele caminho, não um arquivo específico.",
+                "nodes": [
+                  "crawler",
+                  "catalog"
+                ],
+                "edges": [
+                  "crawler>catalog"
+                ]
+              },
+              {
+                "label": "A inferência pode errar, e a política decide o que fazer quando erra",
+                "detail": "Se um arquivo chega com `valor_centavos` como texto em vez de inteiro, o crawler encontra um conflito de schema entre arquivos. `UpdateBehavior` decide se ele aplica a mudança (`UPDATE_IN_DATABASE`) ou só registra em log; `DeleteBehavior` decide o que fazer com partição que sumiu da varredura — e são decisões distintas.",
+                "nodes": [
+                  "crawler",
+                  "s3_bronze"
+                ],
+                "edges": [
+                  "crawler>s3_bronze"
+                ]
+              },
+              {
+                "label": "O gatilho do Workflow substitui o intervalo fixo pela dependência real",
+                "detail": "Um gatilho condicional dentro do mesmo Glue Workflow observa o estado do crawler e só inicia o job quando ele termina com SUCEEDED. Não é \"job às 3h, torcendo para o crawler das 2h já ter acabado\": é \"job depois que o catálogo, de fato, atualizou\".",
+                "nodes": [
+                  "crawler",
+                  "job"
+                ],
+                "edges": [
+                  "crawler>job"
+                ]
+              },
+              {
+                "label": "O job lê pelo catálogo, não por um caminho decorado no script",
+                "detail": "`from_catalog` resolve localização, formato e schema a partir da tabela — se o crawler não rodou ou falhou, a tabela não existe ou está desatualizada, e essa falha é o sinal correto: nada para transformar sem catálogo confiável.",
+                "nodes": [
+                  "job",
+                  "s3_bronze"
+                ],
+                "edges": [
+                  "job>s3_bronze"
+                ]
+              },
+              {
+                "label": "Idempotência é apagar a partição inteira antes de escrever, não acrescentar",
+                "detail": "O escritor padrão do Glue ACRESCENTA arquivo ao prefixo existente. Sem apagar a partição do dia primeiro, rodar o job duas vezes duplicaria cada linha. A janela entre apagar e escrever não é atômica — é um risco aceito e documentado.",
+                "nodes": [
+                  "job",
+                  "s3_prata"
+                ],
+                "edges": [
+                  "job>s3_prata"
+                ]
+              },
+              {
+                "label": "O catálogo evolui com o dado, sem um segundo crawler",
+                "detail": "O próprio job atualiza a tabela prata no catálogo ao gravar, com `enableUpdateCatalog` e `updateBehavior`. Isso evita pagar uma segunda varredura completa só para o catálogo \"perceber\" que uma partição nova existe.",
+                "nodes": [
+                  "job",
+                  "catalog"
+                ],
+                "edges": [
+                  "job>catalog"
+                ]
+              },
+              {
+                "label": "Qualquer motor lê a mesma verdade, e a falha vira alarme, não silêncio",
+                "detail": "Athena consulta a tabela do catálogo sem DDL manual — o mesmo valeria para EMR ou Redshift Spectrum, porque o catálogo é compatível com Hive Metastore. E se o job falhar em qualquer etapa, uma regra do EventBridge notifica antes que alguém precise perceber olhando um painel.",
+                "nodes": [
+                  "job",
+                  "alarme",
+                  "athena",
+                  "catalog",
+                  "s3_prata"
+                ],
+                "edges": [
+                  "job>alarme",
+                  "athena>catalog",
+                  "athena>s3_prata"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação à arquitetura mínima não é a presença do crawler: é que nenhuma pessoa aparece no caminho crítico. Duda poderia sair do time de novo, e a tabela continuaria correta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho que mais economiza tempo de analista",
+            "content": "Antes, toda pessoa nova gastava a primeira semana perguntando \"o que tem essa tabela\". Depois do catálogo, `DESCRIBE prata_pedidos` no Athena responde em segundos, sempre certo, porque quem o mantém atualizado é o job, não a memória de alguém."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho do dado, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os nomes dos estados não são jargão: são a prova da ordem. O crawler termina com "
+              },
+              {
+                "text": "Succeeded",
+                "code": true
+              },
+              {
+                "text": ", e só então o gatilho condicional do Workflow inicia o job — não um horário fixo depois. Isso é observável com "
+              },
+              {
+                "text": "get-workflow --include-graph",
+                "code": true
+              },
+              {
+                "text": ", e a seção de provas faz exatamente isso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Do arquivo pousando em bronze à tabela pronta para qualquer motor consultar",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "Arquivos pousam em bronze/pedidos/dt=",
+                "desc": "Já resolvido pelo L62. Este módulo começa a partir daqui: o dado existe, ninguém sabe descrevê-lo."
+              },
+              {
+                "label": "Gatilho agendado inicia o crawler (02:00 UTC)",
+                "desc": "Horário escolhido para que os arquivos do dia anterior já tenham todos pousado — não é garantia formal, é convenção operacional."
+              },
+              {
+                "label": "Crawler varre, infere schema, aplica a SchemaChangePolicy",
+                "desc": "UPDATE_IN_DATABASE aplica mudança de tipo automaticamente; DEPRECATE_IN_DATABASE marca partição sumida sem apagar o registro."
+              },
+              {
+                "label": "Crawler termina com SUCCEEDED",
+                "desc": "É o evento que o gatilho condicional do Workflow observa — não um horário fixo depois."
+              },
+              {
+                "label": "Gatilho condicional inicia o job",
+                "desc": "A dependência crawler→job vira garantia do próprio Glue Workflow, não coordenação manual de dois agendamentos."
+              },
+              {
+                "label": "Job lê a partição do dia via from_catalog",
+                "desc": "Se a tabela não existe ou está vazia para o dia, o job encerra sem erro — não há nada a transformar ainda."
+              },
+              {
+                "label": "Job apaga os objetos da partição de destino do dia",
+                "desc": "Passo que torna o rerun seguro. É também o passo mais arriscado: falhar aqui, antes de escrever, deixa a partição vazia."
+              },
+              {
+                "label": "Job grava o Parquet e atualiza a tabela prata no catálogo",
+                "desc": "Uma única chamada faz as duas coisas — grava dado e atualiza metadado — via enableUpdateCatalog."
+              },
+              {
+                "label": "Falha em qualquer etapa dispara alerta via EventBridge → SNS",
+                "desc": "Glue Job State Change = FAILED é o evento; o alerta chega antes de alguém precisar abrir o console."
+              }
+            ]
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O que o EventBridge entrega quando o crawler termina. Fonte, detail-type e o campo de estado estao documentados; os demais campos deste \"detail\" sao ILUSTRATIVOS — inspecione um evento real no seu console antes de decidir logica em cima de um campo que nao esta aqui confirmado."
+              }
+            ]
+          },
+          "position": 2
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "json",
+            "filename": "evento-crawler-succeeded.json",
+            "code": "{\n  \"source\": \"aws.glue\",\n  \"detail-type\": \"Glue Crawler State Change\",\n  \"resources\": [\"arn:aws:glue:us-east-1:111122223333:crawler/cadencia-raw-pedidos\"],\n  \"detail\": {\n    \"crawlerName\": \"cadencia-raw-pedidos\",\n    \"state\": \"Succeeded\",\n    \"startTime\": \"2026-08-08T02:00:04Z\"\n  }\n}"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "O que foi verificado nesse payload, e o que é ilustrativo",
+            "content": "A AWS documenta `source: \"aws.glue\"` e `detail-type: \"Glue Crawler State Change\"` como o contrato do evento. Os demais campos do objeto `detail` acima — nome exato e formato — não foram confirmados nesta sessão; inspecione um evento real no seu console antes de escrever lógica que dependa de um campo que não seja `state`."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Um marketplace com 40 lojistas parceiros, time de dados de três pessoas, sem orçamento para operar um serviço a mais, e uma pergunta recorrente: \"o que tem essa tabela mesmo?\" — feita a cada analista novo que entra.",
+            "winner": "Glue Data Catalog alimentado por crawler agendado, com job de transformação idempotente encadeado por um gatilho condicional do próprio Glue Workflow",
+            "why": "Resolve as duas dívidas separadamente, sem inventar peça nova na conta: o catálogo responde \"quem sabe o schema\" sem exigir que alguém pergunte a uma pessoa, e a sobrescrita de partição responde \"o que acontece se eu rodar de novo\" sem exigir um formato de tabela transacional novo. Nenhuma das duas depende do time crescer ou de disciplina de documentação — o catálogo é populado por um serviço gerenciado, e a idempotência é uma propriedade do código do job, não um acordo verbal.",
+            "alternatives": [
+              {
+                "name": "Hive Metastore próprio em EC2 ou EMR",
+                "downside": "Funciona, e é o que o Glue Data Catalog imita por baixo (é compatível com o protocolo). Mas exige operar um banco relacional e um serviço sempre ligado — custo operacional que um time de três pessoas não tem, para ganhar um controle fino que este caso não precisa."
+              },
+              {
+                "name": "DDL manual documentado em wiki",
+                "downside": "É o antipadrão que a arquitetura mínima deste módulo mostra. Nunca acompanha a realidade, porque nada força a atualização quando o schema muda — a única garantia de sincronia é alguém lembrar."
+              },
+              {
+                "name": "AWS Lake Formation por cima do catálogo",
+                "downside": "Adiciona permissão fina por coluna e por linha, e é a resposta certa para \"quem pode ver o quê\" — um problema diferente de \"o que existe\". Presume que o catálogo técnico deste módulo já existe; é o L69, e depende deste."
+              },
+              {
+                "name": "Upsert transacional com Iceberg (S3 Tables)",
+                "downside": "Resolve idempotência de um jeito mais forte — merge em vez de reescrever a partição inteira — mas troca o formato de tabela e adiciona compaction e gestão de snapshot para operar. É o L67, e vale quando reescrever partição inteira começa a doer de verdade."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Metastore central",
+                "Glue Data Catalog gerenciado",
+                "Hive Metastore próprio em EC2/EMR; DDL manual em wiki",
+                "zero servidor para operar, e já é o que Athena/EMR/Redshift Spectrum esperam por padrão",
+                "menos controle fino sobre o protocolo Thrift — irrelevante para este caso"
+              ],
+              [
+                "Política de schema",
+                "UPDATE_IN_DATABASE + DEPRECATE_IN_DATABASE",
+                "LOG (revisão manual) + DELETE_FROM_DATABASE",
+                "time de três pessoas não tem quem revise log toda manhã; apagar registro é risco maior que aceitar mudança automaticamente",
+                "mudança de schema por bug de upstream pode entrar sem revisão humana — mitigado pelos logs do crawler"
+              ],
+              [
+                "Orquestração",
+                "gatilhos nativos do Glue Workflow",
+                "EventBridge customizado + Step Functions",
+                "zero peça nova na conta; a dependência crawler→job é garantida pelo próprio serviço",
+                "menos visibilidade num painel de orquestração genérico — fica dentro do console do Glue"
+              ],
+              [
+                "Idempotência",
+                "apagar e reescrever a partição inteira",
+                "Job Bookmarks sozinho; upsert via Iceberg (L67)",
+                "resolve o caso de hoje sem adotar formato de tabela transacional novo",
+                "janela não atômica entre apagar e escrever — risco aceito e documentado"
+              ],
+              [
+                "Frequência do crawler",
+                "1x/dia, via gatilho agendado",
+                "por evento de cada arquivo novo (S3 PutObject)",
+                "schema muda raramente comparado à chegada de dado; crawlear por arquivo multiplicaria custo sem ganho",
+                "uma mudança de schema no meio do dia só é percebida no dia seguinte"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este módulo cria, e que ele não paga",
+            "content": "Um cast que falha silenciosamente — `\"abc\".cast(\"bigint\")` vira `null`, não erro — passa batido pelo job inteiro. Ele grava a partição, atualiza o catálogo, e nenhum alarme dispara. Validar o VALOR do dado, não só o tipo declarado, é o L70, e este módulo não substitui aquele."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: o catálogo, o crawler e a política de mudança de schema"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A escolha mais consequente deste bloco não é o crawler em si — é a `schema_change_policy`. Sem ela explícita, você herda o padrão do provedor, que pode mudar entre versões sem aviso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "catalogo.tf",
+            "code": "# catalogo.tf — o banco, o crawler, e a decisao explicita sobre schema mudando\n\nresource \"aws_glue_catalog_database\" \"lake\" {\n  name = \"${var.projeto}_lake\"\n}\n\ndata \"aws_iam_policy_document\" \"crawler_assume\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sts:AssumeRole\"]\n    principals {\n      type        = \"Service\"\n      identifiers = [\"glue.amazonaws.com\"]\n    }\n  }\n}\n\nresource \"aws_iam_role\" \"crawler\" {\n  name               = \"${var.projeto}-crawler\"\n  assume_role_policy = data.aws_iam_policy_document.crawler_assume.json\n}\n\n# Politica gerenciada da AWS para o papel do Glue: cobre CloudWatch Logs e as\n# chamadas de API do proprio servico. Nao cobre S3 — isso e sempre por conta\n# de quem escreve o Terraform, e e a policy abaixo.\nresource \"aws_iam_role_policy_attachment\" \"crawler_gerenciada\" {\n  role       = aws_iam_role.crawler.name\n  policy_arn = \"arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole\"\n}\n\ndata \"aws_iam_policy_document\" \"crawler_leitura\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"s3:GetObject\", \"s3:ListBucket\"]\n    resources = [\n      \"arn:aws:s3:::${var.bucket_lake}\",\n      \"arn:aws:s3:::${var.bucket_lake}/bronze/pedidos/*\",\n    ]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"crawler_leitura\" {\n  role   = aws_iam_role.crawler.id\n  policy = data.aws_iam_policy_document.crawler_leitura.json\n}\n\nresource \"aws_glue_crawler\" \"raw_pedidos\" {\n  name          = \"${var.projeto}-raw-pedidos\"\n  role          = aws_iam_role.crawler.arn\n  database_name = aws_glue_catalog_database.lake.name\n  table_prefix  = \"raw_\"\n\n  s3_target {\n    path = \"s3://${var.bucket_lake}/bronze/pedidos/\"\n  }\n\n  # Sem \"schedule\" aqui de proposito: quem dispara o crawler e o gatilho\n  # agendado do Workflow (workflow.tf), nao o crawler sozinho. Um agendamento\n  # dentro do crawler E outro no Workflow seriam dois relogios discordando.\n\n  schema_change_policy {\n    # UPDATE_IN_DATABASE: aplica a mudanca de tipo automaticamente. A escolha\n    # e \"velocidade sobre revisao\" — time pequeno, sem quem leia log toda\n    # manha. Times maiores, com coluna sensivel, preferem LOG + aprovacao.\n    update_behavior = \"UPDATE_IN_DATABASE\"\n\n    # NUNCA DELETE_FROM_DATABASE aqui: se o s3_target apontar, ainda que por\n    # engano temporario, para um prefixo vazio, essa opcao apagaria do\n    # catalogo particoes cujos arquivos continuam intactos no S3. Ver o\n    # callout de risco na secao de Construcao.\n    delete_behavior = \"DEPRECATE_IN_DATABASE\"\n  }\n\n  configuration = jsonencode({\n    Version  = 1.0\n    Grouping = { TableGroupingPolicy = \"CombineCompatibleSchemas\" }\n  })\n}\n\noutput \"banco_do_lake\" {\n  value       = aws_glue_catalog_database.lake.name\n  description = \"nome do banco no Glue Data Catalog\"\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "DELETE_FROM_DATABASE apaga metadado — e não tem desfazer simples",
+            "content": "O crawler decide o que \"sumiu\" pelo que ele VÊ na varredura, não pelo que realmente existe no bucket. Se o `s3_target` apontar, ainda que por um erro de configuração de um dia, para um subprefixo vazio, `DELETE_FROM_DATABASE` remove do catálogo partições cujos arquivos continuam intactos no S3 — e recuperar o registro exige rodar o crawler de novo apontando certo, não existe \"restaurar\" no catálogo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o Workflow que troca agendamento fixo por dependência real"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Dois gatilhos, dois papéis: um inicia o crawler por horário; o outro inicia o job por `crawl_state = SUCCEEDED`. A garantia não vem de calcular um atraso seguro entre os dois — vem do segundo gatilho literalmente esperar o primeiro terminar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "workflow.tf",
+            "code": "# workflow.tf — a dependencia crawler -> job vira garantia do proprio Glue\n\nresource \"aws_glue_workflow\" \"pedidos\" {\n  name = \"${var.projeto}-pedidos\"\n}\n\n# Gatilho 1: agenda. So inicia o CRAWLER — nunca o job diretamente. O job so\n# comeca depois que o catalogo, de fato, terminou de atualizar (gatilho 2).\nresource \"aws_glue_trigger\" \"agenda_diaria\" {\n  name          = \"${var.projeto}-agenda-diaria\"\n  type          = \"SCHEDULED\"\n  schedule      = \"cron(0 2 * * ? *)\" # 02:00 UTC\n  workflow_name = aws_glue_workflow.pedidos.name\n\n  actions {\n    crawler_name = aws_glue_crawler.raw_pedidos.name\n  }\n}\n\n# Gatilho 2: condicional. Observa o ESTADO do crawler dentro do mesmo\n# Workflow — nao um horario fixo \"3h, torcendo para o crawler ja ter\n# acabado\". Se o crawler demorar ou falhar, o job simplesmente nao comeca.\nresource \"aws_glue_trigger\" \"apos_catalogo_atualizado\" {\n  name          = \"${var.projeto}-apos-catalogo\"\n  type          = \"CONDITIONAL\"\n  workflow_name = aws_glue_workflow.pedidos.name\n\n  predicate {\n    conditions {\n      crawler_name = aws_glue_crawler.raw_pedidos.name\n      crawl_state  = \"SUCCEEDED\"\n    }\n  }\n\n  actions {\n    job_name = aws_glue_job.transformar_pedidos.name\n    # Sem \"--dt\" aqui: o job calcula \"ontem\" sozinho quando o argumento nao\n    # vem. Reprocessamento manual (reprocessar.tf/lambda) passa --dt explicito.\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "hcl",
+            "filename": "job.tf",
+            "code": "# job.tf — o job idempotente, e o alerta que substitui silencio por sinal\n\ndata \"aws_iam_policy_document\" \"job_assume\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sts:AssumeRole\"]\n    principals {\n      type        = \"Service\"\n      identifiers = [\"glue.amazonaws.com\"]\n    }\n  }\n}\n\nresource \"aws_iam_role\" \"job\" {\n  name               = \"${var.projeto}-job-transformar-pedidos\"\n  assume_role_policy = data.aws_iam_policy_document.job_assume.json\n}\n\nresource \"aws_iam_role_policy_attachment\" \"job_gerenciada\" {\n  role       = aws_iam_role.job.name\n  policy_arn = \"arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole\"\n}\n\n# O papel MAIS SENSIVEL deste laboratorio: ele tem s3:DeleteObject, porque a\n# idempotencia exige apagar a particao antes de escrever. O escopo por\n# PREFIXO e a unica coisa que impede um bug no calculo de \"dt\" (fuso horario,\n# por exemplo) de apagar dado fora do que era pretendido. Ver o callout de\n# risco na secao de Seguranca.\ndata \"aws_iam_policy_document\" \"job_leitura_e_escrita\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"s3:GetObject\", \"s3:ListBucket\"]\n    resources = [\n      \"arn:aws:s3:::${var.bucket_lake}\",\n      \"arn:aws:s3:::${var.bucket_lake}/bronze/pedidos/*\",\n    ]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"s3:GetObject\", \"s3:PutObject\", \"s3:DeleteObject\", \"s3:ListBucket\"]\n    resources = [\n      \"arn:aws:s3:::${var.bucket_lake}\",\n      \"arn:aws:s3:::${var.bucket_lake}/prata/pedidos/*\",\n    ]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"job_leitura_e_escrita\" {\n  role   = aws_iam_role.job.id\n  policy = data.aws_iam_policy_document.job_leitura_e_escrita.json\n}\n\nresource \"aws_glue_job\" \"transformar_pedidos\" {\n  name     = \"${var.projeto}-transformar-pedidos\"\n  role_arn = aws_iam_role.job.arn\n\n  glue_version      = \"4.0\"\n  worker_type       = \"G.1X\"\n  number_of_workers = 4\n\n  command {\n    script_location = \"s3://${var.bucket_scripts}/jobs/transformar_pedidos.py\"\n    python_version   = \"3\"\n  }\n\n  default_arguments = {\n    # Evita RELER arquivo ja processado entre execucoes agendadas. Isto NAO\n    # e a defesa contra duplicar dado num rerun manual do mesmo dia — essa\n    # defesa e a sobrescrita de particao, dentro do script.\n    \"--job-bookmark-option\"             = \"job-bookmark-enable\"\n    \"--enable-continuous-cloudwatch-log\" = \"true\"\n    \"--enable-metrics\"                  = \"true\"\n    \"--TempDir\"                         = \"s3://${var.bucket_scripts}/tmp/\"\n  }\n\n  # Sem retry automatico: reexecutar sozinho sobre uma falha nao investigada\n  # so multiplicaria a mesma janela de risco (particao vazia). Rerun manual,\n  # depois de olhar o log, e mais seguro — e e seguro porque o job e idempotente.\n  max_retries = 0\n  timeout     = 30\n}\n\nresource \"aws_sns_topic\" \"alertas\" {\n  name = \"${var.projeto}-alertas-pipeline\"\n}\n\nresource \"aws_cloudwatch_event_rule\" \"job_falhou\" {\n  name        = \"${var.projeto}-job-pedidos-falhou\"\n  description = \"Glue Job State Change = FAILED ou TIMEOUT para o job de pedidos\"\n\n  event_pattern = jsonencode({\n    source      = [\"aws.glue\"]\n    detail-type = [\"Glue Job State Change\"]\n    detail = {\n      jobName = [aws_glue_job.transformar_pedidos.name]\n      state   = [\"FAILED\", \"TIMEOUT\", \"ERROR\"]\n    }\n  })\n}\n\nresource \"aws_cloudwatch_event_target\" \"avisa_time\" {\n  rule = aws_cloudwatch_event_rule.job_falhou.name\n  arn  = aws_sns_topic.alertas.arn\n}\n"
+          }
+        },
+        {
+          "id": "b9_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "Por que não um Step Functions aqui",
+            "content": "Step Functions orquestra bem quando os passos cruzam serviços heterogêneos — Lambda, ECS, aprovação humana. Aqui os dois passos são do próprio Glue, e o Glue já expõe a dependência nativamente como gatilho. Adicionar Step Functions por cima seria uma segunda ferramenta fazendo o que a primeira já faz."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o job idempotente"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O script é PySpark porque o Glue ETL não roda outra linguagem para este tipo de job — é uma diferença deliberada em relação ao restante da série, que usa C#/.NET 8 para a aplicação. Aqui a \"aplicação\" é o próprio job Spark, e ele só existe em Python ou Scala."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "filename": "transformar_pedidos.py",
+            "code": "# transformar_pedidos.py — le pelo catalogo, escreve com overwrite de particao\n\nimport sys\nfrom datetime import datetime, timedelta, timezone\n\nimport boto3\nfrom awsglue.context import GlueContext\nfrom awsglue.dynamicframe import DynamicFrame\nfrom awsglue.job import Job\nfrom awsglue.utils import getResolvedOptions\nfrom pyspark.context import SparkContext\nfrom pyspark.sql import functions as F\n\nBUCKET = \"cadencia-lake\"\nDATABASE = \"cadencia_lake\"\nRAW_TABLE = \"raw_pedidos\"\nPARTICAO = \"dt\"\n\nargs = getResolvedOptions(sys.argv, [\"JOB_NAME\"])\n\n# --dt e OPCIONAL: o gatilho agendado do Workflow nao passa nada, e o job\n# calcula \"ontem\" sozinho. Reprocessamento manual (ver secao de construcao\n# do utilitario em C#) passa --dt explicito para escolher outro dia.\ndata_ref = None\nfor i, arg in enumerate(sys.argv):\n    if arg == \"--dt\" and i + 1 < len(sys.argv):\n        data_ref = sys.argv[i + 1]\nif data_ref is None:\n    data_ref = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()\n\nsc = SparkContext()\nglueContext = GlueContext(sc)\nspark = glueContext.spark_session\njob = Job(glueContext)\njob.init(args[\"JOB_NAME\"], args)\n\n# 1. Le a particao do dia PELO CATALOGO — nao por um caminho decorado no\n#    script. push_down_predicate filtra por PARTICAO JA CATALOGADA: se o\n#    crawler nao rodou hoje, a particao nao existe no catalogo e a leitura\n#    volta vazia, mesmo que o arquivo ja esteja fisicamente no S3.\nbruto = glueContext.create_dynamic_frame.from_catalog(\n    database=DATABASE,\n    table_name=RAW_TABLE,\n    push_down_predicate=f\"{PARTICAO} = '{data_ref}'\",\n    transformation_ctx=\"fonte_raw_pedidos\",  # chave do job bookmark\n)\n\nif bruto.count() == 0:\n    print(f\"nenhum arquivo novo para {PARTICAO}={data_ref}; nada a fazer\")\n    job.commit()\n    sys.exit(0)\n\n# 2. Transformacao com tipo EXPLICITO. A inferencia ja aconteceu no crawler;\n#    aqui so convertemos para o tipo que a tabela prata deve ter.\ndf = bruto.toDF()\nprata = (\n    df.withColumn(\"valor_centavos\", F.col(\"valor_centavos\").cast(\"bigint\"))\n      .withColumn(\"criado_em\", F.to_timestamp(\"criado_em\"))\n      .withColumn(PARTICAO, F.lit(data_ref))\n      # dropDuplicates aqui protege contra o MESMO arquivo de origem reenviado\n      # com o mesmo pedido_id — NAO e a defesa contra rodar o job duas vezes.\n      # Essa defesa e o passo 3, abaixo.\n      .dropDuplicates([\"pedido_id\"])\n)\n\n# 3. IDEMPOTENCIA REAL: apaga a particao de destino inteira antes de escrever.\n#    O escritor do Glue ACRESCENTA arquivo por padrao — sem este passo, rodar\n#    o job duas vezes sobre o mesmo dia duplicaria cada linha da particao.\n#\n#    ATENCAO: a janela entre apagar e escrever NAO e atomica. Se o job morrer\n#    aqui, a particao fica vazia ate a proxima execucao bem-sucedida. E um\n#    risco aceito e documentado — ver o callout na secao de construcao.\ns3 = boto3.client(\"s3\")\nprefixo_destino = f\"prata/pedidos/{PARTICAO}={data_ref}/\"\npaginador = s3.get_paginator(\"list_objects_v2\")\nchaves = [\n    obj[\"Key\"]\n    for pagina in paginador.paginate(Bucket=BUCKET, Prefix=prefixo_destino)\n    for obj in pagina.get(\"Contents\", [])\n]\nif chaves:\n    s3.delete_objects(Bucket=BUCKET, Delete={\"Keys\": [{\"Key\": k} for k in chaves]})\n\nsaida = DynamicFrame.fromDF(prata, glueContext, \"saida\")\n\n# 4. Grava E atualiza o catalogo no MESMO passo, sem precisar de um segundo\n#    crawler. useGlueParquetWriter=True e OBRIGATORIO para o catalogo aceitar\n#    atualizacao de schema em Parquet — sem ele, a chamada grava o arquivo e\n#    ignora silenciosamente a parte de atualizar o catalogo.\nsink = glueContext.getSink(\n    connection_type=\"s3\",\n    path=f\"s3://{BUCKET}/prata/pedidos/\",\n    enableUpdateCatalog=True,\n    updateBehavior=\"UPDATE_IN_DATABASE\",\n    partitionKeys=[PARTICAO],\n)\nsink.setFormat(\"parquet\", useGlueParquetWriter=True)\nsink.setCatalogInfo(catalogDatabase=DATABASE, catalogTableName=\"prata_pedidos\")\nsink.writeFrame(saida)\n\njob.commit()\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "useGlueParquetWriter é fácil de esquecer, e o efeito é silencioso",
+            "content": "Sem `setFormat(\"parquet\", useGlueParquetWriter=True)`, a chamada grava o arquivo Parquet normalmente e simplesmente NÃO atualiza o catálogo quando o schema muda — sem erro, sem aviso. O sintoma aparece dias depois, como \"a tabela não sabe da coluna nova\", exatamente o problema que este módulo existe para resolver."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: reprocessar um dia sob demanda, sem medo"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Todo pipeline de dados eventualmente precisa de um botão \"roda de novo\". A pergunta que decide se esse botão é seguro ou assustador é exatamente a deste laboratório: o que acontece se alguém apertar duas vezes?"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Reprocessar.cs",
+            "code": "// Reprocessar.cs — reprocessar um dia e seguro PORQUE o job e idempotente\n\nusing Amazon.Glue;\nusing Amazon.Glue.Model;\nusing Amazon.Lambda.Core;\n\nnamespace Cadencia.Operacao;\n\npublic record ReprocessarPedido(string Dia); // \"2026-08-07\", validado antes de chegar aqui\n\npublic class ReprocessarHandler\n{\n    // Um so cliente por invocacao fria; reutilizado entre chamadas quentes.\n    private static readonly AmazonGlueClient _glue = new();\n\n    // Exposta via API Gateway com autorizacao restrita ao time de dados —\n    // este endpoint chama StartJobRun, e por isso nao pode ser publico.\n    public async Task<string> ReprocessarAsync(ReprocessarPedido pedido, ILambdaContext contexto)\n    {\n        // Nao ha protecao extra de \"clique duplo\" aqui, e e proposital: a\n        // protecao E o job. Chamar isto duas vezes para o MESMO dia\n        // sobrescreve a MESMA particao duas vezes — o resultado final e\n        // identico, e essa e a garantia que a secao de provas mediu.\n        var resposta = await _glue.StartJobRunAsync(new StartJobRunRequest\n        {\n            JobName = \"cadencia-transformar-pedidos\",\n            Arguments = new Dictionary<string, string> { [\"--dt\"] = pedido.Dia },\n        });\n\n        contexto.Logger.LogInformation(\n            $\"reprocessamento iniciado para dt={pedido.Dia}: JobRunId={resposta.JobRunId}\");\n\n        return resposta.JobRunId;\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "Por que este utilitário não precisa de trava contra clique duplo",
+            "content": "Numa arquitetura que apenas acrescenta dado, chamar isto duas vezes seria um incidente, e precisaria de um lock ou de um botão desabilitado após o clique. Aqui, chamar duas vezes para o mesmo dia produz o mesmo resultado da primeira vez — a idempotência do job é a trava, e ela vale para qualquer chamador, não só para este botão."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar que reprocessar não duplica nada"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma aceita \"o painel mostrou verde\" como resultado — cada uma compara um número antes e depois, e a segunda é a que mais gente pula."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medicoes; nenhuma conclusao vem de \"parece que atualizou\"\n\nPROJETO=cadencia; BANCO=cadencia_lake; DIA=2026-08-07\n\n# ── Prova 1: o Workflow roda ponta a ponta e a particao fica com N linhas ────\naws glue start-workflow-run --name \"${PROJETO}-pedidos\"\naws glue get-workflow --name \"${PROJETO}-pedidos\" --include-graph \\\n  --query 'Workflow.LastRun.Statistics'\n# Esperado: TotalActions == SucceededActions, e nenhuma FailedAction.\n\nN1=$(aws athena start-query-execution \\\n  --query-string \"SELECT COUNT(*) FROM ${BANCO}.prata_pedidos WHERE dt = '${DIA}'\" \\\n  --result-configuration OutputLocation=s3://cadencia-lake/atenas-resultados/ \\\n  --query 'QueryExecutionId' --output text)\necho \"guarde N1 (contagem apos a primeira execucao)\"\n\n# ── Prova 2: rodar o JOB de novo para o MESMO dia nao duplica nada ───────────\naws glue start-job-run --job-name \"${PROJETO}-transformar-pedidos\" \\\n  --arguments \"{\\\"--dt\\\":\\\"${DIA}\\\"}\"\naws glue wait job-run-complete --job-name \"${PROJETO}-transformar-pedidos\" \\\n  --run-id \"$(aws glue get-job-runs --job-name ${PROJETO}-transformar-pedidos \\\n              --query 'JobRuns[0].Id' --output text)\"\nN2=$(aws athena start-query-execution \\\n  --query-string \"SELECT COUNT(*) FROM ${BANCO}.prata_pedidos WHERE dt = '${DIA}'\" \\\n  --result-configuration OutputLocation=s3://cadencia-lake/atenas-resultados/ \\\n  --query 'QueryExecutionId' --output text)\n# Esperado: N2 == N1. Se N2 == 2 * N1, o passo de apagar a particao nao rodou.\n\n# ── Prova 3: objetos no S3 foram SUBSTITUIDOS, nao acumulados ────────────────\naws s3api list-objects-v2 --bucket cadencia-lake \\\n  --prefix \"prata/pedidos/dt=${DIA}/\" --query 'length(Contents)'\n# Esperado: contagem de arquivo estavel entre a primeira e a segunda execucao,\n# nao crescente. Contagem crescente indica escrita por acrescimo, nao overwrite.\n\n# ── Prova 4: o catalogo aprendeu a coluna nova SEM um segundo crawler ────────\naws glue get-table --database-name \"${BANCO}\" --name prata_pedidos \\\n  --query 'Table.StorageDescriptor.Columns[].Name'\n# Esperado: 7 colunas, incluindo \"canal_pedido\". Se faltar, o\n# enableUpdateCatalog do job nao aplicou — confira useGlueParquetWriter.\n\n# ── Prova 5: falha real dispara alerta, nao fica em silencio ─────────────────\n# Revogue temporariamente s3:DeleteObject do papel do job, rode de novo, e\n# confirme a notificacao:\naws sns list-subscriptions-by-topic --topic-arn \"$(terraform output -raw topico_alertas)\" \\\n  --query 'Subscriptions[].[Endpoint,SubscriptionArn]'\naws glue get-job-runs --job-name \"${PROJETO}-transformar-pedidos\" \\\n  --query 'JobRuns[0].[JobRunState,ErrorMessage]'\n# Esperado: JobRunState = FAILED, e a mensagem cita AccessDenied em DeleteObject.\n"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · O Workflow termina sem falha",
+                "`get-workflow --include-graph`",
+                "TotalActions == SucceededActions",
+                "qualquer FailedAction indica que o job nunca chegou a rodar, ou que o crawler falhou antes dele"
+              ],
+              [
+                "2 · Rerun não duplica",
+                "rodar o job de novo para o mesmo `dt`, comparar contagem",
+                "N2 igual a N1",
+                "N2 igual a 2×N1 significa que o passo de apagar a partição não executou"
+              ],
+              [
+                "3 · Arquivos foram substituídos",
+                "contagem de objetos no prefixo, antes e depois",
+                "contagem estável entre execuções",
+                "contagem crescente indica escrita por acréscimo, não overwrite"
+              ],
+              [
+                "4 · Catálogo aprendeu a coluna nova",
+                "`get-table` → `Columns[].Name`",
+                "7 colunas, incluindo `canal_pedido`",
+                "coluna faltando indica que `useGlueParquetWriter` não foi configurado"
+              ],
+              [
+                "5 · Falha real dispara alerta",
+                "revogar `s3:DeleteObject`, rodar, checar SNS",
+                "notificação chega, e `JobRunState = FAILED` com o erro de permissão",
+                "silêncio na notificação é o defeito mais caro deste desenho: ninguém percebe a partição vazia"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três se parecem no sintoma superficial — \"a tabela está errada\". O que separa uma da outra é ONDE o defeito mora: no destino, no catálogo, ou no valor."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Janela não atômica de apagar-e-escrever",
+                "negue `s3:DeleteObject` ao papel do job DEPOIS de ele já ter apagado a partição (interrompa entre os dois passos)",
+                "a partição do dia fica vazia; `COUNT(*)` retorna zero para um dia que tinha pedido",
+                "Glue Job State Change = FAILED, e o horário bate com o instante do delete",
+                "reprocessar é seguro — é idempotente — mas o alerta precisa disparar ANTES que um painel de negócio leia a partição vazia como \"zero pedidos hoje\""
+              ],
+              [
+                "DeleteBehavior apagando partição válida",
+                "aponte o `s3_target` do crawler para um subprefixo vazio por uma execução",
+                "partições de dias anteriores somem do catálogo, mesmo com os arquivos intactos no S3",
+                "histórico de execução do crawler → contagem de \"partitions deleted\"",
+                "DEPRECATE_IN_DATABASE em vez de DELETE_FROM_DATABASE; recriar exige rodar o crawler certo de novo"
+              ],
+              [
+                "Cast silencioso mascarando dado ruim",
+                "envie um arquivo com `valor_centavos` como texto não numérico (\"N/D\")",
+                "o job termina com sucesso; a soma de faturamento cai sem nenhum erro registrado",
+                "contagem de `null` em `valor_centavos` na partição, comparada ao total de linhas",
+                "validar tipo antes do cast e desviar para quarentena em vez de aceitar — é o L70"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em parâmetro, pergunte: o defeito está no DADO (valor errado, tipo mal convertido) ou no METADADO (catálogo desatualizado, partição sumida)? Falha de dado o job reporta sucesso e mente; falha de metadado o crawler ou o job falham abertamente. São dois tipos de investigação diferentes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Theo cria manualmente uma tabela no Athena com CREATE EXTERNAL TABLE apontando para prata/pedidos/, usando um schema de seis meses atrás. Duas semanas atrás, o produtor adicionou a coluna canal_pedido. O que acontece quando Theo roda SELECT canal_pedido FROM pedidos?",
+        "options": [
+          "A consulta retorna a coluna normalmente, porque o Athena lê o schema de cada arquivo Parquet individualmente",
+          "A consulta falha, porque a coluna não existe na definição de tabela que Theo escreveu à mão — mesmo estando presente nos arquivos",
+          "A consulta retorna null para toda linha, porque o Athena preenche colunas ausentes automaticamente",
+          "A consulta atualiza a tabela automaticamente, porque o Athena sincroniza com o schema real do Parquet a cada execução"
+        ],
+        "correctIndex": 1,
+        "explanation": "A tabela que o Athena consulta é a DEFINIÇÃO guardada no catálogo, não os arquivos — e a definição que Theo escreveu à mão só tem as colunas que existiam há seis meses. `canal_pedido` está fisicamente no Parquet, mas o Athena nem tenta procurá-la, porque a coluna simplesmente não consta do schema declarado; o erro típico é `COLUMN_NOT_FOUND`. A primeira alternativa confunde o comportamento do Parquet — que de fato guarda seu próprio schema por arquivo — com o comportamento do Athena, que não abre arquivo nenhum para descobrir coluna: ele confia inteiramente na definição do catálogo. A terceira inventa uma tolerância que o Athena não tem: coluna ausente na definição não vira `null`, ela simplesmente não é uma coluna consultável. A quarta é o erro mais perigoso de se acreditar: não existe sincronização automática entre arquivo físico e DDL escrita à mão — é exatamente essa ausência que o crawler existe para resolver, populando e atualizando o catálogo em vez de alguém manter a definição manualmente."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o preço de um papel que pode apagar"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A idempotência exige `s3:DeleteObject` no papel do job — é a peça que mais aumenta a superfície de risco deste laboratório, porque um bug no cálculo de `dt` (fuso horário, por exemplo) tem o mesmo poder de destruição que um ataque."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Bug de fuso horário apaga a partição errada",
+                "baixa",
+                "alto",
+                "política de IAM restrita ao prefixo `prata/pedidos/*`, nunca ao bucket inteiro",
+                "CloudTrail em `DeleteObject` fora do prefixo esperado",
+                "restaurar de versão anterior, se o bucket tiver versionamento ligado — senão, reprocessar do bronze"
+              ],
+              [
+                "Crawler catalogando prefixo além do pretendido",
+                "baixa",
+                "médio",
+                "um `s3_target` por crawler, revisão de PR obrigatória em mudança de caminho",
+                "contagem de tabelas novas inesperadas após uma execução",
+                "ajustar o `s3_target` e rodar o crawler de novo"
+              ],
+              [
+                "Coluna de dado pessoal exposta a quem não deveria",
+                "média",
+                "alto",
+                "este laboratório NÃO resolve — é o L69, com Lake Formation",
+                "consulta de auditoria do Lake Formation",
+                "aplicar permissão por coluna antes de liberar acesso amplo ao catálogo"
+              ],
+              [
+                "Papel de execução compartilhado entre vários jobs",
+                "média",
+                "médio",
+                "um papel por job, política derivada do uso real, não copiada de outro job",
+                "IAM Access Analyzer sobre uso real",
+                "separar papéis — é o L41"
+              ],
+              [
+                "DeleteBehavior removendo metadado por engano",
+                "baixa",
+                "alto",
+                "`DEPRECATE_IN_DATABASE`, nunca `DELETE_FROM_DATABASE`",
+                "métrica de \"partitions deleted\" na execução do crawler",
+                "recriar o registro rodando o crawler com o caminho correto"
+              ],
+              [
+                "Segredo de conexão futura hardcoded no script",
+                "baixa hoje (sem JDBC ainda)",
+                "alto",
+                "Secrets Manager referenciado em tempo de execução, nunca no código",
+                "busca por padrão de credencial no script e nos logs",
+                "rotacionar e mover para o Secrets Manager"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "O `s3:DeleteObject` do papel do job é o maior risco deste laboratório",
+            "content": "Ele existe porque a idempotência exige — não há como reescrever uma partição sem antes poder apagá-la. Um bug de fuso horário que calcule `dt` errado, ou uma política de IAM escrita contra o bucket inteiro em vez do prefixo `prata/pedidos/*`, transforma o mecanismo que protege contra duplicata no mecanismo que apaga dado de verdade, fora do alcance de qualquer rerun."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um painel deste pipeline tem uma função estreita: dizer se o catálogo de hoje é confiável. Métrica que não ajuda nessa pergunta pertence a outro painel."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "O catálogo foi atualizado hoje?",
+                "última execução do crawler = SUCCEEDED, com timestamp",
+                "crawler falhou ou não rodou — nada abaixo dele é confiável",
+                "ausência de execução em 26 h"
+              ],
+              [
+                "O job processou o dia certo?",
+                "log \"nenhum arquivo novo\" vs. volume normal",
+                "`dt` calculado errado, geralmente por fuso horário",
+                "qualquer dia com zero linhas inesperado"
+              ],
+              [
+                "A partição ficou vazia depois de rodar?",
+                "`COUNT(*)` da partição do dia via Athena",
+                "falha entre apagar e escrever — a janela não atômica",
+                "0 linhas num dia com pedido conhecido"
+              ],
+              [
+                "O schema mudou sem ninguém decidir?",
+                "CloudWatch Logs do crawler, linha de mudança de schema",
+                "UpdateBehavior aplicou uma mudança sem revisão humana",
+                "qualquer ocorrência, revisar manualmente"
+              ],
+              [
+                "Quantas partições o crawler tocou?",
+                "métricas de execução: criadas, atualizadas, removidas",
+                "\"removidas\" maior que zero de forma inesperada é o sinal do DeleteBehavior errado",
+                "> 0 removidas"
+              ],
+              [
+                "O job está reprocessando sem necessidade?",
+                "contagem de StartJobRun por dia, via CloudTrail",
+                "gatilho condicional disparando mais de uma vez por dia",
+                "> 1 execução/dia sem reprocessamento manual"
+              ],
+              [
+                "O alerta de falha realmente chega?",
+                "teste periódico da assinatura do tópico SNS",
+                "assinatura expirada ou e-mail não confirmado",
+                "teste mensal"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana neste pipeline",
+            "content": "Um job que termina com `SUCCEEDED` não significa \"dado correto\" — significa \"nenhuma exceção não tratada\". Um cast que vira `null` silenciosamente, ou uma partição gravada com zero linhas porque o arquivo de origem veio vazio, passam pelo status de sucesso sem nenhuma bandeira."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão, e o que muda sem AZ nenhuma"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 pedidos/dia (piloto)",
+                "crawler e job terminam em minutos, custo desprezível",
+                "nada",
+                "nada"
+              ],
+              [
+                "18 mil pedidos/dia (Cadência hoje)",
+                "é o cenário deste laboratório",
+                "nada",
+                "nada"
+              ],
+              [
+                "1 milhão de pedidos/dia",
+                "arquivos bronze crescem em número; o crawler amostra mais arquivo por execução",
+                "tempo (e custo) de cada varredura do crawler cresce, mesmo sem mudança de schema",
+                "crawlear apenas prefixos novos, se a versão do Glue em uso suportar — confirme a disponibilidade dessa opção antes de assumi-la"
+              ],
+              [
+                "Pico de chegada de arquivo",
+                "mais arquivos por partição, mesmo volume total de linha",
+                "o job lê mais arquivos pequenos, e mais workers processam menos dado cada",
+                "é o problema que o L64 (formato e tamanho de arquivo) resolve — não este módulo"
+              ],
+              [
+                "Falha de AZ",
+                "não há AZ para este desenho planejar do seu lado",
+                "Glue e S3 já são serviços regionais geridos pela AWS; a única dependência real é o bucket",
+                "garantir versionamento do bucket S3 — é a proteção contra apagar errado, não contra falha de AZ"
+              ],
+              [
+                "Schema mudando com frequência crescente",
+                "o crawler aplica mudança automaticamente a cada execução",
+                "UPDATE_IN_DATABASE deixa de ser seguro quando a mudança passa a ser regra, não exceção",
+                "revisar para LOG + aprovação quando a frequência de mudança justificar o custo de revisão"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O gargalo que só aparece com muito arquivo pequeno",
+            "content": "O crawler paga por tempo de execução, e amostrar milhares de arquivos pequenos custa mais que amostrar dezenas de arquivos grandes com o mesmo volume total de dado. É o L64 cobrando a dívida de particionamento que ele mandou evitar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O crawler e o job são os itens visíveis; o que raramente aparece na conta mental é a varredura de S3 que o passo de apagar-e-escrever faz a cada execução, mesmo sem nenhuma linha nova."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Piloto",
+                "1 execução/dia, poucos MB",
+                "minutos de DPU do crawler e do job",
+                "desprezível",
+                "nenhuma; otimizar aqui é gastar atenção onde não há dinheiro"
+              ],
+              [
+                "Produção pequena",
+                "Cadência hoje: 18 mil pedidos/dia, ~48 arquivos",
+                "DPU-hora do crawler (varredura curta) e do job (poucos minutos)",
+                "baixa e previsível",
+                "crawler com `table_prefix` e `s3_target` restrito evita varrer prefixo maior que o necessário"
+              ],
+              [
+                "Alta escala",
+                "1 milhão de pedidos/dia, milhares de arquivos",
+                "DPU-hora do crawler cresce com o número de arquivo, não só com o volume de dado",
+                "passa a ser linha visível na fatura de Glue",
+                "crawler incremental (quando disponível) e consolidação de arquivo pequeno (L64)"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "DPU do crawler",
+                "DPU-hora, faturado por segundo com mínimo de 10 minutos",
+                "uma varredura de poucos segundos ainda cobra o mínimo — execução por evento de arquivo multiplicaria isso"
+              ],
+              [
+                "DPU do job",
+                "DPU-hora, proporcional a workers × duração",
+                "a listagem S3 do passo de apagar soma tempo, mesmo sem escrever nada novo"
+              ],
+              [
+                "Requisições S3 de listagem e delete",
+                "por milhar de requisições",
+                "partição com muitos arquivos pequenos multiplica chamadas de `list_objects_v2` e `delete_objects`"
+              ],
+              [
+                "Armazenamento do catálogo",
+                "gratuito até 1 milhão de objetos, depois cobrado por objeto",
+                "irrelevante neste volume; relevante em lakes com dezenas de milhares de tabelas"
+              ],
+              [
+                "CloudWatch Logs do job",
+                "GB ingerido e retido",
+                "log contínuo habilitado (`--enable-continuous-cloudwatch-log`) grava bastante em job com muito worker"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O custo que não aparece em nenhuma linha da AWS",
+            "content": "Antes deste módulo, cada analista novo gastava dias reconstruindo o schema de memória alheia. Esse custo nunca teve linha na fatura, mas era o maior dos dois — e ele desaparece com o catálogo, não com nenhuma otimização de DPU."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "catálogo sempre atual, sem intervenção manual; falha vira alerta",
+                "janela não atômica entre apagar e escrever a partição",
+                "escrever em prefixo temporário e mover (rename lógico) ao final — L67 resolve com upsert",
+                "média"
+              ],
+              [
+                "Segurança",
+                "IAM restrito por prefixo, sem `DELETE_FROM_DATABASE`",
+                "papel do job tem `s3:DeleteObject`, o poder de destruição mais alto do módulo",
+                "revisão de política por par antes de qualquer mudança de escopo de recurso",
+                "alta"
+              ],
+              [
+                "Confiabilidade",
+                "dependência crawler→job garantida pelo Workflow, não por horário coincidente",
+                "cast silencioso mascarando dado ruim sem falhar o job",
+                "contrato de dado com quarentena (L70)",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "leitura filtrada por partição via `push_down_predicate`",
+                "crawler varre todo o prefixo a cada execução, mesmo sem mudança",
+                "crawler incremental, quando disponível na versão em uso",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "crawler agendado 1x/dia, não por evento de arquivo",
+                "muitos arquivos pequenos multiplicam DPU do crawler sem ganho de dado",
+                "consolidação de arquivo pequeno (L64)",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "job lê só a partição do dia, não a tabela inteira",
+                "partição reescrita inteira mesmo quando só uma fração do dado mudou",
+                "avaliar upsert granular (L67) quando o volume por dia crescer muito",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco e compra outro — inclusive o próprio risco de idempotência que este módulo resolveu de um jeito, e que um nível acima resolve de outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do script solto ao catálogo que uma pergunta em português consulta",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Script solto, sem crawler, sem catálogo — DDL manual quando alguém precisa consultar. É onde a Cadência estava, e continua legítimo em experimento de curta duração.",
+                "note": "Risco resolvido: nenhum. Novo risco: schema só numa cabeça, e a saída da pessoa vira incidente de conhecimento. Custo: o mais baixo — sem crawler nem job gerenciado."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Glue Data Catalog alimentado por crawler com SchemaChangePolicy explícita, job idempotente encadeado por Glue Workflow.",
+                "note": "Risco resolvido: schema desconhecido e reprocessamento duplicando linha. Novo risco: SchemaChangePolicy mal escolhida apaga metadado ou aceita mudança sem revisão; janela não atômica entre apagar e escrever. Custo: DPU-hora do crawler e do job, baixo."
+              },
+              {
+                "label": "Nível 3 — Contrato de dado e quarentena",
+                "instruction": "Glue Data Quality valida VALOR, não só tipo — registro que viola o contrato vai para quarentena em vez de virar `null` silencioso (L70).",
+                "note": "Risco resolvido: o cast que mascara dado ruim sem falhar o job. Novo risco: falso positivo de quarentena bloqueando dado legítimo. Custo: mais uma execução de avaliação por partição."
+              },
+              {
+                "label": "Nível 4 — Lakehouse transacional",
+                "instruction": "Formato Iceberg com upsert e time travel — corrige uma linha sem reescrever a partição inteira (L67).",
+                "note": "Risco resolvido: a própria janela não atômica deste módulo, porque merge substitui apagar-e-escrever. Novo risco: compaction e gestão de snapshot exigem operação própria. Custo: mais armazenamento por snapshot retido."
+              },
+              {
+                "label": "Nível 5 — Governança e permissão fina",
+                "instruction": "Lake Formation por cima do catálogo: permissão por coluna e por linha, não só por tabela (L69).",
+                "note": "Risco resolvido: qualquer pessoa com acesso ao catálogo vê qualquer coluna, incluindo dado pessoal do cliente. Novo risco: permissão mal configurada quebra consulta legítima sem mensagem clara. Custo: desprezível — é configuração."
+              },
+              {
+                "label": "Nível 6 — Dados e IA sobre o catálogo",
+                "instruction": "O catálogo confiável vira a camada de DADOS que um MODELO de linguagem consulta: pergunta em português vira SQL sobre a tabela do catálogo, e a resposta cita a consulta que a gerou.",
+                "note": "Risco resolvido: analista sem SQL depende de outra pessoa para relatório simples. Novo risco: um MODELO de IA pode gerar SQL que agrega errado — soma sem filtrar duplicata, por exemplo — e apresentar o resultado com confiança; validação humana do SQL gerado continua necessária. Custo: chamadas de IA por pergunta, pequenas comparadas ao resto do pipeline."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Texto-para-SQL do nível 6 depende de um catálogo em que o nome das colunas já significa algo — que é o nível 2. Pedir a um modelo para gerar SQL sobre um schema que ninguém revisou monta uma resposta convincente em cima de metadado que pode estar simplesmente errado. É a decoração que o nível anterior evita."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não resolve nenhum dos dois problemas centrais, e forçá-la seria o antipadrão que a própria série critica. \"Quem sabe o schema\" tem resposta determinística: um catálogo. \"O que acontece ao rodar duas vezes\" também: apagar e reescrever a partição."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar onde IA acrescentaria valor real, e ele aparece no nível 6 da evolução: traduzir pergunta em português para consulta sobre a tabela do catálogo. É modesto, e depende de o catálogo já ser confiável — um modelo gerando SQL sobre metadado errado só embala o erro com mais confiança."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "traduzir pergunta em português para SQL sobre a tabela do catálogo"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "um conjunto fixo de 10 a 15 relatórios recorrentes cobre a maior parte do pedido real; IA só se justifica depois que esse conjunto fixo mostrar seu limite"
+              ],
+              [
+                "De onde viriam os dados?",
+                "o próprio schema do catálogo, mais o histórico de consultas do Athena, como exemplo de pergunta-para-SQL"
+              ],
+              [
+                "Qual o risco?",
+                "SQL gerado que agrega errado — soma sem filtrar duplicata, ou ignora a partição certa — e é apresentado com confiança, sem sinalizar incerteza"
+              ],
+              [
+                "Por que não agora?",
+                "a Cadência tem duas tabelas e três analistas; um dicionário fixo de perguntas frequentes resolve isso mais barato e sem risco de alucinação"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para INFERIR o schema em vez do crawler — \"leia esses arquivos e me diga as colunas\" — troca um mecanismo determinístico e auditável, compatível com Hive Metastore, por uma suposição que nenhum outro motor de consulta compartilha. O crawler já resolve isso de um jeito verificável; IA aqui remove a garantia, não acrescenta nenhuma."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "DDL manual mantida em wiki",
+                "é mais rápido de escrever uma vez do que configurar um crawler",
+                "nunca acompanha a realidade — nada força atualização quando o schema muda",
+                "`COLUMN_NOT_FOUND`, ou pior, tipo errado devolvendo valor plausível e falso",
+                "crawler agendado alimentando o Glue Data Catalog automaticamente",
+                "protótipo de um dia, descartado antes de qualquer pessoa nova consultar"
+              ],
+              [
+                "Escrever sem apagar a partição antes",
+                "é menos código, e \"funciona\" na primeira execução",
+                "todo rerun duplica cada linha da partição — sem erro nenhum, o job \"termina com sucesso\"",
+                "contagem de pedido no relatório maior que a contagem de pedido real",
+                "apagar objetos do prefixo de destino antes de escrever",
+                "tabela append-only de fato, onde duplicata é impossível por design (ex.: log de evento imutável)"
+              ],
+              [
+                "DELETE_FROM_DATABASE por padrão",
+                "parece \"limpeza automática\", e o nome sugere manutenção saudável",
+                "apaga registro de partição cujo arquivo continua existindo, só porque a varredura não o viu desta vez",
+                "consulta a dia antigo passa a retornar tabela/partição inexistente, do nada",
+                "DEPRECATE_IN_DATABASE, e investigar antes de qualquer exclusão real",
+                "ambiente descartável, recriado do zero a cada execução, sem histórico a preservar"
+              ],
+              [
+                "Confiar só no status SUCCEEDED do job",
+                "é o sinal mais visível no console, e parece suficiente",
+                "um cast que vira `null` silenciosamente passa por ele sem nenhuma bandeira",
+                "soma de faturamento cai, sem nenhum erro registrado em lugar nenhum",
+                "contagem de `null` pós-cast como métrica própria, mais contrato de dado (L70)",
+                "nunca; é sempre insuficiente sozinho, mesmo em protótipo"
+              ],
+              [
+                "Job Bookmarks como defesa de idempotência de escrita",
+                "o nome \"bookmark\" soa como \"não processa de novo\", e parece cobrir o caso",
+                "bookmark evita reler ARQUIVO já processado; não evita duplicar ao reescrever de propósito",
+                "reprocessamento manual dobra a contagem de linha da partição",
+                "apagar-e-reescrever a partição, independente do estado do bookmark",
+                "pipeline que nunca reprocessa de propósito e nunca falha no meio — na prática, quase nunca"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Athena diz que a tabela não existe",
+                "crawler nunca rodou, ou rodou apontando para caminho errado",
+                "confira a última execução do crawler e o `s3_target` configurado",
+                "histórico de execução do crawler no console do Glue",
+                "rodar o crawler manualmente uma vez e conferir `get-table`"
+              ],
+              [
+                "Consulta falha com COLUMN_NOT_FOUND numa coluna que existe no arquivo",
+                "DDL manual desatualizada, ou UpdateBehavior em LOG sem revisão feita",
+                "compare `get-table` → `Columns` com o schema real de um arquivo de amostra",
+                "diferença entre colunas do catálogo e colunas do Parquet",
+                "trocar DDL manual pelo catálogo alimentado por crawler; ou aplicar a mudança pendente"
+              ],
+              [
+                "Partição do dia com o dobro de linhas esperado",
+                "o job rodou duas vezes sem apagar a partição antes de escrever",
+                "compare contagem de arquivo no prefixo com o número de execuções do job hoje",
+                "`list_objects_v2` no prefixo da partição",
+                "incluir o passo de apagar antes de escrever; nunca confiar só em Job Bookmarks para isso"
+              ],
+              [
+                "Partição do dia com zero linhas, mas havia pedido",
+                "falha do job entre apagar e escrever — a janela não atômica",
+                "cheque `JobRunState` e o horário do evento de falha contra o horário do delete",
+                "`get-job-runs` → `ErrorMessage`, e CloudWatch Logs do job",
+                "corrigir a causa da falha e reprocessar — é seguro, porque o job é idempotente"
+              ],
+              [
+                "Partições antigas somem do catálogo sem aviso",
+                "DELETE_FROM_DATABASE combinado a uma varredura que não viu os arquivos",
+                "histórico de execução do crawler, campo de partições removidas",
+                "execução do crawler mais recente",
+                "trocar para DEPRECATE_IN_DATABASE; recriar rodando o crawler com o caminho certo"
+              ],
+              [
+                "Faturamento reportado menor que o esperado, sem erro em lugar nenhum",
+                "cast silencioso: valor não numérico virou `null` em vez de falhar",
+                "conte `null` em `valor_centavos` na partição do dia contra o total de linhas",
+                "saída do job comparada ao arquivo de origem",
+                "validar tipo antes do cast, desviar linha ruim para quarentena — é o L70"
+              ],
+              [
+                "Job nunca inicia, mesmo com arquivo novo em bronze",
+                "o gatilho condicional está esperando um crawler que falhou",
+                "veja o estado do crawler dentro do Workflow, não só o do job",
+                "`get-workflow --include-graph` → nó do crawler",
+                "corrigir a causa da falha do crawler; o job propaga a dependência, não pula ela"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em parâmetro, pergunte: o Workflow terminou com sucesso, ou parou no crawler? Um job que \"nunca roda\" quase sempre não é um problema do job — é um crawler que falhou silenciosamente e o gatilho condicional, corretamente, nunca disparou."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório cria pouco recurso que sobrevive por conta própria, mas dois deles pedem atenção: o dado em si, que não é deste módulo para apagar, e resultado de consulta do Athena, que não tem ciclo de vida por padrão."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "#!/usr/bin/env bash\n# limpar.sh — o que o destroy nao leva, e o que continua cobrando\nset -euo pipefail\n\nPROJETO=\"${PROJETO:?defina PROJETO}\"\n\n# 1. Derrube o que o Terraform administra (crawler, job, workflow, gatilhos,\n#    regra do EventBridge, topico SNS, papeis).\nterraform destroy -auto-approve\n\n# 2. O QUE O DESTROY NAO TOCA: o BANCO do catalogo pode ficar com tabelas\n#    orfas se voce criou alguma manualmente por fora do Terraform durante o\n#    laboratorio (por exemplo, testando o antipadrao da arquitetura minima).\naws glue get-tables --database-name \"${PROJETO}_lake\" \\\n  --query 'TableList[].Name' --output table\n\n# 3. Os DADOS em si: bronze e prata continuam no S3 do L62. Este laboratorio\n#    nao os apaga porque nao foi ele quem os criou — apague-os apenas se voce\n#    tambem estiver encerrando o L62.\naws s3 ls \"s3://cadencia-lake/prata/pedidos/\" --recursive --summarize \\\n  | tail -2\n\n# 4. RESULTADOS DE CONSULTA DO ATHENA: cada execucao grava um arquivo no\n#    bucket de resultados, e ele NAO tem ciclo de vida por padrao.\naws s3 rm \"s3://cadencia-lake/atenas-resultados/\" --recursive\n\n# 5. Prova final: nada com o nome do projeto de pe fora do que era esperado.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=\"${PROJETO}\" \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table\n"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Crawler, job, Workflow, gatilhos",
+                "sim",
+                "não",
+                "são definições — sem execução, não geram custo"
+              ],
+              [
+                "Banco e tabelas do catálogo",
+                "sim",
+                "não diretamente",
+                "gratuito até 1 milhão de objetos de catálogo; irrelevante neste volume"
+              ],
+              [
+                "Dado em bronze/ e prata/ no S3",
+                "não — não pertence a este módulo",
+                "sim, GB-mês",
+                "veio do L62; apagar aqui apagaria o lake inteiro, não só este laboratório"
+              ],
+              [
+                "Resultados de consulta do Athena",
+                "não",
+                "sim, GB-mês",
+                "cada execução grava um arquivo; sem ciclo de vida configurado, acumula para sempre"
+              ],
+              [
+                "Tópico SNS e regra do EventBridge",
+                "sim, se em Terraform",
+                "centavos",
+                "regra ou assinatura criada à mão no console não aparece no estado"
+              ],
+              [
+                "Logs do CloudWatch do job",
+                "depende de `skip_destroy`",
+                "sim, retenção",
+                "tem ciclo próprio; sobrevive à definição do job que o alimentava"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "Apagar o banco do catálogo não apaga o dado",
+            "content": "É tentador achar que remover a tabela do Glue Data Catalog \"limpa\" o laboratório. Ela só remove o REGISTRO — os arquivos Parquet em `prata/pedidos/` continuam no S3, cobrando armazenamento, e um novo crawler os catalogaria de novo a qualquer momento."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Schema só na cabeça de quem escreveu o script",
+                "Glue Data Catalog alimentado por crawler",
+                "metastore único, consultável por qualquer motor, sem depender de pessoa"
+              ],
+              [
+                "DDL manual desatualizada",
+                "crawler com SchemaChangePolicy explícita",
+                "decide o que fazer com mudança de schema, em vez de improviso"
+              ],
+              [
+                "Job pode rodar antes do catálogo atualizar",
+                "gatilho condicional do Glue Workflow (crawl_state=SUCCEEDED)",
+                "substitui agendamento fixo coincidente por dependência real, do próprio serviço"
+              ],
+              [
+                "Reprocessar duplica linha",
+                "apagar e reescrever a partição inteira antes de gravar",
+                "garante que rerun produz o mesmo resultado, nunca o dobro"
+              ],
+              [
+                "Catálogo desatualizado depois do job",
+                "enableUpdateCatalog + updateBehavior no sink do job",
+                "evita um segundo crawler só para o catálogo \"perceber\" a partição nova"
+              ],
+              [
+                "Falha vira silêncio",
+                "regra de EventBridge em Glue Job State Change = FAILED, com SNS",
+                "o alerta chega antes de alguém precisar perceber pelo painel"
+              ],
+              [
+                "Partição pode ficar vazia entre apagar e escrever",
+                "não resolvido neste módulo",
+                "risco residual aceito e documentado; mitigado por alerta rápido e rerun seguro"
+              ],
+              [
+                "Coluna com tipo errado vira null silencioso",
+                "cast explícito + observação de contagem de null",
+                "primeira linha de defesa; contrato de dado de verdade é o L70"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Analista sem saber o schema",
+                "catálogo central alimentado por crawler",
+                "schema desatualizado NO catálogo por UpdateBehavior mal escolhido"
+              ],
+              [
+                "Reprocessamento duplicando linha",
+                "apagar e reescrever a partição inteira",
+                "falha no meio da própria troca — a janela não atômica"
+              ],
+              [
+                "Mudança de schema silenciosa",
+                "UpdateBehavior explícito + log revisável",
+                "mudança de tipo que ainda \"casa\" sem erro aparente, como int virando bigint"
+              ],
+              [
+                "Perda de registro de partição no catálogo",
+                "DeleteBehavior = DEPRECATE_IN_DATABASE",
+                "apontar o crawler para o prefixo errado desde o início"
+              ],
+              [
+                "Job falhando sem ninguém notar",
+                "alerta via EventBridge + SNS",
+                "assinatura de e-mail expirada ou não confirmada"
+              ],
+              [
+                "Dado pessoal exposto a quem não deveria",
+                "nada neste módulo",
+                "é o L69 inteiro, com Lake Formation"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Arquivos do dia pousam em bronze/pedidos/dt= (resolvido pelo L62).",
+              "Às 02:00 UTC, o gatilho agendado do Glue Workflow inicia o crawler.",
+              "O crawler varre o prefixo, infere schema e atualiza a tabela raw, conforme a SchemaChangePolicy.",
+              "O crawler termina com SUCCEEDED, e o gatilho condicional inicia o job — não um horário fixo.",
+              "O job lê a partição do dia pela tabela do catálogo, não por um caminho decorado no script.",
+              "Antes de escrever, o job apaga todos os objetos da partição de destino do dia.",
+              "O job grava o Parquet transformado e atualiza a tabela prata no catálogo no mesmo passo.",
+              "Qualquer motor — hoje o Athena — consulta a tabela prata sem DDL manual.",
+              "Se o job falhar em qualquer etapa, uma regra do EventBridge dispara um alerta no SNS.",
+              "Rodar o job de novo para o mesmo dia é seguro: a partição é redesenhada inteira, não somada."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que minha consulta no Athena diz que a tabela não existe, mesmo com arquivos no S3?",
+            "answer": "Porque existir no S3 e existir para o Athena são coisas diferentes: o Athena não lê o bucket para descobrir tabela, ele lê o catálogo. Uma tabela só aparece ali depois que um crawler a registra, ou depois que um job com `enableUpdateCatalog` a cria a partir da gravação. Arquivo sozinho no S3, sem esse passo, é invisível para qualquer motor de consulta baseado no catálogo — não é um bug, é o contrato do serviço."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "O crawler precisa rodar toda vez que chega um arquivo novo?",
+            "answer": "Não, e rodar por evento de cada arquivo costuma sair caro sem necessidade real: crawlear uma vez por dia, orquestrado pelo mesmo Glue Workflow que dispara o job, cobre a maioria dos casos, porque o SCHEMA muda com muito menos frequência do que o DADO chega. Reserve execução por evento para quando a própria estrutura do arquivo mudar com frequência que justifique o custo extra de varredura constante."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Qual a diferença entre Job Bookmarks e a sobrescrita de partição deste módulo?",
+            "answer": "Job Bookmarks evitam reler um ARQUIVO já processado entre execuções agendadas — protegem contra processar dado novo duas vezes por acidente de agendamento. A sobrescrita de partição garante que reprocessar o MESMO dia de propósito, como um rerun manual ou um backfill, não duplica linha. São defesas para riscos diferentes, e um pipeline idempotente de verdade precisa das duas ao mesmo tempo, não de uma no lugar da outra."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Por que usar UPDATE_IN_DATABASE em vez de LOG na política do crawler?",
+            "answer": "Porque a Cadência tem um time de três pessoas sem capacidade de revisar log de mudança de schema toda manhã, e aceitar a mudança automaticamente resolve isso ao custo de perder revisão humana antes de aplicar. Times maiores, com coluna sensível ou schema que muda por razão que merece aprovação, tendem a preferir LOG mais um passo manual — a troca é velocidade por revisão, e nenhuma das duas opções está certa em todo contexto."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Rodar o job duas vezes seguidas para o mesmo dia é seguro?",
+            "answer": "Sim, e essa é a garantia central deste laboratório: o job apaga a partição inteira do dia antes de escrever de novo, então a segunda execução produz exatamente o mesmo resultado da primeira. A prova não é confiar nisso — é comparar a contagem de linha da partição antes e depois do segundo rerun e confirmar que o número não mudou."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Por que o schema do Parquet não basta, já que o formato é autodescritivo?",
+            "answer": "Porque autodescrição por arquivo não é o mesmo que um contrato consultável entre arquivos: cada arquivo Parquet sabe o próprio schema, mas nenhum motor de consulta lê \"todos os arquivos de um prefixo\" sem antes saber quais colunas esperar de forma consistente entre eles. É exatamente essa pergunta — qual é o schema da PARTIÇÃO, não do arquivo — que o catálogo responde uma única vez, para todos os arquivos dali."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "O que acontece se o job falhar depois de apagar a partição, mas antes de escrever a nova?",
+            "answer": "A partição fica vazia até a próxima execução bem-sucedida — é o risco real da sobrescrita por apagar-e-escrever, e este módulo não finge que ele não existe. Por isso o evento de falha do job (Glue Job State Change = FAILED) é tratado como alerta prioritário via SNS, não como uma linha de log que alguém lê depois, quando um painel de negócio já mostrou zero pedido no dia."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Preciso do Lake Formation para ter esse catálogo funcionando?",
+            "answer": "Não; o Glue Data Catalog funciona sozinho como metastore central, e é exatamente o que este módulo entrega. O Lake Formation entra por cima dele quando o requisito muda de \"existe uma tabela consultável\" para \"quem pode ver qual coluna\" — um problema diferente, de permissão fina, tratado no laboratório seguinte desta trilha sobre governança."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "O job de transformação da Cadência tem Job Bookmarks habilitado, mas grava o Parquet sem apagar a partição de destino antes. Um operador reprocessa manualmente o dia de ontem, depois de corrigir um bug no cast de valor_centavos, passando --dt explícito. O que acontece na partição dt=2026-08-07?",
+            "options": [
+              "A partição é sobrescrita com os dados corrigidos, porque o Glue sempre reescreve a partição inteira ao detectar uma nova execução",
+              "A partição passa a ter o dobro de linhas, porque o arquivo novo é adicionado ao lado dos arquivos antigos, sem substituí-los",
+              "Nada muda, porque os Job Bookmarks impedem que o job reprocesse um dia já processado",
+              "O job falha, porque Job Bookmarks e reprocessamento manual com --dt explícito são mutuamente exclusivos"
+            ],
+            "correctIndex": 1,
+            "explanation": "Job Bookmarks decidem QUAIS ARQUIVOS DE ORIGEM o job lê — evitam reler um arquivo já processado entre execuções agendadas — e não têm nenhuma opinião sobre o que acontece no DESTINO da escrita. Sem o passo explícito de apagar a partição antes de gravar, o escritor do Glue se comporta como todo escritor de objeto do Spark: acrescenta um arquivo novo ao prefixo existente. Como o operador forçou a releitura com `--dt` explícito, a partição termina com os arquivos antigos E os novos convivendo, e uma consulta soma os dois — dobrando o total. A primeira alternativa é o erro central deste módulo: confundir a defesa contra reler arquivo (bookmark) com a defesa contra duplicar dado na escrita (overwrite de partição) — são mecanismos diferentes, para riscos diferentes, e o primeiro não substitui o segundo. A segunda inventa um comportamento de sobrescrita automática que o Glue não tem por padrão. A quarta trata dois recursos independentes como incompatíveis, quando na prática um pipeline maduro usa os dois ao mesmo tempo, para propósitos diferentes."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "O crawler da Cadência está configurado com delete_behavior = DELETE_FROM_DATABASE. Por um erro de configuração temporário, o s3_target passou a apontar para um subprefixo vazio por uma execução. O que acontece com as partições que já existiam no catálogo?",
+            "options": [
+              "As partições antigas são removidas do catálogo, mesmo que os arquivos continuem existindo no S3",
+              "O crawler ignora a execução inteira e mantém o catálogo exatamente como estava no dia anterior",
+              "O crawler marca as partições como obsoletas (deprecated), mas mantém o registro para auditoria",
+              "Nada muda, porque DELETE_FROM_DATABASE só afeta tabelas novas, nunca partições já catalogadas"
+            ],
+            "correctIndex": 0,
+            "explanation": "`DELETE_FROM_DATABASE` instrui o crawler a remover do catálogo tudo o que ele NÃO encontrou na varredura mais recente — e ele decide isso pelo que VÊ no caminho configurado, não pelo que realmente existe no bucket. Com o `s3_target` apontando, ainda que temporariamente, para um subprefixo vazio, o crawler enxerga zero objetos e conclui que todas as partições anteriores sumiram, apagando o registro delas do catálogo — os arquivos continuam intactos no S3, mas nenhum motor de consulta mais os encontra, porque a referência que os tornava descobertos deixou de existir. A primeira alternativa erra o alcance da política: ela afeta exatamente partições e tabelas já catalogadas, que é o caso descrito. A segunda descreve o comportamento de `DEPRECATE_IN_DATABASE`, a alternativa mais segura e recomendada neste módulo justamente por preservar o registro em vez de apagá-lo. A quarta inventa uma proteção que o crawler não tem: ele não detecta \"varredura suspeita\" nem pausa sozinho — confia no que a configuração aponta, e por isso revisar o `s3_target` antes de aplicar é responsabilidade de quem opera."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L62 (data lake em camadas) — bronze/pedidos/dt= já populado; Terraform e S3 básicos"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "papel do catálogo vs. papel do crawler; SchemaChangePolicy (UpdateBehavior/DeleteBehavior); gatilhos nativos do Glue Workflow; diferença entre Job Bookmarks e idempotência de escrita; atualização de catálogo pelo próprio job"
+              ],
+              [
+                "Limitação que fica",
+                "a janela entre apagar e escrever a partição não é atômica; um cast que falha vira null silencioso, sem validação de contrato"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L66 — consultar o lake e pagar pouco (Athena, custo por byte varrido). Reutiliza a tabela prata deste módulo, e é onde o catálogo alimentado aqui passa a ser consultado de verdade"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L69 (governança do lake, permissão por coluna) e L70 (qualidade de dado, contrato e quarentena) dependem de um catálogo confiável, que é o entregável deste laboratório"
+              ],
+              [
+                "Data da última validação técnica",
+                "8 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "AWS Glue SchemaChangePolicy",
+                "code": true
+              },
+              {
+                "text": " — os valores de UpdateBehavior e DeleteBehavior; "
+              },
+              {
+                "text": "AWS Glue events on Amazon EventBridge",
+                "code": true
+              },
+              {
+                "text": " — fonte e detail-type dos eventos de crawler e job; "
+              },
+              {
+                "text": "AWS Glue Data Catalog support for Spark SQL jobs",
+                "code": true
+              },
+              {
+                "text": " — a compatibilidade com Hive Metastore; "
+              },
+              {
+                "text": "Overview of workflows in AWS Glue",
+                "code": true
+              },
+              {
+                "text": " — gatilhos agendados e condicionais dentro de um Workflow; "
+              },
+              {
+                "text": "Updating the schema, and adding new partitions in the Data Catalog using AWS Glue ETL jobs",
+                "code": true
+              },
+              {
+                "text": " — enableUpdateCatalog, updateBehavior e a exigência do useGlueParquetWriter; e "
+              },
+              {
+                "text": "Tracking processed data using job bookmarks",
+                "code": true
+              },
+              {
+                "text": " — o que Job Bookmarks realmente protegem. Nenhum valor de preço aparece neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "Os campos do payload de evento do crawler além de `source`, `detail-type` e `state` são ilustrativos — inspecione um evento real antes de decidir lógica em cima deles. A disponibilidade de crawler incremental (varrer só prefixo novo) depende da versão do Glue em uso e não foi confirmada nesta sessão. Os volumes da Cadência — 18 mil pedidos/dia, 48 arquivos — são os do cenário de exemplo; meça os seus antes de copiar um limiar de alarme."
+          }
+        }
+      ]
+    }
+  ]
+}

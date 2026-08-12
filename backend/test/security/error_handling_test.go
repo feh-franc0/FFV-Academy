@@ -129,12 +129,16 @@ func Test_Security_EmailEnumeration_Prevented(t *testing.T) {
 	if c1 != http.StatusAccepted {
 		t.Fatalf("esperado 202; got %d", c1)
 	}
-	// As respostas podem ter o flag isNewUser, mas NÃO devem conter texto
-	// como "usuário não existe" ou "email inválido" para casos pretos/brancos.
+	// A resposta NÃO PODE ter o flag isNewUser nem texto como "usuário não
+	// existe"/"email inválido" — request-token é público e não prova posse do
+	// email; isNewUser só é revelado depois que Verify prova posse do código.
 	for _, body := range []string{b1, b2} {
 		l := strings.ToLower(body)
 		if strings.Contains(l, "não existe") || strings.Contains(l, "not found") {
 			t.Fatalf("resposta vaza existência do email: %s", body)
+		}
+		if strings.Contains(l, "isnewuser") {
+			t.Fatalf("resposta vaza isNewUser em request-token (endpoint público, sem prova de posse do email): %s", body)
 		}
 	}
 }

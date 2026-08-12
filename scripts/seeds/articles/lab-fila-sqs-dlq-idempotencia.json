@@ -1,0 +1,2616 @@
+{
+  "slug": "lab-fila-sqs-dlq-idempotencia",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência processa pedidos das suas trinta lojas pela mesma API do "
+              },
+              {
+                "text": "L01",
+                "code": true
+              },
+              {
+                "text": " e do "
+              },
+              {
+                "text": "L03",
+                "code": true
+              },
+              {
+                "text": ": .NET 8 em ECS Fargate, atrás de um ALB. Em dia normal, meio pedido por segundo — cerca de 43 mil por dia — passa sem drama pela cadeia de gravar o pedido, debitar o estoque e cobrar o cartão, tudo dentro do mesmo request HTTP."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "A equipe de marketing anunciou uma campanha de um dia com desconto agressivo em três categorias. Na simulação de tráfego, a vazão prevista é dez vezes a normal por cerca de vinte minutos no pico. No teste, a API começou a devolver 504 depois de três minutos — sem nenhuma linha de erro no log da aplicação, porque as requisições nunca chegaram a ser processadas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O segundo problema apareceu só depois: comparando o número de cobranças no gateway de pagamento com o número de pedidos gravados no banco, havia mais cobranças do que pedidos. Clientes que receberam timeout tentaram de novo — e a segunda tentativa, sem nenhuma chave que identificasse \"isto é o mesmo pedido\", cobrou o cartão pela segunda vez."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Básico — depende do L21 (primeira Lambda .NET 8) e não pressupõe experiência prévia com fila"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L21 concluído (modelo de execução do Lambda), API de pedidos do L01/L03 no ar, Terraform e .NET 8 básicos"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 35 min · implementação 1 h 30 a 2 h"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Muito baixo: SQS, Lambda e DynamoDB cobram por uso — sem hora ligada parada"
+              },
+              {
+                "k": "Serviços",
+                "v": "SQS (fila + DLQ), Lambda (.NET 8), DynamoDB (idempotência), CloudWatch"
+              },
+              {
+                "k": "Volume atual",
+                "v": "30 lojas, cerca de 0,5 pedido/s em dia normal, pico de campanha até 10×"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "zero pedido perdido e zero cobrança duplicada durante o pico"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "o cliente aceita receber \"pedido recebido\" sem a confirmação de pagamento ser síncrona — é o que autoriza responder antes de cobrar"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "fila absorvendo 10× de carga, consumidor idempotente provado por reentrega forçada, e DLQ recebendo o pedido que falha de propósito"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é sobre integração real com um gateway de pagamento, nem sobre o desenho completo do checkout. O foco é o padrão fila + DLQ + idempotência, que se repete em qualquer sistema que precise desacoplar produtor de consumidor. Fanout para múltiplos consumidores sem tocar no produtor é o L23; retry sofisticado com disjuntor para uma dependência instável é o L36 — os dois dependem deste."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que \"ao menos uma vez\" não é um defeito a corrigir, e sim o contrato da fila.",
+              "Nomear os dois relógios do padrão: visibility timeout e retenção da DLQ, e o que cada um decide.",
+              "Implementar idempotência com escrita condicional no DynamoDB, distinguindo primeira entrega de reentrega.",
+              "Configurar `ReportBatchItemFailures` e explicar o que acontece sem ele num lote de 10 mensagens.",
+              "Dimensionar `maxReceiveCount` e o visibility timeout a partir do timeout real da função.",
+              "Provar, matando o consumidor no meio do processamento, que a reentrega não duplica o efeito.",
+              "Medir a fila absorvendo um pico de 10× sem devolver erro ao cliente.",
+              "Diagnosticar uma DLQ crescendo e decidir se a causa é mensagem malformada ou dependência fora do ar."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Standard vs FIFO",
+                "DVA-C02, SAA-C03",
+                "a escolha de standard, justificada pela independência entre pedidos",
+                "quando ordem importa de verdade — e quando parece importar e não importa"
+              ],
+              [
+                "Visibility timeout",
+                "DVA-C02, SAA-C03",
+                "o relógio que evita dois consumidores processando a mesma mensagem ao mesmo tempo",
+                "que ele NÃO impede reentrega — só adia; e que 12 h é o teto absoluto"
+              ],
+              [
+                "Dead-letter queue e redrive policy",
+                "DVA-C02, SAA-C03",
+                "`maxReceiveCount` e o destino de quem falha persistentemente",
+                "a DLQ sem alarme é tão inútil quanto não ter DLQ"
+              ],
+              [
+                "Idempotência e at-least-once",
+                "DVA-C02",
+                "escrita condicional como o único mecanismo real de \"uma vez só\"",
+                "a fila nunca promete \"exatamente uma vez\" numa fila standard"
+              ],
+              [
+                "Partial batch response (`ReportBatchItemFailures`)",
+                "DVA-C02",
+                "o que evita reprocessar mensagens já bem-sucedidas dentro de um lote",
+                "o comportamento padrão sem essa configuração: o lote inteiro volta"
+              ],
+              [
+                "Long polling",
+                "SAA-C03",
+                "implícito no SDK do Lambda para SQS — reduz `ReceiveMessage` vazio",
+                "a diferença de custo e latência frente a short polling"
+              ],
+              [
+                "Fila como buffer de absorção de pico",
+                "SAA-C03, SAP-C02",
+                "o núcleo do laboratório: desacoplar vazão de capacidade de processamento",
+                "por que isso resolve PERDA, e não resolve DUPLICATA sozinho"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica dá uma fila standard, um consumidor sem tratamento de erro específico, e pergunta o que garante que a mensagem não seja processada duas vezes. A resposta \"nada garante isso — é responsabilidade do consumidor\" é a que a prova busca, e é a que mais gente erra por assumir que \"at-least-once\" é jargão sem consequência prática."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito não funcional que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Zero pedido perdido durante o pico",
+                "obrigatório",
+                "retenção de 4 dias na fila principal, muito acima da duração de qualquer campanha"
+              ],
+              [
+                "Zero cobrança duplicada",
+                "obrigatório",
+                "tabela DynamoDB com `ConditionExpression: attribute_not_exists`; a fila sozinha não entrega isso"
+              ],
+              [
+                "Resposta ao cliente sem esperar confirmação de pagamento",
+                "aceito pelo negócio",
+                "API responde 202 ao enfileirar, não ao processar — muda o contrato da rota"
+              ],
+              [
+                "Ordem entre pedidos DIFERENTES",
+                "não importa",
+                "autoriza fila standard em vez de FIFO, com throughput bem maior"
+              ],
+              [
+                "Falha permanente tem de ser vista por humano",
+                "requisito operacional",
+                "DLQ com alarme de `ApproximateNumberOfMessagesVisible`, não só a existência da fila"
+              ],
+              [
+                "Tempo de processamento por pedido",
+                "até 10 s no pior caso",
+                "timeout da função Lambda; e o visibility timeout da fila (6× esse valor)"
+              ],
+              [
+                "Falha transitória não deve virar alarme na primeira tentativa",
+                "requisito operacional",
+                "`maxReceiveCount` de 5, não de 1 — dá chance a instabilidade momentânea do gateway"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: tudo no mesmo request"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem hoje, e ele é legítimo como ponto de partida: publica de verdade, com poucas peças. O laboratório começa por medir o defeito — porque um número torna a indisponibilidade discutível, e \"a API caiu na campanha\" não."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Tudo dentro do mesmo request — e o pico é quem cobra a conta",
+            "caption": "Este desenho é o que a Cadência tem hoje, e ele publica de verdade: poucas peças, fácil de entender. A indisponibilidade da campanha não vem de nenhum bug — vem de aritmética de concorrência que ninguém fez. Percorra os passos e repare que o segundo defeito, a cobrança duplicada, nasce do cliente reagindo ao primeiro.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente na campanha",
+                    "note": "em dia normal manda 1 pedido a cada 2 s; na campanha, 1 a cada 100 ms"
+                  },
+                  {
+                    "id": "external",
+                    "service": "external",
+                    "label": "Gateway de pagamento (terceiro)",
+                    "note": "latência própria de ~700 ms que não muda com a carga da Cadência — o handler fica preso nela"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB",
+                    "note": "só distribui; não sabe que o handler atrás dele está ocupado por 850 ms cada"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "fargate",
+                    "service": "fargate",
+                    "label": "API de pedidos (Cadência)",
+                    "note": "grava, debita estoque e cobra dentro do MESMO request, do início ao fim"
+                  }
+                ]
+              },
+              {
+                "label": "Dados",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "postgres",
+                    "service": "postgres",
+                    "label": "PostgreSQL — pedidos e estoque",
+                    "note": "a mesma transação grava o pedido e decrementa o estoque; sem chave de deduplicação nenhuma"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "POST /api/pedidos",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "fargate",
+                "label": "encaminha ao alvo saudável",
+                "style": "solid"
+              },
+              {
+                "from": "fargate",
+                "to": "postgres",
+                "label": "grava pedido + decrementa estoque",
+                "style": "solid"
+              },
+              {
+                "from": "fargate",
+                "to": "external",
+                "label": "cobra o cartão, síncrono, ~700 ms",
+                "style": "solid"
+              },
+              {
+                "from": "user",
+                "to": "fargate",
+                "label": "reenvio após timeout, sem chave de pedido",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Três operações, um request, uma thread presa até o fim",
+                "detail": "Gravar o pedido, decrementar o estoque e cobrar o cartão acontecem em série, dentro do mesmo handler HTTP. O cliente só recebe resposta quando a TERCEIRA etapa termina — e ela é a mais lenta das três.",
+                "nodes": [
+                  "fargate",
+                  "postgres"
+                ],
+                "edges": [
+                  "fargate>postgres"
+                ]
+              },
+              {
+                "label": "A latência do terceiro é fixa, e o handler fica preso nela",
+                "detail": "O gateway de pagamento responde em cerca de 700 ms independente de quantos pedidos a Cadência manda por segundo. Não é elástico do lado da Cadência: é uma constante que cada request paga inteira.",
+                "nodes": [
+                  "fargate",
+                  "external"
+                ],
+                "edges": [
+                  "fargate>external"
+                ]
+              },
+              {
+                "label": "A conta de concorrência: vazão vezes latência",
+                "detail": "Em dia normal, 0,5 pedido/s × 0,85 s de processamento pede menos de 1 requisição simultânea — qualquer pool serve. Na campanha, 5 pedidos/s × 0,85 s pedem cerca de 4 requisições em voo ao mesmo tempo só para não enfileirar NADA. Um pool dimensionado para o normal não tem essa folga.",
+                "nodes": [
+                  "user",
+                  "alb"
+                ],
+                "edges": [
+                  "user>alb"
+                ]
+              },
+              {
+                "label": "Quando o pool acaba, a fila vira o próprio request do cliente",
+                "detail": "Sem excedente de conexão nem de thread, cada request novo espera um lugar livre. Essa espera conta para o timeout do ALB — e quando ele estoura, o cliente recebe 504 mesmo com a aplicação viva e sem erro nenhum no log dela.",
+                "nodes": [
+                  "alb",
+                  "fargate"
+                ],
+                "edges": [
+                  "alb>fargate"
+                ]
+              },
+              {
+                "label": "O cliente reage ao 504 do jeito mais óbvio: tenta de novo",
+                "detail": "Sem nenhuma chave que identifique \"este é o mesmo pedido de antes\", o segundo POST é, para a API, um pedido novo. Se o primeiro tinha efetivamente sido cobrado — só o 200 de resposta que se perdeu no timeout —, o cliente paga duas vezes.",
+                "nodes": [
+                  "user",
+                  "fargate"
+                ],
+                "edges": [
+                  "user>fargate"
+                ]
+              },
+              {
+                "label": "Por que a Cadência publicou assim",
+                "detail": "Porque funcionou nos testes, com um usuário por vez. O defeito só existe sob concorrência, e concorrência é exatamente o que um teste manual não produz.",
+                "nodes": [
+                  "fargate",
+                  "postgres"
+                ],
+                "edges": [
+                  "fargate>postgres"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "annotated_formula",
+          "position": 2,
+          "data": {
+            "title": "Quanto de concorrência o desenho síncrono precisa suportar sem enfileirar nada",
+            "formula": "concorrência_necessária ≈ vazão (pedidos/s) × tempo_ocupado_por_pedido (s)",
+            "parts": [
+              {
+                "symbol": "vazão",
+                "name": "Pedidos que chegam por segundo",
+                "description": "O dado que muda dez vezes na campanha — é a variável que a fila existe para absorver, e que o handler síncrono não tinha como absorver."
+              },
+              {
+                "symbol": "tempo_ocupado_por_pedido",
+                "name": "Quanto o handler fica preso por request",
+                "description": "Escrita no banco (~50 ms) mais a chamada ao gateway de pagamento (~700 ms a 800 ms). É constante — não cai porque o tráfego subiu."
+              },
+              {
+                "symbol": "concorrência_necessária",
+                "name": "Requisições em voo ao mesmo tempo, sem fila implícita",
+                "description": "Com 5 pedidos/s × 0,85 s, são cerca de 4 a 5 requisições simultâneas só para não acumular espera. Um pool de conexão dimensionado para o tráfego normal (abaixo de 1 concorrente) fica sem folga assim que a campanha começa.",
+                "highlight": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "Os dois defeitos não são o mesmo, e um produz o outro",
+            "content": "O primeiro é indisponibilidade: sem excedente de concorrência, o pool satura e o ALB devolve 504 sem que a aplicação registre erro nenhum. O segundo é cobrança duplicada: o cliente que recebeu 504 reenvia o pedido, e sem chave de deduplicação a API trata isso como um pedido novo. O segundo é consequência direta do primeiro — resolver só a indisponibilidade sem idempotência deixaria a cobrança duplicada acontecer de outro jeito, na primeira instabilidade seguinte."
+          }
+        },
+        {
+          "id": "b4_4",
+          "type": "paragraph",
+          "position": 4,
+          "data": {
+            "content": [
+              {
+                "text": "A prova de que isso é aritmética, não falha pontual: rode a carga de campanha contra este desenho antes de mudar qualquer coisa."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_5",
+          "type": "code_block",
+          "position": 5,
+          "data": {
+            "language": "bash",
+            "filename": "carga.sh",
+            "code": "#!/usr/bin/env bash\n# carga.sh — reproduz o pico de campanha contra as duas arquiteturas\nset -euo pipefail\n\nURL=\"https://$(terraform output -raw dominio)/api/pedidos\"\nTOTAL=3000   # 10x o normal por 10 minutos, comprimido para o laboratorio\nCONCORRENCIA=20\n\n# Cada requisicao manda um item e quantidade fixos, SEM chave de deduplicacao —\n# e assim que o cliente real se comporta na versao sincrona.\nseq 1 \"$TOTAL\" | xargs -P \"$CONCORRENCIA\" -I{} \\\n  curl -s -o /dev/null -w '%{http_code}\\n' -X POST \"$URL\" \\\n    -H 'Content-Type: application/json' \\\n    -d '{\"itemId\":\"sku-42\",\"quantidade\":1,\"valorCentavos\":15000}' \\\n  >> resultado_carga.txt\n\necho \"200/202: $(grep -cE '^20[02]$' resultado_carga.txt)\"\necho \"5xx:     $(grep -cE '^5' resultado_carga.txt)\"\necho \"total:   $(wc -l < resultado_carga.txt)\"\n# Na arquitetura sincrona (medicao de exemplo): 3.000 requisicoes, 640 com\n# 502/504 (21%) — o pool de conexao satura antes do fim do laco.\n# Na arquitetura com fila: 3.000 requisicoes, 3.000 com 202 — a fila absorve\n# o excesso; o que muda e quanto tempo o CONSUMIDOR leva para esvaziar.\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção: a fila absorve, a condição decide"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. Se você não conseguir apontar o requisito, a peça é adorno — e este desenho não tem nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A API para de processar — ela só registra a intenção",
+            "caption": "A mudança estrutural não é \"adicionar uma fila\": é que o trabalho pesado sai do request HTTP e vira um consumidor que escala no próprio ritmo. A fila absorve o pico; a condição de escrita no DynamoDB é quem garante que o at-least-once da fila não vira duplicata. São dois mecanismos diferentes para dois problemas diferentes — percorra os passos para separá-los.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente na campanha",
+                    "note": "recebe 202 assim que o pedido é registrado — não espera a cobrança acontecer"
+                  },
+                  {
+                    "id": "external",
+                    "service": "external",
+                    "label": "Gateway de pagamento (terceiro)",
+                    "note": "chamado pelo consumidor, fora do caminho crítico do request HTTP do cliente"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB",
+                    "note": "encaminha para um handler que agora responde em milissegundos, não em 850 ms"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "fargate",
+                    "service": "fargate",
+                    "label": "API de pedidos (Cadência)",
+                    "note": "valida o payload e publica na fila; não toca mais em estoque nem em gateway de pagamento"
+                  }
+                ]
+              },
+              {
+                "label": "Fila e processamento — regionais, fora da VPC",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sqs",
+                    "service": "sqs",
+                    "label": "Fila principal (standard)",
+                    "note": "retém o pedido pelo tempo que o consumidor levar — é o buffer explícito que faltava"
+                  },
+                  {
+                    "id": "lambda",
+                    "service": "lambda",
+                    "label": "Consumidor .NET 8 (L21)",
+                    "note": "escala pelo tamanho do backlog, no seu próprio ritmo, não no ritmo do pico do cliente"
+                  },
+                  {
+                    "id": "dynamodb",
+                    "service": "dynamodb",
+                    "label": "Tabela de idempotência",
+                    "note": "grava a chave do pedido com condição de escrita única; é aqui que a duplicata vira nada"
+                  }
+                ]
+              },
+              {
+                "label": "Falha permanente, observada",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "dlq",
+                    "service": "sqs",
+                    "label": "DLQ",
+                    "note": "destino do pedido que falhou 5 vezes seguidas; sem o alarme ao lado, vira lixo silencioso"
+                  },
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Alarme de DLQ não vazia",
+                    "note": "a diferença entre um humano saber que algo parou de processar e descobrir por reclamação"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "POST /api/pedidos",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "fargate",
+                "label": "encaminha ao alvo saudável",
+                "style": "solid"
+              },
+              {
+                "from": "fargate",
+                "to": "sqs",
+                "label": "SendMessage: pedido serializado + PedidoId",
+                "style": "solid"
+              },
+              {
+                "from": "sqs",
+                "to": "lambda",
+                "label": "poll em lote, até 10 mensagens",
+                "style": "solid"
+              },
+              {
+                "from": "lambda",
+                "to": "dynamodb",
+                "label": "PutItem condicional: attribute_not_exists(PedidoId)",
+                "style": "solid"
+              },
+              {
+                "from": "lambda",
+                "to": "external",
+                "label": "cobra o cartão — só se a condição foi nova",
+                "style": "dashed"
+              },
+              {
+                "from": "lambda",
+                "to": "sqs",
+                "label": "ReportBatchItemFailures: devolve só o item que falhou",
+                "style": "dashed"
+              },
+              {
+                "from": "sqs",
+                "to": "dlq",
+                "label": "após 5 tentativas, redrive policy",
+                "style": "dashed"
+              },
+              {
+                "from": "dlq",
+                "to": "cw",
+                "label": "ApproximateNumberOfMessagesVisible > 0",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A API para de processar — ela só registra a intenção",
+                "detail": "O handler grava o pedido na fila e devolve 202 em milissegundos. Cobrar o cartão e debitar o estoque deixam de bloquear o cliente: viram trabalho de outro processo, em outro momento.",
+                "nodes": [
+                  "fargate",
+                  "sqs"
+                ],
+                "edges": [
+                  "fargate>sqs"
+                ]
+              },
+              {
+                "label": "A fila é o buffer explícito que a versão síncrona não tinha",
+                "detail": "Antes, o \"buffer\" era implícito: o pool de conexões do handler, que estourava sob carga. Agora ele é uma fila com retenção de até 4 dias — o pico da campanha para de ser um problema de capacidade da API e vira um problema de quanto tempo o consumidor leva para esvaziar a fila.",
+                "nodes": [
+                  "alb",
+                  "fargate",
+                  "sqs"
+                ],
+                "edges": [
+                  "alb>fargate",
+                  "fargate>sqs"
+                ]
+              },
+              {
+                "label": "O consumidor processa em lote, não mensagem a mensagem",
+                "detail": "O Lambda recebe até 10 mensagens por invocação e escala o número de invocações concorrentes pelo tamanho do backlog — sozinho, sem ninguém provisionar capacidade para o pico com antecedência.",
+                "nodes": [
+                  "sqs",
+                  "lambda"
+                ],
+                "edges": [
+                  "sqs>lambda"
+                ]
+              },
+              {
+                "label": "A condição de escrita é o mecanismo de idempotência — não a fila",
+                "detail": "SQS garante \"ao menos uma vez\", nunca \"exatamente uma vez\", para fila standard. O `PutItem` com `ConditionExpression: attribute_not_exists(PedidoId)` só tem sucesso na PRIMEIRA vez que aquele pedido é visto; nas seguintes, falha de propósito.",
+                "nodes": [
+                  "lambda",
+                  "dynamodb"
+                ],
+                "edges": [
+                  "lambda>dynamodb"
+                ]
+              },
+              {
+                "label": "O efeito de negócio só roda quando a condição é nova",
+                "detail": "Cobrar o cartão acontece DEPOIS do `PutItem` ter sucesso, nunca antes. Se a condição falhar — pedido já visto —, a função pula direto para \"sucesso\" sem chamar o gateway de novo. É essa ordem, e não a fila, que impede a cobrança dupla.",
+                "nodes": [
+                  "lambda",
+                  "external"
+                ],
+                "edges": [
+                  "lambda>external"
+                ]
+              },
+              {
+                "label": "Falha parcial devolve só quem falhou",
+                "detail": "Com `ReportBatchItemFailures`, se 1 das 10 mensagens do lote falhar, só ela volta para a fila. Sem essa configuração, o comportamento padrão do Lambda é devolver as 10 — inclusive as 9 que já tiveram efeito aplicado, e cujo `PutItem` vai falhar na reentrega (o que é inofensivo, mas desperdiça invocação e mascara o item que de fato precisa de atenção).",
+                "nodes": [
+                  "lambda",
+                  "sqs"
+                ],
+                "edges": [
+                  "lambda>sqs"
+                ]
+              },
+              {
+                "label": "Depois de 5 tentativas, a mensagem muda de fila — e alguém tem de olhar",
+                "detail": "A redrive policy move a mensagem para a DLQ após `maxReceiveCount` falhas. Sem o alarme de `ApproximateNumberOfMessagesVisible`, uma mensagem pode ficar até 14 dias ali sem que ninguém saiba que um pedido parou de ser processado.",
+                "nodes": [
+                  "sqs",
+                  "dlq",
+                  "cw"
+                ],
+                "edges": [
+                  "sqs>dlq",
+                  "dlq>cw"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação ao desenho anterior não é \"adicionar uma fila entre a API e o banco\": é que o trabalho pesado sai do request HTTP por completo. A API deixa de saber o que aconteceu com o pedido depois do `SendMessage` — quem sabe é o consumidor, minutos depois."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "Os dois problemas, resolvidos por dois mecanismos diferentes",
+            "content": "A fila resolve PERDA: nada desaparece enquanto a retenção não expirar, e o consumidor pode estar mais lento que a chegada sem que isso vire erro para o cliente. A condição de escrita no DynamoDB resolve DUPLICATA: é ela, e só ela, que transforma \"a mesma mensagem chegou de novo\" em \"nada aconteceu da segunda vez\". Tratar os dois como o mesmo problema é o erro mais caro desta arquitetura."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de um pedido, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os nomes dos estados não são jargão: eles são o que separa \"a mensagem existe\" de \"o efeito aconteceu\". Isso é observável com "
+              },
+              {
+                "text": "describe-tasks",
+                "code": true
+              },
+              {
+                "text": " trocado por "
+              },
+              {
+                "text": "get-queue-attributes",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "dynamodb query",
+                "code": true
+              },
+              {
+                "text": " durante o teste — e a seção de provas faz exatamente isso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "O caminho de um pedido, da intenção ao efeito — com a reentrega no meio",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1 · POST /api/pedidos",
+                "desc": "A API valida o formato do payload (sem tocar estoque ou pagamento) e chama `SendMessage`. Responde 202 com o `PedidoId` gerado — o cliente já pode seguir em frente."
+              },
+              {
+                "label": "2 · A mensagem fica invisível durante o processamento",
+                "desc": "Quando o Lambda faz `ReceiveMessage`, a mensagem entra em voo: some da fila por até o `visibility_timeout` (60 s aqui), mas continua existindo. Nenhum outro consumidor a vê nesse intervalo — a menos que o intervalo expire antes de ela ser apagada."
+              },
+              {
+                "label": "3 · PutItem condicional decide: primeira vez ou reentrega",
+                "desc": "`attribute_not_exists(PedidoId)` distingue as duas situações. Sucesso: segue para o efeito. `ConditionalCheckFailedException`: já foi processado, encerra sem efeito colateral novo."
+              },
+              {
+                "label": "4a · Caminho feliz: efeito aplicado, mensagem apagada",
+                "desc": "Debita estoque, chama o gateway, grava o resultado. A função não retorna o `MessageId` em `batchItemFailures` — Lambda apaga a mensagem da fila principal automaticamente."
+              },
+              {
+                "label": "4b · Falha real: item volta para a lista de falhas do lote",
+                "desc": "Exceção de negócio ou infraestrutura (gateway fora, erro de rede): o `MessageId` entra em `batchItemFailures`. A mensagem some da resposta bem-sucedida, mas continua na fila."
+              },
+              {
+                "label": "5 · Visibility timeout expira: reentrega, se ainda houver tentativa",
+                "desc": "Se ninguém apagou a mensagem, ela volta a ficar visível — para o mesmo consumidor ou para outro. `ApproximateReceiveCount` sobe 1. É esse contador que a redrive policy observa."
+              },
+              {
+                "label": "6 · maxReceiveCount excedido: vai para a DLQ",
+                "desc": "Na 6ª entrega (contador ultrapassa 5), a fila move a mensagem para a DLQ em vez de entregá-la de novo. O alarme de `ApproximateNumberOfMessagesVisible` na DLQ dispara."
+              }
+            ]
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O corpo que a API grava na fila. PedidoId e gerado no PRODUTOR, nao no consumidor — e e ele que vira a chave de particao da tabela de idempotencia."
+              }
+            ]
+          },
+          "position": 2
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "json",
+            "filename": "pedido-recebido.json",
+            "code": "{\n  \"pedidoId\": \"b3f1c2a4-7e21-4c9a-9f0e-1a2b3c4d5e6f\",\n  \"itemId\": \"sku-42\",\n  \"quantidade\": 1,\n  \"valorCentavos\": 15000,\n  \"lojaId\": \"loja-17\",\n  \"recebidoEm\": \"2026-08-07T14:22:31.618Z\"\n}"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "Por que o PedidoId nasce na API, não no consumidor",
+            "content": "Se o consumidor gerasse a chave de idempotência a partir do conteúdo da mensagem, duas mensagens com o mesmo pedido mas geradas por dois cliques do usuário (sem timeout no meio) teriam IDs diferentes e seriam processadas como pedidos distintos — o problema voltaria pela porta de trás. A chave tem de vir de uma decisão explícita do PRODUTOR sobre o que conta como \"o mesmo pedido\", não de um cálculo do consumidor sobre o conteúdo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Absorver um pico de campanha de até 10× o tráfego normal numa API de pedidos, sem perder pedido, sem cobrar duas vezes, e sem que o cliente espere o pagamento ser confirmado para receber uma resposta.",
+            "winner": "Fila SQS standard como buffer + Lambda .NET 8 como consumidor idempotente, com DLQ e `ReportBatchItemFailures`",
+            "why": "O problema tem duas partes que pedem mecanismos diferentes, e a fila standard resolve exatamente a parte que é dela: absorver um volume que varia sem que o produtor (a API) precise ser dimensionado para o pico. A ordem entre PEDIDOS DIFERENTES não importa — cada um é independente —, então FIFO não compra nada aqui e custaria throughput. O que resolve a duplicata não é a fila: é a condição de escrita no DynamoDB, e ela funciona igual com standard ou FIFO. Escolher standard é a decisão mais barata que ainda atende o requisito real.",
+            "alternatives": [
+              {
+                "name": "Fila FIFO",
+                "downside": "Garante ordem e deduplicação por `MessageDeduplicationId`, mas o teto de throughput é bem menor e o batch size do Lambda cai para 10 fixos. Compensa quando a ORDEM entre mensagens importa — pedidos independentes não é esse caso."
+              },
+              {
+                "name": "Retry com backoff no próprio handler síncrono (sem fila)",
+                "downside": "Reduz timeout, mas não resolve o problema real: a capacidade da API continua dimensionada para o pico, e o pico só existe em campanha. É a solução do L36 para um problema diferente — instabilidade de uma dependência, não excesso de volume."
+              },
+              {
+                "name": "Kinesis Data Streams",
+                "downside": "Feito para volume ordenado e consumo por múltiplos leitores independentes com replay. Para \"processar um pedido uma vez, com DLQ pronta\", é mais operação (shards, checkpoint) para resolver um problema que SQS resolve com menos peças."
+              },
+              {
+                "name": "Step Functions orquestrando o fluxo",
+                "downside": "Vale quando o fluxo tem VÁRIAS etapas com compensação entre si (saga) — é o L25. Aqui há uma etapa de negócio (cobrar e debitar), e orquestrar isso é peso sem função."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Tipo de fila",
+                "Standard",
+                "FIFO com `MessageGroupId` por cliente",
+                "pedidos independentes não precisam de ordem; standard tem throughput bem maior",
+                "nenhuma garantia de ordem entre pedidos — irrelevante para este requisito"
+              ],
+              [
+                "Mecanismo de idempotência",
+                "DynamoDB com `ConditionExpression`",
+                "deduplicação nativa de fila FIFO; cache com TTL curto",
+                "condição de escrita é atômica e não expira antes da hora — dedup de FIFO cobre só 5 min",
+                "mais uma tabela para manter, e um TTL para decidir"
+              ],
+              [
+                "Reporte de falha",
+                "`ReportBatchItemFailures` por mensagem",
+                "lote pequeno (1) para simplificar; sem partial batch, aceitando reprocesso total",
+                "evita reprocessar quem já teve sucesso, sem abrir mão do throughput de lote",
+                "mais código no laço de processamento — cada item precisa do próprio try/catch"
+              ],
+              [
+                "`maxReceiveCount`",
+                "5",
+                "1 (falha na primeira tentativa já vai para DLQ); 100 (quase nunca desiste)",
+                "dá margem a falha transitória sem deixar mensagem ruim reprocessando indefinidamente",
+                "um pedido com problema real leva 5 ciclos de visibility timeout até virar alarme"
+              ],
+              [
+                "Visibility timeout",
+                "60 s (6× o timeout da função)",
+                "10 s (igual ao timeout); 300 s (bem folgado)",
+                "segue a recomendação da AWS: cobre reentrega por throttling sem multiplicar o atraso",
+                "nada aqui — é o ponto de equilíbrio documentado"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: a API para de processar, e passa a registrar intenção"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A mudança na API é pequena em linhas e grande em contrato: o endpoint deixa de devolver \"o pedido confirmado\" e passa a devolver \"recebi a intenção\". Quem consome essa API precisa saber disso — é uma mudança de contrato, não um detalhe de implementação."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Program.cs (antes)",
+            "code": "// Program.cs (ANTES) — tudo dentro do mesmo request\n\napp.MapPost(\"/api/pedidos\", async (NovoPedidoRequest req, AppDb db, IGatewayPagamento gateway) =>\n{\n    // TRES operacoes, em serie, no MESMO request: gravar, decrementar estoque,\n    // cobrar. O cliente so recebe resposta quando a ULTIMA termina — e ela e a\n    // mais lenta das tres, porque depende de um servico que a Cadencia nao controla.\n    var pedido = new Pedido(req.ItemId, req.Quantidade, req.ValorCentavos);\n    db.Pedidos.Add(pedido);\n    db.Estoque.Decrementar(req.ItemId, req.Quantidade);\n    await db.SaveChangesAsync();\n\n    // ~700 ms no p50, sem retry, sem timeout configurado. Sob carga normal\n    // (0,5 pedido/s) isso e invisivel. Sob 10x, e o gargalo inteiro.\n    await gateway.CobrarAsync(pedido.Id, req.ValorCentavos);\n\n    return Results.Ok(pedido);\n});\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "csharp",
+            "filename": "Program.cs (depois)",
+            "code": "// Program.cs (DEPOIS) — a API registra a intencao e responde\n\napp.MapPost(\"/api/pedidos\", async (NovoPedidoRequest req, IAmazonSQS sqs, IOptions<FilaConfig> cfg) =>\n{\n    var pedidoId = Guid.NewGuid().ToString();\n\n    var corpo = JsonSerializer.Serialize(new PedidoRecebido(\n        PedidoId: pedidoId,\n        ItemId: req.ItemId,\n        Quantidade: req.Quantidade,\n        ValorCentavos: req.ValorCentavos));\n\n    // A API so registra a INTENCAO. Nenhum estoque e decrementado e nenhum\n    // gateway e chamado aqui — isso passou a ser trabalho do consumidor,\n    // minutos ou so segundos depois, no seu proprio ritmo.\n    await sqs.SendMessageAsync(new SendMessageRequest\n    {\n        QueueUrl = cfg.Value.FilaPedidosUrl,\n        MessageBody = corpo,\n        MessageAttributes = new Dictionary<string, MessageAttributeValue>\n        {\n            [\"PedidoId\"] = new() { DataType = \"String\", StringValue = pedidoId },\n        },\n    });\n\n    // 202: \"recebi a intencao\", nao \"processei o pedido\". E a mudanca de\n    // contrato que o cliente da API precisa saber — nao e mais um 200 com o\n    // pedido confirmado.\n    return Results.Accepted(value: new { pedidoId, status = \"recebido\" });\n});\n"
+          }
+        },
+        {
+          "id": "b8_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O `SendMessageAsync` também pode falhar",
+            "content": "Se a chamada ao SQS lançar exceção, a API precisa decidir o que fazer — normalmente devolver 5xx e deixar o cliente tentar de novo, já que nada foi registrado. Ignorar essa exceção com um `try/catch` vazio produz o pior cenário: o cliente recebe 202 achando que o pedido foi aceito, e ele nunca existiu em lugar nenhum."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: a fila principal, a DLQ e o alarme"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os dois relógios deste laboratório vivem em objetos diferentes — visibility timeout na fila, timeout na função — e é por isso que quase nunca são lidos juntos. O comentário no Terraform amarra um ao outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "fila.tf",
+            "code": "# fila.tf — a fila principal e a DLQ, com os dois relogios explicitos\n\nresource \"aws_sqs_queue\" \"pedidos_dlq\" {\n  name = \"${var.projeto}-pedidos-dlq\"\n\n  # Retencao MAXIMA do servico: 14 dias. Quem for investigar tem duas semanas,\n  # nao os 4 dias padrao da fila principal. Mensagem que morre aqui sem alguem\n  # olhar e o \"lixo silencioso\" que o alarme abaixo existe para evitar.\n  message_retention_seconds = 1209600\n\n  sqs_managed_sse_enabled = true\n}\n\nresource \"aws_sqs_queue\" \"pedidos\" {\n  name = \"${var.projeto}-pedidos\"\n\n  # RELOGIO 1: o teto de paciencia antes de a mensagem reaparecer para outro\n  # consumidor. A recomendacao da AWS e pelo menos 6x o timeout da funcao —\n  # aqui a funcao tem 10 s, entao o minimo seguro e 60 s. Abaixo disso, uma\n  # reentrega pode colidir com o PROPRIO processamento ainda em andamento.\n  visibility_timeout_seconds = 60\n\n  # Quanto tempo uma mensagem nao consumida sobrevive antes de ser descartada.\n  # O padrao (4 dias) cobre qualquer pico de campanha real; se o consumidor\n  # ficar parado por mais que isso, o problema deixou de ser \"fila\".\n  message_retention_seconds = 345600\n\n  sqs_managed_sse_enabled = true\n\n  redrive_policy = jsonencode({\n    deadLetterTargetArn = aws_sqs_queue.pedidos_dlq.arn\n    # A AWS recomenda pelo menos 5: da ao consumidor algumas chances de\n    # reentrega antes de desistir. Falha transitoria (o gateway de pagamento\n    # cai por um instante) nao deveria virar alarme na PRIMEIRA tentativa.\n    maxReceiveCount = 5\n  })\n}\n\n# So a fila principal pode redirecionar para esta DLQ — nao qualquer fila da\n# conta. Sem isto, qualquer engenheiro com permissao de SQS poderia apontar\n# uma fila nao relacionada para a mesma DLQ, misturando causas de falha.\nresource \"aws_sqs_queue_redrive_allow_policy\" \"dlq_allow\" {\n  queue_url = aws_sqs_queue.pedidos_dlq.id\n\n  redrive_allow_policy = jsonencode({\n    redrivePermission = \"byQueue\"\n    sourceQueueArns   = [aws_sqs_queue.pedidos.arn]\n  })\n}\n\n# O alarme e a razao de a DLQ nao ser lixo silencioso. threshold = 0 significa\n# \"qualquer mensagem visivel ja dispara\" — nao existe volume aceitavel de\n# pedido que parou de ser processado.\nresource \"aws_cloudwatch_metric_alarm\" \"dlq_com_mensagem\" {\n  alarm_name          = \"${var.projeto}-pedidos-dlq-nao-vazia\"\n  namespace           = \"AWS/SQS\"\n  metric_name         = \"ApproximateNumberOfMessagesVisible\"\n  statistic           = \"Maximum\"\n  period              = 300\n  evaluation_periods  = 1\n  threshold           = 0\n  comparison_operator = \"GreaterThanThreshold\"\n  treat_missing_data  = \"notBreaching\"\n\n  dimensions = {\n    QueueName = aws_sqs_queue.pedidos_dlq.name\n  }\n\n  alarm_actions = [aws_sns_topic.alertas.arn]\n}\n\noutput \"fila_pedidos_url\" {\n  value       = aws_sqs_queue.pedidos.id\n  description = \"URL da fila principal; e para aqui que a API publica\"\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "DLQ sem alarme é a mesma coisa que não ter DLQ",
+            "content": "A dead-letter queue existe para dar visibilidade a falha permanente — mas ela é passiva: nada nela dispara notificação por conta própria. Sem o `aws_cloudwatch_metric_alarm` acima, um pedido pode ficar até 14 dias parado ali, e a primeira pessoa a descobrir é o cliente reclamando que o pedido nunca chegou."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o Lambda, o event source mapping e as permissões"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O `function_response_types = [\"ReportBatchItemFailures\"]` é a única linha que decide se uma falha isolada custa um item ou um lote inteiro. É fácil de esquecer porque, sem ela, tudo parece funcionar — o lote é reprocessado, e reprocessar não gera erro visível, só desperdício e confusão sobre o que de fato falhou."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "consumidor.tf",
+            "code": "# consumidor.tf — o Lambda, o event source mapping e as permissoes minimas\n\nresource \"aws_lambda_function\" \"consumidor\" {\n  function_name = \"${var.projeto}-consumidor-pedidos\"\n  runtime       = \"dotnet8\"\n  handler       = \"Consumidor::Cadencia.Pedidos.Consumidor.Function::FunctionHandler\"\n  role          = aws_iam_role.consumidor.arn\n\n  # RELOGIO 2: o timeout da funcao. O visibility_timeout de 60 s da fila (em\n  # fila.tf) tem de ser pelo menos 6x este valor — e 6 x 10 = 60, sem folga\n  # sobrando. Subir este numero sem revisar o outro quebra a relacao.\n  timeout     = 10\n  memory_size = 512\n\n  filename         = data.archive_file.consumidor.output_path\n  source_code_hash = data.archive_file.consumidor.output_base64sha256\n\n  environment {\n    variables = {\n      TABELA_IDEMPOTENCIA = aws_dynamodb_table.pedidos_processados.name\n    }\n  }\n}\n\nresource \"aws_lambda_event_source_mapping\" \"consumidor_pedidos\" {\n  event_source_arn = aws_sqs_queue.pedidos.arn\n  function_name    = aws_lambda_function.consumidor.arn\n\n  batch_size = 10 # o padrao; e tambem o teto de uma fila FIFO. Standard aceita ate 10.000.\n\n  # O MECANISMO central deste laboratorio, do lado da configuracao. Sem isto,\n  # UMA mensagem com erro num lote de 10 devolve as OUTRAS NOVE para a fila\n  # tambem — inclusive as que ja tiveram efeito aplicado. Com isto, a funcao\n  # devolve so os IDs que de fato falharam.\n  function_response_types = [\"ReportBatchItemFailures\"]\n\n  maximum_batching_window_in_seconds = 5\n}\n\ndata \"aws_iam_policy_document\" \"consumidor_permissoes\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sqs:ReceiveMessage\", \"sqs:DeleteMessage\", \"sqs:GetQueueAttributes\"]\n    # So a fila PRINCIPAL. O consumidor nunca le da DLQ — quem le a DLQ e um\n    # humano investigando, nao o codigo de producao.\n    resources = [aws_sqs_queue.pedidos.arn]\n  }\n\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"dynamodb:PutItem\"]\n    resources = [aws_dynamodb_table.pedidos_processados.arn]\n  }\n}\n\nresource \"aws_iam_role\" \"consumidor\" {\n  name               = \"${var.projeto}-consumidor-pedidos\"\n  assume_role_policy = data.aws_iam_policy_document.consumidor_assume.json\n}\n\nresource \"aws_iam_role_policy\" \"consumidor_permissoes\" {\n  role   = aws_iam_role.consumidor.id\n  policy = data.aws_iam_policy_document.consumidor_permissoes.json\n}\n\nresource \"aws_iam_role_policy_attachment\" \"consumidor_logs\" {\n  role       = aws_iam_role.consumidor.name\n  policy_arn = \"arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole\"\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Onde",
+              "Parâmetro",
+              "Recomendação da AWS",
+              "Aqui",
+              "Por quê"
+            ],
+            "rows": [
+              [
+                "Fila",
+                "`visibility_timeout_seconds`",
+                "≥ 6× o timeout da função",
+                "60 s",
+                "6 × 10 s = 60 s, sem folga sobrando — qualquer aumento no timeout da função exige revisar aqui"
+              ],
+              [
+                "Fila",
+                "`maxReceiveCount`",
+                "≥ 5",
+                "5",
+                "dá margem a falha transitória do gateway sem deixar mensagem ruim reprocessando sem fim"
+              ],
+              [
+                "Lambda",
+                "`timeout`",
+                "menor que o visibility timeout",
+                "10 s",
+                "cobre a escrita condicional (rápida) mais a chamada ao gateway (~700-800 ms) com folga larga"
+              ],
+              [
+                "Event source mapping",
+                "`batch_size`",
+                "até 10.000 (standard)",
+                "10",
+                "o padrão; lote maior exige `maximum_batching_window_in_seconds` ≥ 1 s"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: a tabela de idempotência, e o consumidor que a usa"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A tabela existe para uma coisa só: guardar \"este PedidoId já foi visto\" com uma escrita que só tem sucesso uma vez. Tudo o mais — TTL, `point_in_time_recovery` — é cuidado em volta desse único fato."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "idempotencia.tf",
+            "code": "# idempotencia.tf — a tabela onde a duplicata vira nao-operacao\n\nresource \"aws_dynamodb_table\" \"pedidos_processados\" {\n  name         = \"${var.projeto}-pedidos-processados\"\n  billing_mode = \"PAY_PER_REQUEST\" # o trafego e o mesmo pico irregular da fila; provisionado sobraria ocioso\n  hash_key     = \"PedidoId\"\n\n  attribute {\n    name = \"PedidoId\"\n    type = \"S\"\n  }\n\n  # A marca de idempotencia nao precisa viver para sempre. 30 dias cobre\n  # qualquer reentrega tardia plausivel — a retencao MAXIMA da propria fila e\n  # 14 dias — sem acumular item indefinidamente.\n  ttl {\n    attribute_name = \"ExpiraEm\"\n    enabled        = true\n  }\n\n  point_in_time_recovery {\n    enabled = true # e o registro de \"isto ja foi cobrado\"; restaurar errado cobra duas vezes\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "csharp",
+            "filename": "Function.cs",
+            "code": "// Function.cs — consome em lote, decide por mensagem, devolve so quem falhou\n\nusing Amazon.DynamoDBv2;\nusing Amazon.DynamoDBv2.Model;\nusing Amazon.Lambda.Core;\nusing Amazon.Lambda.SQSEvents;\nusing System.Text.Json;\n\n[assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]\nnamespace Cadencia.Pedidos.Consumidor;\n\npublic class Function\n{\n    private static readonly AmazonDynamoDBClient _dynamo = new();\n    private static readonly HttpClient _gatewayPagamento = new() { Timeout = TimeSpan.FromSeconds(5) };\n    private static readonly string _tabela = Environment.GetEnvironmentVariable(\"TABELA_IDEMPOTENCIA\")!;\n\n    public async Task<SQSBatchResponse> FunctionHandler(SQSEvent evento, ILambdaContext contexto)\n    {\n        var falhas = new List<SQSBatchResponse.BatchItemFailure>();\n\n        // Cada mensagem do lote e tratada de forma INDEPENDENTE: uma excecao\n        // aqui nao pode impedir que as outras sejam reportadas como sucesso —\n        // e para isso que existe o ReportBatchItemFailures no event source\n        // mapping. Sem essa configuracao (e sem este try/catch por mensagem),\n        // uma unica falha devolveria o LOTE INTEIRO para a fila.\n        foreach (var mensagem in evento.Records)\n        {\n            try\n            {\n                await ProcessarPedidoAsync(mensagem, contexto);\n            }\n            catch (Exception ex)\n            {\n                contexto.Logger.LogError($\"Falha ao processar {mensagem.MessageId}: {ex.Message}\");\n                falhas.Add(new SQSBatchResponse.BatchItemFailure { ItemIdentifier = mensagem.MessageId });\n            }\n        }\n\n        return new SQSBatchResponse(falhas);\n    }\n\n    private async Task ProcessarPedidoAsync(SQSEvent.SQSMessage mensagem, ILambdaContext contexto)\n    {\n        var pedido = JsonSerializer.Deserialize<PedidoRecebido>(mensagem.Body)!;\n\n        // O MECANISMO de idempotencia mora INTEIRO nesta escrita condicional.\n        // attribute_not_exists(PedidoId) so deixa o PutItem ter sucesso se\n        // este for o PRIMEIRO PutItem com essa chave. SQS pode entregar a\n        // mesma mensagem mais de uma vez (at-least-once, nunca exactly-once\n        // numa fila standard); esta condicao e o que garante que o EFEITO de\n        // negocio acontece uma vez so, nao a fila.\n        try\n        {\n            await _dynamo.PutItemAsync(new PutItemRequest\n            {\n                TableName = _tabela,\n                Item = new Dictionary<string, AttributeValue>\n                {\n                    [\"PedidoId\"] = new AttributeValue { S = pedido.PedidoId },\n                    [\"ProcessadoEm\"] = new AttributeValue { S = DateTimeOffset.UtcNow.ToString(\"O\") },\n                    // TTL: a marca de idempotencia nao precisa viver para sempre.\n                    [\"ExpiraEm\"] = new AttributeValue\n                        { N = DateTimeOffset.UtcNow.AddDays(30).ToUnixTimeSeconds().ToString() },\n                },\n                ConditionExpression = \"attribute_not_exists(PedidoId)\",\n            });\n        }\n        catch (ConditionalCheckFailedException)\n        {\n            // Chegou aqui de novo. NAO e um erro de aplicacao: e o contrato\n            // at-least-once se manifestando. O efeito de negocio ja aconteceu\n            // na entrega anterior — pular e devolver sucesso e a resposta\n            // CORRETA, e e exatamente o que evita a cobranca duplicada.\n            contexto.Logger.LogInformation(\n                $\"Pedido {pedido.PedidoId} ja processado — reentrega ignorada, sem duplicar efeito\");\n            return;\n        }\n\n        // So chega aqui quando o PutItem acima criou o item pela PRIMEIRA vez.\n        // E aqui, e so aqui, que o efeito de negocio acontece.\n        await DebitarEstoqueAsync(pedido);\n        await CobrarCartaoAsync(pedido);\n    }\n\n    private static async Task DebitarEstoqueAsync(PedidoRecebido pedido)\n    {\n        // Decremento no PostgreSQL do L01/L03 — fora do escopo deste trecho.\n        // O ponto deste laboratorio nao e ONDE o estoque mora, e sim QUANDO o\n        // decremento acontece: depois da condicao de escrita ter passado.\n        await Task.CompletedTask;\n    }\n\n    private static async Task CobrarCartaoAsync(PedidoRecebido pedido)\n    {\n        var resposta = await _gatewayPagamento.PostAsJsonAsync(\n            \"https://gateway.exemplo/cobrancas\",\n            new { pedido.PedidoId, pedido.ValorCentavos });\n        resposta.EnsureSuccessStatusCode(); // erro aqui vira excecao e o item entra em batchItemFailures\n    }\n}\n\npublic record PedidoRecebido(string PedidoId, string ItemId, int Quantidade, int ValorCentavos);\n"
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "Por que `ConditionalCheckFailedException` não é logada como erro",
+            "content": "Ela representa o caminho ESPERADO de uma reentrega, não uma falha do sistema. Logar como erro faria o painel de observabilidade acender toda vez que a fila fizesse exatamente o que o contrato dela promete. O log de informação aqui é o dado que a prova de idempotência da seção seguinte usa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar que a duplicata não aconteceu"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma delas aceita \"a fila parece estar funcionando\" como resultado — cada uma tem um número ou um estado esperado, e a terceira é a que mais gente pula por confiar de olhos fechados no \"at-least-once resolvido pela AWS\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medicoes; nenhuma conclusao vem de \"parece que funcionou\"\n\nPROJETO=ffv-lab-fila\nFILA_URL=$(terraform output -raw fila_pedidos_url)\nDLQ_URL=$(aws sqs get-queue-url --queue-name \"${PROJETO}-pedidos-dlq\" --query QueueUrl --output text)\n\n# ── Prova 1: a fila absorve o pico sem devolver erro ao cliente ──────────────\n./carga.sh\n# Esperado: 100% dos requests com 202. Qualquer 5xx aqui e regressao na API,\n# nao na fila — a fila em si nao rejeita escrita por volume dentro dos limites.\n\n# ── Prova 2: o backlog cresce e depois esvazia, sem perder mensagem ──────────\nwatch -n5 \"aws sqs get-queue-attributes --queue-url $FILA_URL \\\n  --attribute-names ApproximateNumberOfMessages ApproximateAgeOfOldestMessage \\\n  --query 'Attributes'\"\n# Esperado: o numero sobe durante a carga e desce a zero em minutos. Se ele\n# NUNCA desce, o consumidor esta mais lento que a chegada — e capacidade do\n# Lambda, nao da fila.\n\n# ── Prova 3: a mesma mensagem reentregue nao duplica o efeito ────────────────\n# Reduza temporariamente o timeout da funcao Lambda para MENOR que o tempo\n# real de processamento, force uma execucao, e mate o processo no meio\n# (ou simplesmente reduza o visibility_timeout da fila para poucos segundos).\naws lambda update-function-configuration --function-name \"${PROJETO}-consumidor-pedidos\" --timeout 1\nPEDIDO_ID=$(uuidgen)\naws sqs send-message --queue-url \"$FILA_URL\" \\\n  --message-body \"{\\\"pedidoId\\\":\\\"$PEDIDO_ID\\\",\\\"itemId\\\":\\\"sku-42\\\",\\\"quantidade\\\":1,\\\"valorCentavos\\\":15000}\"\nsleep 90  # cobre pelo menos duas reentregas com visibility_timeout curto\naws dynamodb query --table-name \"${PROJETO}-pedidos-processados\" \\\n  --key-condition-expression \"PedidoId = :p\" \\\n  --expression-attribute-values \"{\\\":p\\\":{\\\"S\\\":\\\"$PEDIDO_ID\\\"}}\" \\\n  --query \"length(Items)\"\n# Esperado: exatamente 1 item, mesmo com varias tentativas de entrega — e o\n# PutItem condicional recusando as tentativas depois da primeira.\naws lambda update-function-configuration --function-name \"${PROJETO}-consumidor-pedidos\" --timeout 10\n\n# ── Prova 4: falha parcial nao reprocessa quem ja teve sucesso ───────────────\n# Envie um lote com 1 mensagem malformada (sem itemId) e 9 validas.\nfor i in $(seq 1 9); do\n  aws sqs send-message --queue-url \"$FILA_URL\" \\\n    --message-body \"{\\\"pedidoId\\\":\\\"$(uuidgen)\\\",\\\"itemId\\\":\\\"sku-42\\\",\\\"quantidade\\\":1,\\\"valorCentavos\\\":15000}\"\ndone\naws sqs send-message --queue-url \"$FILA_URL\" --message-body '{\"pedidoId\":\"quebrado\"}'\nsleep 15\naws cloudwatch get-metric-statistics --namespace AWS/Lambda --metric-name Invocations \\\n  --dimensions Name=FunctionName,Value=\"${PROJETO}-consumidor-pedidos\" \\\n  --start-time \"$(date -u -d '5 min ago' +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --period 300 --statistics Sum\n# Esperado: apenas 1 invocacao adicional na proxima rodada de poll (so a\n# mensagem malformada reaparece) — nao 10. Sem ReportBatchItemFailures no\n# event source mapping, esperar-se-ia todo o lote de volta.\n\n# ── Prova 5: falha permanente chega na DLQ e dispara o alarme ────────────────\n# A mensagem \"quebrada\" acima falha 5 vezes (deserializacao explode sempre).\nsleep 400  # 5 tentativas x 60s de visibility timeout, com folga\naws sqs get-queue-attributes --queue-url \"$DLQ_URL\" \\\n  --attribute-names ApproximateNumberOfMessages --query 'Attributes.ApproximateNumberOfMessages'\naws cloudwatch describe-alarms --alarm-names \"${PROJETO}-pedidos-dlq-nao-vazia\" \\\n  --query 'MetricAlarms[0].StateValue'\n# Esperado: 1 mensagem na DLQ, alarme em ALARM. Se o numero for 0, o\n# maxReceiveCount ainda nao foi atingido — confira ApproximateReceiveCount.\n"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Absorve o pico",
+                "carga de 3.000 pedidos em paralelo",
+                "100% dos requests com 202",
+                "qualquer 5xx aqui é regressão na API, não na fila"
+              ],
+              [
+                "2 · Backlog esvazia",
+                "`get-queue-attributes` em laço",
+                "sobe durante a carga e desce a zero em minutos",
+                "se nunca desce, o consumidor está mais lento que a chegada"
+              ],
+              [
+                "3 · Reentrega não duplica",
+                "força reentrega e conta itens no DynamoDB",
+                "exatamente 1 item, mesmo com várias tentativas",
+                "mais de 1 item significa que a condição de escrita não está no caminho crítico"
+              ],
+              [
+                "4 · Falha parcial não reprocessa sucesso",
+                "lote com 1 mensagem ruim + 9 boas",
+                "apenas 1 invocação adicional na rodada seguinte",
+                "10 invocações adicionais indica `ReportBatchItemFailures` ausente ou mal configurado"
+              ],
+              [
+                "5 · DLQ recebe e alarme dispara",
+                "mensagem malformada até esgotar `maxReceiveCount`",
+                "1 mensagem na DLQ, alarme em `ALARM`",
+                "DLQ vazia com `ApproximateReceiveCount` alto indica redrive policy não aplicada"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três acontecem de verdade, e a primeira é a mais cara: ela não aparece como erro, aparece como fatura de gateway de pagamento maior que o número de pedidos."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "`ReportBatchItemFailures` ausente",
+                "remova `function_response_types` do event source mapping",
+                "a mesma cobrança acontece 2 vezes quando 1 mensagem do lote falha — mesmo com idempotência",
+                "contagem de invocações do Lambda muito acima do número de mensagens que de fato falharam",
+                "reative `function_response_types = [\"ReportBatchItemFailures\"]`"
+              ],
+              [
+                "Visibility timeout menor que o processamento real",
+                "baixe `visibility_timeout_seconds` para 5 com a função ainda levando 8 s",
+                "a mesma mensagem é processada por DUAS invocações concorrentes",
+                "`ApproximateReceiveCount` sobe mesmo sem erro registrado na função",
+                "visibility timeout ≥ 6× o timeout medido da função, nunca o contrário"
+              ],
+              [
+                "`maxReceiveCount` baixo demais",
+                "configure `maxReceiveCount = 1`",
+                "pedido legítimo vai para a DLQ na primeira instabilidade momentânea do gateway",
+                "DLQ crescendo em correlação com picos de latência do gateway, não com erro de código",
+                "suba para 5 e trate a DLQ como sinal de falha PERSISTENTE, não de qualquer falha"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A falha que não aparece em nenhum painel de erro",
+            "content": "Sem `ReportBatchItemFailures`, o Lambda continua reportando sucesso ou falha por LOTE, nunca por mensagem — e reprocessar um item que já teve efeito aplicado não gera exceção nenhuma se a idempotência estiver correta. O sintoma real é financeiro: mais chamadas ao gateway de pagamento do que pedidos únicos, e nenhum log vermelho apontando por quê."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Uma fila SQS standard entrega a mesma mensagem duas vezes ao seu consumidor, mesmo sem nenhum erro de configuração. O que isso representa?",
+        "options": [
+          "Prova de que o visibility timeout está configurado baixo demais",
+          "O comportamento normal do contrato de entrega \"ao menos uma vez\"",
+          "Um sinal de que a fila deveria ser trocada para FIFO",
+          "Um defeito no serviço, que deveria ser reportado à AWS como bug"
+        ],
+        "correctIndex": 1,
+        "explanation": "É o contrato, não uma falha. Filas standard da Amazon SQS garantem entrega \"ao menos uma vez\" — a arquitetura distribuída da fila pode, em circunstâncias normais, entregar a mesma mensagem mais de uma vez, mesmo com toda configuração correta. Tratar isso como bug leva a procurar uma causa que não existe; a resposta certa é projetar o consumidor para ser idempotente, não tentar eliminar a duplicata na origem.\n\nA primeira alternativa erra o modelo mental: não há nada errado para reportar, porque a documentação declara esse comportamento como esperado. A terceira confunde duas coisas diferentes — visibility timeout baixo AUMENTA a chance de reentrega por colisão com processamento em andamento, mas reentrega ocasional acontece mesmo com o valor bem dimensionado, por causa da natureza distribuída do serviço. A quarta ataca o sintoma errado: FIFO tem deduplicação por 5 minutos a partir de um ID enviado pelo produtor, não elimina a necessidade de idempotência no consumidor ao longo do tempo — o mesmo mecanismo de escrita condicional seria necessário de qualquer forma."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o que uma fila de pedidos expõe"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A fila carrega dado de negócio real — item, valor, loja. Ela não é infraestrutura invisível: é um lugar onde payload sensível fica em repouso, ainda que por minutos."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Mensagem com dado de pagamento em texto plano",
+                "média",
+                "alto",
+                "nunca inclua número de cartão no corpo — só referência tokenizada do gateway",
+                "revisão de código; varredura de payload em ambiente de teste",
+                "rotacionar token comprometido; nunca há \"apagar do log\" garantido"
+              ],
+              [
+                "Consumidor com permissão de escrita em qualquer tabela",
+                "baixa",
+                "alto",
+                "IAM restrito à tabela de idempotência específica, nunca `dynamodb:*`",
+                "IAM Access Analyzer sobre uso real do papel",
+                "derivar a política do uso medido — é o L41"
+              ],
+              [
+                "Poison message reprocessando sem limite",
+                "média",
+                "médio",
+                "`maxReceiveCount` finito com DLQ configurada",
+                "alarme de `ApproximateNumberOfMessagesVisible` na DLQ",
+                "investigar a mensagem na DLQ antes de decidir reprocessar ou descartar"
+              ],
+              [
+                "DLQ acessível a qualquer papel da conta",
+                "baixa",
+                "alto",
+                "`redrive_allow_policy` restrita `byQueue`, e leitura da DLQ restrita a papel de investigação",
+                "CloudTrail em `ReceiveMessage` na DLQ fora do papel esperado",
+                "revogar acesso; auditar o que foi lido"
+              ],
+              [
+                "Fila sem criptografia em repouso",
+                "baixa",
+                "médio",
+                "`sqs_managed_sse_enabled = true` em ambas as filas",
+                "AWS Config regra de fila sem SSE",
+                "ativar SSE; não há retroativo para mensagens já entregues e apagadas"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O que este laboratório NÃO cobre",
+            "content": "Autenticação de quem pode chamar `POST /api/pedidos` já é resolvida pela camada da API (cookie de sessão sem estado, do L​autenticacao-cognito-sessao-sem-estado). Este módulo assume que a requisição já chegou legítima até a fila."
+          }
+        },
+        {
+          "id": "b14_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "A DLQ guarda o payload por mais tempo que a fila principal",
+            "content": "Catorze dias de retenção na DLQ, contra quatro na fila principal, significam que um pedido com dado de cliente fica em repouso três vezes e meia mais tempo justamente na fila que menos gente audita rotineiramente. Se o payload incluir CPF, endereço ou qualquer dado pessoal, a política de retenção da DLQ entra na mesma discussão de conformidade que a retenção de log — não é só um detalhe operacional."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "A fila está acumulando mais rápido do que esvazia?",
+                "`ApproximateNumberOfMessages`",
+                "consumidor mais lento que a chegada — capacidade, não perda",
+                "crescendo por > 10 min seguidos"
+              ],
+              [
+                "Algum pedido está esperando demais para ser processado?",
+                "`ApproximateAgeOfOldestMessage`",
+                "mensagem antiga na fila principal é atraso; na DLQ, é falha permanente",
+                "> 300 s na principal"
+              ],
+              [
+                "Há pedido que não consegue ser processado de jeito nenhum?",
+                "`ApproximateNumberOfMessagesVisible` (DLQ)",
+                "qualquer valor > 0 é falha persistente, não transitória",
+                "> 0"
+              ],
+              [
+                "O Lambda está de fato apagando mensagens processadas?",
+                "`NumberOfMessagesDeleted`",
+                "cair para perto de zero com fila cheia indica função devolvendo tudo como falha",
+                "próximo de `NumberOfMessagesReceived`"
+              ],
+              [
+                "A reentrega está acontecendo mais do que o esperado?",
+                "contagem de `ConditionalCheckFailedException` no log",
+                "sinal direto de duplicata real acontecendo — é o número que a prova 3 lê",
+                "investigar acima de 1% das mensagens"
+              ],
+              [
+                "O consumidor está sendo limitado (throttled)?",
+                "`Throttles` do Lambda",
+                "concorrência reservada baixa demais para o tamanho do pico",
+                "> 0 durante o pico esperado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana sozinha",
+            "content": "`ApproximateNumberOfMessages` alto durante o pico é ESPERADO — é a fila fazendo o trabalho que ela existe para fazer. O sinal de problema real não é o valor absoluto, é a TENDÊNCIA: se ele não volta a cair depois que a carga cessa, o consumidor tem um problema de capacidade, não a fila."
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O par de métricas que confirma que ReportBatchItemFailures está funcionando",
+            "content": "`NumberOfMessagesDeleted` caindo para perto de zero enquanto `NumberOfMessagesReceived` continua alto é o sinal mais direto de que a função está devolvendo lotes inteiros como falha em vez de reportar item por item. As duas métricas lidas juntas contam a história que nenhuma das duas conta sozinha."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão, e falha de AZ"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que muda",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "5 pedidos/s (o cenário deste laboratório)",
+                "concorrência padrão do Lambda (5 lotes simultâneos) já cobre",
+                "nada; é o cenário do laboratório",
+                "nada"
+              ],
+              [
+                "500 pedidos/s",
+                "o Lambda escala até 300 invocações concorrentes a mais por minuto",
+                "a rampa de escala do Lambda pode não acompanhar um pico instantâneo",
+                "testar o pico real; considerar `Provisioned Mode` no event source mapping se a rampa for insuficiente"
+              ],
+              [
+                "5 mil pedidos/s",
+                "a tabela de idempotência recebe 5 mil `PutItem`/s",
+                "em `PAY_PER_REQUEST` isso é absorvido, mas o custo por escrita passa a ser linha visível",
+                "medir custo por escrita; considerar TTL mais curto se o volume de itens crescer rápido"
+              ],
+              [
+                "1 milhão de pedidos/dia",
+                "nada estrutural muda — SQS, Lambda e DynamoDB são regionais",
+                "o gargalo desloca para o que chama o gateway de pagamento, que tem o próprio limite de taxa",
+                "é o assunto do L36: retry com backoff e disjuntor para uma dependência com limite próprio"
+              ],
+              [
+                "Falha de uma AZ",
+                "nenhum redesenho é necessário",
+                "ao contrário do ALB/ECS dos laboratórios anteriores, SQS, Lambda e DynamoDB já são multi-AZ por padrão, sem configuração extra",
+                "nada — é o contraste que vale registrar: serviço regional não tem \"plano de falha de AZ\" porque a AZ nunca é a unidade de disponibilidade dele"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O contraste com os laboratórios de ECS/RDS",
+            "content": "Nos laboratórios anteriores da série, Multi-AZ era uma decisão explícita com custo dobrado. Aqui, os três serviços novos — SQS, Lambda, DynamoDB — são regionais por natureza: a AWS distribui entre AZs sem que isso apareça como parâmetro de Terraform. É uma vantagem real do desenho serverless, e vale nomear por que ela existe, não só usufruir dela."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três dimensões que cobram são independentes, e o laboratório é barato porque nenhuma delas tem custo fixo — tudo escala com uso real."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "0,5 pedido/s, dia normal",
+                "requisições de SQS e invocações de Lambda na casa de dezenas de milhares por mês",
+                "desprezível",
+                "nenhuma; otimizar aqui é gastar atenção onde não há dinheiro"
+              ],
+              [
+                "Campanha",
+                "pico de 5 pedidos/s por 20 min, algumas vezes por mês",
+                "um degrau visível só no dia da campanha; volta ao normal no dia seguinte",
+                "baixa e previsível",
+                "nenhuma — é exatamente o tipo de carga que serverless existe para não superprovisionar"
+              ],
+              [
+                "Alta escala",
+                "500 pedidos/s sustentados",
+                "linha visível em Lambda (duração × memória) e em leitura/escrita de DynamoDB",
+                "crescente e linear",
+                "otimizar a duração da função (menos tempo preso no gateway externo) reduz o custo do Lambda direto"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "SQS",
+                "requisições (Send/Receive/Delete), por milhão",
+                "long polling do Lambda já reduz `ReceiveMessage` vazio — não é um ajuste manual necessário aqui"
+              ],
+              [
+                "Lambda",
+                "duração × memória alocada, por invocação",
+                "a chamada ao gateway de pagamento domina a duração; ela, não o código, é o que cobra mais"
+              ],
+              [
+                "DynamoDB (PAY_PER_REQUEST)",
+                "unidade de leitura/escrita, por operação",
+                "o TTL de 30 dias evita a tabela crescer sem teto — sem ele, cada pedido novo é uma linha para sempre"
+              ],
+              [
+                "CloudWatch",
+                "alarmes por mês e ingestão de log",
+                "valor pequeno e fixo; não é onde se economiza"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O custo oculto que a arquitetura síncrona tinha, e este não tem",
+            "content": "Dimensionar o ECS Fargate da API para suportar 10× o tráfego normal — mesmo que só por 20 minutos, algumas vezes por mês — significa pagar hora ligada de capacidade ociosa 99% do tempo. Com a fila absorvendo o pico, a API volta a ser dimensionada para o tráfego NORMAL, e quem escala para o pico é o Lambda, que só cobra pelas invocações que de fato acontecem."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "DLQ com alarme; painel com backlog, idade da mensagem e taxa de reentrega",
+                "ninguém definiu o runbook de \"o que fazer quando a DLQ tem mensagem\"",
+                "documentar o playbook de investigação e redrive manual",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "IAM restrito por recurso; sem `dynamodb:*` nem `sqs:*`",
+                "payload da fila sem criptografia adicional além do SSE gerenciado",
+                "avaliar KMS próprio se o payload passar a incluir dado mais sensível",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "idempotência provada por reentrega forçada; falha parcial isolada por mensagem",
+                "a chamada ao gateway de pagamento não tem retry nem timeout configurado no cliente HTTP",
+                "Polly com backoff e jitter no `HttpClient` do consumidor (L36)",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "concorrência do Lambda escala automaticamente com o backlog",
+                "nenhum teste real de pico acima de 10× foi feito",
+                "testar o próximo patamar de carga antes de precisar dele em produção",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "tudo paga por uso; TTL evita crescimento sem teto na tabela",
+                "nenhum",
+                "nenhuma ação necessária agora",
+                "baixa"
+              ],
+              [
+                "Sustentabilidade",
+                "sem capacidade ociosa provisionada para o pico",
+                "nenhum",
+                "já é o desenho mais eficiente disponível para esta carga",
+                "baixa"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "O pilar que este laboratório mais move",
+            "content": "Confiabilidade é onde a distância entre o desenho síncrono e este é maior — não porque a fila seja um componente mais robusto, mas porque ela transforma \"a API precisa suportar o pico\" em \"o consumidor precisa, no seu próprio tempo, esvaziar o que a fila acumulou\". É uma mudança de que peça carrega o risco, não uma peça a mais."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "De tudo síncrono a fila com dados e IA — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Tudo dentro do request HTTP: gravar, debitar, cobrar. É onde a Cadência estava, e continua legítimo para volume baixo e sem pico previsível.",
+                "note": "Risco resolvido: nenhum. Novo risco: qualquer pico de tráfego vira indisponibilidade, e qualquer timeout do cliente vira cobrança duplicada. Custo: o mais baixo — sem fila nem consumidor."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Fila SQS como buffer, Lambda consumidor idempotente, DLQ com alarme, `ReportBatchItemFailures` configurado.",
+                "note": "Risco resolvido: perda de pedido sob pico e cobrança duplicada por reentrega. Novo risco: atraso entre \"pedido recebido\" e \"pedido processado\" — o cliente não sabe o status em tempo real. Custo: pago por uso, sem hora ociosa."
+              },
+              {
+                "label": "Nível 3 — Múltiplos interessados",
+                "instruction": "Fanout com SNS para o mesmo evento de pedido: estoque, notificação, faturamento — cada um com sua própria fila (L23).",
+                "note": "Risco resolvido: adicionar um novo consumidor deixa de exigir alterar o produtor. Novo risco: cada consumidor precisa da própria idempotência — o padrão se repete, não se compartilha. Custo: proporcional ao número de assinantes."
+              },
+              {
+                "label": "Nível 4 — Dependência instável tratada com disciplina",
+                "instruction": "Retry com backoff exponencial e jitter, disjuntor de circuito no cliente HTTP do gateway de pagamento (L36).",
+                "note": "Risco resolvido: instabilidade do gateway virando retry storm que derruba o próprio consumidor. Novo risco: disjuntor mal calibrado rejeita tráfego legítimo. Custo: desprezível — é lógica de aplicação."
+              },
+              {
+                "label": "Nível 5 — Orquestração de fluxo multi-etapa",
+                "instruction": "Step Functions coordenando reservar estoque, cobrar, confirmar — com compensação explícita se uma etapa falhar depois de outra ter sucesso (L25).",
+                "note": "Risco resolvido: lógica de compensação (saga) espalhada em `try/catch` que ninguém audita. Novo risco: mais uma peça de infraestrutura para versionar e testar. Custo: por transição de estado."
+              },
+              {
+                "label": "Nível 6 — Dados e IA",
+                "instruction": "Detecção de anomalia sobre o padrão de pedidos e o volume da DLQ — sinalizar fraude ou instabilidade de dependência antes que o alarme simples dispare.",
+                "note": "Risco resolvido: alarme de limiar fixo que não distingue pico de campanha legítimo de ataque. Novo risco: modelo treinado sobre poucos incidentes reprovando tráfego legítimo. Custo: baixo — o dado (CloudWatch, DLQ) já existe."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Fanout (nível 3) sem idempotência (nível 2) multiplica o problema: cada novo assinante reintroduz \"processei duas vezes\" com sua própria dependência. Orquestração (nível 5) sem retry disciplinado (nível 4) só automatiza a compensação de uma falha que um backoff simples já evitaria. Cada nível resolve o risco que o anterior deixou, não o substitui."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não resolve o problema central, e forçá-la seria o antipadrão que a própria série critica. \"Como não perder pedido e não cobrar duas vezes\" tem resposta determinística: retenção de fila e escrita condicional. Um modelo não melhora nenhuma das duas — são contrato e aritmética."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar onde IA acrescentaria valor real, e ele aparece só no nível 6 da evolução: distinguir um pico de campanha legítimo de um padrão anômalo (ataque, bug em loop no cliente gerando pedido repetido). Hoje o alarme de DLQ é um limiar fixo — qualquer mensagem dispara — e isso é correto para \"algo falhou permanentemente\". Não é a mesma pergunta que \"este volume é esperado\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "distinguir pico de campanha esperado de padrão anômalo de pedidos"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "uma regra de limiar (ex.: \"mais de 3× a média móvel\") cobre a maior parte dos casos; IA só se justifica quando o padrão sazonal (campanhas recorrentes) torna o limiar fixo ruidoso demais"
+              ],
+              [
+                "De onde viriam os dados?",
+                "histórico de `ApproximateNumberOfMessages` e volume de pedidos por loja, já em CloudWatch"
+              ],
+              [
+                "Qual o risco?",
+                "sinalizar campanha legítima como anomalia e atrasar o processamento de pedidos reais"
+              ],
+              [
+                "Por que não agora?",
+                "a Cadência ainda não tem histórico de campanhas suficiente para treinar nem para avaliar — um modelo sobre poucos eventos é superstição com aparência de estatística"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"decidir se o pedido é idempotente\" trocaria um mecanismo determinístico — a condição de escrita, que está certa ou está errada, sem meio-termo — por um probabilístico. Idempotência não é uma decisão de julgamento: é uma prova de unicidade. Onde existe mecanismo exato, IA só acrescenta chance de errar com confiança."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Assumir que a fila entrega exatamente uma vez",
+                "o nome \"fila confiável\" soa como garantia total, e funciona assim em quase todo teste manual",
+                "sob volume real, at-least-once se manifesta, e o efeito duplicado só aparece na fatura ou no estoque",
+                "mais cobranças no gateway do que pedidos únicos gravados",
+                "idempotência explícita com escrita condicional, sempre",
+                "nunca — mesmo volume baixo eventualmente entrega duas vezes"
+              ],
+              [
+                "Ignorar `ReportBatchItemFailures`",
+                "o padrão \"funciona sem configurar nada extra\" parece suficiente em teste com lotes de 1 mensagem",
+                "sob lote real de 10, uma falha isolada reprocessa as nove que já tiveram sucesso",
+                "contagem de invocações do Lambda muito maior que o número de falhas reais",
+                "`function_response_types = [\"ReportBatchItemFailures\"]` mais o try/catch por mensagem",
+                "nunca em produção com batch size > 1"
+              ],
+              [
+                "`maxReceiveCount = 1`",
+                "parece \"mais rigoroso\" e manda para a DLQ na primeira suspeita de problema",
+                "falha transitória do gateway (instabilidade de alguns segundos) manda pedido legítimo para a DLQ",
+                "DLQ crescendo em correlação com picos de latência de uma dependência, não com bug de código",
+                "`maxReceiveCount` de pelo menos 5, seguindo a recomendação da AWS",
+                "quando o processamento é conhecidamente não-idempotente e reentrega é pior que perder"
+              ],
+              [
+                "Idempotência \"por comentário\"",
+                "o código tem um comentário dizendo \"não deveria processar duas vezes\" sem mecanismo real",
+                "comentário não impede nada; é decoração que passa despercebida em revisão apressada",
+                "duplicata aparece meses depois, na primeira reentrega real sob carga",
+                "mecanismo verificável: escrita condicional que FALHA de propósito na segunda tentativa",
+                "nunca — comentário não é controle"
+              ],
+              [
+                "DLQ sem alarme",
+                "a DLQ \"existe\", então parece que a falha permanente já está tratada",
+                "nada nela dispara notificação sozinho; ela é um lugar, não um processo",
+                "pedido nunca processado e ninguém sabe até o cliente reclamar",
+                "alarme de `ApproximateNumberOfMessagesVisible` com threshold em qualquer valor acima de zero",
+                "nunca — DLQ sem monitoração é pior que não ter DLQ, porque passa segurança falsa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Mensagens acumulando sem parar de crescer",
+                "consumidor mais lento que a chegada, ou throttling",
+                "compare `ApproximateNumberOfMessages` com `Throttles` do Lambda",
+                "painel de CloudWatch da fila e da função",
+                "aumentar concorrência reservada, ou investigar por que cada invocação demora mais que o esperado"
+              ],
+              [
+                "Mesma cobrança duas vezes, mesmo com idempotência implementada",
+                "a chamada ao gateway acontece ANTES do `PutItem` condicional, não depois",
+                "releia a ordem do código: escrita condicional tem de vir primeiro, sempre",
+                "diff do `ProcessarPedidoAsync` contra a versão de referência",
+                "mover a chamada de negócio para depois do `PutItem` bem-sucedido"
+              ],
+              [
+                "DLQ crescendo em rajadas correlacionadas com horário de pico",
+                "falha transitória do gateway de pagamento sob carga, não bug de código",
+                "compare o horário das mensagens na DLQ com a latência p99 do gateway",
+                "log de erro do `CobrarCartaoAsync` e métrica de latência do terceiro",
+                "não é `maxReceiveCount`: é resiliência do cliente HTTP — retry com backoff, é o L36"
+              ],
+              [
+                "Lote inteiro reprocessado quando só 1 mensagem falha",
+                "`function_response_types` sem `ReportBatchItemFailures`, ou resposta malformada",
+                "confira o event source mapping e o formato exato do retorno da função",
+                "`aws lambda get-event-source-mapping` e o corpo de retorno de `FunctionHandler`",
+                "ative a configuração e confirme que o retorno usa `itemIdentifier`, não outro nome de campo"
+              ],
+              [
+                "Alarme de DLQ nunca dispara mesmo com mensagem visível",
+                "dimensão errada no alarme, ou ele aponta para a fila principal em vez da DLQ",
+                "confira `QueueName` nas `dimensions` do alarme contra o nome real da DLQ",
+                "`aws cloudwatch describe-alarms`",
+                "corrigir a dimensão; testar forçando uma mensagem até a DLQ de propósito"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em parâmetro, pergunte: o problema é PERDA (mensagem sumiu), DUPLICATA (efeito aconteceu duas vezes) ou ATRASO (mensagem demorou, mas chegou uma vez)? Cada um aponta para um mecanismo diferente — retenção, condição de escrita, ou capacidade do consumidor — e confundi-los é o que faz alguém ajustar o `maxReceiveCount` para um problema de idempotência."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório é barato de manter, mas dois pontos merecem atenção antes de considerar encerrado: mensagens presas na DLQ e itens acumulados na tabela de idempotência sem TTL ativo por engano."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Confirme que nao ha mensagem presa antes de derrubar a fila.\naws sqs get-queue-attributes --queue-url \"$FILA_URL\" \\\n  --attribute-names ApproximateNumberOfMessages --query \"Attributes\"\naws sqs get-queue-attributes --queue-url \"$DLQ_URL\" \\\n  --attribute-names ApproximateNumberOfMessages --query \"Attributes\"\n\n# 2. Derrube o que o Terraform administra: filas, Lambda, event source\n#    mapping, tabela DynamoDB, alarme.\nterraform destroy -auto-approve\n\n# 3. LOG GROUP DO LAMBDA: o Terraform so remove se voce declarou o\n#    aws_cloudwatch_log_group explicitamente. Sem isso, ele sobrevive\n#    e continua cobrando por retencao.\naws logs describe-log-groups \\\n  --log-group-name-prefix \"/aws/lambda/ffv-lab-fila-consumidor-pedidos\" \\\n  --query \"logGroups[].logGroupName\" --output table\naws logs delete-log-group \\\n  --log-group-name \"/aws/lambda/ffv-lab-fila-consumidor-pedidos\" 2>/dev/null || true\n\n# 4. Prova final: nada com o nome do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab-fila \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Fila principal e DLQ",
+                "sim",
+                "não",
+                "não há taxa de existência — só de uso"
+              ],
+              [
+                "Função Lambda e event source mapping",
+                "sim",
+                "não",
+                "nenhum custo de capacidade reservada por padrão"
+              ],
+              [
+                "Tabela DynamoDB",
+                "sim",
+                "não em `PAY_PER_REQUEST`",
+                "sem provisionamento fixo, não há custo ocioso"
+              ],
+              [
+                "Grupo de logs do Lambda",
+                "só se declarado em Terraform",
+                "sim, retenção",
+                "tem ciclo próprio; sobrevive à função que o alimentava se não for gerenciado explicitamente"
+              ],
+              [
+                "Alarme CloudWatch",
+                "sim se em Terraform",
+                "centavos",
+                "alarme criado à mão no console não aparece no estado"
+              ],
+              [
+                "Itens na tabela com TTL ainda não vencido",
+                "sim, junto com a tabela",
+                "não após o destroy",
+                "o TTL só importa enquanto a tabela existir; ela some inteira no destroy"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Pico de 10× derruba a API síncrona",
+                "fila SQS standard como buffer",
+                "desacopla vazão de capacidade — o consumidor escala no próprio ritmo"
+              ],
+              [
+                "Mesma mensagem entregue mais de uma vez",
+                "escrita condicional no DynamoDB",
+                "é o único mecanismo que transforma at-least-once em efeito único — a fila não faz isso sozinha"
+              ],
+              [
+                "Falha isolada reprocessa o lote inteiro",
+                "`ReportBatchItemFailures`",
+                "devolve só o item que falhou, preservando o efeito das mensagens já bem-sucedidas"
+              ],
+              [
+                "Falha persistente vira lixo silencioso",
+                "DLQ com alarme de profundidade",
+                "DLQ sem monitoração dá segurança falsa; o alarme é a parte que faz ela servir para algo"
+              ],
+              [
+                "Reentrega colide com processamento em andamento",
+                "visibility timeout ≥ 6× o timeout da função",
+                "segue a recomendação da AWS para cobrir throttling sem multiplicar o atraso"
+              ],
+              [
+                "Falha transitória vira alarme prematuro",
+                "`maxReceiveCount` de 5",
+                "dá margem à instabilidade momentânea de uma dependência externa"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Pico de tráfego derrubando a API",
+                "fila como buffer explícito",
+                "consumidor genuinamente subdimensionado para o volume total — isso é escala do Lambda"
+              ],
+              [
+                "Cobrança duplicada por reentrega",
+                "condição de escrita no DynamoDB",
+                "efeito de negócio chamado ANTES da condição — ordem errada no código não é protegida por config nenhuma"
+              ],
+              [
+                "Reprocessamento de mensagem já bem-sucedida",
+                "`ReportBatchItemFailures`",
+                "a idempotência em si — sem ela, cada reentrega ainda duplicaria o efeito"
+              ],
+              [
+                "Mensagem perdida silenciosamente",
+                "retenção de 4 dias na fila principal",
+                "consumidor parado por mais tempo que a retenção — vira perda de verdade"
+              ],
+              [
+                "Falha permanente não percebida",
+                "alarme de DLQ",
+                "decidir o que fazer com a mensagem na DLQ — isso ainda é trabalho humano"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "A API valida o payload e chama `SendMessage`, sem tocar estoque ou gateway de pagamento.",
+              "A resposta 202 sai antes de qualquer efeito de negócio acontecer.",
+              "A mensagem fica invisível na fila pelo tempo do visibility timeout enquanto está sendo processada.",
+              "O Lambda faz `PutItem` condicional: sucesso significa primeira vez; exceção significa reentrega.",
+              "Se for a primeira vez, o efeito de negócio roda — debita estoque, cobra o cartão.",
+              "Se for reentrega, a função encerra sem repetir o efeito, e reporta sucesso mesmo assim.",
+              "Falha real no processamento entra em `batchItemFailures`, e só aquele item volta para a fila.",
+              "Depois de 5 tentativas, a mensagem migra para a DLQ.",
+              "O alarme de `ApproximateNumberOfMessagesVisible` na DLQ avisa um humano.",
+              "A prova de carga confirma 100% de 202 mesmo em 10× o tráfego normal."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "lab-fila-des1",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Desafio — sem roteiro"
+      },
+      "children": [
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "O requisito",
+            "content": "Envie uma mensagem propositalmente malformada (JSON quebrado ou faltando um campo obrigatório) para a fila e prove que o restante do processamento não trava por causa dela."
+          },
+          "id": "lab-fila-des2",
+          "position": 0
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "Critério de aceite — executável, não \"verifique se funciona\"",
+            "content": "Depois de N tentativas (o `maxReceiveCount` configurado), a mensagem malformada aparece na fila DLQ — e mensagens válidas enviadas DEPOIS dela continuam sendo processadas normalmente, sem fila parada."
+          },
+          "id": "lab-fila-des3",
+          "position": 1
+        },
+        {
+          "type": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "Dica 1: A redrive policy da fila principal aponta para a DLQ com um `maxReceiveCount` — sem essa configuração, a mensagem quebrada fica reciclando para sempre e nunca sai da fila principal.",
+              "Dica 2: O consumidor precisa deixar a mensagem malformada FALHAR explicitamente (não capturar a exceção e silenciosamente descartar) — é a falha que aciona o contador de recebimento da fila.",
+              "Dica 3: Prova de que o resto não travou: SQS padrão processa mensagens em paralelo por natureza — mas se o seu consumidor processa uma de cada vez em loop síncrono, uma mensagem travada ANTES da malformada bloqueia sim. Verifique a ordem do teste."
+            ]
+          },
+          "id": "lab-fila-des4",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "success",
+            "title": "Lembrete de limpeza",
+            "content": "Todo recurso que este desafio criar entra no mesmo `terraform destroy` do laboratório — nada fica para trás cobrando sozinho."
+          },
+          "id": "lab-fila-des5",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "SQS garante que uma mensagem não será processada duas vezes?",
+            "answer": "Não, se for uma fila standard — e é exatamente por isso que este laboratório existe. O SQS promete entrega \"ao menos uma vez\": a mesma mensagem pode chegar ao consumidor mais de uma vez, por causa da arquitetura distribuída da fila e de reentregas depois do visibility timeout. Fila FIFO tem deduplicação, mas só dentro de uma janela de 5 minutos por padrão, e não substitui idempotência real. A única forma confiável de garantir \"uma vez só\" é o consumidor gravar uma chave de operação com escrita condicional — por exemplo, `PutItem` no DynamoDB com `ConditionExpression: attribute_not_exists` — e processar o efeito de negócio só quando essa escrita tiver sucesso."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "O que acontece se o processamento da mensagem demorar mais que o visibility timeout?",
+            "answer": "A mensagem volta a ficar visível na fila antes de o processamento original terminar, e pode ser entregue a outro consumidor — os dois processando a mesma mensagem ao mesmo tempo. O visibility timeout não é uma trava exclusiva permanente: é um relógio que expira sozinho se ninguém apagar a mensagem antes. A correção não é só \"aumentar o valor\": é dimensioná-lo a partir do tempo real de processamento, com folga — a recomendação da AWS para consumo via Lambda é pelo menos seis vezes o timeout configurado na função, exatamente para cobrir reentrega por throttling sem que o valor vire uma adivinhação."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Preciso de fila FIFO para garantir que os pedidos não se dupliquem?",
+            "answer": "Não — FIFO resolve ORDEM, não duplicata. A deduplicação de uma fila FIFO funciona por uma janela de 5 minutos a partir do `MessageDeduplicationId`, e existe para evitar reenvio acidental do PRODUTOR, não para garantir que o CONSUMIDOR processe uma vez só ao longo do tempo de vida da mensagem. Se o requisito real é \"este pedido nunca deve ter o efeito aplicado duas vezes\", mesmo com uma reentrega horas depois, isso continua sendo trabalho da escrita condicional no consumidor — em fila standard ou FIFO, o mecanismo é o mesmo."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Por que a mensagem some da resposta da minha função sem eu ter deletado nada?",
+            "answer": "Porque o Lambda apaga automaticamente qualquer mensagem que não apareça em `batchItemFailures` ao final da execução — não é preciso chamar `DeleteMessage` manualmente no fluxo padrão de evento SQS. Isso também explica por que esquecer de reportar uma falha real faz a mensagem desaparecer da fila mesmo sem ter sido processada de fato: se a exceção foi engolida em algum `catch` silencioso e a função retornou sucesso, o Lambda entende que tudo deu certo e apaga a mensagem — perdendo o pedido de verdade, sem nenhum log indicando isso."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "O que muda no código se eu esquecer de configurar ReportBatchItemFailures?",
+            "answer": "O comportamento passa a ser tudo ou nada por lote: se qualquer mensagem lançar exceção não tratada, o lote inteiro volta para a fila depois do visibility timeout — inclusive as mensagens que já tiveram efeito de negócio aplicado com sucesso. Com idempotência correta, isso não duplica o efeito (a condição de escrita recusa a segunda tentativa), mas desperdiça invocação e atraso, e mistura no mesmo log o item que realmente falhou com nove que só foram reprocessados à toa — dificultando saber qual mensagem merece atenção de verdade."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Quantas tentativas devo permitir antes de mandar uma mensagem para a DLQ?",
+            "answer": "A AWS recomenda pelo menos 5 no `maxReceiveCount`, e o motivo é dar margem a falha transitória sem tratar toda instabilidade momentânea como falha permanente. Com o valor em 1, um pedido legítimo que esbarrou numa lentidão de um segundo do gateway de pagamento já vai para a DLQ na primeira tentativa, gerando alarme para algo que se resolveria sozinho na segunda. O número certo depende de quanto tempo uma dependência instável costuma levar para voltar — 5 tentativas com visibility timeout de 60 segundos dão cinco minutos de janela antes de desistir."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "DLQ sozinha já resolve o problema de mensagem perdida?",
+            "answer": "Não — ela move o problema de \"mensagem sumida sem rastro\" para \"mensagem parada num lugar que ninguém está olhando\", o que é melhor, mas incompleto sem um alarme. A dead-letter queue é passiva: nada nela notifica automaticamente. Sem um `aws_cloudwatch_metric_alarm` monitorando `ApproximateNumberOfMessagesVisible`, um pedido pode ficar até 14 dias — o teto de retenção do serviço — parado ali, e a primeira pessoa a perceber costuma ser o cliente reclamando que o pedido nunca chegou."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Por que devo chamar o gateway de pagamento só depois de gravar no DynamoDB?",
+            "answer": "Porque a ordem é o que garante a idempotência, não um detalhe estético do código. Se a chamada ao gateway viesse antes do `PutItem` condicional, uma reentrega chamaria o gateway de novo antes de sequer checar se aquele pedido já tinha sido visto — a condição de escrita deixaria de proteger nada, porque o efeito colateral (cobrar o cartão) já teria acontecido independente do resultado da escrita. A regra é simples e sem exceção: o efeito de negócio só roda DEPOIS de a escrita condicional confirmar que aquela chave nunca foi vista antes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Seu Lambda processa um lote de 10 mensagens SQS. A mensagem número 7 lança uma exceção não tratada; as outras nove são processadas com sucesso. O event source mapping NÃO tem `ReportBatchItemFailures` configurado. O que acontece?",
+            "options": [
+              "A fila rejeita o lote inteiro imediatamente, sem esperar o visibility timeout",
+              "Todas as dez mensagens voltam para a fila depois do visibility timeout, inclusive as nove que tiveram sucesso",
+              "O Lambda apaga as dez mensagens e registra um erro no CloudWatch para a mensagem 7",
+              "Apenas a mensagem 7 volta para a fila; as outras nove são apagadas normalmente"
+            ],
+            "correctIndex": 1,
+            "explanation": "Sem partial batch response configurado, o comportamento padrão do Lambda com SQS é tudo ou nada por invocação: uma exceção não tratada em qualquer mensagem do lote faz o Lambda considerar a invocação inteira como falha, e nenhuma mensagem do lote é apagada. Depois do visibility timeout expirar, as dez voltam a ficar visíveis — inclusive as nove que já tiveram efeito de negócio aplicado. Isso não perde dado se o consumidor for idempotente, mas desperdiça invocação e mistura no mesmo evento a mensagem que de fato precisa de atenção com nove que só serão reprocessadas à toa.\n\nA primeira alternativa descreve o comportamento CORRETO — mas só depois de `ReportBatchItemFailures` estar configurado, que o enunciado explicitamente diz que não está. A terceira inverte a lógica de falha: uma exceção não tratada não produz \"sucesso com log de erro\", produz falha da invocação inteira. A quarta erra o mecanismo: a fila não tem como saber que a invocação falhou antes do visibility timeout expirar — não existe rejeição imediata; a reentrega segue o relógio normal da fila."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Seu consumidor grava a chave de idempotência no DynamoDB (`PutItem` condicional) DEPOIS de já ter chamado o gateway de pagamento com sucesso. Qual é a consequência mais provável sob reentrega da mesma mensagem?",
+            "options": [
+              "O SQS detecta a ordem errada e rejeita a configuração do consumidor",
+              "O cliente é cobrado duas vezes, porque a proteção contra reentrega só existe depois de o efeito já ter acontecido",
+              "Nenhuma: a ordem entre as duas operações não afeta o resultado final",
+              "A escrita no DynamoDB falha na segunda tentativa e impede a cobrança de acontecer de novo"
+            ],
+            "correctIndex": 1,
+            "explanation": "A ordem entre as duas chamadas é exatamente o que decide se a idempotência funciona. Se o gateway é chamado primeiro, uma reentrega da mensagem chama o gateway DE NOVO antes de qualquer verificação — o efeito colateral (a cobrança) já aconteceu, independente do que a escrita condicional decidir depois. A condição de escrita só protege o que vem DEPOIS dela no código; não tem como impedir retroativamente uma chamada que já foi feita.\n\nA primeira alternativa é o erro central do quiz: a ordem entre as duas operações é a diferença inteira entre um consumidor idempotente e um que só parece ser. A terceira inverte causa e efeito — a escrita condicional de fato falharia na segunda tentativa (`ConditionalCheckFailedException`), mas isso não desfaz uma cobrança que já foi disparada antes dela rodar; a proteção chega tarde demais. A quarta atribui ao SQS uma capacidade que ele não tem: a fila não inspeciona a lógica interna do consumidor, e não haveria como ela saber a ordem das chamadas dentro da função."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 29,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L21 (modelo de execução do Lambda .NET 8), API de pedidos do L01/L03 no ar, Terraform básico"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "at-least-once como contrato, não defeito; idempotência real via escrita condicional; visibility timeout e sua relação com o timeout da função; ReportBatchItemFailures e o que falta sem ele; DLQ como observabilidade de falha permanente, não como solução sozinha"
+              ],
+              [
+                "Limitação que fica",
+                "a chamada ao gateway de pagamento ainda não tem retry nem disjuntor próprios — uma instabilidade prolongada do terceiro esgota o `maxReceiveCount` e manda pedidos legítimos para a DLQ"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L23 — fanout com SNS. Reutiliza esta fila como um dos assinantes de um evento de pedido compartilhado entre vários consumidores"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L36 (retry, backoff, disjuntor) resolve a limitação da dependência instável; L25 (Step Functions) trata fluxos com mais de uma etapa de negócio e compensação"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Amazon SQS visibility timeout",
+                "code": true
+              },
+              {
+                "text": " — o comportamento do relógio e o teto de 12 horas; "
+              },
+              {
+                "text": "Amazon SQS standard queues",
+                "code": true
+              },
+              {
+                "text": " — a garantia de entrega ao menos uma vez; "
+              },
+              {
+                "text": "Amazon SQS dead-letter queues",
+                "code": true
+              },
+              {
+                "text": " — redrive policy e `maxReceiveCount`; "
+              },
+              {
+                "text": "Using Lambda with Amazon SQS",
+                "code": true
+              },
+              {
+                "text": " — polling, batching e o aviso oficial sobre idempotência; "
+              },
+              {
+                "text": "Handling errors for an SQS event source in Lambda",
+                "code": true
+              },
+              {
+                "text": " — o contrato exato de `ReportBatchItemFailures`; e "
+              },
+              {
+                "text": "Creating and configuring an Amazon SQS event source mapping",
+                "code": true
+              },
+              {
+                "text": " — a recomendação de visibility timeout em pelo menos seis vezes o timeout da função, e `maxReceiveCount` de pelo menos 5. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "A latência de ~700-800 ms do gateway de pagamento e os números de vazão da campanha (0,5 pedido/s normal, 5 pedidos/s de pico) são os medidos no cenário de exemplo da Cadência, e servem como ordem de grandeza — não como referência para o seu sistema. O timeout da função (10 s) e o visibility timeout (60 s) devem ser derivados do tempo real de processamento medido na sua aplicação, mantendo a proporção de pelo menos 6× recomendada pela AWS, não copiados destes valores."
+          }
+        }
+      ]
+    }
+  ]
+}

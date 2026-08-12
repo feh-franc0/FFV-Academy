@@ -338,6 +338,12 @@ func (r *LeaderboardRepo) UpsertXP(ctx context.Context, userID shared.UserID, we
 	return err
 }
 
+// GetWeekly monta o ranking da semana.
+//
+// `u.deleted_at IS NULL` não é otimização: sem ele, quem apaga a conta continua
+// aparecendo pelo nome no ranking PÚBLICO (home e /ranking), porque a exclusão é
+// soft e a linha de `users` permanece. Era o caso até ago/2026 — o oposto do que
+// um pedido de exclusão significa.
 func (r *LeaderboardRepo) GetWeekly(ctx context.Context, weekStart time.Time, limit int) ([]domlb.RankEntry, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT lw.user_id, u.name, lw.xp_gained,
@@ -346,6 +352,7 @@ func (r *LeaderboardRepo) GetWeekly(ctx context.Context, weekStart time.Time, li
 		JOIN users u ON u.id = lw.user_id
 		JOIN leaderboard_opt_ins lo ON lo.user_id = lw.user_id
 		WHERE lw.week_start = $1
+		  AND u.deleted_at IS NULL
 		ORDER BY lw.xp_gained DESC
 		LIMIT $2
 	`, weekStart, limit)
@@ -406,6 +413,7 @@ func (r *LeaderboardRepo) GetByPeriod(ctx context.Context, p domlb.Period, now t
 		       RANK() OVER (ORDER BY a.xp_total DESC) AS rank
 		FROM agg a
 		JOIN users u ON u.id = a.user_id
+		WHERE u.deleted_at IS NULL   -- ver comentário em GetWeekly
 		ORDER BY a.xp_total DESC
 		LIMIT $3
 	`, nullableTime(start), end, limit)

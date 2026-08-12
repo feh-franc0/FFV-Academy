@@ -98,3 +98,37 @@ func Test_RefreshToken_Execute_Revoked_ReturnsUnauthorized(t *testing.T) {
 		t.Fatalf("expected ErrUnauthorized, got %v", err)
 	}
 }
+
+// Reapresentar um refresh JÁ REVOGADO é o sinal clássico de token roubado — a
+// rotação normal nunca reusa um hash antigo. A resposta correta não é só
+// recusar ESTE token: é derrubar toda a família de sessões do usuário, para
+// que a cópia que o atacante tem (e a que o dono legítimo tem) precisem de
+// login novo.
+func Test_RefreshToken_Execute_ReuseOfRevokedToken_RevokesEntireFamily(t *testing.T) {
+	now := time.Now()
+	userID := shared.NewUserID()
+	revokedAt := now.Add(-time.Minute)
+	refreshRepo := newMockRefreshRepo()
+	refreshRepo.byHash["stolen-and-already-rotated"] = domidentity.RefreshToken{
+		UserID:    userID,
+		TokenHash: "stolen-and-already-rotated",
+		ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now.Add(-time.Hour),
+		RevokedAt: &revokedAt,
+	}
+	uc := appidentity.NewRefreshTokenUseCase(refreshRepo, newMockUserRepo(),
+		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour)
+
+	_, err := uc.Execute(context.Background(), "stolen-and-already-rotated")
+	if !errors.Is(err, shared.ErrUnauthorized) {
+		t.Fatalf("expected ErrUnauthorized, got %v", err)
+	}
+	if len(refreshRepo.revokedAll) != 1 || refreshRepo.revokedAll[0] != userID {
+		t.Fatalf("expected RevokeAllForUser(%v) to have been called once, got %v", userID, refreshRepo.revokedAll)
+	}
+	// Reuso não é a rotação normal: NÃO deve emitir novo par de tokens nem
+	// tentar Save/Revoke individual — só derrubar a família.
+	if len(refreshRepo.saved) != 0 {
+		t.Fatalf("expected no new token issued on reuse detection, got %v", refreshRepo.saved)
+	}
+}

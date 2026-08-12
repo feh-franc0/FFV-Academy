@@ -84,7 +84,7 @@ describe('OnboardingWizard', () => {
     await user.click(screen.getByRole('button', { name: /Próximo/i }));
 
     // Step 2: marca um hub
-    await user.click(screen.getByRole('button', { name: /Inteligência Artificial/i }));
+    await user.click(screen.getByRole('button', { name: /IA na AWS/i }));
     await user.click(screen.getByRole('button', { name: /Próximo/i }));
 
     expect(screen.getByText(/Conte um pouco sobre você/i)).toBeInTheDocument();
@@ -103,7 +103,7 @@ describe('OnboardingWizard', () => {
     await user.click(screen.getByRole('button', { name: /Próximo/i }));
 
     // Step 2
-    await user.click(screen.getByRole('button', { name: /Inteligência Artificial/i }));
+    await user.click(screen.getByRole('button', { name: /IA na AWS/i }));
     await user.click(screen.getByRole('button', { name: /Próximo/i }));
 
     // Step 3 — escolhe nível
@@ -114,7 +114,7 @@ describe('OnboardingWizard', () => {
     const payload = updatePreferencesMock.mock.calls[0][0];
     expect(payload).toMatchObject({
       objectives: ['certifications'],
-      hubIds: ['ia'],
+      hubIds: ['ia-aws'],
       skillLevel: 'intermediate',
     });
 
@@ -129,7 +129,7 @@ describe('OnboardingWizard', () => {
 
     await user.click(screen.getByRole('button', { name: /Passar em certificações/i }));
     await user.click(screen.getByRole('button', { name: /Próximo/i }));
-    await user.click(screen.getByRole('button', { name: /Inteligência Artificial/i }));
+    await user.click(screen.getByRole('button', { name: /IA na AWS/i }));
     await user.click(screen.getByRole('button', { name: /Próximo/i }));
     await user.click(screen.getByRole('button', { name: /^Iniciante/i }));
     await user.click(screen.getByRole('button', { name: /Finalizar e começar/i }));
@@ -150,7 +150,7 @@ describe('OnboardingWizard', () => {
 
     await user.click(screen.getByRole('button', { name: /Passar em certificações/i }));
     await user.click(screen.getByRole('button', { name: /Próximo/i }));
-    await user.click(screen.getByRole('button', { name: /Inteligência Artificial/i }));
+    await user.click(screen.getByRole('button', { name: /IA na AWS/i }));
     await user.click(screen.getByRole('button', { name: /Próximo/i }));
     await user.click(screen.getByRole('button', { name: /^Avançado/i }));
     await user.click(screen.getByRole('button', { name: /Finalizar e começar/i }));

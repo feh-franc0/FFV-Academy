@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useId } from 'react';
 import Link from 'next/link';
 import { useGameState } from '@/hooks/useGameState';
 import { STORAGE_KEYS } from '@/lib/constants';
@@ -9,6 +9,7 @@ import {
   type Team, type TeamMember,
 } from '@/lib/teams';
 import { CURRICULUM, getLevelInfo } from '@/lib/curriculum';
+import { BackButton } from '@/components/BackButton';
 
 type View = 'home' | 'create' | 'join' | 'dashboard';
 
@@ -108,9 +109,9 @@ export function TimesClient() {
         <section className="px-6 pt-16 pb-12 md:pt-24 md:pb-16 relative overflow-hidden">
           <div aria-hidden className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 60% 50% at 50% 0%, color-mix(in srgb, var(--ffv-blue) 12%, transparent) 0%, transparent 60%)' }} />
           <div className="relative max-w-4xl mx-auto">
-            <Link href="/" className="inline-flex items-center gap-1 text-xs font-mono mb-6 transition-opacity hover:opacity-70" style={{ color: 'var(--ffv-muted)', letterSpacing: '0.06em' }}>
-              ← VOLTAR PARA HOME
-            </Link>
+            <BackButton href="/" className="text-xs font-mono mb-6 transition-opacity hover:opacity-70 inline-flex items-center gap-1.5">
+              VOLTAR PARA HOME
+            </BackButton>
             <p className="font-mono uppercase tracking-widest text-xs mb-3" style={{ color: 'var(--ffv-blue)', letterSpacing: '0.12em' }}>Times de estudo</p>
             <h1 style={{ fontSize: 'clamp(2rem, 5vw, 3.2rem)', fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.1, marginBottom: 16 }}>
               Aprenda mais rápido<br />em grupo.
@@ -122,7 +123,7 @@ export function TimesClient() {
               <button
                 onClick={() => setView('create')}
                 className="px-6 py-3 rounded-full font-bold text-sm transition-all hover:opacity-90 active:scale-95"
-                style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
+                style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
               >
                 Criar time →
               </button>
@@ -170,7 +171,7 @@ export function TimesClient() {
               onClick={handleCreate}
               disabled={!teamName.trim() || !creatorName.trim() || !state}
               className="mt-2 py-3 rounded-xl font-bold text-sm transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
+              style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
             >
               Criar time →
             </button>
@@ -203,7 +204,7 @@ export function TimesClient() {
               onClick={handleJoin}
               disabled={!joinCode.trim() || !joinerName.trim() || !state}
               className="mt-2 py-3 rounded-xl font-bold text-sm transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
+              style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
             >
               Entrar no time →
             </button>
@@ -257,7 +258,7 @@ export function TimesClient() {
             { label: 'Streak médio', value: `${avgStreak}d`, color: 'var(--ffv-orange)' },
           ].map(s => (
             <div key={s.label} className="p-4 rounded-xl text-center" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
-              <div className="text-2xl font-bold tabular-nums" style={{ color: s.color }}>{s.value}</div>
+              <div className="text-2xl font-bold tabular-nums ffv-acento-texto" style={{ '--ffv-acento': s.color } as React.CSSProperties}>{s.value}</div>
               <div className="text-[10px] uppercase tracking-widest font-mono mt-1" style={{ color: 'var(--ffv-muted)' }}>{s.label}</div>
             </div>
           ))}
@@ -321,7 +322,7 @@ export function TimesClient() {
             <button
               onClick={handleCopyCode}
               className="px-4 py-2 rounded-full text-sm font-semibold transition-all hover:opacity-90"
-              style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
+              style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
             >
               {copied ? '✓ Copiado!' : '📋 Copiar código'}
             </button>
@@ -361,10 +362,12 @@ export function TimesClient() {
 }
 
 function Field({ label, value, onChange, placeholder, mono }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; mono?: boolean }) {
+  const id = useId();
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-xs font-semibold uppercase tracking-widest font-mono" style={{ color: 'var(--ffv-muted)' }}>{label}</label>
+      <label htmlFor={id} className="text-xs font-semibold uppercase tracking-widest font-mono" style={{ color: 'var(--ffv-muted)' }}>{label}</label>
       <input
+        id={id}
         type="text"
         value={value}
         onChange={e => onChange(e.target.value)}

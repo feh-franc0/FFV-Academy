@@ -1,360 +1,315 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { BackButton } from '@/components/BackButton';
 import { useRouter } from 'next/navigation';
+import { getSimulado } from '@/lib/simulados';
 import {
-  type SimuladoAttempt,
-  type SimuladoQuestion,
-  getSimulado,
-  getAttempt,
-  saveAttempt,
-  getExplanationText,
-  scoreAttempt,
-} from '@/lib/simulados';
-import { fetchRandomQuestions } from '@/lib/clf-bank';
+  startOrResumeAttempt,
+  answerQuestion as apiAnswerQuestion,
+  toggleFlag as apiToggleFlag,
+  finishAttempt as apiFinishAttempt,
+  type AttemptDTO,
+  type QuestionDTO,
+} from '@/lib/simulados-api';
+import { stashResult } from '@/lib/simulado-result-bridge';
+import { hasBackend } from '@/lib/api-client';
 import { useAuth } from '@/hooks/useAuth';
 import { idFromSlug } from '@/components/SimuladoCard';
-import { TutorChat } from './TutorChat';
-import { FEATURES } from '@/lib/features';
-import { STORAGE_KEYS } from '@/lib/constants';
-import { getJSON, setJSON, removeKey } from '@/lib/storage';
-import { SimuladoTimerSchema } from '@/lib/schemas';
 
 interface Props {
   slug: string;
 }
 
-type Mode = 'prova' | 'estudo';
-
-// Chave dinâmica de localStorage para o conjunto de questões sorteadas de um
-// simulado em andamento. Não cabe no enum `StorageKey` (literal union), então
-// é tratada via cast — fora do registro de chaves conhecidas.
-const simQsKey = (id: string) => `ffv_sim_qs_${id}` as unknown as import('@/lib/constants').StorageKey;
+// Máquina de estados explícita — closes achado P0-F/UX-1: antes, "não
+// logado", "carregando", "indisponível" e "falha ao carregar" colapsavam
+// todos na mesma frase "Carregando questões…", sem saída para o caso de erro.
+type ViewState =
+  | { kind: 'loading' }
+  | { kind: 'not-logged' }
+  | { kind: 'unavailable' }
+  | { kind: 'no-backend' }
+  | { kind: 'error'; message: string }
+  | { kind: 'ready' };
 
 export function SimuladoRunner({ slug }: Props) {
   const router = useRouter();
   const { isLoggedIn, requireLogin } = useAuth();
   const simuladoId = idFromSlug(slug);
+  // O banco Postgres usa outro id (`aws-clf`, não `simulado-aws-practitioner`).
+  // Consultar a API com o id do catálogo devolve zero linhas SEM erro — foi
+  // exatamente o defeito que deixou o fluxo cronometrado sem questões.
   const simulado = getSimulado(simuladoId);
+  const dbBankId = simulado?.dbBankId ?? simuladoId;
 
-  const [attempt, setAttempt] = useState<SimuladoAttempt | null>(null);
-  const [questions, setQuestions] = useState<SimuladoQuestion[]>([]);
-  const [questionsReady, setQuestionsReady] = useState(false);
+  const [view, setView] = useState<ViewState>({ kind: 'loading' });
+  const [attempt, setAttempt] = useState<AttemptDTO | null>(null);
+  const [questions, setQuestions] = useState<QuestionDTO[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [mode, setMode] = useState<Mode>('estudo');
+  const [answers, setAnswers] = useState<Record<string, string>>({});
   const [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
   const [reviewFlags, setReviewFlags] = useState<Set<string>>(new Set());
-  const [timeLeft, setTimeLeft] = useState<number>(0);
-  const [showTutor, setShowTutor] = useState(false);
-  const [hydrated, setHydrated] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(0);
+  const [finishing, setFinishing] = useState(false);
+  // finalize() é chamado tanto pelo timer quanto pelo botão — trava contra
+  // disparo duplo (achado 3.8: dois cliques/estouro simultâneo do timer).
+  const finalizingRef = useRef(false);
 
-  // Gate inicial: precisa estar logado
+  // Gate inicial: precisa estar logado.
   useEffect(() => {
     if (!isLoggedIn) {
+      setView({ kind: 'not-logged' });
       requireLogin('fazer o simulado').catch(() => router.push(`/simulados/${slug}`));
+      return;
     }
-  }, [isLoggedIn, requireLogin, router, slug]);
+    if (!hasBackend()) {
+      // A prova cronometrada é server-authoritative por design — sem
+      // backend real não há como sortear/pontuar com integridade. Não faz
+      // sentido simular isso localmente (seria reintroduzir o problema que
+      // este componente existe para fechar).
+      setView({ kind: 'no-backend' });
+      return;
+    }
+    if (!simulado) {
+      setView({ kind: 'unavailable' });
+      return;
+    }
+    if (simulado.comingSoon) {
+      setView({ kind: 'unavailable' });
+      return;
+    }
 
-  // Hidrata ou cria attempt + hidrata timer persistido
+    let cancelled = false;
+    startOrResumeAttempt(dbBankId)
+      .then(res => {
+        if (cancelled) return;
+        setAttempt(res.attempt);
+        setQuestions(res.attempt.questions ?? []);
+        setAnswers(res.attempt.answers ?? {});
+        setReviewFlags(new Set(res.attempt.flagged ?? []));
+        const initialConfirmed: Record<string, boolean> = {};
+        for (const qid of Object.keys(res.attempt.answers ?? {})) initialConfirmed[qid] = true;
+        setConfirmed(initialConfirmed);
+        setTimeLeft(res.attempt.timeLeftSec);
+        setView({ kind: 'ready' });
+      })
+      .catch(err => {
+        if (cancelled) return;
+        console.error('SimuladoRunner: falha ao iniciar/retomar tentativa', err);
+        setView({ kind: 'error', message: err instanceof Error ? err.message : 'Falha desconhecida' });
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoggedIn, simuladoId]);
+
+  // Tick do timer — server-authoritative: o deadline vem do servidor
+  // (attempt.deadlineAt / timeLeftSec no início), o cliente só conta pra
+  // baixo visualmente. finalize() sempre lê o estado ATUAL (via refs
+  // implícitos do closure de render, não um snapshot congelado na
+  // hidratação) — é a correção do P0 em que estourar o tempo pontuava
+  // com um conjunto de respostas desatualizado.
   useEffect(() => {
-    if (!simulado || !isLoggedIn) return;
-    let current = getAttempt(simuladoId);
-    if (!current || current.finishedAt) {
-      // Nova attempt: limpa questões sorteadas anteriores para novo sorteio
-      removeKey(simQsKey(simuladoId));
-      current = {
-        simuladoId,
-        startedAt: new Date().toISOString(),
-        answers: {},
-      };
-      saveAttempt(current);
-    }
-    setAttempt(current);
-    setReviewFlags(new Set(current.reviewFlags ?? []));
-    const initialConfirmed: Record<string, boolean> = {};
-    for (const qid of Object.keys(current.answers)) initialConfirmed[qid] = true;
-    setConfirmed(initialConfirmed);
-
-    // Timer: usa deadline persistido se existir e for válido
-    const raw = getJSON<unknown>(STORAGE_KEYS.SIMULADO_TIMER, null);
-    const parsed = SimuladoTimerSchema.safeParse(raw);
-    if (parsed.success && parsed.data.simuladoId === simuladoId) {
-      const remaining = Math.max(0, Math.floor((parsed.data.deadline - Date.now()) / 1000));
-      setTimeLeft(remaining);
-    } else {
-      const deadline = Date.now() + simulado.timeLimitMin * 60 * 1000;
-      setJSON(STORAGE_KEYS.SIMULADO_TIMER, { simuladoId, deadline });
-      setTimeLeft(simulado.timeLimitMin * 60);
-    }
-    setHydrated(true);
-  }, [simulado, simuladoId, isLoggedIn]);
-
-  // Carrega questões do banco Postgres — server sorteia N e devolve.
-  useEffect(() => {
-    if (!simulado || !isLoggedIn) return;
-
-    async function load() {
-      const storedIds = getJSON<string[] | null>(simQsKey(simuladoId), null);
-      try {
-        if (storedIds && storedIds.length > 0) {
-          // Retoma attempt em andamento: busca exatamente os IDs já sorteados.
-          const { fetchQuestionsByIds } = await import('@/lib/clf-bank');
-          const fetched = await fetchQuestionsByIds(storedIds, simuladoId);
-          if (fetched.length > 0) {
-            setQuestions(fetched);
-            return;
-          }
-        }
-        // Nova attempt: backend sorteia N questões via ORDER BY RANDOM().
-        const fresh = await fetchRandomQuestions({
-          simuladoId,
-          count: simulado!.questionCount,
-        });
-        if (fresh.length === 0) {
-          throw new Error('banco vazio — rode o seed-questions no backend');
-        }
-        setJSON(simQsKey(simuladoId), fresh.map(q => q.id));
-        setQuestions(fresh);
-      } catch (err) {
-        console.error('SimuladoRunner: falha ao carregar questões do backend', err);
-        // Sem fallback estático — questões são autoridade do banco.
-        setQuestions([]);
-      } finally {
-        setQuestionsReady(true);
-      }
-    }
-
-    load();
-  }, [simulado, simuladoId, isLoggedIn]);
-
-  // Tick do timer — wall-clock based
-  useEffect(() => {
-    if (!hydrated) return;
-    const raw = getJSON<unknown>(STORAGE_KEYS.SIMULADO_TIMER, null);
-    const parsed = SimuladoTimerSchema.safeParse(raw);
-    if (!parsed.success) return;
-    const deadline = parsed.data.deadline;
+    if (view.kind !== 'ready') return;
     const id = window.setInterval(() => {
-      const remaining = Math.max(0, Math.floor((deadline - Date.now()) / 1000));
-      setTimeLeft(remaining);
-      if (remaining <= 0) {
-        window.clearInterval(id);
-        finalize();
-      }
-    }, 500);
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          window.clearInterval(id);
+          finalize();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated]);
+  }, [view.kind]);
 
-  if (!simulado) {
-    return <p className="px-6 py-20 text-center">Simulado não encontrado.</p>;
+  async function finalize() {
+    if (!attempt || finalizingRef.current) return;
+    finalizingRef.current = true;
+    setFinishing(true);
+    try {
+      const { score, weakTopics } = await apiFinishAttempt(attempt.id);
+      stashResult(simuladoId, {
+        attemptId: attempt.id,
+        simuladoId,
+        score,
+        weakTopics,
+        questionIds: questions.map(q => q.id),
+        answers,
+        finishedAt: new Date().toISOString(),
+      });
+      router.push(`/simulados/${slug}/resultado`);
+    } catch (err) {
+      console.error('SimuladoRunner: falha ao finalizar tentativa', err);
+      finalizingRef.current = false;
+      setFinishing(false);
+      setView({ kind: 'error', message: 'Não foi possível finalizar a prova. Tente novamente.' });
+    }
   }
-  if (!isLoggedIn || !attempt || !questionsReady || questions.length === 0) {
-    return <p className="px-6 py-20 text-center">Carregando questões…</p>;
+
+  // ─── Estados de carga/erro (achado P0-F: antes, um só "Carregando…" pra tudo) ───
+
+  if (view.kind === 'not-logged' || view.kind === 'loading' && !isLoggedIn) {
+    return (
+      <div className="px-6 py-20 text-center">
+        <p style={{ color: 'var(--ffv-muted)' }}>Faça login para continuar.</p>
+      </div>
+    );
   }
-  if (simulado.comingSoon) {
+  if (view.kind === 'no-backend') {
+    return (
+      <div className="px-6 py-20 text-center max-w-md mx-auto">
+        <p className="mb-2">A prova cronometrada precisa do servidor real.</p>
+        <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
+          Use o <Link href={`/simulados/${slug}`} style={{ color: 'var(--ffv-blue)' }}>modo de estudo</Link> enquanto isso.
+        </p>
+      </div>
+    );
+  }
+  if (view.kind === 'unavailable') {
     return <p className="px-6 py-20 text-center">Este simulado ainda não está disponível.</p>;
+  }
+  if (view.kind === 'error') {
+    return (
+      <div className="px-6 py-20 text-center max-w-md mx-auto">
+        <p className="mb-4">Não conseguimos carregar a prova agora.</p>
+        <p className="text-xs mb-6" style={{ color: 'var(--ffv-muted)' }}>{view.message}</p>
+        <div className="flex items-center justify-center gap-3">
+          <button
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 rounded-lg text-sm font-semibold"
+            style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
+          >
+            Tentar novamente
+          </button>
+          <Link href={`/simulados/${slug}`} className="px-4 py-2 rounded-lg text-sm" style={{ color: 'var(--ffv-muted)' }}>
+            Voltar ao catálogo
+          </Link>
+        </div>
+      </div>
+    );
+  }
+  if (view.kind === 'loading' || !simulado || !attempt || questions.length === 0) {
+    return (
+      <div className="px-6 py-20 text-center" role="status" aria-live="polite" aria-label="Carregando prova">
+        <p style={{ color: 'var(--ffv-muted)' }}>Carregando questões…</p>
+      </div>
+    );
   }
 
   const currentQuestion = questions[currentIndex];
+  const accent = '#f78166';
+  const answered = !!answers[currentQuestion.id];
 
   function selectOption(optionId: string) {
     if (!attempt || confirmed[currentQuestion.id]) return;
-    const next: SimuladoAttempt = {
-      ...attempt,
-      answers: { ...attempt.answers, [currentQuestion.id]: optionId },
-    };
-    setAttempt(next);
-    saveAttempt(next);
+    setAnswers(prev => ({ ...prev, [currentQuestion.id]: optionId }));
+    apiAnswerQuestion(attempt.id, currentQuestion.id, optionId).catch(err =>
+      console.error('SimuladoRunner: falha ao registrar resposta', err)
+    );
   }
 
   function confirmAnswer() {
-    if (!attempt || !attempt.answers[currentQuestion.id]) return;
+    if (!answers[currentQuestion.id]) return;
     setConfirmed(prev => ({ ...prev, [currentQuestion.id]: true }));
   }
 
   function toggleReview() {
+    if (!attempt) return;
     const next = new Set(reviewFlags);
     if (next.has(currentQuestion.id)) next.delete(currentQuestion.id);
     else next.add(currentQuestion.id);
     setReviewFlags(next);
-    if (attempt) {
-      const withFlags: SimuladoAttempt = { ...attempt, reviewFlags: Array.from(next) };
-      setAttempt(withFlags);
-      saveAttempt(withFlags);
-    }
+    apiToggleFlag(attempt.id, currentQuestion.id).catch(err =>
+      console.error('SimuladoRunner: falha ao marcar revisão', err)
+    );
   }
 
   function goTo(idx: number) {
     if (idx >= 0 && idx < questions.length) setCurrentIndex(idx);
   }
 
-  function finalize() {
-    if (!attempt) return;
-    const sim = { ...simulado!, questions };
-    const { score, passed } = scoreAttempt(sim, attempt);
-    const finished: SimuladoAttempt = {
-      ...attempt,
-      finishedAt: new Date().toISOString(),
-      score,
-      passed,
-    };
-    saveAttempt(finished);
-    removeKey(STORAGE_KEYS.SIMULADO_TIMER);
-    router.push(`/simulados/${slug}/resultado`);
-  }
-
   const mm = Math.floor(timeLeft / 60);
   const ss = timeLeft % 60;
-  const accent = '#f78166';
-  const showExplanation = mode === 'estudo' && confirmed[currentQuestion.id];
-  const answered = !!attempt.answers[currentQuestion.id];
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8">
       {/* Top bar */}
       <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
         <div className="flex items-center gap-3">
-          <Link href={`/simulados/${slug}`} className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
-            ← Sair
-          </Link>
+          <BackButton href={`/simulados/${slug}`} className="inline-flex items-center gap-1.5 text-xs">
+            Sair
+          </BackButton>
           <h1 className="text-base font-bold">{simulado.title}</h1>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div
-            className="inline-flex items-center gap-1 text-xs rounded-full p-0.5"
-            style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
-          >
-            {(['estudo', 'prova'] as Mode[]).map(m => (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
-                className="px-3 py-1 rounded-full"
-                style={{
-                  background: mode === m ? accent : 'transparent',
-                  color: mode === m ? '#0d1117' : 'var(--ffv-muted)',
-                  fontWeight: mode === m ? 700 : 400,
-                }}
-              >
-                {m === 'estudo' ? '📘 Estudo' : '🎯 Prova'}
-              </button>
-            ))}
-          </div>
-          <div
-            className="text-sm font-mono font-bold tabular-nums px-3 py-1 rounded-full"
-            style={{
-              background: timeLeft <= 60 ? 'rgba(247,129,102,0.18)' : 'var(--ffv-bg2)',
-              color: timeLeft <= 60 ? 'var(--ffv-red)' : 'var(--foreground)',
-              border: '1px solid var(--ffv-border)',
-            }}
-          >
-            ⏱ {String(mm).padStart(2, '0')}:{String(ss).padStart(2, '0')}
-          </div>
+        <div
+          className="text-sm font-mono font-bold tabular-nums px-3 py-1 rounded-full"
+          style={{
+            background: timeLeft <= 60 ? 'rgba(247,129,102,0.18)' : 'var(--ffv-bg2)',
+            color: timeLeft <= 60 ? 'var(--ffv-red)' : 'var(--foreground)',
+            border: '1px solid var(--ffv-border)',
+          }}
+        >
+          ⏱ {String(mm).padStart(2, '0')}:{String(ss).padStart(2, '0')}
         </div>
       </div>
 
       <div className="grid md:grid-cols-[1fr_280px] gap-6">
         {/* Painel esquerdo — questão */}
         <section>
-          <>
-            <div className="mb-5">
-                <p className="text-xs font-mono uppercase tracking-widest mb-2" style={{ color: 'var(--ffv-muted)' }}>
-                  Questão {currentIndex + 1} de {questions.length} · {currentQuestion.topic}
-                </p>
-                <p className="text-base md:text-lg font-semibold leading-relaxed">{currentQuestion.stem}</p>
-              </div>
+          <div className="mb-5">
+            <p className="text-xs font-mono uppercase tracking-widest mb-2" style={{ color: 'var(--ffv-muted)' }}>
+              Questão {currentIndex + 1} de {questions.length} · {currentQuestion.topic}
+            </p>
+            <p className="text-base md:text-lg font-semibold leading-relaxed">{currentQuestion.stem}</p>
+          </div>
 
-              <div className="flex flex-col gap-2 mb-5">
-                {currentQuestion.options.map(opt => {
-                  const selected = attempt.answers[currentQuestion.id] === opt.id;
-                  const isCorrect = showExplanation && opt.id === currentQuestion.correctId;
-                  const isWrongSelected = showExplanation && selected && opt.id !== currentQuestion.correctId;
-                  return (
-                    <button
-                      key={opt.id}
-                      onClick={() => selectOption(opt.id)}
-                      disabled={confirmed[currentQuestion.id]}
-                      className="text-left px-4 py-3 rounded-lg text-sm transition-all disabled:cursor-default"
-                      style={{
-                        background:
-                          isCorrect ? 'rgba(63,185,80,0.14)'
-                          : isWrongSelected ? 'rgba(247,129,102,0.14)'
-                          : selected ? `${accent}20`
-                          : 'var(--ffv-bg2)',
-                        border: `1px solid ${
-                          isCorrect ? 'rgba(63,185,80,0.4)'
-                          : isWrongSelected ? 'rgba(247,129,102,0.4)'
-                          : selected ? accent
-                          : 'var(--ffv-border)'
-                        }`,
-                        color: isCorrect ? 'var(--ffv-green)' : isWrongSelected ? 'var(--ffv-red)' : 'var(--foreground)',
-                      }}
-                    >
-                      <b>{opt.id}.</b> {opt.text}
-                      {isCorrect && ' ✓'}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Ações */}
-              {!confirmed[currentQuestion.id] ? (
+          <div className="flex flex-col gap-2 mb-5">
+            {currentQuestion.options.map(opt => {
+              const selected = answers[currentQuestion.id] === opt.id;
+              return (
                 <button
-                  onClick={confirmAnswer}
-                  disabled={!answered}
-                  className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40"
-                  style={{ background: accent, color: '#0d1117' }}
-                >
-                  {answered ? 'Confirmar resposta' : 'Selecione uma alternativa'}
-                </button>
-              ) : (
-                <div className="flex items-center gap-3 flex-wrap">
-                  <button
-                    onClick={() => goTo(currentIndex + 1)}
-                    className="flex-1 py-3 rounded-xl font-semibold text-sm"
-                    style={{ background: accent, color: '#0d1117' }}
-                  >
-                    {currentIndex < questions.length - 1 ? 'Próxima →' : 'Revisar tudo'}
-                  </button>
-                  {FEATURES.tutorAI ? (
-                    <button
-                      onClick={() => setShowTutor(true)}
-                      className="px-4 py-3 rounded-xl font-semibold text-sm"
-                      style={{ background: 'var(--ffv-bg2)', color: 'var(--foreground)', border: '1px solid var(--ffv-border)' }}
-                    >
-                      💬 Pergunte ao tutor
-                    </button>
-                  ) : (
-                    <button
-                      disabled
-                      title="Em breve"
-                      className="px-4 py-3 rounded-xl font-semibold text-sm opacity-50 cursor-not-allowed"
-                      style={{ background: 'var(--ffv-bg2)', color: 'var(--ffv-muted)', border: '1px solid var(--ffv-border)' }}
-                    >
-                      💬 Tutor IA (em breve)
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {/* Explicação (modo estudo) */}
-              {showExplanation && (
-                <div
-                  className="mt-6 p-5 rounded-xl"
+                  key={opt.id}
+                  onClick={() => selectOption(opt.id)}
+                  disabled={confirmed[currentQuestion.id]}
+                  className="text-left px-4 py-3 rounded-lg text-sm transition-all disabled:cursor-default"
                   style={{
-                    background: 'color-mix(in srgb, var(--ffv-blue) 8%, var(--ffv-bg2))',
-                    border: '1px solid color-mix(in srgb, var(--ffv-blue) 30%, transparent)',
+                    background: selected ? `${accent}20` : 'var(--ffv-bg2)',
+                    border: `1px solid ${selected ? accent : 'var(--ffv-border)'}`,
+                    color: 'var(--foreground)',
                   }}
                 >
-                  <p className="text-xs font-bold mb-2" style={{ color: 'var(--ffv-blue)' }}>
-                    💡 Explicação do tutor
-                  </p>
-                  <p className="text-sm leading-relaxed">{getExplanationText(currentQuestion.explanation)}</p>
-                </div>
-              )}
-          </>
+                  <b>{opt.id}.</b> {opt.text}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Sem gabarito nem explicação aqui de propósito: a prova é
+              server-authoritative e a correção só é revelada depois do
+              finish, na tela de resultado. */}
+          {!confirmed[currentQuestion.id] ? (
+            <button
+              onClick={confirmAnswer}
+              disabled={!answered}
+              className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40"
+              style={{ background: accent, color: '#0d1117' }}
+            >
+              {answered ? 'Confirmar resposta' : 'Selecione uma alternativa'}
+            </button>
+          ) : (
+            <button
+              onClick={() => goTo(currentIndex + 1)}
+              disabled={currentIndex >= questions.length - 1}
+              className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40"
+              style={{ background: accent, color: '#0d1117' }}
+            >
+              {currentIndex < questions.length - 1 ? 'Próxima →' : 'Última questão — use a navegação ao lado'}
+            </button>
+          )}
         </section>
 
         {/* Painel direito — grid + flag */}
@@ -366,7 +321,7 @@ export function SimuladoRunner({ slug }: Props) {
             <div className="grid grid-cols-5 gap-1.5 mb-4">
               {questions.map((q, i) => {
                 const isCurrent = i === currentIndex;
-                const isAnswered = !!attempt.answers[q.id];
+                const isAnswered = !!answers[q.id];
                 const isFlagged = reviewFlags.has(q.id);
                 let bg = 'var(--ffv-bg2)';
                 let border = 'var(--ffv-border)';
@@ -407,26 +362,20 @@ export function SimuladoRunner({ slug }: Props) {
 
             <button
               onClick={finalize}
-              className="w-full text-xs font-semibold px-3 py-2 rounded-lg"
+              disabled={finishing}
+              className="w-full text-xs font-semibold px-3 py-2 rounded-lg disabled:opacity-50"
               style={{ background: 'var(--ffv-bg2)', color: 'var(--foreground)', border: '1px solid var(--ffv-border)' }}
             >
-              Finalizar simulado
+              {finishing ? 'Finalizando…' : 'Finalizar simulado'}
             </button>
 
             <div className="mt-4 text-[10px]" style={{ color: 'var(--ffv-muted)' }}>
               <p>🟢 Respondida · 🟡 Atual · 🔴 Marcada</p>
-              <p className="mt-1">Progresso salvo automaticamente.</p>
+              <p className="mt-1">Progresso salvo no servidor a cada resposta.</p>
             </div>
           </div>
         </aside>
       </div>
-
-      {showTutor && FEATURES.tutorAI && (
-        <TutorChat
-          question={currentQuestion}
-          onClose={() => setShowTutor(false)}
-        />
-      )}
     </div>
   );
 }

@@ -1,12 +1,17 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { NewsletterInlineForm } from '@/components/NewsletterInlineForm';
+import { BASE, social } from '@/lib/metadata-social';
+
+/** Uma definição só: serve à meta description e ao cartão social. */
+const DESCRICAO_CARTAO =
+  'Newsletter semanal sobre IA, engenharia e produtos digitais. Um artigo profundo por semana, direto na sua caixa. Sem spam.';
 
 export const metadata: Metadata = {
-  title: 'Newsletter — FFV Academy',
-  description:
-    'Newsletter semanal sobre IA, engenharia e produtos digitais. Um artigo profundo por semana, direto na sua caixa. Sem spam.',
-  alternates: { canonical: 'https://fernandofrancovalle.com/newsletter' },
+  title: 'Newsletter',
+  description: DESCRICAO_CARTAO,
+  alternates: { canonical: `${BASE}/newsletter` },
+  ...social({ titulo: `Newsletter — FFV Academy`, descricao: DESCRICAO_CARTAO, caminho: '/newsletter' }),
 };
 
 const RECENT_TOPICS = [
@@ -158,7 +163,7 @@ export default function NewsletterPage() {
               href="https://buttondown.com/fernandofrancovalle/archive"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-sm font-semibold transition-opacity hover:opacity-70"
+              className="inline-flex min-h-[24px] items-center text-sm font-semibold transition-opacity hover:opacity-70"
               style={{ color: 'var(--ffv-green)' }}
             >
               Ver arquivo completo no Buttondown →

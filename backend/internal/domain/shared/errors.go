@@ -25,6 +25,13 @@ var (
 
 	// ErrRateLimited indica que o limite de requisições foi atingido.
 	ErrRateLimited = errors.New("rate limited")
+
+	// ErrRegistrationRequired indica que o código foi validado com sucesso
+	// mas o email é de um usuário novo sem dados de registro — o chamador
+	// deve reenviar o MESMO código junto com nome/telefone. Sentinel próprio
+	// (não sob ErrValidation) para que a resposta HTTP tenha um `type`
+	// distinguível sem o frontend precisar casar string de mensagem.
+	ErrRegistrationRequired = errors.New("registration required")
 )
 
 // DomainError encapsula um erro de domínio com mensagem legível.

@@ -48,7 +48,15 @@ const variantBackground: Record<string, string> = {
 };
 
 const variantColor: Record<string, string> = {
-  primary: '#fff',
+  // `var(--primary-foreground)`, não `'#fff'` literal: o gradiente usa
+  // `--ffv-blue`/`--ffv-purple`, que TROCAM de polaridade por tema —
+  // claros no escuro (#58a6ff/#d2a8ff, pensados pra ler sobre fundo escuro),
+  // escuros no claro (#085dc2/#7447c6). Texto branco fixo lia bem no tema
+  // claro (6,07–6,26:1) e falhava no ESCURO — o padrão da plataforma —
+  // 2,53:1/1,95:1, medido em 11/ago/2026. Achado no componente que esta
+  // change elegeu como botão único: se o de referência erra, todo call site
+  // que segue o padrão herda o erro.
+  primary: 'var(--primary-foreground)',
   gold: '#0d1117',
 };
 

@@ -107,154 +107,25 @@ export function getExplanationText(
 }
 
 /**
- * Parseia uma explicação no schema v1 (string com blocos `(a)`, `(b)`, `(c)`,
- * `(d)`) para o objeto `QuestionExplanation` (v2).
+/**
+ * `parseExplanationString` e `buildTutorSeeds` foram APAGADAS em 07/ago/2026.
  *
- * Heurística:
- *   - `(a)` → `whyCorrect` (e primeira frase vira `summary`)
- *   - `(b)` → distribuído em `whyWrong[optId]` para cada distractor, com
- *             matching por palavra-chave do texto da opção. Se não conseguir
- *             mapear, joga tudo no primeiro distractor não-correto e o
- *             chamador deve marcar TODO.
- *   - `(c)` → `keyConcept`
- *   - `(d)` → ignorado (referência já vive em `references[]` do JSON)
- *   - `tutorSeeds` → inferido a partir do `keyConcept`.
+ * Elas prometiam converter a explicação em string (v1) para o objeto rico (v2),
+ * casando cada bloco `(a)`/`(b)`/`(c)` com os distratores por palavra-chave.
+ * Medido antes de apagar: das **75 explicações do catálogo, 75 são string v1 e
+ * ZERO tem os três blocos** que a função exigia — ela devolveria `null` para
+ * todas. E não era chamada de lugar nenhum.
  *
- * Retorna `null` se a string não tem os 3 blocos mínimos `(a)`/`(b)`/`(c)` —
- * nesse caso, o chamador deve manter o original como fallback.
+ * Manter custava mais que apagar: quem abria o arquivo via uma conversão
+ * automática que não existia, e por isso não fazia a migração real — que é
+ * redação técnica, um distrator de cada vez, nomeando o erro de raciocínio de
+ * quem escolheria aquela alternativa.
+ *
+ * Os marcadores `TODO_REVIEW` que ela geraria NUNCA chegaram ao aluno, porque a
+ * função nunca executou. A suspeita inicial era a oposta, e a medição a
+ * contradisse — fica registrado para não voltar como achado.
  */
-export function parseExplanationString(
-  raw: string,
-  optionIds: OptionId[],
-  correctId: OptionId,
-  optionTexts?: Partial<Record<OptionId, string>>,
-): QuestionExplanation | null {
-  const a = /\(a\)\s*([\s\S]*?)\s*\(b\)/i.exec(raw);
-  const b = /\(b\)\s*([\s\S]*?)\s*\(c\)/i.exec(raw);
-  const c = /\(c\)\s*([\s\S]*?)(?:\s*\(d\)|\s*$)/i.exec(raw);
-  if (!a || !b || !c) return null;
 
-  const whyCorrect = a[1].trim();
-  const wrongBlock = b[1].trim();
-  const keyConcept = c[1].trim();
-
-  // summary = primeira frase do whyCorrect
-  const firstSentence =
-    /^[\s\S]*?[.!?](?=\s|$)/.exec(whyCorrect)?.[0]?.trim() ?? whyCorrect;
-  const summary = firstSentence.length > 280
-    ? firstSentence.slice(0, 277) + '...'
-    : firstSentence;
-
-  // Split wrongBlock em sentenças/cláusulas: ponto+maiúscula, ponto-e-vírgula
-  // e travessão " — " (separador comum nos autores).
-  const sentences = wrongBlock
-    .split(/(?<=[.!?])\s+(?=[A-ZÁÊÉÍÓÔÚÇ])|;\s+|\s+—\s+/)
-    .map(s => s.trim().replace(/^[,.;:]\s*/, ''))
-    .filter(s => s.length > 0);
-
-  const distractors = optionIds.filter(id => id !== correctId);
-  const whyWrong: Partial<Record<OptionId, string>> = {};
-
-  // Heurística de matching: para cada sentença, achar distractor cujo texto
-  // tem mais sobreposição de tokens significativos.
-  const tokenize = (s: string): string[] =>
-    s
-      .toLowerCase()
-      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-      .split(/\s+/)
-      .filter(t => t.length >= 4); // descarta stopwords curtas
-
-  const stop = new Set([
-    'para', 'pelo', 'pela', 'pelos', 'pelas', 'sobre', 'cada', 'mais', 'menos',
-    'todos', 'todas', 'esse', 'essa', 'isso', 'esta', 'este', 'isto', 'tipo',
-    'tipos', 'porque', 'quando', 'enquanto', 'apenas', 'serviço', 'serviços',
-    'cliente', 'clientes', 'opção', 'opções', 'aqui', 'então', 'também',
-  ]);
-
-  const distractorTokens = new Map<OptionId, Set<string>>();
-  for (const id of distractors) {
-    const text = optionTexts?.[id] ?? '';
-    const toks = tokenize(text).filter(t => !stop.has(t));
-    distractorTokens.set(id, new Set(toks));
-  }
-
-  const buckets = new Map<OptionId, string[]>();
-  const unmatched: string[] = [];
-
-  for (const sent of sentences) {
-    const sentToks = new Set(tokenize(sent).filter(t => !stop.has(t)));
-    let best: { id: OptionId; score: number } | null = null;
-    for (const id of distractors) {
-      const dToks = distractorTokens.get(id)!;
-      let score = 0;
-      for (const t of dToks) if (sentToks.has(t)) score++;
-      if (score > 0 && (!best || score > best.score)) {
-        best = { id, score };
-      }
-    }
-    if (best) {
-      if (!buckets.has(best.id)) buckets.set(best.id, []);
-      buckets.get(best.id)!.push(sent);
-    } else {
-      unmatched.push(sent);
-    }
-  }
-
-  for (const id of distractors) {
-    const bucket = buckets.get(id);
-    if (bucket && bucket.length > 0) {
-      whyWrong[id] = bucket.join(' ');
-    }
-  }
-
-  // Se sobraram sentenças sem matching, append no primeiro distractor sem texto
-  // ou no primeiro distractor (se todos já têm) com marcador.
-  if (unmatched.length > 0) {
-    const emptyTarget = distractors.find(id => !whyWrong[id]);
-    if (emptyTarget) {
-      whyWrong[emptyTarget] = `TODO_REVIEW: ${unmatched.join(' ')}`;
-    } else if (distractors[0]) {
-      whyWrong[distractors[0]] =
-        (whyWrong[distractors[0]] ?? '') + ` [extra: ${unmatched.join(' ')}]`;
-    }
-  }
-
-  // Para distractors sem nenhuma sentença atribuída, marcar TODO.
-  for (const id of distractors) {
-    if (!whyWrong[id]) {
-      whyWrong[id] = `TODO_REVIEW: distractor sem explicação específica no bloco (b). Contexto geral: ${wrongBlock}`;
-    }
-  }
-
-  // tutorSeeds — perguntas inferidas a partir do keyConcept
-  const tutorSeeds = buildTutorSeeds(keyConcept, whyCorrect);
-
-  return {
-    summary,
-    whyCorrect,
-    whyWrong,
-    keyConcept,
-    tutorSeeds,
-  };
-}
-
-/** Heurística simples de geração de seeds de tutor. */
-function buildTutorSeeds(keyConcept: string, whyCorrect: string): string[] {
-  const seeds: string[] = [];
-  const concept = keyConcept.replace(/\.$/, '').trim();
-  if (concept) {
-    seeds.push(`Pode explicar com mais detalhe: ${concept}?`);
-    seeds.push(`Quais cenários reais aplicam ${concept}?`);
-  }
-  // Procura termos AWS-style (CamelCase ou ALLCAPS) no whyCorrect.
-  const awsTerms = Array.from(
-    new Set(whyCorrect.match(/\b(?:AWS\s+[A-Z][\w-]+|Amazon\s+[A-Z][\w-]+|[A-Z]{2,}[\w-]*)\b/g) ?? []),
-  ).slice(0, 1);
-  if (awsTerms[0]) {
-    seeds.push(`Como ${awsTerms[0]} se compara com alternativas?`);
-  }
-  return seeds.slice(0, 3);
-}
 
 export interface Simulado {
   id: string;
@@ -271,11 +142,22 @@ export interface Simulado {
   passingScore: number;
   /** Se true, ainda não está disponível (mostrar "Em breve"). */
   comingSoon?: boolean;
+  /**
+   * Id do banco no Postgres (`questions.simulado_id`), quando as questões vêm
+   * do backend em vez de inline. É DIFERENTE do `id` do catálogo de propósito
+   * histórico — `simulado-aws-practitioner` no catálogo, `aws-clf` no banco —
+   * e a ausência desta ponte quebrou o fluxo `fazer` em silêncio: o runner
+   * consultava a API com o id do catálogo, a query `simulado_id = $1` voltava
+   * vazia, e o aluno via "banco vazio" com 1.015 questões no banco.
+   */
+  dbBankId?: string;
   /** URL do modo de estudo livre associado (sem timer, banco completo). */
   studyModeUrl?: string;
 }
 
 export interface SimuladoAttempt {
+  /** ID real da tentativa no servidor — ausente no modo mock (identificado só por simuladoId). */
+  id?: string;
   simuladoId: string;
   startedAt: string;
   finishedAt?: string;

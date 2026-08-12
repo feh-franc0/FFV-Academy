@@ -1,11 +1,29 @@
 'use client';
 
-import LZString from 'lz-string';
-import { CURRICULUM, LEVELS, BADGES_DEF, getLevelInfo } from './curriculum';
+/**
+ * IMPORTANTE: nunca importar `CURRICULUM` (barril completo, 490 módulos com
+ * `desc`/`keywords`, ~92 KB gz) aqui. `engine.ts` é alcançado por
+ * `useGameState` a partir de `GameHUD`, que vive no layout raiz — e por isso
+ * roda em TODA rota. O que este arquivo precisa de cada módulo é só `slug` e
+ * `xp` (para calcular XP) e o `id` da trilha (para `trailStartedAt`), que é
+ * exatamente o que `CURRICULO_LEVE` carrega. Medido em 11/ago/2026: importar
+ * o barril completo daqui era a causa raiz de o currículo pesado aparecer em
+ * 100% das rotas, mesmo com o layout limpo — `layout-sem-curriculo.test.ts`
+ * não pegava porque só rastreia imports `@/...`, e este era relativo
+ * (`from './curriculum'`).
+ */
+import { CURRICULO_LEVE } from './curriculum/indice-leve';
+import { LEVELS } from './curriculum/levels';
+import { BADGES_DEF } from './curriculum/badges';
+import { getLevelInfo } from './curriculum/queries-leves';
 import { type ReviewCard, type ReviewQuality, createCard, reviewCard, getDueCards, todayISO, isoDate } from './srs';
 import { GAME_CONFIG, STORAGE_KEYS } from './constants';
 import { getRaw, setRaw, onStorageError } from './storage';
-import { GameStateSchema, safeParseJSON } from './schemas';
+// Nenhum import estático de `./schemas` aqui — `zod` (~61,5 KB gz) só é
+// carregado dentro de `importState()`, via import dinâmico, porque este
+// arquivo é alcançado por TODA rota (GameHUD → useGameState → engine.ts) e
+// `importState` só roda no fluxo raro de "importar backup".
+import { encodeGameState, decodeGameState } from './game-state-codec';
 import { evaluateModuleBadges, evaluateReviewBadges, evaluateQuizBadges } from './badges';
 import { hashString } from './random-question';
 
@@ -87,7 +105,10 @@ export interface GameState {
   dailyQuestionHistory?: Array<{ id: string; date: string; correct: boolean; source: 'module' | 'simulado' | 'pool'; hubId?: string }>;
 }
 
-const CURRENT_SCHEMA = 6;
+// Exportado para progress-sync.ts: o snapshot enviado à nuvem precisa
+// declarar a MESMA versão que este cliente usa — um valor hardcoded duplicado
+// ali é exatamente como o schemaVersion divergiu da engine antes desta correção.
+export const CURRENT_SCHEMA = 6;
 
 /** Migra estado antigo (sem schemaVersion) para versão atual. */
 function migrateState(parsed: Record<string, unknown>): Partial<GameState> {
@@ -148,6 +169,8 @@ export interface CompleteModuleResult {
   leveledUp: boolean;
   newLevel: number;
   cardsAdded: number;
+  /** `false` quando a persistência falhou (ex.: quota do localStorage estourada). */
+  persisted: boolean;
 }
 
 const DEFAULT_STATE: GameState = {
@@ -183,25 +206,37 @@ const DEFAULT_STATE: GameState = {
   dailyQuestionHistory: [],
 };
 
+/**
+ * Reporta se há uma chave de GameState gravada no localStorage — usado por
+ * useGameState para decidir se vale a pena consultar o backup assíncrono do
+ * IndexedDB (ver hooks/useGameState.ts). Sem isso, um localStorage evacuado
+ * pelo navegador (Safari ITP, pressão de armazenamento) e um usuário
+ * genuinamente novo eram indistinguíveis — os dois produzem DEFAULT_STATE.
+ */
+export function hasLocalState(): boolean {
+  if (typeof window === 'undefined') return false;
+  return getRaw(STORAGE_KEYS.GAME_STATE) !== null;
+}
+
+/**
+ * Grava um GameState já validado diretamente no localStorage, no mesmo
+ * formato que saveState usa — usado para restaurar a partir do backup do
+ * IndexedDB quando o localStorage volta vazio (ver useGameState.ts). Não
+ * passa pelo GC de cartas SRS de saveState: o estado já veio de um backup
+ * que passou por ele quando foi salvo originalmente.
+ */
+export function restoreFromBackup(state: GameState): void {
+  setRaw(STORAGE_KEYS.GAME_STATE, encodeGameState(state));
+}
+
 export function loadState(): GameState {
   if (typeof window === 'undefined') return { ...DEFAULT_STATE };
   try {
     const raw = getRaw(STORAGE_KEYS.GAME_STATE);
     if (raw) {
-      // Support both lz-string compressed (new) and plain JSON (legacy).
-      // Skip decompress for plain JSON — LZString.decompress can hang on arbitrary input.
-      let finalStr: string;
-      if (raw.charAt(0) === '{') {
-        finalStr = raw;
-      } else {
-        let jsonStr: string | null = null;
-        try {
-          jsonStr = LZString.decompress(raw);
-        } catch { /* not compressed */ }
-        finalStr = jsonStr || raw;
-      }
-      const parsed = JSON.parse(finalStr) as Record<string, unknown>;
-      const migrated = migrateState(parsed);
+      const decoded = decodeGameState(raw) as Record<string, unknown> | null;
+      if (!decoded) throw new Error('estado corrompido');
+      const migrated = migrateState(decoded);
       return {
         ...DEFAULT_STATE,
         ...migrated,
@@ -265,11 +300,16 @@ export function onSaveError(cb: (msg: string) => void) {
   onStorageError(msg => _saveErrorCallback?.(msg));
 }
 
-function saveState(state: GameState) {
+/**
+ * Persiste o estado. Retorna se a escrita de fato aconteceu — antes disto,
+ * quota estourada era engolida em silêncio: `ConcluirModulo` sempre mostrava
+ * "concluído · +N XP" mesmo quando a escrita (a original E a retentativa
+ * mínima) falhava, porque nada olhava o resultado de `setRaw`.
+ */
+function saveState(state: GameState): boolean {
   // GC well-known SRS cards before persisting
   const gc = gcSRSCards(state);
-  const compressed = LZString.compress(JSON.stringify(gc));
-  const ok = setRaw(STORAGE_KEYS.GAME_STATE, compressed);
+  const ok = setRaw(STORAGE_KEYS.GAME_STATE, encodeGameState(gc));
   if (!ok) {
     // Fallback: retenta com dados mínimos (preserva progresso, descarta histórico pesado)
     const minimal = {
@@ -277,8 +317,9 @@ function saveState(state: GameState) {
       studyDays: gc.studyDays.slice(-GAME_CONFIG.FALLBACK_STUDY_DAYS_TRIM),
       reviewCards: gc.reviewCards.slice(-GAME_CONFIG.FALLBACK_CARDS_TRIM),
     };
-    setRaw(STORAGE_KEYS.GAME_STATE, LZString.compress(JSON.stringify(minimal)));
+    return setRaw(STORAGE_KEYS.GAME_STATE, encodeGameState(minimal));
   }
+  return true;
 }
 
 /** Exporta o estado completo como JSON string para download pelo usuário. */
@@ -297,7 +338,8 @@ export function exportState(): string {
  *
  * Retorna `{ ok: true }` em sucesso ou `{ ok: false, error }` com motivo.
  */
-export function importState(json: string): { ok: true } | { ok: false; error: string } {
+export async function importState(json: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { GameStateSchema, safeParseJSON } = await import('./schemas');
   const result = safeParseJSON<Record<string, unknown>>(
     GameStateSchema as unknown as { safeParse: (i: unknown) => { success: boolean; data?: Record<string, unknown>; error?: { message: string } } },
     json,
@@ -310,7 +352,7 @@ export function importState(json: string): { ok: true } | { ok: false; error: st
     ...(result.data as unknown as Partial<GameState>),
     schemaVersion: CURRENT_SCHEMA,
   };
-  const ok = setRaw(STORAGE_KEYS.GAME_STATE, LZString.compress(JSON.stringify(next)));
+  const ok = setRaw(STORAGE_KEYS.GAME_STATE, encodeGameState(next));
   return ok ? { ok: true } : { ok: false, error: 'falha ao persistir' };
 }
 
@@ -526,7 +568,7 @@ export function completeModule(input: CompleteModuleInput): CompleteModuleResult
 
   // Encontra o módulo no currículo
   let moduleXP = 30;
-  for (const trail of CURRICULUM) {
+  for (const trail of CURRICULO_LEVE) {
     const mod = trail.modules.find(m => m.slug === slug);
     if (mod) { moduleXP = mod.xp; break; }
   }
@@ -583,13 +625,13 @@ export function completeModule(input: CompleteModuleInput): CompleteModuleResult
   state = stateAfterBadges;
   newBadges.push(...badgesUnlocked);
 
-  saveState(state);
-  return { xpGained, newBadges, leveledUp, newLevel, cardsAdded };
+  const persisted = saveState(state);
+  return { xpGained, newBadges, leveledUp, newLevel, cardsAdded, persisted };
 }
 
 /** Registra o timestamp do primeiro módulo de uma trilha (para speedrun_trail). */
 function trackTrailStart(state: GameState, slug: string): GameState {
-  const trail = CURRICULUM.find(t => t.modules.some(m => m.slug === slug));
+  const trail = CURRICULO_LEVE.find(t => t.modules.some(m => m.slug === slug));
   if (!trail) return state;
   if (state.trailStartedAt[trail.id]) return state;
   return {

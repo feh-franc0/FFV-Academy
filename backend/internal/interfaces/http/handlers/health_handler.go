@@ -10,6 +10,7 @@ package handlers
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -78,7 +79,11 @@ func (h *HealthHandler) Readiness(w http.ResponseWriter, r *http.Request) {
 
 		// Só pinga o Postgres se o circuito está fechado.
 		if err := h.db.Ping(ctx); err != nil {
-			checks["postgres"] = "unhealthy: " + err.Error()
+			// /readyz é público e sem rate-limit (ver router.go) — o corpo NUNCA
+			// leva o erro cru: pgx/go-redis embutem host, porta e às vezes a DSN
+			// inteira na mensagem. O detalhe vai só para o log do operador.
+			slog.Default().ErrorContext(ctx, "readyz: postgres unhealthy", "error", err.Error())
+			checks["postgres"] = "unhealthy"
 			allOK = false
 		} else {
 			checks["postgres"] = "ok"
@@ -86,7 +91,8 @@ func (h *HealthHandler) Readiness(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.redis.Ping(ctx); err != nil {
-		checks["redis"] = "unhealthy: " + err.Error()
+		slog.Default().ErrorContext(ctx, "readyz: redis unhealthy", "error", err.Error())
+		checks["redis"] = "unhealthy"
 		allOK = false
 	} else {
 		checks["redis"] = "ok"

@@ -289,8 +289,10 @@ func (h *CurriculumHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *CurriculumHandler) Update(w http.ResponseWriter, r *http.Request) {
 	slug := chi.URLParam(r, "slug")
 
-	// Busca o artigo atual para aplicar atualizações parciais.
-	article, err := h.getArticle.Execute(r.Context(), slug)
+	// Busca o artigo atual para aplicar atualizações parciais. FindBySlugForAdmin
+	// (não h.getArticle, que só resolve PUBLICADOS) — editar um rascunho ainda
+	// não publicado precisa continuar funcionando.
+	article, err := h.repo.FindBySlugForAdmin(r.Context(), slug)
 	if err != nil {
 		HandleDomainErrorCtx(r, w, err)
 		return
@@ -331,8 +333,10 @@ func (h *CurriculumHandler) SaveBlocks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Confirma que o artigo existe antes de mexer nos blocks.
-	if _, err := h.getArticle.Execute(r.Context(), slug); err != nil {
+	// Confirma que o artigo existe antes de mexer nos blocks. FindBySlugForAdmin
+	// (não h.getArticle) — salvar blocks de um rascunho ainda não publicado
+	// precisa continuar funcionando.
+	if _, err := h.repo.FindBySlugForAdmin(r.Context(), slug); err != nil {
 		HandleDomainErrorCtx(r, w, err)
 		return
 	}

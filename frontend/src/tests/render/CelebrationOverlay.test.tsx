@@ -4,11 +4,19 @@ import { render, screen, act, fireEvent } from '@testing-library/react';
 import { cleanup } from '@testing-library/react';
 import { CelebrationOverlay } from '@/components/CelebrationOverlay';
 
-vi.mock('@/lib/curriculum', () => ({
+// Os mocks apontam para os módulos ESTREITOS, e não para o barrel
+// `@/lib/curriculum`. O componente passou a importar de `curriculum/badges` e
+// `curriculum/levels` em ago/2026, para não arrastar as 39 trilhas para o
+// primeiro carregamento — e mock do barrel deixou de interceptar. Foi este
+// teste que acusou a mudança, que é o comportamento desejado dele.
+vi.mock('@/lib/curriculum/badges', () => ({
   BADGES_DEF: [
     { id: 'badge_first', name: 'Primeiro Módulo', icon: '🌱', desc: 'Completou o primeiro módulo', xpBonus: 50 },
     { id: 'badge_level5', name: 'Aprendiz', icon: '⭐', desc: 'Alcançou nível 5', xpBonus: 100 },
   ],
+}));
+
+vi.mock('@/lib/curriculum/levels', () => ({
   LEVELS: [
     { level: 1, name: 'Curioso', icon: '🌱', color: '#3fb950', xpMin: 0, xpMax: 100 },
     { level: 5, name: 'Aprendiz', icon: '⭐', color: '#58a6ff', xpMin: 400, xpMax: 700 },

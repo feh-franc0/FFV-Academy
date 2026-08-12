@@ -164,6 +164,7 @@ test/
 | POST | `/api/v1/attempts/{attemptId}/flags/{questionId}` | JWT | Simulado.ToggleReviewFlag |
 | POST | `/api/v1/attempts/{attemptId}/finish` | JWT | Simulado.FinishAttempt |
 | DELETE | `/api/v1/attempts/{attemptId}` | JWT | Simulado.CancelAttempt |
+| POST | `/api/v1/attempts/{attemptId}/claim-xp` | JWT | Simulado.ClaimXPCredit *(novo, ago/2026 — idempotência de crédito de XP no servidor via `xp_credited_at`, ver seção abaixo)* |
 | POST | `/api/v1/attempts/{attemptId}/report` | JWT | Simulado.ReportQuestion |
 | GET | `/api/v1/progress` | JWT | Progress.Pull |
 | PUT | `/api/v1/progress` | JWT | Progress.Push |
@@ -188,11 +189,13 @@ test/
 - profile: 64 KB
 - simulado answers: 256 KB
 - progress: 512 KB
+- billing checkout: 4 KB · tutor ask: 8 KB *(achado P-09, ago/2026)*
 
 **Rate-limits por IP (Redis-backed):**
-- auth: 20 req/min
-- tutor: 60 req/min
-- cert verify: 120 req/min
+- auth: 20 req/min (fail-closed)
+- tutor: 60 req/min (fail-closed)
+- cert verify: 120 req/min (fail-closed desde 11/ago/2026, achado P-09 — antes era fail-open, justo na rota que existe pra impedir enumeração de hash de certificado)
+- webhook Stripe: sem rate-limit no Go, mas 300 req/min na borda do Nginx (`api_webhook`, achado P-10) — protege CPU do custo de validar HMAC sobre payload grande vindo de request anônimo; a assinatura já protege a lógica
 
 ---
 
@@ -237,9 +240,13 @@ test/
 
 **Import cycle solution**: `internal/interfaces/http/httputil/` contém `WriteError` e `WriteJSON`. Tanto `handlers/` quanto `middleware/` importam de `httputil`.
 
-**Server-authoritative scoring**: catálogo embebido via `//go:embed catalog.json`. O score nunca vem do cliente.
+**Server-authoritative scoring**: `StartAttempt` sorteia e grava `question_ids` no servidor; `FinishAttempt` pontua essas questões contra o banco Postgres REAL (`QuestionRepository.FindByIDs`), não mais o catálogo estático embutido (`catalog.json` continua existindo só como fallback quando o Postgres não tem o simulado). O score nunca vem do cliente. `ExamQuestionDTO` (sem `correctId`/`explanation`) é o que o cliente recebe durante a prova; o gabarito só sai depois de `finish`.
 
-**Magic token**: Redis GETDEL para consumo atômico (anti-replay). TTL = 10 min, rate limit = 5/email/janela.
+**Crédito de XP idempotente por tentativa** (ago/2026): XP/badges/streak são um `GameState` de CLIENTE (localStorage, sync LWW) — não há ledger de XP no servidor. `POST /attempts/{attemptId}/claim-xp` (`ClaimXPCreditUseCase` → `AttemptRepo.ClaimXPCredit`) não calcula XP nenhum; grava `xp_credited_at` atomicamente (`UPDATE ... WHERE user_id=$2 AND finished_at IS NOT NULL AND xp_credited_at IS NULL`) e só a chamada que afeta a linha recebe `claimed:true`. O frontend só concede XP local quando `claimed:true` — fecha o caso de reabrir `/resultado` em outra aba/dispositivo e ganhar XP de novo, que uma chave em `sessionStorage` não cobria (não é compartilhada entre abas).
+
+**Gabarito nunca sai enquanto há prova ativa** (achado P-01, auditoria de 11/ago/2026): `ExamQuestionDTO` no runner sempre esteve correto, mas três rotas LATERAIS (`GET .../study/random`, `GET .../questions`, `GET .../questions/batch?ids=`) serviam `correctId`/`explanation` pra qualquer autenticado, sem checar tentativa ativa nem ownership — o console do navegador durante a prova conseguia ler o gabarito via `fetch`. Corrigido com a função de pacote `hasActiveAttempt(r, attemptRepo, simuladoID)` (`study_handler.go`), usada nas três rotas: com tentativa ativa do simulado, todas devolvem `ExamQuestionDTO` (sem chave), não importa qual delas é chamada. Sem tentativa ativa, `questions/batch` ainda restringe por OWNERSHIP: só ids que pertencem a `QuestionIDs()` de alguma tentativa FINALIZADA do próprio usuário revelam gabarito — `AttemptRepository.ListFinishedByUserAndSimulado` (novo). `study/random`/`questions` sem tentativa ativa continuam plenos (é o modo estudo livre, sem paywall, por desenho). Toda ausência de `attemptRepo`/`userID` no contexto falha FECHADO (trata como "tem tentativa ativa"). Travado por `study_handler_test.go` + `simulado_handler_questions_test.go` (8 casos).
+
+**Magic token**: Redis GETDEL para consumo atômico (anti-replay). TTL = 10 min, teto de 5 ações/email/janela de 10min (`ffv:magic_attempts:<hash>`, `IncrAttempts`/`GetAttempts`) — **compartilhado entre pedir código novo E verificar** (achado P-03, auditoria de 11/ago/2026: até então só `RequestMagicLinkUseCase` incrementava o contador; `VerifyMagicLinkUseCase` nunca chamava `IncrAttempts`, então um código de 6 dígitos era varrível por quem controlasse poucos IPs — o rate-limit de 20/min era por IP, não por email). `VerifyMagicLinkUseCase.WithMaxAttempts(n)` (default 5, `main.go` usa o mesmo `magicMaxAttempts` de `RequestMagicLinkUseCase`) recusa com `ErrRateLimited` ao atingir o teto — inclusive se o código enviado na tentativa que estourou o teto estiver CERTO.
 
 **Refresh token rotation**: Hash SHA-256 no DB; raw token em cookie `ffv_refresh` (HttpOnly + Secure + SameSiteStrict). A cada `POST /auth/refresh` o token antigo é revogado.
 
@@ -251,9 +258,9 @@ test/
 
 **Redis Pinger**: `*goredis.Client.Ping()` retorna `*StatusCmd`, não `error`. `redisPingerAdapter` em `main.go` adapta para `handlers.Pinger`.
 
-**Audit log**: Middleware async que registra HTTP mutations (POST/PATCH/PUT/DELETE) sem bloquear o request path. Armazena actor, IP, path, status, latência.
+**Audit log**: Middleware async que registra HTTP mutations (POST/PATCH/PUT/DELETE) sem bloquear o request path. Armazena actor, IP, path, status, latência. Inserção passa por um `auditWorker` — canal com capacidade 256 processado por UMA goroutine dedicada por instância do middleware (não uma goroutine nova por request); fila cheia descarta com log em vez de crescer sem limite (achado P-15, ago/2026). Por padrão só registra 2xx; `AuditLog(repo, AuditLogOptions{IncludeFailures: true})` também registra 4xx/5xx — usado em `/api/v1/auth/*` (tentativa de login falha) e no webhook Stripe (assinatura rejeitada), que até ago/2026 não tinham NENHUMA trilha porque ficam fora do grupo autenticado onde o `AuditLog` original rodava (achado P-13). `X-Request-ID` fornecido pelo cliente é validado por regex (`^[a-zA-Z0-9-]{1,64}$`) em `RequestID` antes de entrar no contexto — um valor com quebra de linha era log/audit injection contra consumidores de log em texto puro.
 
-**Prometheus metrics**: `GET /metrics` exposto publicamente. Instrumentado via `MetricsMW` no router. Métricas: request count, duration histogram, inflight por handler.
+**Prometheus metrics**: `GET /metrics` exposto publicamente. Instrumentado via `MetricsMW` no router. Métricas: request count, duration histogram, inflight por handler. Label de rota usa `RoutePattern()` do chi (baixa cardinalidade); quando vem vazio (404 real, rota não casada) usa o valor fixo `"unmatched"`, nunca o path cru — path cru dava uma série temporal nova a cada sonda de bot (`/wp-admin`, `/.env`, achado P-15, ago/2026). ACL de rede em `172.16.0.0/12` no Nginx é mais larga que o necessário mas mantida — não há coletor Prometheus real rodando ainda; decisão documentada em `api.conf`.
 
 **OpenTelemetry**: `telemetry.Setup()` em `main.go`. Exporta traces via OTLP gRPC para endpoint configurado. Se `OTEL_EXPORTER_OTLP_ENDPOINT` vazio → NoopProvider (zero overhead).
 
@@ -268,14 +275,15 @@ test/
 | `DATABASE_URL` | ✓ | — | Postgres DSN completo |
 | `REDIS_URL` | ✓ | — | Redis DSN |
 | `JWT_SECRET` | ✓ | — | >= 32 chars (validado em startup) |
-| `STRIPE_SECRET_KEY` | ✓ | — | sk_live_... |
-| `STRIPE_WEBHOOK_SECRET` | ✓ | — | whsec_... |
+| `STRIPE_SECRET_KEY` | condicional | — | sk_live_... — obrigatório só quando `FEATURE_BILLING_ENABLED=true` (validado no boot; doc dizia "sempre obrigatório", código nunca exigiu — corrigido em ago/2026 fazendo o boot falhar de verdade quando a feature está ligada e o segredo ausente) |
+| `STRIPE_WEBHOOK_SECRET` | condicional | — | whsec_... — mesma regra de `STRIPE_SECRET_KEY` |
 | `RESEND_API_KEY` | ✓ | — | re_... |
-| `TWILIO_ACCOUNT_SID` | ✓ | — | AC... |
-| `TWILIO_AUTH_TOKEN` | ✓ | — | — |
-| `TWILIO_FROM_NUMBER` | ✓ | — | E.164 format |
-| `ANTHROPIC_API_KEY` | ✓ | — | sk-ant-... |
+| `TWILIO_ACCOUNT_SID` | — | — | AC... — sem enforcement no config; phone auth real depende de `FEATURE_PHONE_AUTH_ENABLED` |
+| `TWILIO_AUTH_TOKEN` | — | — | — |
+| `TWILIO_FROM_NUMBER` | — | — | E.164 format |
+| `ANTHROPIC_API_KEY` | condicional | — | sk-ant-... — obrigatório só quando `FEATURE_TUTOR_AI_ENABLED=true` (mesma correção acima) |
 | `APP_ENV` | — | `development` | `development`\|`production`\|`test` |
+| `AUTH_DEV_BYPASS_ENABLED` | — | `false` | Liga o código fixo `000000` (autentica qualquer email sem Redis). **Nunca `true` fora de `APP_ENV=development`** — o boot recusa subir nessa combinação (`config.validate()`). Antes dependia implicitamente de `APP_ENV=="development"`, que é o próprio default de `APP_ENV` — corrigido em ago/2026 |
 | `HTTP_PORT` | — | `8080` | — |
 | `JWT_ACCESS_TTL` | — | `15m` | — |
 | `JWT_REFRESH_TTL` | — | `720h` | 30 dias |
@@ -442,6 +450,10 @@ nano /opt/ffv/.env
 - `data` (`internal: true`) — api ↔ postgres ↔ redis (sem acesso externo)
 
 **`/opt/ffv/.env`** nunca entra no repositório. Criado manualmente na VPS com `vps-setup.sh`.
+
+**Imagens base pinadas por digest** (achado P-12, ago/2026): `golang`, `gcr.io/distroless/static-debian12`, `node` (frontend), `nginx`, `postgres`, `redis` referenciam `@sha256:...`, não tag flutuante — Dependabot (`docker` ecosystem, `/backend/deployments` e `/frontend`) mantém o digest atualizado. `mailhog` (só dev) não é pinado.
+
+**Nginx — três endurecimentos de ago/2026** (achado P-12): (1) `frontend.conf` passou a sobrescrever `X-Forwarded-For` com `$remote_addr`, igual a `api.conf` — antes usava `$proxy_add_x_forwarded_for`, que ANEXA ao valor do cliente; (2) `ssl_ciphers` trocou de `HIGH:!aNULL:!MD5` (lista aberta, muda com a versão do OpenSSL da imagem) para uma lista Mozilla "Intermediate" explícita nos dois vhosts; (3) `conf.d/default.conf` novo — `default_server` em 443 via `ssl_reject_handshake on` (rejeita na camada de SNI, sem cert dummy) e em 80 retornando 444, para Host/SNI não reconhecido. Sem isso o "vhost default" era uma função acidental da ordem alfabética de `include conf.d/*.conf` (api.conf antes de frontend.conf).
 
 ---
 

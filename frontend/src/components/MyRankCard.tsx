@@ -140,8 +140,8 @@ function RankCell({ rank }: { rank: MyRankByPeriod }) {
       }}
     >
       <p
-        className="font-mono text-[10px] mb-2"
-        style={{ color: meta.color, letterSpacing: '0.08em', fontWeight: 700 }}
+        className="font-mono text-[10px] mb-2 ffv-acento-texto"
+        style={{ '--ffv-acento': meta.color, letterSpacing: '0.08em', fontWeight: 700 } as React.CSSProperties}
       >
         {meta.emoji} {meta.label.toUpperCase()}
       </p>
@@ -156,7 +156,7 @@ function RankCell({ rank }: { rank: MyRankByPeriod }) {
         </>
       ) : (
         <>
-          <p className="text-2xl font-bold" style={{ color: meta.color, lineHeight: 1 }}>
+          <p className="text-2xl font-bold ffv-acento-texto" style={{ '--ffv-acento': meta.color, lineHeight: 1 } as React.CSSProperties}>
             #{rank.rank}
           </p>
           <p

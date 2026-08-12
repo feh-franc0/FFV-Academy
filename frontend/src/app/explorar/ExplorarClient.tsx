@@ -331,7 +331,11 @@ function ModuleCard({ module: m }: { module: ModuleWithTrail }) {
           letterSpacing: '0.04em',
         }}
       >
-        <span style={{ color: m.trail.color }}>{m.trail.name}</span>
+        {/* Cor de trilha como texto: em tema claro dava até 1,81:1. Ver
+            `.ffv-acento-texto` em globals.css. */}
+        <span className="ffv-acento-texto" style={{ '--ffv-acento': m.trail.color } as React.CSSProperties}>
+          {m.trail.name}
+        </span>
         <span style={{ opacity: 0.5 }}>·</span>
         <span>{diffLabel[diff]}</span>
         <span style={{ opacity: 0.5 }}>·</span>

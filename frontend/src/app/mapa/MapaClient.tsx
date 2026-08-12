@@ -33,7 +33,7 @@ export function MapaClient() {
   return (
     <div className="max-w-6xl mx-auto px-6 py-12">
       <nav className="text-xs mb-8" style={{ color: 'var(--ffv-muted)' }}>
-        <Link href="/" style={{ color: 'var(--ffv-muted)' }}>FFV Academy</Link>
+        <Link href="/" className="inline-flex min-h-[24px] items-center" style={{ color: 'var(--ffv-muted)' }}>FFV Academy</Link>
         <span className="mx-1">/</span>
         <span style={{ color: 'var(--foreground)' }}>Mapa</span>
       </nav>
@@ -69,7 +69,11 @@ export function MapaClient() {
             >
               <span className="text-2xl">{hub.icon}</span>
               <div>
-                <h2 className="text-xl font-bold" style={{ color: hub.color }}>
+                {/* `ffv-acento-texto`: paleta de hub e de trilha é dark e falha
+                    WCAG AA como texto em tema claro. Esta página tem 5 hubs × 37
+                    trilhas, então é a de maior dívida da plataforma (82 nós medidos
+                    em 07/ago/2026). Ver globals.css. */}
+                <h2 className="text-xl font-bold ffv-acento-texto" style={{ '--ffv-acento': hub.color } as React.CSSProperties}>
                   {hub.name}
                 </h2>
                 <p className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
@@ -97,7 +101,7 @@ export function MapaClient() {
                     <div className="flex items-start gap-3 mb-2">
                       <span className="text-2xl">{trail.icon}</span>
                       <div className="flex-1 min-w-0">
-                        <h3 className="text-sm font-bold" style={{ color: trail.color }}>
+                        <h3 className="text-sm font-bold ffv-acento-texto" style={{ '--ffv-acento': trail.color } as React.CSSProperties}>
                           {levelEmoji} {trail.name}
                         </h3>
                         {hasCapstone && (
@@ -117,7 +121,7 @@ export function MapaClient() {
                       <span style={{ color: 'var(--ffv-muted)' }}>
                         {done}/{total} módulos
                       </span>
-                      <span style={{ color: trail.color }}>{pct}%</span>
+                      <span className="ffv-acento-texto" style={{ '--ffv-acento': trail.color } as React.CSSProperties}>{pct}%</span>
                     </div>
                     <div
                       className="h-1 rounded-full mt-1 overflow-hidden"
@@ -148,7 +152,7 @@ export function MapaClient() {
         <Link
           href="/roadmaps"
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full font-semibold text-sm"
-          style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
+          style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
         >
           Ver roadmaps →
         </Link>

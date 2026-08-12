@@ -1,0 +1,3205 @@
+{
+  "slug": "lab-observabilidade-trace-correlacao",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência tem um ticket aberto há três dias: \"às 14h22 de terça, tentei abrir um pedido e apareceu erro\". A aplicação é a mesma do "
+              },
+              {
+                "text": "L01",
+                "code": true
+              },
+              {
+                "text": " — .NET 8 em ECS Fargate, RDS em sub-rede privada, ALB na frente e CloudFront na borda — e ela registra log. Registra bastante: 3,4 GB por dia. Nada disso ajudou."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "A investigação foi a de sempre. Abrir o grupo de logs, filtrar por "
+              },
+              {
+                "text": "error",
+                "code": true
+              },
+              {
+                "text": ", recortar a janela entre 14h20 e 14h25, e ler. Nesse intervalo há 2.100 eventos de quatro tasks diferentes, e onze deles contêm a palavra. Nenhum tem o identificador do pedido. Dois têm um GUID que pode ser o pedido ou pode ser outra coisa. As linhas de requisições distintas se intercalam no mesmo milissegundo, então ler em sequência produz histórias que não aconteceram."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O diagnóstico que se chegou foi \"provavelmente o banco estava lento\". Provavelmente. Depois de três dias, a conclusão é um advérbio. E aqui está o ponto que este laboratório existe para atacar: o problema não é falta de log, é que log em texto é um documento para humano ler, e ninguém pode ler 3,4 GB. O que se precisa é de um dado que a máquina consulte — e o que separa uma coisa da outra é um identificador que apareça em todas as camadas, em todas as linhas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Intermediário — depende do L01 no ar e não pressupõe experiência com OpenTelemetry"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L01 concluído e respondendo, Terraform, .NET 8 SDK, noção de HTTP e de cabeçalho"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 45 min · implementação 2 h a 3 h"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo, com um pico possível: ingestão e retenção de log são previsíveis, e cardinalidade de métrica não é — é onde a fatura surpreende"
+              },
+              {
+                "k": "Serviços",
+                "v": "CloudWatch Logs e Logs Insights, métricas do CloudWatch (formato embutido e filtro de métrica), AWS X-Ray com Transaction Search, OpenTelemetry com o coletor ADOT, ALB, CloudFront"
+              },
+              {
+                "k": "Volume atual",
+                "v": "500 mil requisições/dia, 4 tasks, 3,4 GB de log/dia, p99 de 380 ms em regime normal"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "de um ticket de cliente até o salto exato que falhou, em menos de 2 minutos e sem adivinhar horário"
+              },
+              {
+                "k": "Restrição de orçamento",
+                "v": "a observabilidade não pode passar de 8% da fatura da aplicação — o que proíbe 100% de trace amostrado e proíbe dimensão de alta cardinalidade"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "a API é síncrona sobre HTTP, sem fila nem trabalho em segundo plano; é o que permite tratar \"requisição\" e \"unidade de correlação\" como a mesma coisa. Com fila, a propagação precisa entrar no cabeçalho da mensagem, e é outro laboratório"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "uma requisição rastreável ponta a ponta pelo trace id: o identificador devolvido ao cliente, presente em toda linha de log e em todo span, com a consulta que devolve a requisição inteira em ordem"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é painel, não é SLO e não é plantão. Definir objetivo de nível de serviço, orçamento de erro e política de acionamento é o L51; correlacionar métrica de negócio com métrica técnica é o L52. Aqui o alvo é mais estreito e vem antes dos dois: fazer com que UMA requisição tenha resposta. Sem isso, um SLO violado avisa que algo está errado e não diz o quê — e a plataforma que você constrói em cima herda o ponto cego."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada objetivo abaixo tem uma prova com número na seção de implantação. Nenhum deles se verifica com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar de onde vem o identificador de correlação antes de o seu código rodar, e nomear os dois campos que o ALB usa.",
+              "Distinguir o identificador de borda do CloudFront do identificador de trace, e dizer por que gravar os dois é necessário.",
+              "Configurar log estruturado em .NET 8 de modo que TraceId e SpanId entrem em toda mensagem sem serem passados de método em método.",
+              "Derivar por que o trace id precisa estar TAMBÉM no log, e o que exatamente se perde quando ele está só no span.",
+              "Escolher entre métrica customizada, métrica derivada de log e filtro de métrica a partir de cardinalidade e de quem controla o formato.",
+              "Calcular quantos traces uma regra de amostragem produz para um volume dado, e dizer quais perguntas deixam de ter resposta.",
+              "Escrever a consulta do Logs Insights que devolve uma requisição inteira em ordem, partindo apenas do identificador que o cliente tem na mão.",
+              "Diagnosticar um trace partido em dois e apontar qual propagador estava faltando.",
+              "Identificar, num arquivo de configuração, a linha que produziria explosão de cardinalidade de métrica."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Log estruturado vs. texto",
+                "DVA-C02, SOA-C02",
+                "JSON de uma linha por evento, consultado por campo",
+                "que a consulta por campo é o que o formato compra, e que o driver awslogs quebra por linha"
+              ],
+              [
+                "Correlação por identificador",
+                "DVA-C02, SOA-C02",
+                "`X-Amzn-Trace-Id` do ALB lido por propagador e gravado no log",
+                "que o id chega no cabeçalho e não é a aplicação que o inventa"
+              ],
+              [
+                "Trace distribuído e propagação de contexto",
+                "DVA-C02, SAP-C02",
+                "propagador composto: formato AWS e `traceparent` do W3C",
+                "que instalar só um dos dois parte o trace em dois, sem erro nenhum"
+              ],
+              [
+                "Amostragem do X-Ray",
+                "DVA-C02, SOA-C02",
+                "primeira de cada segundo mais 5% das adicionais, no padrão do SDK",
+                "que amostragem é escolha de perguntas futuras, não configuração de volume"
+              ],
+              [
+                "Anotação vs. metadado",
+                "DVA-C02",
+                "anotação indexada para filtro, metadado só para leitura",
+                "que anotação é pesquisável e limitada a 50 por trace, e metadado não é pesquisável"
+              ],
+              [
+                "Métrica derivada de log",
+                "SOA-C02, DOP-C02",
+                "formato embutido pelo coletor e filtro de métrica no grupo de logs",
+                "quando cada um cabe: você controla o formato, ou não controla"
+              ],
+              [
+                "Cardinalidade de dimensão",
+                "SOA-C02, DOP-C02",
+                "a linha de `dimensions` que decide o custo do arquivo inteiro",
+                "que cada combinação distinta é uma métrica nova, e id único é a pior escolha"
+              ],
+              [
+                "Métrica, log e trace: qual pergunta cada um responde",
+                "SOA-C02, SAP-C02",
+                "três planos, três custos, três perguntas",
+                "que métrica não responde \"esta requisição\" e log não responde \"onde o tempo foi\""
+              ],
+              [
+                "Retenção de grupo de logs",
+                "SOA-C02",
+                "dois grupos com retenções diferentes por propósito",
+                "que grupo sem retenção declarada guarda indefinidamente"
+              ],
+              [
+                "Sidecar de telemetria em ECS",
+                "DVA-C02, SAP-C02",
+                "contêiner do coletor com `essential = false`",
+                "por que marcar o coletor como essencial troca incidente de observação por incidente de disponibilidade"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica apresenta uma aplicação em contêiner com log em texto e pede a forma mais econômica de alarmar sobre uma condição que aparece na mensagem. A armadilha é escolher \"publicar métrica customizada da aplicação\", que funciona e acrescenta uma chamada de API por medição. A resposta esperada é derivar a métrica do log que já está sendo ingerido — por filtro de métrica quando você não controla o formato, ou pelo formato embutido quando controla. A segunda armadilha é a distinção entre 5xx do balanceador e 5xx do alvo, que aparece junto e é do L03."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito de observabilidade que não vira linha de configuração é aspiração. A coluna da direita é onde cada um deixou marca no desenho."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Do ticket ao salto que falhou",
+                "abaixo de 2 min, sem adivinhar horário",
+                "obriga identificador devolvido ao cliente e presente como CAMPO em toda linha — é o que descarta log de texto"
+              ],
+              [
+                "O trace da requisição reclamada tem de existir",
+                "100% dos erros e das lentas",
+                "obriga amostragem por CAUDA no coletor: a decisão por cabeça não sabe ainda se houve erro"
+              ],
+              [
+                "Custo de observabilidade",
+                "até 8% da fatura da aplicação",
+                "proíbe 100% de span indexado e proíbe dimensão de métrica de alta cardinalidade; empurra a métrica para ser derivada do log"
+              ],
+              [
+                "Detalhe da requisição individual",
+                "sempre disponível",
+                "log estruturado em 100%, não amostrado — é o plano barato o suficiente para não amostrar"
+              ],
+              [
+                "Latência acrescentada pela telemetria",
+                "desprezível na resposta ao cliente",
+                "coletor em sidecar, e não exportação direta do processo da API: lote e repetição saem do caminho da requisição"
+              ],
+              [
+                "Falha da telemetria não derruba a API",
+                "requisito absoluto",
+                "`essential = false` no contêiner do coletor, e exportador que descarta em vez de bloquear"
+              ],
+              [
+                "Repartir o tempo entre os saltos",
+                "obrigatório",
+                "instrumentação do cliente de banco e do cliente HTTP: sem subsegmento não há como separar lentidão de banco de lentidão de código"
+              ],
+              [
+                "Log não pode conter dado pessoal",
+                "exigência de conformidade",
+                "campo de negócio é identificador, nunca corpo de requisição; e a rota de saúde é filtrada da instrumentação"
+              ],
+              [
+                "Retenção diferenciada",
+                "14 dias para aplicação, 3 para o log que virou métrica",
+                "dois grupos de logs distintos, cada um com a sua retenção — não um grupo grande"
+              ],
+              [
+                "Ligar latência a deploy",
+                "desejável",
+                "o SHA da imagem entra como atributo de recurso na telemetria, reaproveitando o L03"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: muitos logs, nenhuma resposta"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem, e ele é legítimo como ponto de partida: registra de verdade, custa pouco em atenção e resolve o problema de depurar na própria máquina. O laboratório começa medindo o defeito, porque um número o torna discutível e \"o log é ruim\" não."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A mesma requisição, espalhada em linhas que não se ligam",
+            "caption": "Este desenho está em produção e registra tudo: nada aqui está desligado. O defeito não é ausência de log — é que nenhuma das quatro linhas que a requisição gerou sabe da existência das outras três. Percorra os passos e repare que o identificador de correlação JÁ CHEGOU no cabeçalho, e foi descartado pela própria aplicação.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente que abriu o ticket",
+                    "note": "tem na mão a hora aproximada e o texto do erro; nada disso é chave de busca"
+                  },
+                  {
+                    "id": "dev",
+                    "service": "ide",
+                    "label": "Dev com grep no terminal",
+                    "note": "a única ferramenta que o formato de texto permite é casar substring e recortar por hora"
+                  }
+                ]
+              },
+              {
+                "label": "Borda",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cf",
+                    "service": "cloudfront",
+                    "label": "CloudFront",
+                    "note": "gera o identificador de borda e o devolve na resposta; o log dela vive em outro lugar e ninguém abre"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "Application Load Balancer",
+                    "note": "acrescenta X-Amzn-Trace-Id em toda requisição, sem que ninguém peça — e a aplicação ignora"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "api",
+                    "service": "fargate",
+                    "label": "API .NET 8 em Fargate",
+                    "note": "escreve texto interpolado no stdout: legível para gente, opaco para consulta"
+                  },
+                  {
+                    "id": "db",
+                    "service": "rds",
+                    "label": "RDS PostgreSQL",
+                    "note": "a consulta lenta que causou o tempo esgotado não deixou nenhuma marca de duração"
+                  }
+                ]
+              },
+              {
+                "label": "Observação: um grupo de logs, e nada mais",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "logs",
+                    "service": "cloudwatch",
+                    "label": "CloudWatch Logs (texto)",
+                    "note": "guarda tudo e responde pouco: sem campo, cada evento é uma cadeia de caracteres inteira"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "cf",
+                "label": "GET /pedidos/8f3 — e o 500 que ele viu",
+                "style": "solid"
+              },
+              {
+                "from": "cf",
+                "to": "alb",
+                "label": "repassa, acrescentando o identificador de borda",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "api",
+                "label": "X-Amzn-Trace-Id: Root=1-67891233-abcdef…",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "db",
+                "label": "SELECT do pedido, sem duração medida",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "logs",
+                "label": "quatro linhas de texto por requisição",
+                "style": "dashed"
+              },
+              {
+                "from": "dev",
+                "to": "logs",
+                "label": "filter-log-events com \"error\" e um horário aproximado",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O identificador já existe, e a aplicação o joga fora",
+                "detail": "O ALB acrescenta ou atualiza `X-Amzn-Trace-Id` em toda requisição que recebe — não é opcional e não custa nada. O valor tem a forma `Root=1-<época em 8 hex>-<24 hex>`. Nada na aplicação lê esse cabeçalho, então o dado que ligaria as camadas chega e é descartado no primeiro salto.",
+                "nodes": [
+                  "alb",
+                  "api"
+                ],
+                "edges": [
+                  "alb>api"
+                ]
+              },
+              {
+                "label": "A borda tem OUTRO identificador, e ele não é o mesmo",
+                "detail": "O CloudFront identifica cada requisição de borda com o seu próprio valor, devolvido no cabeçalho da resposta e registrado no log de acesso dele. Esse valor não é o do ALB nem o da aplicação. Quem só guarda um dos três não consegue partir do que o cliente tem na mão e chegar ao código.",
+                "nodes": [
+                  "cf",
+                  "alb"
+                ],
+                "edges": [
+                  "cf>alb"
+                ]
+              },
+              {
+                "label": "Quatro linhas soltas em vez de um evento",
+                "detail": "\"recebi pedido\", \"consultando banco\", \"erro ao serializar\", \"devolvendo 500\" são quatro eventos independentes para o CloudWatch. Nenhum campo os une. Reconstruir a requisição é trabalho humano de leitura, e cresce linearmente com o volume — que é o oposto do que se quer de um sistema de consulta.",
+                "nodes": [
+                  "api",
+                  "logs"
+                ],
+                "edges": [
+                  "api>logs"
+                ]
+              },
+              {
+                "label": "O grep só sabe casar substring e recortar por hora",
+                "detail": "Com log de texto, as duas únicas dimensões de busca são \"contém isso\" e \"entre estes instantes\". Não há \"onde a rota é X e o status é 500 e o cliente é Y\", porque rota, status e cliente não são campos — são pedaços de frase. É a diferença entre um arquivo e um índice.",
+                "nodes": [
+                  "dev",
+                  "logs"
+                ],
+                "edges": [
+                  "dev>logs"
+                ]
+              },
+              {
+                "label": "Sob concorrência, o horário deixa de correlacionar",
+                "detail": "Com uma requisição por segundo, ordenar por horário quase funciona. Com trinta simultâneas em quatro tasks, as linhas de requisições diferentes se intercalam no mesmo milissegundo e a leitura por proximidade temporal passa a produzir histórias falsas — que é pior do que não ter resposta.",
+                "nodes": [
+                  "api",
+                  "logs"
+                ],
+                "edges": [
+                  "api>logs"
+                ]
+              },
+              {
+                "label": "A chamada ao banco não deixou rastro de tempo",
+                "detail": "A causa real era uma consulta de 4 s que estourou o tempo do cliente. Como ninguém mediu a duração da chamada, o log registra que houve erro e não registra ONDE o tempo foi gasto. A pergunta \"a lentidão é do banco ou da aplicação?\" não tem dado que a responda.",
+                "nodes": [
+                  "api",
+                  "db"
+                ],
+                "edges": [
+                  "api>db"
+                ]
+              },
+              {
+                "label": "Por que alguém instrumenta assim",
+                "detail": "Porque `Console.WriteLine($\"erro ao processar {id}\")` é uma linha, aparece na hora e resolve o problema de ontem — depurar na própria máquina. O custo só aparece quando o log deixa de ser lido por quem o escreveu e passa a ser consultado por quem está de plantão às três da manhã.",
+                "nodes": [
+                  "user",
+                  "cf"
+                ],
+                "edges": [
+                  "user>cf"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Antes de mudar qualquer coisa, meça duas grandezas: quanto tempo se leva para achar uma requisição específica, e qual fração dos eventos permite filtro por campo. As duas viram a linha de base."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "filename": "medir-a-cegueira.sh",
+            "code": "# Rode ANTES de instrumentar nada. Os numeros daqui sao a linha de base.\nGRUPO=/ecs/ffv-lab-api\n\n# 1. Quantos eventos por dia, e quantos GB. Da a escala do problema.\naws logs describe-log-groups --log-group-name-prefix \"$GRUPO\" \\\n  --query \"logGroups[].{grupo:logGroupName,bytes:storedBytes,ret:retentionInDays}\" \\\n  --output table\n# Na Cadencia: 3,4 GB/dia e retentionInDays NULO — guardando para sempre.\n\n# 2. Qual fracao dos eventos e JSON valido, ou seja, consultavel por campo.\n#    Com log de texto a resposta e zero, e o zero e o argumento deste modulo.\naws logs start-query --log-group-name \"$GRUPO\" \\\n  --start-time $(( $(date +%s) - 3600 )) --end-time $(date +%s) \\\n  --query-string 'fields @message\n    | filter ispresent(TraceId)\n    | stats count() as com_campo' --query queryId --output text\n# Na Cadencia: 0 de 87.412 eventos na ultima hora.\n\n# 3. Cronometre a busca de UMA requisicao conhecida. Faca voce mesmo, com\n#    relogio, partindo so de \"erro por volta das 14h22\".\n#    Na Cadencia: 3 dias, e a conclusao foi o adverbio \"provavelmente\"."
+          }
+        },
+        {
+          "id": "b4_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "Os dois defeitos deste desenho são diferentes, e confundi-los custa caro",
+            "content": "O primeiro é de FORMATO: texto interpolado não tem campo, então a única busca possível é substring. O segundo é de CORRELAÇÃO: nenhum evento carrega um identificador comum, então nem com campos você ligaria as linhas de uma mesma requisição. Trocar texto por JSON resolve só o primeiro — e é o meio-caminho mais comum, porque parece a mudança grande. Você fica com eventos bonitos e inconectáveis, e conclui que \"structured logging não ajudou\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça abaixo rastreia a uma linha da tabela de requisitos. A diferença estrutural em relação ao desenho anterior não é uma caixa a mais: a unidade de implantação passa a ter dois contêineres, e a telemetria sai por dois caminhos com preços diferentes."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Um identificador, dois planos de dados e uma pergunta respondível",
+            "caption": "A diferença estrutural não é uma caixa a mais: a task passa a ter DOIS contêineres, e a telemetria sai por dois caminhos com custos diferentes — log estruturado indexável e span amostrado. O que os une é o mesmo identificador, agora presente em toda linha e em todo span. Percorra os passos: cada peça rastreia a um requisito da tabela anterior.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente",
+                    "note": "recebe o identificador de correlação na resposta — é o que transforma o ticket em consulta"
+                  }
+                ]
+              },
+              {
+                "label": "Borda",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cf",
+                    "service": "cloudfront",
+                    "label": "CloudFront",
+                    "note": "o identificador de borda entra como campo do log estruturado, ligando o que a borda viu ao que a task viu"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — pública, duas AZs",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "Application Load Balancer",
+                    "note": "insere Root quando o cabeçalho não vinha e Self quando vinha; a aplicação passa a LER os dois"
+                  },
+                  {
+                    "id": "s3",
+                    "service": "s3",
+                    "label": "Access log do ALB",
+                    "note": "a única fonte que mede o tempo antes de a requisição chegar ao código, e traz o campo de trace"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada: UMA task, DOIS contêineres",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "api",
+                    "service": "fargate",
+                    "label": "Contêiner .NET 8",
+                    "note": "escreve JSON de uma linha com TraceId e SpanId injetados no escopo de toda mensagem"
+                  },
+                  {
+                    "id": "col",
+                    "service": "coletor",
+                    "label": "Sidecar coletor (ADOT)",
+                    "note": "tira do processo da aplicação a decisão de amostrar, o lote e a repetição de envio — falha dele não derruba a API"
+                  },
+                  {
+                    "id": "db",
+                    "service": "rds",
+                    "label": "RDS PostgreSQL",
+                    "note": "a chamada instrumentada vira subsegmento com duração: é o que separa lentidão de banco de lentidão de código"
+                  }
+                ]
+              },
+              {
+                "label": "Planos de dados da observação (regionais)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "logs",
+                    "service": "cloudwatch",
+                    "label": "CloudWatch Logs Insights",
+                    "note": "aceita consulta por campo porque o evento é JSON; é aqui que \"esta requisição\" vira filtro"
+                  },
+                  {
+                    "id": "spans",
+                    "service": "xray",
+                    "label": "X-Ray / Transaction Search",
+                    "note": "ingere 100% dos spans e indexa uma fração como resumo — separar as duas coisas é o que controla o custo"
+                  },
+                  {
+                    "id": "met",
+                    "service": "metrica",
+                    "label": "Métrica derivada de EMF",
+                    "note": "nasce do mesmo evento de log, sem segunda chamada de API — barata em volume, caríssima em cardinalidade"
+                  },
+                  {
+                    "id": "alarme",
+                    "service": "alerta",
+                    "label": "Alarme por rota",
+                    "note": "dispara sobre a métrica derivada e carrega no corpo do aviso o filtro pronto de consulta"
+                  }
+                ]
+              },
+              {
+                "label": "Quem pergunta",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "eng",
+                    "service": "plantao",
+                    "label": "Plantão",
+                    "note": "o critério de aceite do laboratório é o caminho dele: do ticket ao span em duas consultas"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "cf",
+                "label": "GET /pedidos/8f3, com traceparent se o cliente tiver",
+                "style": "solid"
+              },
+              {
+                "from": "cf",
+                "to": "alb",
+                "label": "repassa com o identificador de borda no cabeçalho",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "api",
+                "label": "X-Amzn-Trace-Id: Root=… (ou Self=…;Root=…)",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "s3",
+                "label": "linha de acesso com o campo de trace e o tempo de alvo",
+                "style": "dashed"
+              },
+              {
+                "from": "api",
+                "to": "db",
+                "label": "consulta instrumentada: subsegmento com duração",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "logs",
+                "label": "JSON de uma linha por evento, com TraceId em todos",
+                "style": "dashed"
+              },
+              {
+                "from": "api",
+                "to": "col",
+                "label": "OTLP em gRPC na 4317, dentro da própria task",
+                "style": "dashed"
+              },
+              {
+                "from": "col",
+                "to": "spans",
+                "label": "span exportado: 100% ingerido, fração indexada",
+                "style": "dashed"
+              },
+              {
+                "from": "col",
+                "to": "met",
+                "label": "EMF no log: a métrica nasce do evento que já ia ser escrito",
+                "style": "dashed"
+              },
+              {
+                "from": "met",
+                "to": "alarme",
+                "label": "p99 e taxa de falha por rota, não por requisição",
+                "style": "solid"
+              },
+              {
+                "from": "alarme",
+                "to": "eng",
+                "label": "aviso com a consulta pronta, não com \"erro em produção\"",
+                "style": "solid"
+              },
+              {
+                "from": "eng",
+                "to": "logs",
+                "label": "filter @TraceId = … — um campo, não um grep",
+                "style": "solid"
+              },
+              {
+                "from": "eng",
+                "to": "spans",
+                "label": "abre o trace e vê em qual salto os 4 s foram",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O identificador entra antes do seu código, e agora é lido",
+                "detail": "O ALB continua fazendo o que já fazia: `Root=` quando o cabeçalho não vinha, `Self=` inserido na frente quando já vinha um `Root`. A mudança está na aplicação, que extrai esse valor com um propagador e o adota como contexto do trace em vez de gerar um id novo — que é o que quebra a cadeia em dois.",
+                "nodes": [
+                  "alb",
+                  "api"
+                ],
+                "edges": [
+                  "alb>api"
+                ]
+              },
+              {
+                "label": "Três identificadores, e você grava os três no mesmo evento",
+                "detail": "O de borda vem do CloudFront, o de balanceador vem do `X-Amzn-Trace-Id` e o de negócio é o seu (id do pedido, do cliente). Gravar os três como campos do log estruturado é o que permite entrar pela ponta que o reclamante tem na mão. O access log do ALB fecha a lacuna de tempo que antecede o código.",
+                "nodes": [
+                  "cf",
+                  "alb",
+                  "s3"
+                ],
+                "edges": [
+                  "cf>alb",
+                  "alb>s3"
+                ]
+              },
+              {
+                "label": "O mesmo id vai para o span E para a linha de log",
+                "detail": "Esta é a peça que costuma faltar. Trace sem log dá o mapa e não dá o detalhe; log sem trace dá o detalhe e não dá o mapa. Com o id nos dois, o span diz que o salto do banco levou 4 s e o log diz qual consulta era e com qual parâmetro. Um sem o outro é meio diagnóstico.",
+                "nodes": [
+                  "api",
+                  "logs",
+                  "col"
+                ],
+                "edges": [
+                  "api>logs",
+                  "api>col"
+                ]
+              },
+              {
+                "label": "A amostragem decide o que você poderá perguntar depois",
+                "detail": "Amostrar não é economizar bytes: é escolher, hoje, quais perguntas terão resposta amanhã. Com 5% de amostragem, o trace da requisição que o cliente reclamou tem 95% de chance de não existir. Por isso o laboratório separa os dois planos: log estruturado em 100% e span amostrado, com regra que força 100% no que é erro.",
+                "nodes": [
+                  "col",
+                  "spans"
+                ],
+                "edges": [
+                  "col>spans"
+                ]
+              },
+              {
+                "label": "A métrica nasce do log, não de uma segunda chamada de API",
+                "detail": "O evento que já ia para o CloudWatch Logs sai no formato de métrica embutida, e o CloudWatch extrai o valor numérico dele. Você paga a ingestão do log — que ia pagar de todo modo — em vez de somar uma chamada por medição. A conta muda de sinal quando a dimensão tem cardinalidade alta, e a seção de custo mostra onde.",
+                "nodes": [
+                  "col",
+                  "met"
+                ],
+                "edges": [
+                  "col>met"
+                ]
+              },
+              {
+                "label": "O banco deixa de ser caixa preta",
+                "detail": "A instrumentação do cliente de banco cria um subsegmento por consulta, com início e fim. É isso que responde \"a lentidão é do banco ou da aplicação?\" sem adivinhação — a soma dos subsegmentos contra a duração do segmento pai reparte o tempo entre os saltos.",
+                "nodes": [
+                  "api",
+                  "db"
+                ],
+                "edges": [
+                  "api>db"
+                ]
+              },
+              {
+                "label": "A pergunta do plantão é sobre UMA requisição, e ela tem resposta",
+                "detail": "O alarme dispara sobre a métrica agregada, porque alarme sobre requisição individual é ruído. Mas o corpo do aviso traz o filtro pronto: duas consultas depois — uma no log por `TraceId`, outra no trace — o plantão sabe qual salto falhou e com qual parâmetro. É o entregável deste laboratório.",
+                "nodes": [
+                  "alarme",
+                  "eng",
+                  "logs",
+                  "spans"
+                ],
+                "edges": [
+                  "alarme>eng",
+                  "eng>logs",
+                  "eng>spans"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Repare no que NÃO mudou: continua sendo uma task em Fargate, com o mesmo ALB e o mesmo banco. Observabilidade não é uma arquitetura nova — é um plano de dados acrescentado ao lado do plano de aplicação. O erro de leitura mais comum aqui é achar que o coletor está no caminho da requisição; ele não está, e é justamente por isso que uma falha dele não devolve erro ao cliente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "A decisão que define este desenho, em uma frase",
+            "content": "Log estruturado em 100% e span amostrado. As duas perguntas têm preços diferentes: \"o que aconteceu nesta requisição\" precisa de todas as requisições, e o log é barato o suficiente para não amostrar; \"como o sistema se comporta\" precisa de uma amostra representativa, e o span é caro o suficiente para amostrar. Quem amostra os dois perde a requisição reclamada; quem não amostra nenhum estoura o orçamento de 8%."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "A vida de um identificador, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O identificador não nasce no seu código, e essa é a informação mais útil desta seção. O ALB acrescenta ou atualiza "
+              },
+              {
+                "text": "X-Amzn-Trace-Id",
+                "code": true
+              },
+              {
+                "text": " em toda requisição que recebe, com o formato "
+              },
+              {
+                "text": "Campo=versão-tempo-id",
+                "code": true
+              },
+              {
+                "text": ": versão sempre 1, tempo em 8 dígitos hexadecimais representando a época em segundos, e id em 24 dígitos hexadecimais. Quando o cabeçalho não vinha, ele cria um campo "
+              },
+              {
+                "text": "Root",
+                "code": true
+              },
+              {
+                "text": ". Quando já vinha com um "
+              },
+              {
+                "text": "Root",
+                "code": true
+              },
+              {
+                "text": ", ele insere um campo "
+              },
+              {
+                "text": "Self",
+                "code": true
+              },
+              {
+                "text": " na frente e preserva o resto — inclusive campos arbitrários que a sua aplicação tenha acrescentado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "A vida de um identificador de correlação, do clique ao painel",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "A borda recebe e identifica",
+                "desc": "O CloudFront atribui um identificador à requisição de borda, devolve-o no cabeçalho da resposta e registra a linha no log de acesso dele. Este id NÃO é o mesmo do balanceador — é o primeiro dos três que você vai correlacionar."
+              },
+              {
+                "label": "O ALB acrescenta ou atualiza X-Amzn-Trace-Id",
+                "desc": "Se o cabeçalho não vinha, o balanceador cria `Root=1-<época em 8 hex>-<24 hex>`. Se já vinha com `Root`, ele INSERE um campo `Self` na frente e preserva o resto, inclusive campos próprios da aplicação. Isso acontece na entrada, nunca na resposta."
+              },
+              {
+                "label": "O propagador adota o contexto em vez de criar um novo",
+                "desc": "A aplicação lê o cabeçalho com um propagador composto, que entende tanto o formato da AWS quanto o `traceparent` do W3C. Gerar um id novo aqui é o defeito que produz dois traces de um span cada, sem aresta entre eles."
+              },
+              {
+                "label": "O escopo de log passa a carregar TraceId e SpanId",
+                "desc": "No .NET, a fábrica de log pode anexar automaticamente o id do `Activity` corrente a toda mensagem escrita dentro daquela requisição. Não é uma variável passada de método em método: é o escopo ambiental do fluxo de execução."
+              },
+              {
+                "label": "Cada chamada de saída cria um span filho e propaga o cabeçalho",
+                "desc": "Consulta ao banco, chamada HTTP a outro serviço, publicação em fila: cada uma vira um span com duração medida e leva o contexto adiante. É o que reparte o tempo total entre os saltos em vez de somá-lo num número só."
+              },
+              {
+                "label": "O coletor decide o que sai e em que formato",
+                "desc": "O sidecar recebe OTLP da aplicação, aplica a amostragem, agrupa em lote e exporta: span para o X-Ray e métrica no formato embutido para o CloudWatch Logs. Tirar isso do processo da API significa que uma indisponibilidade do backend de telemetria não vira latência na resposta ao cliente."
+              },
+              {
+                "label": "A métrica é extraída do log pela própria plataforma",
+                "desc": "O CloudWatch reconhece o objeto `_aws` no evento e publica os valores numéricos declarados como métrica. Você não fez uma segunda chamada: o mesmo evento serve de registro detalhado e de série temporal."
+              },
+              {
+                "label": "O plantão entra pelo id que o cliente devolveu",
+                "desc": "Duas consultas: uma no log por campo, que devolve todos os eventos daquela requisição em ordem; outra no trace, que mostra em qual salto o tempo foi. Nenhuma das duas é grep, e nenhuma depende de adivinhar o horário."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "http",
+            "filename": "cabecalhos-de-uma-requisicao.txt",
+            "code": "// Os tres identificadores que atravessam UMA requisicao, e por que sao tres.\n\n// ── 1. O que o cliente ve na resposta ────────────────────────────────────────\nHTTP/1.1 500 Internal Server Error\nX-Amz-Cf-Id: SLxU6dEQ4o8-Xz1kA9wV3rN7pQ==   // identificador da requisicao de borda\nX-Correlation-Id: 4bf92f3577b34da6a3ce929d0e0e4736  // devolvido pelo nosso middleware\n\n// ── 2. O que o ALB coloca a caminho do alvo ─────────────────────────────────\n// Cabecalho AUSENTE na entrada: o balanceador cria um campo Root.\nX-Amzn-Trace-Id: Root=1-67891233-abcdef012345678912345678\n//               ^versao 1  ^epoca em 8 digitos hex  ^id em 24 digitos hex\n\n// Cabecalho PRESENTE com Root: o balanceador INSERE Self na frente e preserva\n// o resto, inclusive campos que a sua aplicacao tenha acrescentado.\nX-Amzn-Trace-Id: Self=1-67891233-12456789abcdef012345678;Root=1-67891233-abcdef012345678912345678;CalledFrom=app\n\n// Ja com Sampled e Parent, quando vem de um servico instrumentado:\nX-Amzn-Trace-Id: Root=1-5759e988-bd862e3fe1be46a994272793;Parent=53995c3f42cd8ad8;Sampled=1\n\n// ── 3. O que um cliente moderno ou outro servico instrumentado manda ─────────\n// Formato W3C. Repare que ele NAO tem tempo embutido: e 32 hex aleatorios.\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\n//           ^versao ^trace-id (32 hex)          ^span-id (16 hex) ^flags: 01 = amostrado\n\n// A diferenca de formato tem consequencia pratica: o id do X-Ray carrega a epoca\n// nos seus 8 primeiros digitos hexadecimais e o do W3C nao carrega nada. E por\n// isso que existe um gerador de id \"no formato X-Ray\" nas extensoes AWS do\n// OpenTelemetry, e por isso que aceitar id em formato W3C foi uma capacidade que\n// precisou ser acrescentada ao lado do X-Ray, nao algo que ja vinha de graca.\n"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "Três limites do rastreamento do ALB que a documentação declara e quase ninguém lê",
+            "content": "O balanceador atualiza o cabeçalho na ENTRADA da requisição, nunca na resposta — então não espere correlacionar pelo caminho de volta. Se os cabeçalhos HTTP passarem de 7 KB, ele REESCREVE o `X-Amzn-Trace-Id` com um campo `Root` novo, o que significa perda silenciosa de correlação em requisição com muito cabeçalho ou cookie grande. E com WebSocket só há rastreamento até o upgrade ser bem-sucedido; depois disso o túnel não produz mais requisições para rastrear."
+          }
+        },
+        {
+          "id": "b6_4",
+          "type": "paragraph",
+          "position": 4,
+          "data": {
+            "content": [
+              {
+                "text": "O mesmo evento que vai para o log pode carregar a métrica embutida, e é assim que a série temporal nasce sem uma segunda chamada de API. O documento abaixo é um evento de log válido E a fonte de duas métricas: o objeto "
+              },
+              {
+                "text": "_aws",
+                "code": true
+              },
+              {
+                "text": " é o que instrui o CloudWatch a extrair os valores numéricos declarados."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_5",
+          "type": "code_block",
+          "position": 5,
+          "data": {
+            "language": "json",
+            "filename": "evento-com-metrica-embutida.json",
+            "code": "{\n  \"_aws\": {\n    \"Timestamp\": 1786000951418,\n    \"CloudWatchMetrics\": [\n      {\n        \"Namespace\": \"ApiPedidos\",\n        \"Dimensions\": [ [ \"http.route\", \"http.status_code\" ] ],\n        \"Metrics\": [\n          { \"Name\": \"http.server.request.duration\", \"Unit\": \"Milliseconds\" },\n          { \"Name\": \"db.query.duration\",            \"Unit\": \"Milliseconds\" }\n        ]\n      }\n    ]\n  },\n\n  \"http.route\": \"/api/pedidos/{id}\",\n  \"http.status_code\": \"500\",\n\n  \"http.server.request.duration\": 4213,\n  \"db.query.duration\": 4098,\n\n  \"TraceId\": \"4bf92f3577b34da6a3ce929d0e0e4736\",\n  \"PedidoId\": \"8f3a1c22-0d41-4d9e-9c17-0b2f4a6e5d10\",\n  \"AwsCloudFrontRequestId\": \"SLxU6dEQ4o8-Xz1kA9wV3rN7pQ==\"\n}\n"
+          }
+        },
+        {
+          "id": "b6_6",
+          "type": "callout",
+          "position": 6,
+          "data": {
+            "variant": "info",
+            "title": "Leia a linha de dimensões como uma linha de custo",
+            "content": "Cada DimensionSet usado cria uma métrica nova no CloudWatch. Com `http.route` e `http.status_code`, o número de séries é rota vezes status — dezenas. Acrescente `PedidoId` à lista de dimensões e passa a ser uma série por pedido: a documentação do formato embutido avisa esse caso com nome e tudo, usando `requestId` como exemplo. Repare que `TraceId` e `PedidoId` estão no evento como campos comuns, e é onde eles devem estar: consultáveis no log, filtráveis, e fora da identidade da métrica."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Uma API .NET 8 em ECS Fargate atrás de ALB e CloudFront, com 500 mil requisições por dia, dois engenheiros em plantão alternado e um erro 500 relatado pelo cliente que ninguém consegue localizar no log de texto.",
+            "winner": "OpenTelemetry na aplicação com propagador composto, sidecar coletor por task, log estruturado em 100% com o trace id em todo evento e span amostrado com regra que força 100% no erro",
+            "why": "A pergunta que precisa de resposta é sobre UMA requisição, e só um identificador compartilhado a responde. A escolha de instrumentar com OpenTelemetry em vez do SDK do X-Ray não é preferência de moda: é o que permite trocar o destino da telemetria mudando a configuração do coletor, sem tocar no código da aplicação — e a decisão de para onde mandar telemetria muda mais vezes do que a de como produzi-la. O sidecar existe para que amostragem, lote e repetição de envio saiam do processo que atende o cliente. E o log fica em 100% enquanto o span é amostrado porque as duas perguntas têm preços diferentes: \"o que aconteceu nesta requisição\" precisa de todas, \"como o sistema se comporta\" precisa de uma amostra representativa.",
+            "alternatives": [
+              {
+                "name": "SDK do X-Ray direto na aplicação",
+                "downside": "Menos peças e funciona. O custo é acoplamento: o formato de span, o destino e a semântica de atributo passam a estar no seu código, e trocar de backend de observabilidade vira refatoração. Legítimo quando o compromisso com a AWS é explícito e a equipe é pequena."
+              },
+              {
+                "name": "Coletor central compartilhado, em vez de sidecar por task",
+                "downside": "Economiza CPU e memória duplicadas e centraliza a configuração. Em troca, passa a ser ponto único de falha e de saturação para toda a frota, e uma perda dele apaga a telemetria de todo mundo ao mesmo tempo — exatamente quando você mais precisa dela."
+              },
+              {
+                "name": "Exportar direto da aplicação, sem coletor",
+                "downside": "Uma peça a menos, e é o desenho mínimo deste módulo levado a sério. O problema é que a amostragem, o lote e a repetição de envio passam a rodar no mesmo processo que atende o cliente: uma lentidão no backend de telemetria vira latência na resposta."
+              },
+              {
+                "name": "Log em texto com padrão de linha e um filtro de métrica",
+                "downside": "É o caminho mais curto de sair do zero, e continua sendo a resposta certa para uma aplicação com um único componente. Ele não sobrevive ao segundo serviço: sem contexto propagado, não existe trace distribuído, e a correlação volta a ser por horário."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Como instrumentar",
+                "OpenTelemetry na aplicação",
+                "SDK do X-Ray; agente sem código; nada",
+                "o destino da telemetria muda mais vezes que a forma de produzi-la, e o coletor absorve essa mudança",
+                "mais peças e uma curva de aprendizado de conceito (span, propagador, exportador)"
+              ],
+              [
+                "Onde amostrar",
+                "no coletor, por cauda",
+                "no SDK, por cabeça; amostragem remota do X-Ray",
+                "decidir depois de o trace fechar é o que permite guardar 100% dos erros",
+                "o coletor precisa manter o trace em memória até decidir, e traces muito longos podem expirar"
+              ],
+              [
+                "Onde o coletor roda",
+                "sidecar por task",
+                "serviço central compartilhado; sem coletor",
+                "falha e saturação ficam contidas na task, e a configuração viaja com a aplicação",
+                "CPU e memória duplicadas em cada task, e uma alteração de configuração exige novo deploy"
+              ],
+              [
+                "Como o log sai",
+                "JSON de uma linha no stdout, driver awslogs",
+                "agente de log próprio; escrita direta na API do CloudWatch",
+                "o contêiner não precisa saber onde o log vai parar, e a plataforma cuida do transporte",
+                "o formato de uma linha é obrigatório, e JSON identado quebraria cada evento em vários"
+              ],
+              [
+                "De onde vem a métrica",
+                "derivada do log em formato embutido",
+                "métrica customizada por chamada de API; filtro de métrica",
+                "aproveita a ingestão que já ia acontecer, sem somar chamada por medição",
+                "a métrica só existe se o log for ingerido: retenção zero no grupo mataria a fonte"
+              ],
+              [
+                "Quanto do span indexar",
+                "fração pequena, com 100% ingerido",
+                "indexar 100%; não usar busca por transação",
+                "ver um trace específico e procurar traces com um padrão são perguntas de preços diferentes",
+                "a busca por atributo só alcança a fração indexada — o trace existe, mas não é encontrável por filtro"
+              ],
+              [
+                "Quais atributos indexar como anotação",
+                "loja e ambiente",
+                "indexar o id do pedido; não indexar nada",
+                "anotação serve para AGRUPAR traces, e o limite é de 50 por trace",
+                "filtrar traces por pedido específico deixa de ser possível — e para isso existe o log"
+              ],
+              [
+                "O que devolver ao cliente",
+                "o trace id, em cabeçalho de resposta",
+                "nada; um id interno próprio",
+                "transforma \"deu erro no seu site\" em uma chave de busca exata",
+                "nada de relevante: o trace id não contém dado do usuário, e expô-lo não abre superfície"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este desenho cria, e que ele não paga",
+            "content": "Com o trace id na resposta e nos dois planos de dados, você passa a ter capacidade de reconstruir o comportamento de um usuário identificado. Isso é poder de diagnóstico e é risco de privacidade ao mesmo tempo. A regra que fica: identificador de recurso (pedido, loja) pode entrar como campo; conteúdo de requisição, cabeçalho de autorização e dado pessoal, não. Quem trata isso a sério faz mascaramento na saída do coletor, e isso é assunto do L52 junto com governança de dado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: log estruturado com escopo de requisição"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A parte que costuma faltar não é o JSON — é o escopo. Sem ele, você escreve eventos estruturados que não sabem a qual requisição pertencem, e o defeito de correlação sobrevive ao upgrade de formato. No .NET a ligação se faz com "
+              },
+              {
+                "text": "ActivityTrackingOptions",
+                "code": true
+              },
+              {
+                "text": ", que instrui a fábrica de log a anexar o "
+              },
+              {
+                "text": "TraceId",
+                "code": true
+              },
+              {
+                "text": " e o "
+              },
+              {
+                "text": "SpanId",
+                "code": true
+              },
+              {
+                "text": " do "
+              },
+              {
+                "text": "Activity",
+                "code": true
+              },
+              {
+                "text": " corrente a toda mensagem escrita dentro daquele fluxo de execução."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O mecanismo importa mais que a linha: o "
+              },
+              {
+                "text": "Activity.Current",
+                "code": true
+              },
+              {
+                "text": " é ambiental — vive no contexto de execução assíncrono, e não num parâmetro. É por isso que a rota não precisa receber nem repassar identificador nenhum, e é por isso que a correlação sobrevive a "
+              },
+              {
+                "text": "await",
+                "code": true
+              },
+              {
+                "text": " e a chamadas em profundidade."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "csharp",
+            "filename": "Program.cs",
+            "code": "// Program.cs — a configuração real do log estruturado com escopo de requisição.\n// Não é \"use Serilog\": é a fábrica de log do proprio .NET anexando o contexto do\n// Activity corrente a TODA mensagem escrita dentro da requisicao.\n\nusing System.Diagnostics;\nusing OpenTelemetry.Trace;\nusing OpenTelemetry.Metrics;\nusing OpenTelemetry.Resources;\n\nvar builder = WebApplication.CreateBuilder(args);\n\n// ── 1. O elo que quase todo mundo esquece ────────────────────────────────────\n// ActivityTrackingOptions faz a fabrica de log ler o Activity.Current e anexar\n// TraceId e SpanId como ESCOPO de cada mensagem. Sem esta linha voce tem trace\n// bonito no X-Ray e log sem trace id nenhum — o pior dos dois mundos, porque\n// cada metade responde a uma pergunta e nenhuma responde a sua.\nbuilder.Logging.Configure(o =>\n    o.ActivityTrackingOptions = ActivityTrackingOptions.TraceId\n                              | ActivityTrackingOptions.SpanId\n                              | ActivityTrackingOptions.ParentId);\n\n// ── 2. Uma linha de JSON por evento, e por que UMA linha ─────────────────────\n// O driver awslogs quebra a saida por salto de linha: um JSON identado viraria\n// N eventos invalidos no CloudWatch, cada um com um fragmento do objeto. Indented\n// = false nao e estetica, e requisito do transporte.\nbuilder.Logging.ClearProviders();\nbuilder.Logging.AddJsonConsole(o =>\n{\n    o.IncludeScopes = true;   // sem isto, TraceId fica no escopo e nao no evento\n    o.UseUtcTimestamp = true; // fuso local em log distribuido e fonte de erro de leitura\n    o.JsonWriterOptions = new System.Text.Json.JsonWriterOptions { Indented = false };\n});\n\n// ── 3. Propagador COMPOSTO: aceita os dois formatos que chegam ───────────────\n// O ALB fala X-Amzn-Trace-Id; um cliente moderno ou outro servico instrumentado\n// fala traceparent (W3C). Instalar so um dos dois propagadores e a causa numero\n// um de \"trace quebrado em dois\": o contexto que chegou nao e reconhecido, um id\n// novo e criado, e o mapa perde a aresta.\n//\n// INCERTEZA DECLARADA: o pacote NuGet que traz o propagador da AWS e o gerador de\n// id no formato do X-Ray mudou de nome entre versoes (ja se chamou\n// OpenTelemetry.Contrib.Extensions.AWSXRay). Confira o nome atual no NuGet antes\n// de copiar o `using` — o MECANISMO abaixo nao muda, o pacote sim.\nbuilder.Services.AddOpenTelemetry()\n    .ConfigureResource(r => r\n        .AddService(serviceName: \"api-pedidos\",\n                    serviceVersion: builder.Configuration[\"SHA_DA_IMAGEM\"] ?? \"dev\")\n        // O SHA como versao do recurso e o que permite perguntar \"esta latencia\n        // apareceu com qual deploy?\" — liga observabilidade a entrega (L03).\n        .AddAttributes(new Dictionary<string, object>\n        {\n            [\"deployment.environment\"] = builder.Environment.EnvironmentName,\n        }))\n    .WithTracing(t => t\n        .AddAspNetCoreInstrumentation(o =>\n        {\n            // Health check gera trace inutil em volume alto: e a maior fonte de\n            // span sem valor numa API atras de ALB verificando a cada 5 s.\n            o.Filter = ctx => !ctx.Request.Path.StartsWithSegments(\"/health\");\n            // Enriquecer o span com o que o cliente tem na mao. Sem isto, nao ha\n            // como partir do ticket e chegar no trace.\n            o.EnrichWithHttpRequest = (activity, req) =>\n            {\n                var borda = req.Headers[\"X-Amz-Cf-Id\"].ToString();\n                if (!string.IsNullOrEmpty(borda))\n                    activity.SetTag(\"aws.cloudfront.request_id\", borda);\n            };\n        })\n        .AddHttpClientInstrumentation()\n        .AddNpgsql()                       // subsegmento por consulta, com duracao\n        .AddOtlpExporter())                // destino vem de OTEL_EXPORTER_OTLP_ENDPOINT\n    .WithMetrics(m => m\n        .AddAspNetCoreInstrumentation()\n        .AddRuntimeInstrumentation()\n        .AddOtlpExporter());\n\nvar app = builder.Build();\n\n// ── 4. Devolver o identificador ao cliente ───────────────────────────────────\n// E a peca que transforma \"deu erro no seu site\" em \"deu erro, o codigo e este\".\n// Sem ela, o ticket chega com um horario aproximado e a investigacao comeca por\n// adivinhacao. Devolver trace id NAO e vazamento: ele nao contem dado do usuario.\napp.Use(async (ctx, next) =>\n{\n    var trace = Activity.Current?.TraceId.ToString();\n    if (trace is not null)\n        ctx.Response.Headers[\"X-Correlation-Id\"] = trace;\n    await next();\n});\n\napp.MapGet(\"/api/pedidos/{id:guid}\", async (\n    Guid id, AppDb db, ILogger<Program> log) =>\n{\n    // Repare no que NAO esta aqui: nenhum trace id passado a mao. O escopo\n    // ambiental do Activity ja garante que este evento sai com TraceId e SpanId.\n    // Repare tambem no formato: {PedidoId} e um NOME DE CAMPO, nao interpolacao.\n    // `$\"pedido {id}\"` produziria uma cadeia de caracteres opaca, e a consulta\n    // por pedido voltaria a ser substring.\n    log.LogInformation(\"Consultando pedido {PedidoId}\", id);\n\n    var pedido = await db.Pedidos.FindAsync(id);\n    if (pedido is null)\n    {\n        // 404 e resultado esperado, nao falha: registrar como erro polui a taxa\n        // de erro e faz o alarme perder credibilidade.\n        log.LogInformation(\"Pedido {PedidoId} inexistente\", id);\n        return Results.NotFound();\n    }\n\n    // Atributo de negocio no span: e o que permite filtrar traces por cliente\n    // sem criar uma metrica por cliente. Atributo de span e barato; dimensao de\n    // metrica com a mesma cardinalidade seria ruinosa.\n    Activity.Current?.SetTag(\"pedido.id\", id.ToString());\n    Activity.Current?.SetTag(\"pedido.loja\", pedido.LojaId.ToString());\n\n    return Results.Ok(pedido);\n});\n\napp.MapHealthChecks(\"/health/ready\");\napp.Run();\n"
+          }
+        },
+        {
+          "id": "b8_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "A pegadinha do JSON identado",
+            "content": "O driver de log `awslogs` delimita eventos por salto de linha. Um JSON formatado com indentação vira N eventos no CloudWatch, cada um com um fragmento do objeto, e nenhum deles é JSON válido — então a consulta por campo falha em silêncio, sem erro, sem alarme e sem nada no console além de linhas soltas. `Indented = false` não é preferência de estilo: é requisito do transporte."
+          }
+        },
+        {
+          "id": "b8_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "Sobre o nome do pacote, e o que não foi verificado",
+            "content": "O mecanismo descrito acima — propagador composto, gerador de id em formato X-Ray e instrumentação do ASP.NET Core — é estável. O NOME dos pacotes NuGet das extensões AWS do OpenTelemetry mudou de lugar entre versões; um deles já se chamou `OpenTelemetry.Contrib.Extensions.AWSXRay`. Confira o nome atual no NuGet antes de copiar os `using`, e prefira configurar o propagador pela variável de ambiente `OTEL_PROPAGATORS`, que é padronizada e não depende do nome do pacote."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o mesmo evento, antes e depois"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Vale ver os dois lado a lado, porque a diferença não é de qualidade de redação. É que o segundo tem nomes, e nome é o que uma consulta pode referenciar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "javascript",
+            "filename": "o-mesmo-evento-nos-dois-formatos.js",
+            "code": "// O MESMO evento, nos dois formatos. A diferenca nao e estetica.\n\n// ── Antes: uma cadeia de caracteres. Legivel, inconsultavel. ─────────────────\n// 2026-08-07 14:22:31 ERRO ao processar pedido 8f3a-... para loja 42: timeout\n//\n// Para achar isto voce precisa saber a substring exata. Para contar quantos\n// aconteceram por loja, precisa de expressao regular sobre texto livre. Para\n// ligar a outra linha da mesma requisicao, precisa do horario e de sorte.\n\n// ── Depois: um objeto com campos. Um evento, N perguntas. ───────────────────\n{\n  \"Timestamp\": \"2026-08-07T14:22:31.4180000Z\",\n  \"LogLevel\": \"Error\",\n  \"Category\": \"Api.Pedidos\",\n  \"Message\": \"Falha ao consultar pedido\",\n  \"State\": {\n    \"PedidoId\": \"8f3a1c22-0d41-4d9e-9c17-0b2f4a6e5d10\",\n    \"LojaId\": 42\n  },\n  // Injetados pelo ActivityTrackingOptions: nao aparecem no codigo da rota.\n  \"Scopes\": [\n    { \"TraceId\": \"4bf92f3577b34da6a3ce929d0e0e4736\",\n      \"SpanId\":  \"00f067aa0ba902b7\",\n      \"ParentId\": \"0000000000000000\" }\n  ],\n  // O que o cliente tem na mao, gravado como campo — e a porta de entrada da\n  // investigacao quando o ticket nao traz horario preciso.\n  \"AwsCloudFrontRequestId\": \"SLxU6dEQ4o8-Xz1kA9wV\",\n  \"http.route\": \"/api/pedidos/{id}\",\n  \"http.status_code\": 500\n}\n\n// A consulta que o segundo formato permite e o primeiro nao, no Logs Insights:\n//\n//   fields @timestamp, Message, State.PedidoId\n//   | filter Scopes.0.TraceId = \"4bf92f3577b34da6a3ce929d0e0e4736\"\n//   | sort @timestamp asc\n//\n// Devolve a requisicao INTEIRA, em ordem, sem depender de horario. E o mesmo\n// dado de antes; o que mudou e que agora ele tem nome.\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta que se quer fazer",
+              "Com log de texto",
+              "Com log estruturado e correlacionado"
+            ],
+            "rows": [
+              [
+                "Todos os eventos desta requisição, em ordem",
+                "impossível: nada os liga além do horário aproximado",
+                "um filtro por `TraceId`, e a resposta vem ordenada"
+              ],
+              [
+                "Quantos erros por loja na última hora",
+                "expressão regular sobre texto livre, quebrando a cada mudança de redação",
+                "`stats count() by LojaId`, sobre um campo"
+              ],
+              [
+                "Este pedido específico já falhou antes",
+                "busca por substring do GUID, se ele estiver escrito na linha",
+                "filtro por `State.PedidoId` em qualquer janela"
+              ],
+              [
+                "Onde os 4 s foram gastos",
+                "não há dado: ninguém mediu duração de nada",
+                "o trace reparte entre os saltos, e o log diz qual consulta era"
+              ],
+              [
+                "A latência piorou com qual deploy",
+                "nenhuma relação entre log e versão",
+                "o SHA está como atributo de recurso em toda telemetria"
+              ],
+              [
+                "Quantos eventos não têm correlação",
+                "a pergunta não faz sentido: nenhum tem",
+                "`filter ispresent(...) = 0 | stats count()` — e a meta é zero"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b9_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "A regra prática que resume esta seção",
+            "content": "Sempre que você escrever interpolação de cadeia de caracteres dentro de uma chamada de log, você acabou de transformar um dado em texto. `log.LogInformation(\"pedido \" + id)` produz uma frase; `log.LogInformation(\"Consultando pedido {PedidoId}\", id)` produz um campo chamado `PedidoId` mais um modelo de mensagem reutilizável. O esforço é o mesmo e a diferença é permanente, porque log velho não se reescreve."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o coletor, a amostragem e a métrica derivada de log"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A amostragem é a decisão mais consequente deste arquivo, e ela não é uma configuração de volume: é a escolha de quais perguntas terão resposta depois. Com 5% uniforme, o trace da requisição que o cliente reclamou tem 95% de chance de não existir — e nenhuma ferramenta recupera o que não foi gravado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "A saída é decidir DEPOIS. A amostragem por cabeça escolhe na primeira requisição do trace, quando ainda não se sabe se houve erro; a amostragem por cauda espera o trace fechar e usa o resultado na decisão. O preço é que o coletor mantém o trace em memória durante a espera, e traces que demoram mais que essa janela são decididos incompletos."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "yaml",
+            "filename": "coletor.yaml",
+            "code": "# coletor.yaml — configuracao do ADOT collector rodando como sidecar da task.\n# Ele existe para que amostragem, lote e repeticao de envio NAO rodem no processo\n# que atende o cliente.\n\nreceivers:\n  otlp:\n    protocols:\n      grpc:\n        # 127.0.0.1 e nao 0.0.0.0: em modo awsvpc os dois conteineres da task\n        # compartilham a interface de rede, entao localhost basta — e expor em\n        # 0.0.0.0 abriria o receptor para qualquer coisa na sub-rede.\n        endpoint: 127.0.0.1:4317\n      http:\n        endpoint: 127.0.0.1:4318\n\nprocessors:\n  # Lote existe para trocar N chamadas pequenas por uma maior. Timeout curto\n  # mantem a telemetria util em incidente; lote grande economiza chamada.\n  batch/traces:\n    timeout: 5s\n    send_batch_size: 128\n\n  # Amostragem por CAUDA: decide DEPOIS de o trace terminar, entao pode usar o\n  # resultado na decisao. E a diferenca central em relacao a amostragem por\n  # cabeca, que decide na primeira requisicao e nao sabe ainda se houve erro.\n  tailsampling:\n    decision_wait: 10s\n    policies:\n      # 1. Tudo o que falhou: 100%. E a regra que garante que o trace da\n      #    requisicao reclamada pelo cliente EXISTE.\n      - name: erros-sempre\n        type: status_code\n        status_code: { status_codes: [ERROR] }\n      # 2. Tudo o que passou de 2 s: 100%. Lentidao e o segundo motivo de ticket.\n      - name: lentas-sempre\n        type: latency\n        latency: { threshold_ms: 2000 }\n      # 3. O resto: 5%. E a linha de base do comportamento normal — suficiente\n      #    para p99 e para o mapa de servicos, e e onde o custo mora.\n      - name: resto-amostrado\n        type: probabilistic\n        probabilistic: { sampling_percentage: 5 }\n\n  resourcedetection:\n    detectors: [env, ecs]   # preenche cluster, servico e task sem codigo\n\nexporters:\n  awsxray:\n    indexed_annotations: [pedido.loja, deployment.environment]\n    # Anotacao e indexada e serve de filtro; atributo comum vira metadado e nao\n    # e pesquisavel. Indexar `pedido.id` seria tentador e errado: o limite e de\n    # 50 anotacoes por trace, e id unico nao agrupa nada.\n\n  awsemf:\n    namespace: ApiPedidos\n    log_group_name: /ecs/api-pedidos/emf\n    dimension_rollup_option: NoDimensionRollup\n    metric_declarations:\n      # A escolha de dimensao E a decisao de custo deste arquivo. Rota x status\n      # sao dezenas de series. Trocar por id de cliente seriam milhares; por id\n      # de requisicao, uma serie por requisicao — a documentacao do formato\n      # embutido avisa exatamente isso.\n      - dimensions: [[http.route, http.status_code]]\n        metric_name_selectors: ['http.server.request.duration']\n\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [resourcedetection, tailsampling, batch/traces]\n      exporters: [awsxray]\n    metrics:\n      receivers: [otlp]\n      processors: [resourcedetection]\n      exporters: [awsemf]\n"
+          }
+        },
+        {
+          "id": "b10_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Estratégia de amostragem",
+              "Quando decide",
+              "O que ela garante",
+              "O que ela custa"
+            ],
+            "rows": [
+              [
+                "Por cabeça, taxa fixa",
+                "na primeira requisição do trace",
+                "volume previsível e nenhuma memória de estado",
+                "o trace do erro reclamado provavelmente não existe"
+              ],
+              [
+                "Por cabeça, com reservatório",
+                "na primeira requisição, com piso por segundo",
+                "que serviço de baixo tráfego não fique invisível",
+                "ainda não distingue erro de sucesso; é o padrão do SDK do X-Ray"
+              ],
+              [
+                "Por cauda, por política",
+                "após o trace fechar, na janela de espera",
+                "100% de erro e de lentidão, com amostra do resto",
+                "memória no coletor e traces mais longos que a janela decididos sem tudo"
+              ],
+              [
+                "Remota, por regra no serviço",
+                "no SDK, consultando regras centralizadas",
+                "mudar a taxa sem novo deploy da aplicação",
+                "a decisão continua por cabeça: não sabe se houve erro"
+              ],
+              [
+                "Nenhuma (100%)",
+                "não há decisão",
+                "todas as perguntas de trace têm resposta",
+                "é a linha da fatura que estoura o orçamento de 8% deste laboratório"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b10_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "Formato embutido, filtro de métrica ou métrica customizada: como escolher",
+            "content": "A pergunta que decide é quem controla o formato do log. Se é você, o formato embutido ganha: o valor numérico viaja no evento que já ia ser ingerido, sem chamada de API a mais, e você escolhe unidade e resolução. Se o log é de terceiro, de biblioteca ou de agente — formato que você não muda — o filtro de métrica sobre o grupo de logs é a ferramenta certa, e ela funciona por campo quando o log é JSON e por padrão de texto quando não é. A métrica customizada por chamada direta continua fazendo sentido em um caso: quando o valor não vem de um evento de log, como uma contagem periódica de estado que ninguém registraria de outro modo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: a task com dois contêineres, e o IAM de cada um"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Duas coisas aqui merecem atenção antes do código. A primeira é "
+              },
+              {
+                "text": "essential = false",
+                "code": true
+              },
+              {
+                "text": " no contêiner do coletor: com "
+              },
+              {
+                "text": "true",
+                "code": true
+              },
+              {
+                "text": ", uma falha da telemetria mata a task e você troca um incidente de observação por um incidente de disponibilidade. A segunda é que quem envia telemetria é a APLICAÇÃO, então a permissão vai no papel da task — não no papel de execução, que é o do agente do ECS. Trocar os dois é o erro mais comum desta banda."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "observabilidade.tf",
+            "code": "# observabilidade.tf — a task com dois conteineres, e o IAM que cada um precisa\n\n# ── Grupos de logs SEPARADOS, com retencoes diferentes ───────────────────────\n# Um grupo por proposito, porque retencao e uma decisao por proposito. Grupo\n# criado sem retention_in_days guarda PARA SEMPRE, e e a linha esquecida mais\n# comum da fatura de CloudWatch.\nresource \"aws_cloudwatch_log_group\" \"app\" {\n  name              = \"/ecs/${var.projeto}-api\"\n  retention_in_days = 14 # log de aplicacao raramente serve depois de 2 semanas\n  kms_key_id        = aws_kms_key.logs.arn\n}\n\nresource \"aws_cloudwatch_log_group\" \"emf\" {\n  name              = \"/ecs/${var.projeto}-api/emf\"\n  retention_in_days = 3 # o valor virou metrica; o log fonte nao precisa durar\n  kms_key_id        = aws_kms_key.logs.arn\n}\n\nresource \"aws_ecs_task_definition\" \"api\" {\n  family                   = \"${var.projeto}-api\"\n  requires_compatibilities = [\"FARGATE\"]\n  network_mode             = \"awsvpc\"\n  cpu                      = 1024 # +256 em relacao ao L01: o sidecar consome\n  memory                   = 2048\n  execution_role_arn       = aws_iam_role.execucao.arn\n  task_role_arn            = aws_iam_role.task.arn\n\n  container_definitions = jsonencode([\n    {\n      name      = \"api\"\n      image     = \"${var.repositorio}:${var.sha_da_imagem}\"\n      essential = true\n      portMappings = [{ containerPort = 8080, protocol = \"tcp\" }]\n\n      environment = [\n        { name = \"ASPNETCORE_URLS\", value = \"http://+:8080\" },\n        # localhost porque, em awsvpc, os dois conteineres da task compartilham\n        # a interface de rede. Nao ha salto de rede entre eles.\n        { name = \"OTEL_EXPORTER_OTLP_ENDPOINT\", value = \"http://127.0.0.1:4317\" },\n        # Propagador COMPOSTO. Manter so um dos dois e a causa numero um de\n        # trace partido: o contexto que chega nao e reconhecido e um id novo\n        # nasce no meio do caminho.\n        { name = \"OTEL_PROPAGATORS\", value = \"tracecontext,baggage,xray\" },\n        { name = \"OTEL_SERVICE_NAME\", value = \"${var.projeto}-api\" },\n        # O SHA entra na telemetria: e o que liga latencia a deploy (L03).\n        { name = \"SHA_DA_IMAGEM\", value = var.sha_da_imagem },\n      ]\n\n      logConfiguration = {\n        logDriver = \"awslogs\"\n        options = {\n          \"awslogs-group\"         = aws_cloudwatch_log_group.app.name\n          \"awslogs-region\"        = var.regiao\n          \"awslogs-stream-prefix\" = \"api\"\n        }\n      }\n\n      # A API nao sobe antes do coletor. Sem isto, os primeiros segundos de\n      # telemetria sao perdidos com recusa de conexao — e e justamente a partida\n      # que voce quer ver quando algo quebra no deploy.\n      dependsOn = [{ containerName = \"coletor\", condition = \"START\" }]\n    },\n    {\n      name = \"coletor\"\n      # Fixe a versao em vez de :latest, pelo mesmo motivo do L03: telemetria\n      # que muda de comportamento sozinha e pior que telemetria ausente.\n      image = \"public.ecr.aws/aws-observability/aws-otel-collector:v0.43.0\"\n\n      # essential = false E A DECISAO CENTRAL DESTE BLOCO. Com true, uma falha do\n      # coletor mata a task inteira e voce troca um incidente de observabilidade\n      # por um incidente de disponibilidade. Telemetria nao pode ser mais critica\n      # que o servico que ela observa.\n      essential = false\n\n      cpu    = 256\n      memory = 512\n\n      secrets = [{\n        # A configuracao vem por referencia de ARN, nunca em environment.\n        name      = \"AOT_CONFIG_CONTENT\"\n        valueFrom = aws_ssm_parameter.coletor.arn\n      }]\n\n      logConfiguration = {\n        logDriver = \"awslogs\"\n        options = {\n          \"awslogs-group\"         = aws_cloudwatch_log_group.app.name\n          \"awslogs-region\"        = var.regiao\n          \"awslogs-stream-prefix\" = \"coletor\"\n        }\n      }\n    },\n  ])\n}\n\n# ── IAM: quem escreve telemetria e a APLICACAO, nao o agente do ECS ──────────\ndata \"aws_iam_policy_document\" \"telemetria\" {\n  statement {\n    sid    = \"EnviarTraceParaXRay\"\n    effect = \"Allow\"\n    actions = [\n      \"xray:PutTraceSegments\",\n      \"xray:PutTelemetryRecords\",\n      \"xray:GetSamplingRules\",\n      \"xray:GetSamplingTargets\",\n      \"xray:GetSamplingStatisticSummaries\",\n    ]\n    # Nenhuma destas cinco acoes aceita recurso especifico: o X-Ray nao tem ARN\n    # de segmento nem de regra de amostragem a que se restringir. Escrever um ARN\n    # aqui nao estreitaria nada — nao autorizaria nada. E `*` por natureza da\n    # API, e esta frase e o que separa decisao de preguica.\n    resources = [\"*\"]\n  }\n\n  statement {\n    sid    = \"EscreverLogEEmf\"\n    effect = \"Allow\"\n    actions = [\n      \"logs:CreateLogStream\",\n      \"logs:PutLogEvents\",\n      \"logs:DescribeLogStreams\",\n    ]\n    # Aqui SIM ha recurso: os dois grupos, e nada mais. O exportador de metrica\n    # embutida escreve num deles, e nao tem por que alcancar outro grupo da conta.\n    resources = [\n      \"${aws_cloudwatch_log_group.app.arn}:*\",\n      \"${aws_cloudwatch_log_group.emf.arn}:*\",\n    ]\n  }\n}\n\n# Repare no que NAO esta na politica: cloudwatch:PutMetricData. A metrica deste\n# desenho nasce do log, entao a permissao de publicar metrica e desnecessaria.\n# Se um dia for preciso, ela tambem nao aceita recurso — mas aceita a chave de\n# condicao cloudwatch:namespace, que e como se estreita esse caso.\n\nresource \"aws_iam_role_policy\" \"telemetria\" {\n  role   = aws_iam_role.task.id\n  policy = data.aws_iam_policy_document.telemetria.json\n}\n\n# ── Alarme sobre a metrica DERIVADA do log ───────────────────────────────────\n# O namespace e o nome vem do exportador de metrica embutida do coletor. Se o\n# alarme ficar em INSUFFICIENT_DATA para sempre, a causa quase certa e o par\n# namespace/dimensao nao casar com o que o coletor declarou.\nresource \"aws_cloudwatch_metric_alarm\" \"p99_rota_pedidos\" {\n  alarm_name          = \"${var.projeto}-p99-pedidos\"\n  namespace           = \"ApiPedidos\"\n  metric_name         = \"http.server.request.duration\"\n  extended_statistic  = \"p99\"\n  period              = 60\n  evaluation_periods  = 3\n  threshold           = 2000\n  comparison_operator = \"GreaterThanThreshold\"\n  treat_missing_data  = \"notBreaching\"\n\n  dimensions = {\n    \"http.route\"       = \"/api/pedidos/{id}\"\n    \"http.status_code\" = \"200\"\n  }\n\n  # O corpo do aviso tem de trazer a consulta pronta. Alarme que diz \"erro em\n  # producao\" transfere ao plantao o trabalho de descobrir por onde comecar.\n  alarm_description = \"p99 da rota de pedidos acima de 2 s. Investigue com: fields @timestamp, Message | filter http.route = '/api/pedidos/{id}' | filter http.status_code >= 500 | sort @timestamp desc\"\n  alarm_actions     = [aws_sns_topic.alertas.arn]\n}\n\n# Filtro de metrica: o OUTRO jeito de derivar metrica de log, e ele serve para o\n# caso em que voce NAO controla o formato — log de terceiro, de biblioteca, de\n# agente. Aqui cabe porque a excecao nao passa pelo coletor.\nresource \"aws_cloudwatch_log_metric_filter\" \"excecao_nao_tratada\" {\n  name           = \"${var.projeto}-excecao-nao-tratada\"\n  log_group_name = aws_cloudwatch_log_group.app.name\n  # Padrao de JSON: consulta por CAMPO, nao por substring. Com log de texto este\n  # filtro so poderia casar cadeia de caracteres, e mudanca de redacao da\n  # mensagem o quebraria em silencio.\n  pattern = \"{ $.LogLevel = \\\"Critical\\\" }\"\n\n  metric_transformation {\n    name          = \"ExcecaoNaoTratada\"\n    namespace     = \"ApiPedidos\"\n    value         = \"1\"\n    default_value = \"0\" # sem isto, ausencia de erro vira ausencia de dado\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Onde",
+              "Parâmetro",
+              "Aqui",
+              "Por quê"
+            ],
+            "rows": [
+              [
+                "Contêiner do coletor",
+                "`essential`",
+                "`false`",
+                "telemetria não pode ser mais crítica que o serviço que ela observa"
+              ],
+              [
+                "Contêiner da API",
+                "`dependsOn` do coletor",
+                "condição `START`",
+                "sem isso, os primeiros segundos de telemetria somem em recusa de conexão — e é a partida que você quer ver"
+              ],
+              [
+                "Endpoint OTLP",
+                "destino do exportador",
+                "`127.0.0.1:4317`",
+                "em modo `awsvpc` os dois contêineres compartilham a interface de rede: não há salto"
+              ],
+              [
+                "Propagadores",
+                "`OTEL_PROPAGATORS`",
+                "`tracecontext,baggage,xray`",
+                "aceita o `traceparent` do W3C e o formato da AWS; só um dos dois parte o trace"
+              ],
+              [
+                "Papel",
+                "quem tem permissão de X-Ray",
+                "papel da TASK",
+                "quem envia span é a aplicação; o papel de execução é do agente, para imagem e log"
+              ],
+              [
+                "Grupo de logs da aplicação",
+                "`retention_in_days`",
+                "14",
+                "sem declarar, o grupo guarda indefinidamente — a linha esquecida mais comum"
+              ],
+              [
+                "Grupo de logs do formato embutido",
+                "`retention_in_days`",
+                "3",
+                "o valor já virou métrica, com retenção própria; o log fonte é rastro de curto prazo"
+              ],
+              [
+                "CPU e memória da task",
+                "acréscimo",
+                "+256 / +512",
+                "o sidecar consome de verdade; dimensionar a task igual à do L01 causa reinício por memória"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "O `*` da política, e por que ele não pode ser mais estreito",
+            "content": "As cinco ações de X-Ray usadas aqui não aceitam recurso específico: não existe ARN de segmento nem de regra de amostragem ao qual restringir a permissão. Escrever um ARN nessa declaração não estreitaria nada — não autorizaria nada. Já a declaração de log é o caso oposto e mostra o contraste: ela nomeia os dois grupos e nenhum outro. A regra não é \"nunca use `*`\"; é que todo `*` vem acompanhado da frase que explica por que não pode ser mais estreito. E note o que a política NÃO tem: `cloudwatch:PutMetricData`, porque a métrica deste desenho nasce do log. Se um dia fizer falta, ela também não aceita recurso, mas aceita a chave de condição `cloudwatch:namespace` — que é como se estreita esse caso."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar que a requisição é rastreável"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Todas têm número, e a última é o entregável do laboratório: partir do que um reclamante tem na mão e chegar ao salto que falhou em menos de dois minutos."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medicoes. Nenhuma conclusao vem de \"parece que funcionou\".\n\nPROJETO=ffv-lab; REGIAO=us-east-1\nGRUPO=\"/ecs/${PROJETO}-api\"\nURL=\"https://$(terraform output -raw dominio)/api/pedidos/8f3a1c22-0d41-4d9e-9c17-0b2f4a6e5d10\"\n\n# ── Prova 1: o identificador chega ao cliente e existe nos DOIS planos ───────\n# E o entregavel do laboratorio. Partimos so do que um reclamante teria na mao.\nCORR=$(curl -s -D - -o /dev/null \"$URL\" | awk -F': ' '/^[Xx]-[Cc]orrelation-[Ii]d/{print $2}' | tr -d '\\r')\necho \"identificador devolvido ao cliente: $CORR\"\n# Esperado: 32 caracteres hexadecimais. Se vier vazio, o middleware nao rodou ou\n# nao ha Activity corrente — a instrumentacao do ASP.NET Core nao esta ativa.\n[ \"${#CORR}\" -eq 32 ] || echo \"FALHA DA PROVA 1: esperado 32 chars, veio ${#CORR}\"\n\n# ── Prova 2: TODA linha de log tem o identificador. A meta e 0 sem. ──────────\n# Esta e a prova que separa \"instrumentei\" de \"correlacionei\". Um unico evento\n# sem TraceId e um ponto cego permanente naquela requisicao.\nCONSULTA_ID=$(aws logs start-query --log-group-name \"$GRUPO\" \\\n  --start-time \"$(($(date +%s) - 900))\" --end-time \"$(date +%s)\" \\\n  --query-string 'fields @message\n    | filter ispresent(Scopes.0.TraceId) = 0\n    | stats count() as sem_trace' \\\n  --query queryId --output text)\nsleep 8\naws logs get-query-results --query-id \"$CONSULTA_ID\" --output table\n# Esperado: sem_trace = 0 num total de centenas. Qualquer valor > 0 aponta log\n# escrito FORA do escopo da requisicao — tipicamente na partida ou num\n# BackgroundService, e nesses casos e legitimo: confira a categoria antes.\n\n# ── Prova 3: a amostragem faz aritmeticamente o que ela diz ─────────────────\n# 600 requisicoes em ~60 s, das quais 60 forcadas a erro. Com a regra por cauda\n# do coletor (100% de erro, 5% do resto), a conta esperada e:\n#   60 (erros) + 0,05 x 540 (~27) = ~87 traces, nao 600.\nfor i in $(seq 1 540); do curl -s -o /dev/null \"$URL\"; done &\nfor i in $(seq 1 60);  do curl -s -o /dev/null \"${URL}?forcar_erro=1\"; done\nwait\naws xray get-trace-summaries --region \"$REGIAO\" \\\n  --start-time \"$(($(date +%s) - 300))\" --end-time \"$(date +%s)\" \\\n  --query 'length(TraceSummaries)' --output text\n# Esperado: da ordem de 87, com tolerancia — a amostragem e estatistica, nao\n# cota. O que REPROVA e sair ~600 (amostragem nao aplicada, e a fatura vem\n# junto) ou sair ~30 (a regra de erro nao casou, e o trace que interessa nao\n# existe). Confira tambem que 100% dos 60 erros aparecem:\naws xray get-trace-summaries --region \"$REGIAO\" \\\n  --start-time \"$(($(date +%s) - 300))\" --end-time \"$(date +%s)\" \\\n  --filter-expression 'error = true OR fault = true' \\\n  --query 'length(TraceSummaries)' --output text\n# Esperado: 60. Menos que isso significa que a decisao por cauda expirou antes\n# de o trace fechar — aumente decision_wait.\n\n# ── Prova 4: a metrica derivada casa com a contagem no log ──────────────────\n# Duas fontes, um numero. Divergencia acima de 1% indica que o exportador de\n# metrica embutida esta descartando evento — quase sempre por dimensao ausente\n# no registro, que invalida o documento inteiro em silencio.\naws cloudwatch get-metric-statistics --namespace ApiPedidos \\\n  --metric-name 'http.server.request.duration' --statistics SampleCount \\\n  --start-time \"$(date -u -v-15M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '15 min ago' +%Y-%m-%dT%H:%M:%SZ)\" \\\n  --end-time \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" --period 900 \\\n  --dimensions Name=http.route,Value='/api/pedidos/{id}' Name=http.status_code,Value=200 \\\n  --query 'Datapoints[0].SampleCount' --output text\n# Compare com o count() do mesmo intervalo no grupo de logs. Diferenca < 1%.\n# Confira tambem se houve documento recusado: o CloudWatch publica falha de\n# extracao no namespace AWS/Logs.\n\n# ── Prova 5: do ticket ao span, em duas consultas e menos de 2 minutos ──────\n# A prova de que o LABORATORIO cumpriu o objetivo. Cronometre de verdade.\ninicio=$(date +%s)\naws logs start-query --log-group-name \"$GRUPO\" \\\n  --start-time \"$(($(date +%s) - 3600))\" --end-time \"$(date +%s)\" \\\n  --query-string \"fields @timestamp, Message, State.PedidoId, http.status_code\n    | filter Scopes.0.TraceId = '${CORR}'\n    | sort @timestamp asc\" --query queryId --output text\naws xray batch-get-traces --trace-ids \"$(aws xray get-trace-summaries \\\n    --start-time \"$(($(date +%s) - 3600))\" --end-time \"$(date +%s)\" \\\n    --query 'TraceSummaries[0].Id' --output text)\" \\\n  --query 'Traces[0].Segments[].Document' --output text | head -5\necho \"segundos do ticket ao span: $(( $(date +%s) - inicio ))\"\n# Esperado: abaixo de 120 s, e nenhuma das duas consultas usa horario como\n# filtro principal. Se voce precisou adivinhar a janela, a correlacao nao esta\n# no lugar — esta na sua cabeca.\n"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · O id chega ao cliente",
+                "ler o cabeçalho de resposta",
+                "32 caracteres hexadecimais em `X-Correlation-Id`",
+                "vazio significa que não havia `Activity` corrente: a instrumentação do ASP.NET Core não está ativa"
+              ],
+              [
+                "2 · Toda linha tem correlação",
+                "contagem de eventos sem `TraceId`",
+                "0 de centenas",
+                "qualquer valor acima de zero é log escrito fora do escopo da requisição — confira a categoria antes de tratar como defeito"
+              ],
+              [
+                "3 · A amostragem faz a aritmética",
+                "600 requisições, 60 com erro",
+                "da ordem de 87 traces, e 60 deles com falha",
+                "~600 significa amostragem não aplicada, e a fatura vem junto; ~30 significa que a regra de erro não casou, e o trace que importa não existe"
+              ],
+              [
+                "4 · A métrica casa com o log",
+                "contagem de amostras vs. `count()` no log",
+                "divergência abaixo de 1%",
+                "divergência maior indica documento de métrica embutida recusado, quase sempre por dimensão declarada e ausente no evento"
+              ],
+              [
+                "5 · Do ticket ao span",
+                "duas consultas, cronometradas",
+                "abaixo de 120 s, sem usar horário como filtro principal",
+                "se você precisou adivinhar a janela de tempo, a correlação está na sua cabeça e não no dado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "A prova 2 é a que separa instrumentar de correlacionar",
+            "content": "É comum passar na prova 1 e falhar na 2. O trace existe, o span está no X-Ray, o cliente recebeu um id — e metade das linhas de log não tem `TraceId`, porque foram escritas por um serviço em segundo plano, por um manipulador de exceção fora do escopo da requisição, ou por uma biblioteca que usa o seu próprio provedor de log. Cada uma dessas linhas é um ponto cego permanente naquela requisição, e ela some exatamente na investigação em que faria falta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três acontecem de verdade, e nenhuma delas gera erro. É a característica que as torna caras: a instrumentação parece funcionando até o dia em que você precisa dela."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Trace partido em dois",
+                "remova `xray` de `OTEL_PROPAGATORS` e chame a API passando por um serviço que só fala o formato da AWS",
+                "dois traces de um span cada, sem aresta entre eles; o mapa de serviços fica com nós soltos",
+                "o mapa de serviços e a contagem de spans por trace: um trace de um span numa chamada que teve dois saltos é o indício",
+                "propagador composto com os dois formatos; a variável `OTEL_PROPAGATORS` é o lugar mais estável de configurá-lo"
+              ],
+              [
+                "Span com trace, log sem trace",
+                "remova a linha de `ActivityTrackingOptions` e mantenha todo o resto",
+                "o X-Ray mostra o trace e a consulta por `TraceId` no log devolve zero eventos",
+                "a prova 2: a contagem de eventos sem o campo passa de 0 para 100%",
+                "reativar o rastreamento de atividade na fábrica de log; é uma linha e é o elo do módulo inteiro"
+              ],
+              [
+                "Explosão de cardinalidade de métrica",
+                "acrescente `TraceId` à lista de `dimensions` do exportador de métrica embutida e gere 1.000 requisições",
+                "nenhum erro; a fatura de métrica customizada cresce e o painel fica com mil séries de um ponto cada",
+                "`list-metrics` no namespace devolve número da ordem do número de requisições, e o namespace `AWS/Logs` acusa o processamento",
+                "dimensão é para AGRUPAR: rota, status, ambiente. Identificador único vira campo do evento, nunca dimensão"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A falha silenciosa que nenhuma das três cobre",
+            "content": "Um documento de métrica embutida com dimensão DECLARADA e ausente no evento é descartado inteiro — sem erro na aplicação, sem erro no coletor, sem métrica. O log continua lá, legível, e a série temporal simplesmente não existe, o que aparece como alarme preso em dados insuficientes. É por isso que a prova 4 compara duas fontes: a única maneira de detectar isso é conferir que o número da métrica casa com o número do log. O CloudWatch publica falha de extração no namespace `AWS/Logs`, e vale alarmar sobre ela."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Uma API .NET 8 em Fargate tem OpenTelemetry ativo, os traces aparecem completos no X-Ray e o log já sai em JSON. Mesmo assim, a consulta `filter Scopes.0.TraceId = \"...\"` no Logs Insights devolve zero eventos. Qual é a causa mais provável?",
+        "options": [
+          "O grupo de logs precisa de um filtro de métrica para expor campos à consulta",
+          "A fábrica de log não está anexando o contexto do Activity ao escopo das mensagens",
+          "A amostragem descartou a requisição, então o log dela não foi ingerido",
+          "O propagador está incompleto e o contexto se perdeu no salto de entrada"
+        ],
+        "correctIndex": 1,
+        "explanation": "O enunciado já descarta quase tudo: os traces estão completos, então a propagação funciona, e o log é JSON, então o formato está resolvido. O que falta é o ELO entre os dois — a fábrica de log tem de ser instruída a anexar o `TraceId` e o `SpanId` do `Activity` corrente ao escopo de cada mensagem, com `ActivityTrackingOptions` e `IncludeScopes = true`. Sem essa linha você fica com trace sem detalhe e log sem trace, que é exatamente o pior dos dois mundos, porque cada metade parece quase suficiente.\n\nA primeira alternativa confunde os dois planos de dados: amostragem age sobre span, não sobre log — o log sai pelo driver do contêiner em cem por cento e nenhuma regra de amostragem de trace o alcança. A terceira alternativa inverte o que um filtro de métrica faz: ele extrai valores numéricos de eventos para criar série temporal, e não tem nenhum papel em tornar campo consultável; num evento JSON os campos já são consultáveis por natureza. A quarta alternativa descreve um defeito real, e é justamente o que o enunciado nega ao dizer que os traces aparecem completos: propagador incompleto produziria traces partidos, com nós soltos no mapa de serviços, e não traces completos com log sem correlação."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: telemetria é dado sensível e é vetor"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Observabilidade cria duas superfícies novas ao mesmo tempo. Uma é de vazamento: o log passa a ser o lugar mais provável de um dado pessoal aparecer sem intenção. A outra é de abuso: o cabeçalho de rastreamento vem do cliente, e cliente é entrada não confiável."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Cliente forja o cabeçalho de rastreamento para forçar amostragem de 100%",
+                "baixa",
+                "médio",
+                "remover `X-Amzn-Trace-Id` de entrada na borda quando a origem não é confiável — a própria documentação do X-Ray recomenda isso",
+                "volume de traces desproporcional ao volume de requisições",
+                "descartar o cabeçalho de entrada e reamostrar no coletor, que decide por conta própria"
+              ],
+              [
+                "Dado pessoal em campo de log",
+                "alta",
+                "alto",
+                "registrar identificador de recurso, nunca corpo de requisição nem cabeçalho de autorização; revisão de código no que se loga",
+                "busca por padrão de documento, cartão e endereço de e-mail no grupo de logs",
+                "apagar o fluxo de log afetado, encurtar retenção e mascarar na saída do coletor"
+              ],
+              [
+                "Segredo em variável de ambiente aparecendo na telemetria",
+                "média",
+                "alto",
+                "configuração do coletor por referência de ARN em `secrets`, nunca em `environment`; nada de despejar o ambiente no log de partida",
+                "CloudTrail em leitura de parâmetro e busca por prefixo de credencial no log",
+                "rotacionar o segredo — presumir que log lido é log copiado"
+              ],
+              [
+                "Log sem cifragem em repouso",
+                "média",
+                "médio",
+                "chave gerenciada pelo cliente no grupo de logs, com política que separa quem lê de quem administra",
+                "auditar grupos sem `kmsKeyId` na conta",
+                "associar a chave; o histórico já ingerido continua com a cifragem anterior"
+              ],
+              [
+                "Trace id como identificador de sessão",
+                "baixa",
+                "alto",
+                "nunca usar o trace id em decisão de autorização: ele é público por desenho e vai no cabeçalho da resposta",
+                "revisão de código em qualquer uso de trace id fora de log e telemetria",
+                "remover o uso; tratar como se o valor tivesse sido publicado"
+              ],
+              [
+                "Grupo de logs legível por toda a organização",
+                "média",
+                "médio",
+                "permissão de leitura por grupo, não por conta; separar log de aplicação de log de auditoria",
+                "Access Analyzer sobre políticas com `logs:FilterLogEvents` amplo",
+                "estreitar a política e derivá-la do uso real medido — é o L41"
+              ],
+              [
+                "Consulta de log varrendo 30 dias sem necessidade",
+                "alta",
+                "baixo",
+                "janela de tempo padrão curta nos painéis; treinar a equipe a filtrar por campo",
+                "custo de consulta do Logs Insights por identidade",
+                "consultas salvas com janela definida, e o filtro por `TraceId` como caminho padrão"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que o trace id pode ir para o cliente e o log não pode ir para o cliente",
+            "content": "O trace id é um número aleatório sem semântica: conhecê-lo não autoriza nada e não revela nada sobre outra requisição. É por isso que devolvê-lo no cabeçalho da resposta é seguro e útil. O conteúdo do log é o oposto: ele carrega parâmetro, identificador de recurso e às vezes mensagem de exceção com detalhe de implementação. A assimetria é o desenho: um identificador opaco atravessa a fronteira, o dado que ele indexa não."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as três perguntas e os três preços"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Log, métrica e trace não são três formas de ver a mesma coisa. São três respostas a perguntas diferentes, com custos e cardinalidades diferentes — e usar um no lugar do outro é a origem tanto de fatura alta quanto de ponto cego."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Plano",
+              "Pergunta que ele responde",
+              "Pergunta que ele NÃO responde",
+              "Como o custo cresce",
+              "Cardinalidade que ele suporta"
+            ],
+            "rows": [
+              [
+                "Métrica",
+                "o sistema está bem AGORA, e desde quando piorou",
+                "o que aconteceu com a requisição do cliente Y",
+                "por série temporal, ou seja, por combinação de dimensões",
+                "baixa: dezenas ou centenas de séries; identificador único é proibitivo"
+              ],
+              [
+                "Log estruturado",
+                "o que exatamente aconteceu nesta requisição, com quais parâmetros",
+                "onde o tempo foi gasto entre os serviços",
+                "por byte ingerido, por byte retido e por byte varrido em consulta",
+                "alta: campo com valor único é normal e desejável"
+              ],
+              [
+                "Trace",
+                "em qual salto o tempo foi, e qual serviço causou a falha",
+                "com qual parâmetro a consulta rodou",
+                "por span ingerido e, separadamente, pela fração indexada",
+                "média: atributo de span é livre, mas anotação indexada tem limite de 50 por trace"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta que o painel tem de responder",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "A rota de pedidos está lenta?",
+                "p99 de `http.server.request.duration` por rota",
+                "regressão de latência que não gera erro",
+                "acima de 2 s por 3 períodos de 1 min"
+              ],
+              [
+                "Estamos devolvendo erro?",
+                "contagem de eventos com status maior ou igual a 500",
+                "falha da aplicação, distinta de falha de capacidade do ALB (L03)",
+                "acima de 1% das requisições da rota"
+              ],
+              [
+                "Quantos eventos perderam correlação?",
+                "contagem de eventos sem `TraceId`",
+                "código escrevendo log fora do escopo da requisição",
+                "qualquer valor acima de zero"
+              ],
+              [
+                "A telemetria está chegando?",
+                "contagem de spans ingeridos por minuto",
+                "coletor caído — e como ele é não essencial, a API continua de pé em silêncio",
+                "queda para zero por 5 min"
+              ],
+              [
+                "O documento de métrica está válido?",
+                "métricas de falha de extração no namespace `AWS/Logs`",
+                "dimensão declarada e ausente descartando o documento inteiro",
+                "qualquer valor acima de zero"
+              ],
+              [
+                "O tempo é de banco ou de código?",
+                "soma dos subsegmentos contra a duração do segmento",
+                "a repartição mudou de lado, e a correção é em lugar diferente",
+                "banco acima de 60% do tempo total da requisição"
+              ],
+              [
+                "A observabilidade caiu no orçamento?",
+                "custo de CloudWatch e X-Ray contra o da aplicação",
+                "ou o volume cresceu, ou alguém acrescentou uma dimensão",
+                "acima de 8% da fatura da aplicação"
+              ],
+              [
+                "Quantas séries de métrica existem no namespace?",
+                "contagem de métricas listadas",
+                "crescimento sem deploy é sinal de cardinalidade escapando",
+                "crescimento acima de 20% em uma semana"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O alarme que ninguém cria e que é o mais importante desta seção",
+            "content": "Alarme sobre a própria telemetria. Como o contêiner do coletor é não essencial — e tem de ser —, uma falha dele deixa a aplicação funcionando perfeitamente e cega. Não há erro, não há 5xx, não há reinício: só param de aparecer spans. Sem um alarme sobre a contagem de spans ingeridos, você descobre isso no próximo incidente, que é o pior momento possível."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece com a observabilidade",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 req/dia, 1 task",
+                "log em 100% e trace em 100% caberiam sem esforço",
+                "nada; e a amostragem por taxa fixa torna o serviço invisível",
+                "reservatório com piso por segundo, ou nenhuma amostragem — em volume baixo, guardar tudo é a decisão barata"
+              ],
+              [
+                "500 mil req/dia, 4 tasks",
+                "é o cenário deste laboratório: 3,4 GB de log/dia",
+                "a retenção indefinida do grupo de logs, que ninguém percebe até o terceiro mês",
+                "retenção declarada por propósito, amostragem por cauda e métrica derivada do log"
+              ],
+              [
+                "50 milhões req/dia, 200 tasks",
+                "a ingestão de log passa a ser linha grande da fatura",
+                "o custo de ingestão e a memória do coletor mantendo traces até decidir",
+                "reduzir o log de nível informativo por amostragem própria, exportar log frio para S3 e consultar com Athena (L64); manter 100% só do log de erro"
+              ],
+              [
+                "Pico de 20× em promoção",
+                "volume de telemetria acompanha o de requisição, linearmente",
+                "a ingestão dispara junto com o incidente que você quer investigar",
+                "não é para impedir; é para saber. Orçamento de custo com alerta, e limite de ingestão no grupo de logs se o risco financeiro for maior que o de cegueira"
+              ],
+              [
+                "Falha de uma AZ",
+                "metade das tasks para, e o log delas para com elas",
+                "os últimos segundos antes da queda são justamente os que interessam",
+                "o driver `awslogs` envia em fluxo contínuo, não no fim: o que se perde é a fração em trânsito. Não escreva log em arquivo dentro do contêiner esperando recuperá-lo"
+              ],
+              [
+                "Segundo serviço entra no desenho",
+                "o trace deixa de ser local e passa a ser distribuído",
+                "a propagação entre serviços, que é onde o trace parte em dois",
+                "propagador composto em TODOS os serviços, e um teste que verifica a contagem de spans por trace no caminho crítico"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O limite que aparece quando o sistema fica grande de verdade",
+            "content": "A busca por transação suporta trace com até 10 mil spans, e um documento de segmento tem limite de 64 kB. Nenhum dos dois incomoda numa API de dois saltos. Os dois passam a incomodar quando alguém instrumenta um laço: um trace com um span por item de uma lista de 50 mil não é observabilidade, é um jeito caro de guardar a lista. Span representa unidade de trabalho com significado, não iteração."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: as dimensões, e o único termo que explode"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Observabilidade tem seis dimensões de cobrança e apenas uma delas cresce de forma multiplicativa. Saber qual é resolve a maior parte das surpresas de fatura."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "annotated_formula",
+          "position": 1,
+          "data": {
+            "title": "De onde vem a fatura de observabilidade, e qual termo cresce sozinho",
+            "formula": "custo ≈ ingestão(GB) + retenção(GB·mês) + consultas_varridas(GB) + spans_ingeridos + spans_indexados(%) + séries_de_métrica(cardinalidade)",
+            "parts": [
+              {
+                "symbol": "ingestão(GB)",
+                "name": "O que entra no CloudWatch Logs",
+                "description": "Proporcional ao tamanho de cada evento vezes o número de eventos. JSON é mais verboso que texto, e isso é real: o ganho de consultabilidade custa bytes. O corte que funciona é remover campo que ninguém consulta, não voltar para texto."
+              },
+              {
+                "symbol": "retenção(GB·mês)",
+                "name": "Quanto tempo você guarda",
+                "description": "Grupo de logs criado sem retenção definida guarda para sempre, e é a linha esquecida mais comum da fatura. Log de depuração raramente serve depois de duas semanas; log de auditoria serve por anos. São grupos diferentes, com retenções diferentes."
+              },
+              {
+                "symbol": "consultas_varridas(GB)",
+                "name": "O que o Logs Insights lê para responder",
+                "description": "Cobra pelo volume varrido, então a janela de tempo da consulta é uma decisão de custo. Buscar por campo indexado numa janela de 15 min é barato; varrer 30 dias para achar uma cadeia de caracteres é o oposto disso."
+              },
+              {
+                "symbol": "spans_indexados(%)",
+                "name": "A fração que vira resumo pesquisável",
+                "description": "No Transaction Search, 100% dos spans são ingeridos como log estruturado e apenas uma porcentagem é indexada como resumo de trace — 1% por padrão, e configurável de 0 a 100. É o parâmetro que separa \"posso ver este trace\" de \"posso procurar traces assim\"."
+              },
+              {
+                "symbol": "séries_de_métrica(cardinalidade)",
+                "name": "O termo que explode",
+                "description": "É o único termo multiplicativo: cada combinação distinta de valores de dimensão é uma métrica customizada nova. Rota × status × versão são dezenas; acrescente id de cliente e são milhares; acrescente id de requisição e a contagem é igual ao número de requisições.",
+                "highlight": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que domina",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "10 mil req/dia, 1 task",
+                "nada domina; a fatura é ruído",
+                "desprezível",
+                "nenhuma. Otimizar aqui é gastar atenção onde não há dinheiro — e amostrar em volume baixo só cria pontos cegos"
+              ],
+              [
+                "Produção pequena",
+                "500 mil req/dia, 4 tasks",
+                "ingestão e retenção de log, nessa ordem",
+                "linear e previsível",
+                "retenção por propósito, métrica derivada do log em vez de chamada por medição, e amostragem por cauda no span"
+              ],
+              [
+                "Alta escala",
+                "50 milhões req/dia, 200 tasks",
+                "ingestão de log; e cardinalidade de métrica, se alguém escorregar",
+                "a de log é linear; a de cardinalidade é degrau súbito",
+                "amostrar o log informativo e manter 100% do log de erro, exportar log frio para consulta por varredura, e revisar dimensões a cada deploy"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Ingestão no CloudWatch Logs",
+                "GB entregue ao serviço",
+                "JSON é mais verboso que texto, e o corte que funciona é remover campo que ninguém consulta — não voltar para texto"
+              ],
+              [
+                "Retenção de log",
+                "GB armazenado por mês",
+                "grupo sem `retention_in_days` guarda indefinidamente; é a linha esquecida mais comum"
+              ],
+              [
+                "Consulta no Logs Insights",
+                "GB varrido pela consulta",
+                "a janela de tempo da consulta é decisão de custo; filtro por campo em janela curta é barato, varredura de 30 dias não"
+              ],
+              [
+                "Spans ingeridos",
+                "volume de span entregue",
+                "na busca por transação, 100% é ingerido como log estruturado — este termo não é reduzido por amostragem de indexação"
+              ],
+              [
+                "Spans indexados",
+                "porcentagem configurada de indexação",
+                "o padrão indexa 1% sem cobrança adicional e vai de 0 a 100; é o que separa \"ver este trace\" de \"procurar traces assim\""
+              ],
+              [
+                "Métricas customizadas",
+                "por série temporal ativa",
+                "é o termo multiplicativo. Uma dimensão de alta cardinalidade transforma dezenas de séries em milhares, sem nenhum erro e sem aviso"
+              ],
+              [
+                "Alarmes",
+                "por alarme e por período de avaliação",
+                "valor pequeno e fixo; alarme sobre estatística estendida como p99 tem preço próprio, que continua modesto"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "O custo oculto deste laboratório, e ele não está na AWS",
+            "content": "É a atenção. Cada campo que você acrescenta ao log estruturado, cada dimensão de métrica e cada alarme é uma coisa que alguém vai ler numa madrugada. Painel com quarenta gráficos não responde mais perguntas que um com seis: responde menos, porque ninguém acha o gráfico certo. O critério para acrescentar sinal é o mesmo do módulo inteiro — que pergunta ele responde, e o que se decide diferente por causa dele. Sem as duas respostas, é decoração que cobra ingestão. Para os valores em moeda, use o AWS Pricing Calculator: preço varia por região e envelhece mais rápido que este texto."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "toda requisição é rastreável por identificador, com log correlacionado e trace amostrado com regra de erro",
+                "não há objetivo de nível de serviço nem política de acionamento: o alarme avisa e ninguém sabe se é aceitável",
+                "SLO e orçamento de erro (L51)",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "log cifrado com chave gerenciada, telemetria por papel da task com privilégio justificado, segredo por referência",
+                "o log pode receber dado pessoal por descuido de quem escreve a próxima rota",
+                "mascaramento na saída do coletor e revisão do que se loga (L52)",
+                "alta"
+              ],
+              [
+                "Confiabilidade",
+                "falha da telemetria não derruba a API, e há alarme sobre a própria telemetria",
+                "o coletor em sidecar é ponto único por task: se ele saturar, aquela task fica cega",
+                "alarme por task na contagem de spans, e limite de memória no processador de amostragem",
+                "média"
+              ],
+              [
+                "Eficiência de performance",
+                "exportação em lote fora do processo da API; instrumentação de saúde filtrada",
+                "nenhuma medição do custo em CPU da própria instrumentação",
+                "comparar p99 com e sem instrumentação em teste de carga (L07)",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "métrica derivada do log, retenção por propósito, span amostrado por cauda",
+                "cardinalidade de dimensão não tem controle automático: depende de revisão humana",
+                "gate no pipeline que reprova dimensão nova sem justificativa, e orçamento com alerta (L09)",
+                "alta"
+              ],
+              [
+                "Sustentabilidade",
+                "só se transmite e se guarda o que responde a uma pergunta declarada",
+                "log de nível informativo em 100% move bytes que quase nunca são lidos",
+                "amostrar o informativo mantendo 100% do erro, quando o volume justificar",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco e compra outro, e é a segunda parte que raramente se escreve."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Da linha de texto à plataforma de telemetria — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Texto no stdout, um grupo de logs, `grep` quando alguém reclama. É onde a Cadência estava, e continua legítimo num serviço com um componente e pouco tráfego.",
+                "note": "Risco resolvido: nenhum — mas também não havia risco a resolver. Novo risco: a primeira investigação de verdade leva dias e termina em advérbio. Impacto de custo: o mais baixo, e é o único termo que ele otimiza."
+              },
+              {
+                "label": "Nível 2 — Aplicação básica: formato e campo",
+                "instruction": "JSON de uma linha por evento, retenção declarada, consulta por campo no Logs Insights. Ainda sem trace e sem propagação.",
+                "note": "Risco resolvido: a busca deixa de ser substring e passa a ser filtro. Novo risco: o meio-caminho engana — eventos bonitos e ainda inconectáveis, o que leva a concluir que o formato não ajudou. Impacto de custo: ingestão sobe, porque JSON é mais verboso que texto."
+              },
+              {
+                "label": "Nível 3 — Produção: este laboratório",
+                "instruction": "Propagador composto, trace id em toda linha e em todo span, coletor em sidecar, amostragem por cauda, métrica derivada do log e o id devolvido ao cliente.",
+                "note": "Risco resolvido: uma requisição específica passa a ter resposta, e a lentidão é repartida entre os saltos. Novo risco: o log passa a poder reconstruir o comportamento de um usuário identificado, o que é poder de diagnóstico e exposição de privacidade ao mesmo tempo. Impacto de custo: span ingerido e uma fração indexada, mais a CPU do sidecar em cada task."
+              },
+              {
+                "label": "Nível 4 — Alta escala: amostrar o log também",
+                "instruction": "O log de nível informativo passa a ser amostrado, o log de erro continua em 100%, o log frio vai para o S3 e é consultado por varredura. Painel por serviço, não por recurso.",
+                "note": "Risco resolvido: a ingestão deixa de crescer linearmente com o tráfego. Novo risco: a requisição amostrada fora não tem detalhe nenhum, e a regra de amostragem passa a ser uma decisão de produto que ninguém documenta. Impacto de custo: cai a ingestão quente e sobe a complexidade de duas camadas de armazenamento."
+              },
+              {
+                "label": "Nível 5 — Plataforma: SLO, orçamento de erro e acionamento",
+                "instruction": "Objetivo de nível de serviço por jornada de usuário, orçamento de erro que governa o ritmo de deploy, e acionamento só sobre sintoma percebido pelo cliente (L51).",
+                "note": "Risco resolvido: alarme técnico que dispara sem ninguém saber se aquilo é aceitável. Novo risco: SLO mal escolhido move o time para o alvo errado com convicção, e orçamento de erro vira instrumento político. Impacto de custo: baixo em infraestrutura, alto em tempo de acordo entre as pessoas."
+              },
+              {
+                "label": "Nível 6 — Dados e IA sobre a telemetria",
+                "instruction": "A telemetria vira conjunto de dados: detecção de anomalia sobre métrica, agrupamento automático de exceções semelhantes e sumarização do trace de um incidente para acelerar a primeira hipótese (L52 e a banda de IA).",
+                "note": "Risco resolvido: volume de sinal maior do que qualquer pessoa consegue ler em incidente. Novo risco: hipótese plausível e errada apresentada com confiança, e dependência de um resumo em vez do dado — que continua existindo e continua sendo a verdade. Impacto de custo: baixo, porque o dado já está ingerido; o que se paga é inferência sob demanda."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "SLO no nível 5 depende de medir a jornada do cliente ponta a ponta, que depende de correlação — o nível 3. Quem define objetivo de nível de serviço antes de ter correlação mede o que é fácil de medir, tipicamente saúde de recurso, e passa a perseguir um número que não corresponde ao que o cliente sente. E detecção de anomalia no nível 6 sobre métrica de cardinalidade descontrolada aprende ruído. Cada nível é pré-requisito de dado, não de maturidade."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "No problema central deste laboratório, IA não entra, e forçá-la seria o antipadrão que a série critica. \"Qual foi o caminho desta requisição\" é uma pergunta com resposta exata: existe um identificador, ele está no dado, e uma consulta o devolve. Trocar isso por um modelo que infere correlação a partir de horário e semelhança de texto é substituir uma resposta certa por uma provável — e mais caro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há dois lugares onde IA acrescentaria valor real, e os dois são posteriores à correlação, não substitutos dela. O primeiro é agrupar exceções semanticamente equivalentes: mil eventos que dizem a mesma coisa com mensagens diferentes viram um grupo com mil ocorrências, e isso é trabalho de similaridade que regra por padrão de texto faz mal. O segundo é a primeira hipótese num incidente: dado um trace com o salto lento e os eventos de log daquela requisição, resumir o que provavelmente aconteceu economiza os primeiros minutos — que são os mais caros."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "reduzir mil eventos a um punhado de grupos com significado, e propor a primeira hipótese de causa a partir de trace mais log"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "para agrupar, regra por padrão de texto quebra a cada mudança de redação da mensagem e não reconhece equivalência semântica. Para a hipótese, regra bastaria nos casos conhecidos — e é onde se deve começar"
+              ],
+              [
+                "De onde viriam os dados?",
+                "do que este laboratório produziu: log estruturado com campos, spans com duração por salto e o histórico de incidentes. Nada de fonte nova"
+              ],
+              [
+                "Qual o risco?",
+                "hipótese plausível e errada, apresentada com confiança, que desvia a investigação. O antídoto é o resumo sempre vir com o link para o dado, e a decisão nunca ser tomada só sobre o resumo"
+              ],
+              [
+                "Por que não substituir a correlação por IA?",
+                "porque a correlação é exata e a inferência é probabilística. Onde existe identificador, modelo só acrescenta latência e a chance de errar com convicção"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"ler o log e achar a requisição que o cliente reclamou\". É exatamente o trabalho que a correlação torna trivial e que a inferência torna caro e incerto: sem identificador comum, o modelo vai correlacionar por horário e por semelhança — que é o mesmo método falho do desenho mínimo, agora com uma fatura de inferência por cima. IA sobre observabilidade tem lugar quando o sinal é volumoso ou ambíguo demais para regra. Um identificador presente em toda linha não é nem uma coisa nem outra."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Interpolar valores na mensagem de log",
+                "é o que a linguagem faz por padrão, e o resultado é legível na hora",
+                "transforma dado em texto: o que era campo passa a ser pedaço de frase, e a consulta volta a ser substring",
+                "não se consegue contar erros por loja sem expressão regular sobre texto livre",
+                "modelo de mensagem com nome de campo, e o valor como parâmetro",
+                "em log de partida da aplicação, que ninguém consulta por campo"
+              ],
+              [
+                "Trace no X-Ray e log sem trace id",
+                "a instrumentação automática dá o trace de graça, e o log parece já estar resolvido porque virou JSON",
+                "é o pior dos dois mundos: o trace mostra ONDE o tempo foi e não com qual parâmetro; o log tem o parâmetro e não se liga ao trace",
+                "a investigação tem duas metades que não se encontram, e cada uma parece quase suficiente",
+                "rastreamento de atividade na fábrica de log, anexando TraceId e SpanId ao escopo",
+                "nunca; é uma linha de configuração e é o elo do módulo"
+              ],
+              [
+                "Amostrar 100% em produção \"para não perder nada\"",
+                "em desenvolvimento é o que funciona, e a intuição é que mais dado é sempre melhor",
+                "a fatura cresce com o tráfego e o painel fica com volume que ninguém consegue ler; em incidente, o excesso atrapalha",
+                "o custo de observabilidade passa o de computação e alguém corta tudo de uma vez, trocando desperdício por cegueira",
+                "amostragem por cauda: 100% de erro e de lentidão, fração pequena do resto",
+                "em volume genuinamente baixo, onde amostrar só cria ponto cego"
+              ],
+              [
+                "Usar identificador único como dimensão de métrica",
+                "dá um gráfico por requisição, e por um momento parece o auge da visibilidade",
+                "cada combinação distinta é uma métrica nova: a contagem de séries iguala a de requisições, e a documentação avisa esse caso pelo nome",
+                "nenhum erro, e a fatura de métrica customizada multiplicada; painel com mil séries de um ponto",
+                "dimensão agrupa (rota, status, ambiente); identificador vira campo do evento de log",
+                "nunca em métrica. Em log e em atributo de span, é normal e desejável"
+              ],
+              [
+                "Correlacionar por horário",
+                "com pouco tráfego funciona, e não exige mudar nada no código",
+                "sob concorrência, linhas de requisições diferentes se intercalam no mesmo milissegundo e a leitura em sequência produz histórias falsas",
+                "diagnóstico confiante e errado, que é pior que diagnóstico ausente",
+                "identificador comum em toda linha, e o horário só para ordenar dentro do trace",
+                "para ordenar eventos que você JÁ sabe pertencerem à mesma requisição"
+              ],
+              [
+                "Logar o corpo inteiro da requisição \"para ter contexto\"",
+                "garante que nada vai faltar na hora do aperto, e é uma linha",
+                "multiplica a ingestão por um fator que ninguém estimou e é o caminho mais curto para dado pessoal no log",
+                "fatura de ingestão alta e um achado de conformidade meses depois",
+                "campos escolhidos: identificador de recurso, rota, status, duração",
+                "em depuração de curta duração, com prazo declarado e retenção curta"
+              ],
+              [
+                "Marcar o contêiner do coletor como essencial",
+                "parece rigor: \"se a telemetria caiu, quero saber\"",
+                "inverte a hierarquia — uma falha da observação passa a derrubar o serviço observado",
+                "a API fica indisponível por causa de um problema no backend de telemetria",
+                "`essential = false`, mais um alarme sobre a contagem de spans ingeridos",
+                "nunca em serviço que atende cliente. Em job cuja saída É a telemetria, faz sentido"
+              ],
+              [
+                "Um grupo de logs para tudo, sem retenção",
+                "é o que acontece por omissão: o driver cria o grupo e ninguém volta lá",
+                "guarda indefinidamente e mistura propósitos com necessidades de retenção diferentes",
+                "a maior linha da fatura de CloudWatch é armazenamento de log de 2023",
+                "um grupo por propósito, cada um com retenção declarada em código",
+                "nunca em conta que fica de pé; em conta de laboratório que será apagada, é indiferente"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Nenhum trace aparece no X-Ray",
+                "papel da TASK sem permissão de X-Ray, ou permissão posta no papel de execução",
+                "leia o log do contêiner do coletor: ele registra a recusa explicitamente",
+                "fluxo de log do coletor no grupo da aplicação",
+                "as cinco ações de X-Ray no papel da task; o papel de execução é do agente do ECS"
+              ],
+              [
+                "Trace aparece com um span só, numa chamada de dois saltos",
+                "propagador incompleto: falta o formato da AWS ou falta o `traceparent`",
+                "compare o trace id do log do chamador com o do chamado — se diferem, o contexto não foi reconhecido",
+                "mapa de serviços com nós soltos; `OTEL_PROPAGATORS`",
+                "propagador composto: `tracecontext,baggage,xray`"
+              ],
+              [
+                "Consulta por `TraceId` no log devolve zero eventos",
+                "rastreamento de atividade não configurado na fábrica de log",
+                "abra um evento cru e procure o campo dentro de `Scopes`",
+                "a prova 2, que conta eventos sem o campo",
+                "a linha de `ActivityTrackingOptions`, mais `IncludeScopes = true` no formatador"
+              ],
+              [
+                "Cada linha do log virou vários eventos truncados",
+                "JSON identado: o driver `awslogs` quebra por salto de linha",
+                "olhe um evento no console — ele terá uma chave e nada mais",
+                "fluxo de log da aplicação",
+                "`Indented = false` nas opções do escritor JSON"
+              ],
+              [
+                "Alarme preso em dados insuficientes",
+                "namespace, nome de métrica ou dimensão não casam com o que o coletor declarou",
+                "liste as métricas do namespace e compare nome e dimensões, caractere por caractere",
+                "`list-metrics` contra o `metric_declarations` do coletor",
+                "alinhar os três; e conferir se algum documento foi recusado, no namespace `AWS/Logs`"
+              ],
+              [
+                "A métrica existe e o número não bate com o log",
+                "documento de métrica embutida recusado por dimensão declarada e ausente no evento",
+                "a prova 4: comparar contagem de amostras com `count()` no log",
+                "métricas de falha de extração em `AWS/Logs`",
+                "garantir que todo campo listado em `Dimensions` exista na raiz do evento"
+              ],
+              [
+                "O trace da requisição reclamada não existe",
+                "amostragem por cabeça, que decidiu antes de saber que houve erro",
+                "confira qual estratégia está ativa; se a decisão está no SDK, é por cabeça",
+                "configuração do coletor e variáveis de amostragem no contêiner",
+                "amostragem por cauda com política de status de erro em 100%"
+              ],
+              [
+                "Só metade dos erros de um teste aparece como trace",
+                "a janela de decisão por cauda expirou antes de o trace fechar",
+                "compare a duração dos traces perdidos com `decision_wait`",
+                "log do coletor, que registra decisão sobre trace incompleto",
+                "aumentar a janela de espera, ciente de que ela custa memória no coletor"
+              ],
+              [
+                "Correlação some em requisições grandes",
+                "cabeçalhos acima de 7 KB: o ALB reescreve o `X-Amzn-Trace-Id` com um `Root` novo",
+                "meça o tamanho total dos cabeçalhos das requisições afetadas",
+                "access log do ALB comparado ao trace id gravado no log da aplicação",
+                "reduzir cabeçalho e cookie; e aceitar que, acima do limite, a correlação é refeita pelo balanceador"
+              ],
+              [
+                "A contagem de séries do namespace cresceu sem deploy",
+                "dimensão de alta cardinalidade entrou por configuração do coletor",
+                "liste as métricas e olhe as dimensões que existem, não as que você acha que existem",
+                "`list-metrics` no namespace",
+                "remover a dimensão; a série já criada expira por desuso, e o mês já foi cobrado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em configuração, pergunte: o dado não foi PRODUZIDO, não foi TRANSPORTADO ou não foi CONSULTADO corretamente? Ausência de span aponta produção ou permissão; evento truncado aponta transporte; alarme em dados insuficientes com log presente aponta consulta ou nome que não casa. São três lugares diferentes, e a maioria das horas perdidas vem de investigar o segundo quando o problema é no terceiro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Três coisas aqui sobrevivem ao "
+              },
+              {
+                "text": "terraform destroy",
+                "code": true
+              },
+              {
+                "text": " e uma delas não se apaga de jeito nenhum: série de métrica customizada expira por desuso, não por comando. É o motivo de a explosão de cardinalidade ser didática uma vez e caríssima duas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# limpar.sh — a ordem importa, e tres coisas aqui cobram depois do destroy.\n\n# 1. O que o Terraform administra.\nterraform destroy -auto-approve\n\n# 2. GRUPOS DE LOGS: sobrevivem se skip_destroy estiver ligado, e sobrevivem\n#    sempre se voce os criou implicitamente (o driver awslogs cria o grupo\n#    quando ele nao existe, e esse nao entra no estado do Terraform).\nfor g in /ecs/ffv-lab-api /ecs/ffv-lab-api/emf; do\n  aws logs describe-log-groups --log-group-name-prefix \"$g\" \\\n    --query 'logGroups[].{nome:logGroupName,bytes:storedBytes,ret:retentionInDays}' \\\n    --output table\n  aws logs delete-log-group --log-group-name \"$g\" 2>/dev/null || true\ndone\n\n# 3. GRUPO DE SPANS: se voce habilitou o Transaction Search, os spans vao para um\n#    grupo gerenciado chamado aws/spans, e ele NAO pertence ao seu Terraform.\n#    Desabilitar a busca por transacao e a acao que para a ingestao; apagar o\n#    grupo sem desabilitar apenas o recria.\naws logs describe-log-groups --log-group-name-prefix \"aws/spans\" \\\n  --query 'logGroups[].{nome:logGroupName,bytes:storedBytes}' --output table\n\n# 4. METRICAS CUSTOMIZADAS nao se apagam. Elas expiram por desuso (15 meses de\n#    retencao de serie no CloudWatch). Se voce criou serie de alta cardinalidade\n#    por engano, o custo do mes ja foi — a correcao e parar de produzir, e a\n#    licao e a secao de custo deste modulo.\naws cloudwatch list-metrics --namespace ApiPedidos \\\n  --query 'length(Metrics)' --output text\n# Se este numero for da ordem do numero de requisicoes do teste, voce reproduziu\n# a explosao de cardinalidade. E didatico uma vez; e caro duas.\n\n# 5. ALARMES e filtro de metrica, se criados fora do Terraform.\naws cloudwatch delete-alarms --alarm-names ffv-lab-p99-pedidos 2>/dev/null || true\naws logs delete-metric-filter --log-group-name /ecs/ffv-lab-api \\\n  --filter-name ffv-lab-excecao-nao-tratada 2>/dev/null || true\n\n# 6. REGRAS DE AMOSTRAGEM do X-Ray criadas a mao permanecem na conta. Nao cobram,\n#    mas se aplicam ao proximo servico que voce subir — e isso surpreende.\naws xray get-sampling-rules \\\n  --query 'SamplingRuleRecords[].SamplingRule.RuleName' --output table\n\n# 7. O que veio do L01 e cobra POR HORA, ligado ou nao: ALB, RDS, NAT Gateway e o\n#    Elastic IP dele, e endpoint de interface de VPC. Se voce nao vai seguir para\n#    o L09, rode a limpeza do L01 tambem.\naws ec2 describe-addresses --query \"Addresses[?AssociationId==null].PublicIp\" --output table\n\n# 8. Prova final: nada com a etiqueta do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table\n"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Definição de task com os dois contêineres",
+                "sim",
+                "não",
+                "as revisões permanecem registradas, sem custo"
+              ],
+              [
+                "Grupos de logs declarados no Terraform",
+                "sim, se sem `skip_destroy`",
+                "sim, por GB retido",
+                "e se o driver `awslogs` criou o grupo implicitamente, ele nunca entrou no estado"
+              ],
+              [
+                "Grupo gerenciado de spans",
+                "não",
+                "sim, por GB retido",
+                "pertence à busca por transação, não ao seu Terraform; apagar sem desabilitar apenas recria"
+              ],
+              [
+                "Séries de métrica customizada",
+                "não",
+                "enquanto ativas",
+                "não existe comando para apagar métrica: ela expira por desuso, e o mês corrente já foi cobrado"
+              ],
+              [
+                "Filtro de métrica",
+                "sim se em Terraform",
+                "não",
+                "criado no console, não aparece no estado — e continua extraindo do grupo"
+              ],
+              [
+                "Alarmes",
+                "sim se em Terraform",
+                "centavos por alarme",
+                "alarme sobre estatística estendida tem preço próprio, ainda modesto"
+              ],
+              [
+                "Regras de amostragem do X-Ray",
+                "sim se em Terraform",
+                "não",
+                "regra criada à mão continua na conta e se aplica ao PRÓXIMO serviço que você subir"
+              ],
+              [
+                "Chave do KMS dos logs",
+                "entra em espera de exclusão",
+                "sim, por chave-mês",
+                "a exclusão tem período de espera obrigatório; até lá, cobra"
+              ],
+              [
+                "ALB, RDS, NAT e Elastic IP (L01)",
+                "sim",
+                "sim, por hora",
+                "vêm do laboratório anterior; o Elastic IP cobra justamente por NÃO estar associado"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Não sei qual requisição é a do cliente",
+                "trace id devolvido no cabeçalho da resposta",
+                "transforma um relato em chave de busca exata, e o valor é opaco: não revela nada"
+              ],
+              [
+                "As linhas não se ligam",
+                "rastreamento de atividade na fábrica de log",
+                "o contexto é ambiental: nenhuma rota precisa receber ou repassar identificador"
+              ],
+              [
+                "Não consigo filtrar por rota ou por loja",
+                "JSON de uma linha com nome de campo",
+                "nome é o que uma consulta pode referenciar; frase não é"
+              ],
+              [
+                "O contexto que chega não é reconhecido",
+                "propagador composto AWS e W3C",
+                "é a única causa de trace partido que não gera erro nenhum"
+              ],
+              [
+                "Não sei onde o tempo foi gasto",
+                "instrumentação do cliente de banco e de HTTP",
+                "subsegmento com duração reparte o tempo entre os saltos, em vez de somá-lo"
+              ],
+              [
+                "O trace do erro reclamado não existe",
+                "amostragem por cauda com 100% de erro",
+                "a decisão por cabeça acontece antes de haver resultado para usar"
+              ],
+              [
+                "Métrica custa uma chamada por medição",
+                "métrica embutida no evento de log",
+                "aproveita a ingestão que já ia acontecer; e o filtro de métrica cobre o log que você não formata"
+              ],
+              [
+                "A telemetria não pode derrubar a API",
+                "sidecar com `essential = false`",
+                "observação não pode ser mais crítica que o observado — mais alarme sobre a própria telemetria"
+              ],
+              [
+                "A fatura de log cresce sem controle",
+                "retenção declarada por propósito",
+                "grupo sem retenção guarda indefinidamente, e é a linha esquecida mais comum"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Requisição impossível de localizar",
+                "trace id em toda linha e no cabeçalho de resposta",
+                "evento escrito fora do escopo da requisição, que continua sem correlação"
+              ],
+              [
+                "Trace partido entre serviços",
+                "propagador composto",
+                "serviço a jusante que não propaga nada — a cadeia quebra lá"
+              ],
+              [
+                "Trace do erro ausente",
+                "amostragem por cauda com política de erro",
+                "trace mais longo que a janela de decisão, que é avaliado incompleto"
+              ],
+              [
+                "Cegueira por falha do coletor",
+                "alarme sobre spans ingeridos",
+                "perda dos poucos segundos em trânsito quando a task morre"
+              ],
+              [
+                "Explosão de custo de métrica",
+                "revisão da linha de dimensões",
+                "nada automático: não há proteção técnica contra dimensão nova mal escolhida"
+              ],
+              [
+                "Alarme que não dispara nunca",
+                "prova que compara métrica com log",
+                "limiar mal escolhido, que é decisão e não defeito"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "O cliente pede uma página; o CloudFront identifica a requisição de borda.",
+              "O ALB acrescenta ou atualiza `X-Amzn-Trace-Id` a caminho do alvo.",
+              "O propagador composto adota o contexto que chegou, em vez de criar um novo.",
+              "O rastreamento de atividade injeta TraceId e SpanId no escopo de todo evento de log.",
+              "Cada chamada de saída vira um span filho com duração medida, e leva o contexto adiante.",
+              "O sidecar recebe OTLP, decide por cauda o que amostrar e exporta em lote.",
+              "O span vai para o X-Ray; a métrica sai embutida no evento de log e o CloudWatch a extrai.",
+              "O middleware devolve o trace id ao cliente no cabeçalho da resposta.",
+              "O alarme dispara sobre a métrica agregada e traz a consulta pronta no corpo do aviso.",
+              "Duas consultas depois — uma por campo no log, uma no trace — o salto que falhou tem nome."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "lab-obse-des1",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Desafio — sem roteiro"
+      },
+      "children": [
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "O requisito",
+            "content": "Um terceiro serviço entrou na cadeia — o serviço de pedidos agora chama, além do de estoque, um serviço de precificação externo. Instrumente essa chamada nova para aparecer no MESMO traço."
+          },
+          "id": "lab-obse-des2",
+          "position": 0
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "Critério de aceite — executável, não \"verifique se funciona\"",
+            "content": "Uma requisição de ponta a ponta produz um único trace ID no X-Ray com TRÊS spans visíveis — pedidos, estoque e precificação — e o mapa de serviço mostra as três caixas conectadas."
+          },
+          "id": "lab-obse-des3",
+          "position": 1
+        },
+        {
+          "type": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "Dica 1: O contexto de rastreamento (trace ID) precisa ser PROPAGADO no cabeçalho HTTP da chamada ao serviço de precificação — sem isso, ele abre um trace novo e desconectado.",
+              "Dica 2: O SDK do X-Ray tem um middleware para instrumentar chamada HTTP de saída automaticamente — verifique se ele está registrado antes de instrumentar manualmente.",
+              "Dica 3: Se o terceiro serviço estiver fora do seu controle (de verdade externo), ele não vai propagar o contexto de volta — o span dele aparece como uma \"caixa preta\" com duração, sem sub-spans, e isso é o resultado ESPERADO nesse caso."
+            ]
+          },
+          "id": "lab-obse-des4",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "success",
+            "title": "Lembrete de limpeza",
+            "content": "Todo recurso que este desafio criar entra no mesmo `terraform destroy` do laboratório — nada fica para trás cobrando sozinho."
+          },
+          "id": "lab-obse-des5",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Qual header o ALB usa para rastrear requisições?",
+            "answer": "O `X-Amzn-Trace-Id`, e o balanceador o acrescenta ou atualiza em toda requisição que recebe, sem que você configure nada. O formato é `Campo=versão-tempo-id`: versão sempre 1, tempo em 8 dígitos hexadecimais representando a época em segundos, e identificador em 24 dígitos hexadecimais. Quando o cabeçalho não vem na requisição, o ALB cria um campo `Root`; quando já vem com um `Root`, ele insere um campo `Self` na frente e preserva o resto, inclusive campos arbitrários que a sua aplicação tenha acrescentado. Três limites valem saber: a atualização acontece na entrada e nunca na resposta, cabeçalhos acima de 7 KB fazem o balanceador reescrever o valor com um `Root` novo — perdendo a correlação em silêncio — e em WebSocket só se rastreia até o upgrade ser bem-sucedido."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Por que meu trace no X-Ray aparece quebrado em dois?",
+            "answer": "Porque o contexto que chegou na requisição não foi reconhecido, e a aplicação criou um identificador novo no meio do caminho. A causa quase sempre é propagador incompleto: instalar apenas o `traceparent` do W3C faz o serviço ignorar o `X-Amzn-Trace-Id` que o ALB e outros serviços da AWS enviam, e instalar apenas o formato da AWS faz o serviço ignorar clientes e serviços que falam W3C. A correção é um propagador composto, que na prática é a variável de ambiente `OTEL_PROPAGATORS` com `tracecontext,baggage,xray`. O diagnóstico é direto: compare o identificador de trace registrado pelo chamador com o registrado pelo chamado. Se diferem, o contexto foi perdido exatamente nesse salto, e o mapa de serviços mostra os dois nós sem aresta entre eles."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Como colocar o trace id em todas as linhas de log no .NET 8?",
+            "answer": "Configure `ActivityTrackingOptions` na fábrica de log e ative a inclusão de escopos no formatador. Concretamente: `builder.Logging.Configure(o => o.ActivityTrackingOptions = ActivityTrackingOptions.TraceId | ActivityTrackingOptions.SpanId)` mais `AddJsonConsole(o => o.IncludeScopes = true)`. Isso faz o `TraceId` e o `SpanId` do `Activity` corrente serem anexados a toda mensagem escrita dentro daquele fluxo de execução, sem que nenhuma rota precise receber ou repassar identificador. O mecanismo é o contexto de execução assíncrono, e é por isso que a correlação sobrevive a `await` e a chamadas em profundidade. Um detalhe de transporte é obrigatório: o JSON tem de sair em uma única linha, porque o driver `awslogs` delimita eventos por salto de linha e um objeto indentado viraria vários eventos inválidos."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Qual é a taxa de amostragem padrão do X-Ray?",
+            "answer": "A primeira requisição de cada segundo mais cinco por cento de todas as adicionais. Esse padrão do SDK é deliberadamente conservador, para não gerar custo em quem está começando, e tem uma consequência que importa mais que o número: como a decisão é tomada na primeira requisição do trace, ela não sabe ainda se houve erro. O resultado é que o trace da requisição reclamada por um cliente provavelmente não existe. A saída é decidir depois de o trace fechar, com amostragem por cauda no coletor, aplicando cem por cento para status de erro e para requisições acima de um limite de latência, e uma fração pequena para o resto. Amostragem não é configuração de volume: é a escolha de quais perguntas terão resposta amanhã."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Embedded Metric Format ou PutMetricData: qual é mais barato?",
+            "answer": "O formato embutido tende a ser mais barato quando você já ingere o log, porque o valor numérico viaja no evento que ia ser escrito de todo modo e não soma uma chamada de API por medição. A comparação muda em dois casos. Se o valor não vem de um evento de log — uma contagem periódica de estado, por exemplo — não há log a aproveitar e a chamada direta é o caminho natural. E se o log é de terceiro, de biblioteca ou de agente, você não controla o formato: aí a ferramenta é o filtro de métrica sobre o grupo de logs, que extrai por campo quando o log é JSON e por padrão de texto quando não é. Em qualquer um dos três, o termo que realmente decide a fatura não é o mecanismo de entrega: é a cardinalidade das dimensões, porque cada combinação distinta de valores cria uma série temporal nova."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Como encontrar todos os logs de uma requisição específica no CloudWatch Logs Insights?",
+            "answer": "Filtre pelo campo que contém o identificador de trace e ordene por horário crescente: `fields @timestamp, Message | filter Scopes.0.TraceId = \"4bf92f35…\" | sort @timestamp asc`. A consulta só funciona se duas coisas estiverem no lugar. A primeira é que o evento seja JSON válido em uma única linha, porque é isso que dá nome aos campos; log em texto só permite casar substring. A segunda é que o identificador esteja em toda linha, e não apenas na primeira da requisição — é o papel do rastreamento de atividade na fábrica de log. Como controle de qualidade, vale rodar a consulta inversa: contar os eventos em que o campo está ausente. O resultado esperado é zero, e qualquer valor acima disso aponta código escrevendo log fora do escopo da requisição."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Log, métrica e trace: qual usar para quê?",
+            "answer": "Métrica responde se o sistema está bem agora e desde quando piorou; log responde o que exatamente aconteceu numa requisição e com quais parâmetros; trace responde em qual salto o tempo foi e qual serviço causou a falha. A distinção não é estilística, porque os três têm cardinalidades e custos diferentes: métrica cobra por série temporal e suporta poucas dezenas de combinações de dimensão, log cobra por byte ingerido, retido e varrido em consulta e aceita campo com valor único sem problema, trace cobra por span ingerido e, separadamente, pela fração indexada para busca. Usar um no lugar do outro produz os dois defeitos clássicos: métrica com identificador único como dimensão explode a fatura, e log usado como série temporal obriga a varrer volume enorme para responder o que uma métrica responderia de imediato."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "O X-Amz-Cf-Id do CloudFront serve como trace id?",
+            "answer": "Não, e tratá-lo como se servisse é uma causa comum de investigação que não fecha. Ele identifica a requisição de borda, aparece no log de acesso do CloudFront e é devolvido no cabeçalho da resposta, mas não é o mesmo valor que o `X-Amzn-Trace-Id` do balanceador nem o identificador de trace da sua aplicação. São identificadores de camadas diferentes, e nenhum deles é derivado do outro. A prática que funciona é gravar os três como campos do mesmo evento de log estruturado: o de borda, porque é o que o cliente costuma ter na mão; o de trace, porque é o que liga log e span; e o de negócio, como o identificador do pedido, porque é a pergunta que a operação faz. Com os três no mesmo evento, você entra pela ponta que tiver e chega às outras duas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Você configura o exportador de métrica embutida do coletor com `dimensions: [[http.route, http.status_code, TraceId]]` e roda um teste de 10 mil requisições. O que acontece?",
+            "options": [
+              "Nada de diferente: TraceId entra como dimensão e o CloudWatch a ignora por ter cardinalidade alta",
+              "O documento é recusado, porque TraceId não é um valor numérico válido para métrica",
+              "São criadas da ordem de 10 mil séries de métrica, uma por combinação distinta, sem erro nenhum",
+              "A ingestão do log é bloqueada quando o limite de 30 dimensões por conjunto é atingido"
+            ],
+            "correctIndex": 2,
+            "explanation": "Cada conjunto de dimensões usado cria uma métrica nova no CloudWatch, e a identidade da métrica é a combinação dos valores. Com um identificador único na lista, cada requisição produz uma combinação inédita: dez mil requisições viram da ordem de dez mil séries temporais, cada uma com um único ponto. Não há erro, não há aviso e o painel fica inútil — a documentação do formato embutido descreve esse caso pelo nome, usando um identificador de requisição como exemplo. A regra que resta é simples: dimensão serve para AGRUPAR, e identificador único entra no evento como campo comum, onde é consultável e não custa série.\n\nA primeira alternativa confunde os dois papéis do documento: o valor numérico é exigido dos alvos listados em `Metrics`, e não dos listados em `Dimensions`, que precisam ser cadeias de caracteres — `TraceId` é uma dimensão perfeitamente válida do ponto de vista da forma, e é justamente por isso que o erro passa. A segunda alternativa atribui à plataforma uma proteção que ela não oferece: não existe descarte automático por cardinalidade alta, e presumir que existe é o raciocínio que produz a fatura. A quarta alternativa cita um limite real e irrelevante aqui: o teto de trinta chaves por conjunto de dimensões é sobre a QUANTIDADE de chaves, e o problema deste caso é a quantidade de VALORES distintos de uma única chave."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Um cliente reclama de erro numa requisição de ontem. Você tem amostragem no SDK com o padrão do X-Ray — a primeira requisição de cada segundo mais 5% das adicionais — e log estruturado correlacionado em 100%. O trace daquela requisição não existe. Qual mudança resolve o problema de raiz?",
+            "options": [
+              "Aumentar a taxa de amostragem para 100% em produção",
+              "Criar uma regra de amostragem no X-Ray que force 100% na rota afetada",
+              "Trocar para amostragem por cauda no coletor, com política de 100% para erro e para latência alta",
+              "Aumentar a retenção do grupo de logs, porque o trace expirou antes da investigação"
+            ],
+            "correctIndex": 2,
+            "explanation": "O defeito não é a taxa: é o MOMENTO da decisão. Amostragem por cabeça escolhe na primeira requisição do trace, quando ainda não existe resultado para consultar, então nenhuma taxa abaixo de cem por cento garante que o erro seja gravado. Decidir por cauda, no coletor, inverte isso: o trace é retido em memória até fechar e a política usa o status e a latência na decisão, guardando cem por cento dos erros e das requisições lentas e uma fração pequena do restante. O preço é memória no coletor e uma janela de espera — traces mais longos que ela são decididos incompletos.\n\nA primeira alternativa funciona e é a mais cara possível, exatamente o que o requisito de orçamento deste laboratório proíbe: ela paga por cem por cento dos traces para garantir a fração pequena que interessa. A terceira alternativa confunde os dois planos de dados e o problema com o prazo: o log está em cem por cento e correlacionado, e o que falta não expirou — nunca foi gravado. A quarta alternativa melhora as chances e não resolve de raiz: regra por rota continua sendo decisão por cabeça, então dentro daquela rota a escolha ainda acontece antes de haver erro; ela é útil para elevar a taxa num caminho crítico, não para garantir o trace do erro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 29,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L01 no ar (ECS Fargate, RDS em sub-rede privada, ALB, CloudFront), Terraform, .NET 8 e noção de cabeçalho HTTP"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "de onde vem o identificador de correlação antes do seu código; por que o trace id tem de estar no log e não só no span; a diferença entre amostragem por cabeça e por cauda e o que cada uma permite perguntar depois; quando métrica derivada de log é mais barata que métrica customizada; e por que cardinalidade é o único termo multiplicativo da fatura de observabilidade"
+              ],
+              [
+                "Limitação que fica",
+                "não há objetivo de nível de serviço, orçamento de erro nem política de acionamento: o alarme avisa e ninguém sabe se aquilo é aceitável. E a hipótese declarada de API síncrona sem fila continua valendo — com trabalho assíncrono, a propagação precisa entrar no cabeçalho da mensagem"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L51 — objetivo de nível de serviço e orçamento de erro. Ele consome exatamente a correlação construída aqui, porque medir a jornada do cliente exige ligar as camadas"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L52 (correlacionar métrica de negócio com métrica técnica) depende do log estruturado com campo de negócio; e o L07 de teste de carga passa a poder medir onde o tempo vai, em vez de só quanto"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Request tracing for your Application Load Balancer",
+                "code": true
+              },
+              {
+                "text": " — o nome do cabeçalho, o formato dos campos "
+              },
+              {
+                "text": "Root",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "Self",
+                "code": true
+              },
+              {
+                "text": ", a preservação de campos próprios e os três limites (atualização só na entrada, reescrita acima de 7 KB de cabeçalhos, WebSocket só até o upgrade); "
+              },
+              {
+                "text": "AWS X-Ray concepts",
+                "code": true
+              },
+              {
+                "text": " — a amostragem padrão de uma requisição por segundo mais 5% das adicionais, a distinção entre anotação indexada e metadado não indexado com o limite de 50 anotações por trace, a retenção de 30 dias e o limite de 64 kB por documento de segmento; "
+              },
+              {
+                "text": "CloudWatch Transaction Search",
+                "code": true
+              },
+              {
+                "text": " — a ingestão de 100% dos spans como log estruturado com indexação de uma porcentagem configurável de 0 a 100 (1% por padrão), o suporte a identificador de trace em formato W3C além do formato X-Ray e o teto de 10 mil spans por trace; e "
+              },
+              {
+                "text": "Specification: embedded metric format",
+                "code": true
+              },
+              {
+                "text": " — a estrutura do objeto "
+              },
+              {
+                "text": "_aws",
+                "code": true
+              },
+              {
+                "text": ", o limite de 30 chaves por conjunto de dimensões e de 100 definições de métrica, o teto de 1 MB por evento e o aviso explícito de que cada conjunto de dimensões cria uma métrica nova, com dimensão de alta cardinalidade como caso a evitar. Nenhum preço absoluto aparece neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir no seu ambiente",
+            "content": "Os volumes citados — 3,4 GB de log por dia, 500 mil requisições, p99 de 380 ms, 87 traces esperados na prova 3 — são da aplicação de exemplo e servem como ordem de grandeza, não como referência: derive os seus da sua medição. Os nomes dos pacotes NuGet das extensões AWS do OpenTelemetry mudaram de lugar entre versões, e por isso o módulo configura o propagador pela variável `OTEL_PROPAGATORS`, que é padronizada; confira o nome atual no NuGet antes de copiar qualquer `using`. A versão fixada da imagem do coletor também envelhece — confira a atual no repositório público antes de implantar, e continue fixando em vez de usar `:latest`, pelo mesmo motivo do L03. Por fim, a porcentagem gratuita de indexação da busca por transação é um valor de produto e pode mudar: confirme no console antes de dimensionar o orçamento em cima dela."
+          }
+        }
+      ]
+    }
+  ]
+}

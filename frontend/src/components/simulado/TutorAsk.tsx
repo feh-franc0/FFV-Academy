@@ -14,10 +14,11 @@
  * mensagem orientativa.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SimuladoQuestion, OptionId } from '@/lib/simulados';
 import { hasBackend } from '@/lib/api-client';
 import { FEATURES } from '@/lib/features';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 import { getJSON, setJSON } from '@/lib/storage';
 import { STORAGE_KEYS } from '@/lib/constants';
 
@@ -69,6 +70,8 @@ export function TutorAsk({ question, userAnswer, open, onClose }: Props) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState<QA[]>([]);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, open);
 
   useEffect(() => {
     if (open) setHistory(loadHistory(question.id));
@@ -136,9 +139,11 @@ export function TutorAsk({ question, userAnswer, open, onClose }: Props) {
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label="Tire sua dúvida com o tutor"
+      tabIndex={-1}
       className="fixed inset-0 z-[90] flex justify-end"
       style={{ background: 'rgba(0,0,0,0.5)' }}
       onClick={e => e.target === e.currentTarget && onClose()}
@@ -174,7 +179,11 @@ export function TutorAsk({ question, userAnswer, open, onClose }: Props) {
             <div key={i} className="space-y-2">
               <div
                 className="rounded-xl p-3 text-sm ml-auto"
-                style={{ background: '#f7816620', border: '1px solid #f7816640', maxWidth: '92%' }}
+                style={{
+                  background: 'color-mix(in srgb, var(--ffv-red) 13%, transparent)',
+                  border: '1px solid color-mix(in srgb, var(--ffv-red) 25%, transparent)',
+                  maxWidth: '92%',
+                }}
               >
                 {qa.q}
               </div>
@@ -218,7 +227,7 @@ export function TutorAsk({ question, userAnswer, open, onClose }: Props) {
             onClick={() => ask(input)}
             disabled={loading || input.trim().length === 0}
             className="text-sm px-4 py-2 rounded-lg font-medium transition-opacity disabled:opacity-40"
-            style={{ background: '#f78166', color: '#fff' }}
+            style={{ background: 'var(--ffv-red)', color: 'var(--primary-foreground)' }}
           >
             {loading ? 'Perguntando...' : 'Perguntar'}
           </button>

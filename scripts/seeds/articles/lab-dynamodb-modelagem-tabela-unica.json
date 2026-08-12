@@ -1,0 +1,2490 @@
+{
+  "slug": "lab-dynamodb-modelagem-tabela-unica",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O "
+              },
+              {
+                "text": "L14",
+                "code": true
+              },
+              {
+                "text": " deixou a Cadência com uma primeira projeção em DynamoDB: histórico de pedidos por cliente, com chave `CLIENTE#id`, alimentada por outbox a partir do Aurora. Funcionou tão bem que o produto pediu mais três perguntas ao mesmo tempo — o suporte precisa achar um pedido só pelo código, a loja precisa ver o que vendeu no dia, e a expedição precisa de uma fila de separação que não cresça para sempre."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Sob prazo, o time fez o que pareceu mais seguro: criou duas tabelas novas espelhando o Aurora — `Pedidos`, com `pedido_id` como chave, e `ItensPedido`, com `item_id`. É literalmente o `CREATE TABLE` de sempre, movido para o DynamoDB. As quatro consultas novas até funcionaram no ambiente de teste, com algumas centenas de linhas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Em produção, com 40 milhões de pedidos acumulados, cada uma das quatro perguntas — exceto a busca direta por código — virou um `Scan` com `FilterExpression`. A resposta continua correta. O que muda é o preço: o Scan lê a tabela inteira antes de descartar o que não bate, e a conta cresce com o tamanho da tabela, não com o tamanho do resultado. É o problema que dá nome a este laboratório: modelar a entidade primeiro e a consulta depois, do jeito relacional, aqui vira Scan em tudo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado — depende do L14 (DynamoDB como caminho conhecido)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L14 concluído e no ar, .NET 8, Docker, Git, Terraform, AWS CLI"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 50 min · implementação 2 h 30 a 3 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo em modo sob demanda: soma três GSIs a uma tabela que já existiria; o custo real está no que a modelagem errada evita"
+              },
+              {
+                "k": "Serviços",
+                "v": "DynamoDB, GSI, VPC endpoint de gateway, CloudWatch"
+              },
+              {
+                "k": "Volume atual",
+                "v": "900 lojas, 40 milhões de pedidos acumulados, 40 mil pedidos/dia, ~3,2 itens por pedido, pico de 20× em campanha"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "quatro padrões de acesso conhecidos, servidos sem Scan em rota de produção"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "as quatro perguntas não mudam de forma — se um relatório ad-hoc aparecer, ele NÃO entra nesta tabela"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "uma tabela única servindo quatro padrões de acesso, medida em RCU, sem nenhum Scan em código de produção"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é um manifesto \"DynamoDB para tudo\": o relatório de faturamento do L14 continua no Aurora, porque é consulta ad-hoc e este módulo não muda isso. Também não é um curso completo de modelagem NoSQL — é a aplicação de UM princípio (a chave é a consulta) a QUATRO perguntas concretas, com o defeito medido antes e depois. Streaming de mudança entre os dois bancos, que a projeção do L14 já demonstrou com outbox, fica mais sofisticado no L29."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com uma medição na seção de implantação, não com a sensação de ter entendido a teoria."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Listar quatro padrões de acesso de uma feature e derivar a chave de cada um antes de escrever qualquer código.",
+              "Explicar por que a chave base de uma tabela pode mudar de dono quando um novo padrão de acesso exige uma coleção de itens.",
+              "Modelar overloading de chave de partição e ordenação com prefixos (`CLIENTE#`, `PEDIDO#`, `LOJA#`, `ITEM#`) para guardar tipos diferentes de item na mesma tabela.",
+              "Criar um GSI esparso e usar a ausência de atributo, não o valor de um campo, como critério de pertencimento ao índice.",
+              "Medir, com `ReturnConsumedCapacity`, a diferença de custo entre um Scan filtrado e uma Query pela chave certa, para o mesmo resultado.",
+              "Escrever cabeçalho e itens de um pedido numa única transação, com condição que impede duplicar o código.",
+              "Remover as chaves de um GSI esparso ao mudar o status de um item, e observar o item desaparecer do índice sem ser apagado da tabela.",
+              "Reconhecer quando o padrão de tabela única NÃO se aplica — consulta não conhecida de antemão, relatório ad-hoc, agregação sobre intervalo arbitrário."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Design pelo padrão de acesso, não pela entidade",
+                "DVA-C02, SAA-C03",
+                "quatro perguntas derivam quatro chaves, antes de qualquer código",
+                "a AWS recomenda \"poucas tabelas\": a exceção é dado de forma muito diferente"
+              ],
+              [
+                "Overloading de chave de partição/ordenação",
+                "DVA-C02, SAA-C03",
+                "prefixos `CLIENTE#`, `PEDIDO#`, `LOJA#`, `ITEM#` na mesma tabela",
+                "reconhecer heterogeneidade de item pelo prefixo da SK, não por tabela separada"
+              ],
+              [
+                "Coleção de itens (item collection)",
+                "DVA-C02",
+                "cabeçalho e itens do pedido na mesma partição, SK diferenciando o tipo",
+                "uma Query só na PK devolve tudo o que pertence àquele agregado"
+              ],
+              [
+                "GSI: chave própria, consistência eventual",
+                "DVA-C02, SAA-C03",
+                "GSI1/2/3 com PK e SK independentes da tabela base",
+                "GSI não tem leitura fortemente consistente — a tabela base e o LSI têm"
+              ],
+              [
+                "Índice esparso",
+                "DVA-C02",
+                "GSI3 só existe para o pedido pendente; some ao mudar o status",
+                "o índice reflete PRESENÇA de atributo, não filtro sobre valor"
+              ],
+              [
+                "Custo de Scan vs. Query",
+                "DVA-C02, SAA-C03",
+                "a fórmula: examina a partição ou a tabela inteira, cobra por isso",
+                "`FilterExpression` não economiza capacidade — ela decide o que volta, não o que se lê"
+              ],
+              [
+                "Endpoint de gateway vs. de interface",
+                "SAA-C03",
+                "DynamoDB usa gateway: sem ENI, sem cobrança por hora",
+                "S3 e DynamoDB usam gateway; o resto (Secrets Manager, Bedrock...) usa interface"
+              ],
+              [
+                "Transação sobre múltiplos itens",
+                "DVA-C02",
+                "`TransactWriteItems` grava cabeçalho e itens juntos, ou nenhum",
+                "o custo é o dobro da unidade de escrita normal por item envolvido"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve uma tabela DynamoDB modelada como entidade relacional e pede a causa de uma consulta lenta. A armadilha comum é responder \"aumentar a capacidade provisionada\" — que não resolve nada, porque o Scan continua examinando a tabela inteira, só que com mais capacidade disponível para pagar por isso mais rápido. A resposta certa é redesenhar a chave, ou acrescentar o índice que a consulta precisa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não aparece numa chave ou num índice é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Detalhe do pedido, só com o código",
+                "p95 abaixo de 30 ms, sem saber o cliente",
+                "obriga uma coleção de itens: cabeçalho e itens na MESMA partição, reivindicando a chave base"
+              ],
+              [
+                "Histórico por cliente continua existindo",
+                "mesma paginação do L14",
+                "não pode sumir — muda de chave base para GSI1, com a mesma forma de chave"
+              ],
+              [
+                "Painel da loja, por intervalo de data",
+                "atualização a cada 1 minuto é aceitável",
+                "GSI2 com SK em timestamp ISO, permitindo BETWEEN sem Scan"
+              ],
+              [
+                "Fila de separação não pode crescer para sempre",
+                "só pedidos ainda pendentes",
+                "GSI3 esparso: a chave do índice existe só enquanto o status é PENDENTE"
+              ],
+              [
+                "Sem sharding manual, sem tuning contínuo",
+                "equipe de duas pessoas, sem plantão",
+                "billing sob demanda; nenhum GSI provisionado à mão"
+              ],
+              [
+                "Nenhuma consulta ad-hoc nesta tabela",
+                "relatório de faturamento fica no Aurora",
+                "a tabela única NÃO tenta resolver pergunta desconhecida de antemão — é o L14 revisitado"
+              ],
+              [
+                "Pico de campanha",
+                "20× o volume normal, em rajadas",
+                "modo sob demanda absorve o pico sem replanejar capacidade dos índices"
+              ],
+              [
+                "Rastreabilidade da modelagem",
+                "saber por que cada chave existe",
+                "cada GSI documentado com a pergunta que ele serve, não com \"índice genérico\""
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o esquema que imita o Aurora"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem hoje, e ele é legítimo como ponto de partida: as duas tabelas foram criadas em minutos, e todas as quatro rotas respondem corretamente no ambiente de teste. O laboratório começa medindo o custo em produção, porque um número torna o defeito discutível, e \"está lento\" não."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Duas tabelas que imitam o Postgres, e um Scan para cada pergunta nova",
+            "caption": "Este desenho publica, e responde às quatro perguntas com o mesmo código de sempre — WHERE virou FilterExpression. O defeito não está em nenhuma configuração: está em que a chave de cada tabela responde a UMA pergunta, e as outras três não têm caminho de índice nenhum. Percorra os passos e repare que a conta do Scan cresce com o tamanho da TABELA, não com o tamanho da resposta.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cliente",
+                    "service": "mobile",
+                    "label": "Cliente no aplicativo",
+                    "note": "abre o histórico de pedidos; é a pergunta que o L14 já resolvia antes destas três"
+                  },
+                  {
+                    "id": "atendente",
+                    "service": "browser",
+                    "label": "Atendente de suporte",
+                    "note": "recebe só o código do pedido no chamado — nunca sabe de antemão quem é o cliente"
+                  },
+                  {
+                    "id": "expedidor",
+                    "service": "browser",
+                    "label": "Expedição da loja",
+                    "note": "confere a fila de separação a cada poucos minutos; só quer o que ainda não saiu"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB, um grupo de destino",
+                    "note": "não distingue as quatro perguntas: para ele são caminhos de URL para o mesmo serviço"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "api",
+                    "service": "fargate",
+                    "label": "API .NET 8",
+                    "note": "atende as quatro rotas com o mesmo padrão: buscar tudo e filtrar em memória depois"
+                  }
+                ]
+              },
+              {
+                "label": "Regional, fora da VPC",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "tpedidos",
+                    "service": "dynamodb",
+                    "label": "Tabela Pedidos (PK = pedido_id)",
+                    "note": "espelha a tabela do Aurora; serve bem a busca por código, e mais nenhuma das outras três"
+                  },
+                  {
+                    "id": "titens",
+                    "service": "dynamodb",
+                    "label": "Tabela ItensPedido (PK = item_id)",
+                    "note": "chave é o item, sem relação nenhuma com o pedido a que ele pertence"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Métricas do DynamoDB",
+                    "note": "mostra capacidade consumida subindo junto com o tamanho da tabela, não da resposta"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "cliente",
+                "to": "alb",
+                "label": "GET /clientes/{id}/pedidos",
+                "style": "solid"
+              },
+              {
+                "from": "atendente",
+                "to": "alb",
+                "label": "GET /pedidos/{codigo}",
+                "style": "solid"
+              },
+              {
+                "from": "expedidor",
+                "to": "alb",
+                "label": "GET /lojas/{id}/pendentes",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "api",
+                "label": "as três rotas caem no mesmo serviço",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "tpedidos",
+                "label": "Scan com FilterExpression em cliente_id, loja_id ou status",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "titens",
+                "label": "Scan com FilterExpression em pedido_id",
+                "style": "solid"
+              },
+              {
+                "from": "tpedidos",
+                "to": "cw",
+                "label": "ConsumedReadCapacityUnits por chamada",
+                "style": "dashed"
+              },
+              {
+                "from": "titens",
+                "to": "cw",
+                "label": "ConsumedReadCapacityUnits por chamada",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A chave responde a uma pergunta só",
+                "detail": "Com `PK = pedido_id`, a única busca eficiente é \"me dê o pedido com este código\" — que é exatamente a pergunta do atendente. As outras três nunca tiveram chave própria: cliente, loja e status são atributos comuns, não a chave, e por isso não têm caminho de índice.",
+                "nodes": [
+                  "api",
+                  "tpedidos"
+                ],
+                "edges": [
+                  "api>tpedidos"
+                ]
+              },
+              {
+                "label": "Achar os itens de um pedido também é Scan",
+                "detail": "`ItensPedido` tem `PK = item_id` porque foi exportada como uma tabela do Aurora, onde o identificador próprio da linha é natural. No DynamoDB isso apaga a relação: não existe caminho de `pedido_id` para os itens dele sem examinar a tabela inteira.",
+                "nodes": [
+                  "api",
+                  "titens"
+                ],
+                "edges": [
+                  "api>titens"
+                ]
+              },
+              {
+                "label": "O Scan cobra pelo que examina, não pelo que devolve",
+                "detail": "A tabela Pedidos tem 40 milhões de itens. Buscar os pedidos pendentes de UMA loja lê os 40 milhões antes de o filtro descartar os que não batem — o filtro roda DEPOIS da cobrança, nunca antes.",
+                "nodes": [
+                  "tpedidos",
+                  "cw"
+                ],
+                "edges": [
+                  "tpedidos>cw"
+                ]
+              },
+              {
+                "label": "A conta cresce com o tamanho da tabela, não da resposta",
+                "detail": "Uma loja tem em média 44 pedidos por dia, entre 40 mil no total. O Scan que devolve esses 44 examina os 40 milhões inteiros — o custo é do tamanho da tabela, e ele só sobe com o tempo, nunca com o tráfego da loja.",
+                "nodes": [
+                  "expedidor",
+                  "tpedidos"
+                ],
+                "edges": [
+                  "api>tpedidos"
+                ]
+              },
+              {
+                "label": "Nenhuma configuração está errada",
+                "detail": "As duas tabelas estão bem criadas, sob demanda, sem sub-provisionamento. O defeito não é operacional — é que a modelagem espelhou o esquema relacional em vez de partir das quatro perguntas que a aplicação faz.",
+                "nodes": [
+                  "tpedidos",
+                  "titens"
+                ],
+                "edges": [
+                  "api>titens"
+                ]
+              },
+              {
+                "label": "Por que alguém modela assim",
+                "detail": "\"Funciona igual ao WHERE do Postgres\" é raciocínio válido em quem vem do relacional, e o Scan de fato devolve a resposta certa em ambiente de teste, com poucos itens. O defeito só aparece em volume — e por definição não aparece na demonstração.",
+                "nodes": [
+                  "api",
+                  "alb"
+                ],
+                "edges": [
+                  "alb>api"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Antes de mudar qualquer coisa, meça o Scan real na sua conta. `ScannedCount` é o número que mais importa aqui: ele mostra quanto foi LIDO, e não tem relação nenhuma com `Count`, que é quanto foi DEVOLVIDO."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "filename": "medir-o-scan.sh",
+            "code": "# Rode contra a tabela Pedidos (minima), buscando os pendentes de UMA loja.\naws dynamodb scan --table-name ffv-lab-pedidos \\\n  --filter-expression \"loja_id = :l AND #s = :p\" \\\n  --expression-attribute-names '{\"#s\":\"status\"}' \\\n  --expression-attribute-values '{\":l\":{\"S\":\"a10ecb4e-...\"},\":p\":{\"S\":\"PENDENTE\"}}' \\\n  --return-consumed-capacity TOTAL \\\n  --query '{lidos: ScannedCount, devolvidos: Count, RCU: ConsumedCapacity.CapacityUnits}'\n# Na Cadencia, com a tabela cheia: ScannedCount fecha perto do total de itens da\n# tabela inteira; Count fica na casa de dezenas. O RCU cobra pelo primeiro numero."
+          }
+        },
+        {
+          "id": "b4_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "O Scan cobra pelo que examina, mesmo filtrando depois",
+            "content": "`FilterExpression` roda DEPOIS de a operação ler e cobrar pelos itens — ela decide o que volta na resposta, não o que é lido. Uma tabela de 40 milhões de itens é examinada por inteiro em toda chamada, não importa se o resultado final é um item ou quarenta mil. É o erro de raciocínio mais caro desta modelagem: parece que filtrar economiza, e não economiza nada."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção: uma tabela, quatro caminhos"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. Se você não conseguir apontar o requisito, a peça é adorno — e este desenho não tem nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Uma tabela, coleção de itens por pedido, três caminhos de índice",
+            "caption": "Não é o desenho anterior com um índice a mais: a chave base mudou de dono. O pedido e os itens dele passam a viver na MESMA partição — é o que serve o atendente num round trip só — e o histórico por cliente, que era a chave base no L14, migra para um índice. Percorra os passos: cada caminho novo responde a uma pergunta específica, nenhum deles examina o que não precisa.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cliente",
+                    "service": "mobile",
+                    "label": "Cliente no aplicativo",
+                    "note": "mesma pergunta do L14; agora servida por um índice, não pela chave base"
+                  },
+                  {
+                    "id": "atendente",
+                    "service": "browser",
+                    "label": "Atendente de suporte",
+                    "note": "busca pelo código do pedido e precisa dos itens junto, na mesma resposta"
+                  },
+                  {
+                    "id": "expedidor",
+                    "service": "browser",
+                    "label": "Expedição da loja",
+                    "note": "só quer o que está pendente — a fila não pode crescer com pedido já separado"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB, um grupo de destino",
+                    "note": "a fronteira entre os três padrões de acesso vive no código da API, não na borda"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "api",
+                    "service": "fargate",
+                    "label": "API .NET 8",
+                    "note": "escolhe o índice pela pergunta recebida; nunca chama Scan em rota de produção"
+                  },
+                  {
+                    "id": "ep",
+                    "service": "routetable",
+                    "label": "Rota de VPC endpoint (gateway)",
+                    "note": "gateway, não interface: entra na tabela de rotas, sem ENI e sem cobrança por hora"
+                  }
+                ]
+              },
+              {
+                "label": "Regional, fora da VPC",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "tabela",
+                    "service": "dynamodb",
+                    "label": "pedidos_cadencia: base + 3 GSIs",
+                    "note": "PK/SK é a coleção de itens do pedido; GSI1/2/3 são os outros três caminhos de acesso"
+                  }
+                ]
+              },
+              {
+                "label": "Observação e custo",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Métricas por índice",
+                    "note": "RCU, WCU e throttling separados por GSI — um índice pode estrangular sozinho"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "cliente",
+                "to": "alb",
+                "label": "GET /clientes/{id}/pedidos",
+                "style": "solid"
+              },
+              {
+                "from": "atendente",
+                "to": "alb",
+                "label": "GET /pedidos/{codigo}",
+                "style": "solid"
+              },
+              {
+                "from": "expedidor",
+                "to": "alb",
+                "label": "GET /lojas/{id}/pendentes",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "api",
+                "label": "as três rotas, um serviço só",
+                "style": "solid"
+              },
+              {
+                "from": "api",
+                "to": "ep",
+                "label": "Query, sem sair da rede da AWS",
+                "style": "solid"
+              },
+              {
+                "from": "ep",
+                "to": "tabela",
+                "label": "Query na chave base: PK = PEDIDO#<id> (detalhe + itens)",
+                "style": "solid"
+              },
+              {
+                "from": "ep",
+                "to": "tabela",
+                "label": "Query no GSI1: PK = CLIENTE#<id> (histórico paginado)",
+                "style": "dashed"
+              },
+              {
+                "from": "ep",
+                "to": "tabela",
+                "label": "Query no GSI2: PK = LOJA#<id>, SK entre datas (painel)",
+                "style": "dashed"
+              },
+              {
+                "from": "ep",
+                "to": "tabela",
+                "label": "Query no GSI3: PK = LOJA#<id>, esparso (fila de pendentes)",
+                "style": "dashed"
+              },
+              {
+                "from": "tabela",
+                "to": "cw",
+                "label": "ConsumedReadCapacityUnits separada por índice",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A pergunta decide qual caminho da tabela é usado",
+                "detail": "Quatro perguntas, quatro caminhos: chave base para detalhe do pedido, GSI1 para histórico por cliente, GSI2 para pedidos de uma loja num intervalo, GSI3 para a fila de pendentes. Nenhum deles é `Scan` — cada Query entra direto na partição certa.",
+                "nodes": [
+                  "api",
+                  "tabela"
+                ],
+                "edges": [
+                  "ep>tabela"
+                ]
+              },
+              {
+                "label": "A chave base pertence a quem precisa de uma coleção de itens",
+                "detail": "O pedido e seus itens moram na MESMA partição — `PK = PEDIDO#<id>`, com `SK = METADADOS` para o cabeçalho e `SK = ITEM#<n>` para cada linha. É a única forma de o atendente receber os dois numa Query só, e é por isso que esta pergunta reivindica a chave base, não a mais frequente.",
+                "nodes": [
+                  "atendente",
+                  "tabela"
+                ],
+                "edges": [
+                  "ep>tabela"
+                ]
+              },
+              {
+                "label": "GSI1 é o mesmo padrão do L14, promovido a índice",
+                "detail": "O histórico por cliente era a chave base da projeção anterior. Aqui ele continua com a MESMA forma — `CLIENTE#<id>` na partição, `PEDIDO#<data>#<id>` na ordenação — só que como GSI1, porque a chave base mudou de dono. A consulta não regrediu: mudou de onde ela mora.",
+                "nodes": [
+                  "cliente",
+                  "tabela"
+                ],
+                "edges": [
+                  "ep>tabela"
+                ]
+              },
+              {
+                "label": "GSI2 serve intervalo de datas, porque ISO ordena como string",
+                "detail": "`GSI2SK` é o `criado_em` em ISO 8601. `BETWEEN` sobre uma chave de ordenação string funciona porque a comparação lexicográfica de ISO 8601 coincide com a ordem cronológica — é a mesma propriedade que fez `PEDIDO#<data>#<id>` ordenar certo no GSI1.",
+                "nodes": [
+                  "expedidor",
+                  "tabela"
+                ],
+                "edges": [
+                  "ep>tabela"
+                ]
+              },
+              {
+                "label": "GSI3 é esparso de propósito",
+                "detail": "Só o item do pedido carrega `GSI3PK`/`GSI3SK` — e só enquanto o status é `PENDENTE`. Quando a expedição marca como separado, a aplicação REMOVE essas duas chaves do item, e ele desaparece do índice sozinho. A fila nunca cresce com pedido já resolvido, porque ele deixa de existir ali.",
+                "nodes": [
+                  "expedidor",
+                  "tabela"
+                ],
+                "edges": [
+                  "ep>tabela"
+                ]
+              },
+              {
+                "label": "O endpoint de gateway evita NAT, porque a tabela não mora na VPC",
+                "detail": "DynamoDB é um serviço regional, alcançado por API — não por sub-rede. O que existe na rede privada é uma entrada na TABELA DE ROTAS, sem interface de rede. Sem ela, a task alcançaria a tabela pelo NAT Gateway, que cobra por hora ligada e por GB processado por um tráfego que não precisava sair.",
+                "nodes": [
+                  "ep",
+                  "tabela"
+                ],
+                "edges": [
+                  "api>ep"
+                ]
+              },
+              {
+                "label": "Cada índice é observado separado",
+                "detail": "Capacidade consumida e estrangulamento são medidos POR ÍNDICE, não pela tabela como um todo. Um GSI pode estrangular sozinho — por exemplo, se uma loja concentrar volume muito acima das outras — enquanto a chave base e os outros dois índices seguem normais.",
+                "nodes": [
+                  "tabela",
+                  "cw"
+                ],
+                "edges": [
+                  "tabela>cw"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação ao desenho anterior não é \"mais um índice\": é que a chave base mudou de dono. No L14, `CLIENTE#id` era a chave base porque era a única pergunta que existia. Aqui, o detalhe do pedido — que precisa de cabeçalho e itens juntos, numa coleção de itens — reivindica a chave base, e o histórico por cliente migra para GSI1 com a mesma forma de chave."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "annotated_formula",
+          "position": 3,
+          "data": {
+            "title": "Por que um Scan de 40 milhões de itens custa isso, e uma Query no índice certo custa quase nada",
+            "formula": "RCU_scan ≈ ⌈(itens_da_tabela × bytes_por_item) ÷ 4 KB⌉    vs.    RCU_query ≈ ⌈(itens_que_batem × bytes_por_item) ÷ 4 KB⌉",
+            "parts": [
+              {
+                "symbol": "itens_da_tabela",
+                "name": "O Scan lê TODOS, filtro depois",
+                "description": "Sem `KeyConditionExpression`, não há partição para localizar: a operação percorre a tabela inteira e só descarta o que não bate DEPOIS de já ter lido e cobrado por aquele item. `FilterExpression` não economiza capacidade nenhuma — ela só decide o que volta na resposta."
+              },
+              {
+                "symbol": "itens_que_batem",
+                "name": "A Query lê só a partição, e só o intervalo",
+                "description": "Com `KeyConditionExpression`, a operação vai direto à partição do índice e lê apenas os itens dentro da condição de chave. O custo é do RESULTADO, não do universo em que ele estava escondido.",
+                "highlight": true
+              },
+              {
+                "symbol": "40.000.000 × ~700 B ÷ 4 KB",
+                "name": "O cálculo do Scan na Pedidos da Cadência",
+                "description": "Cerca de 6,8 milhões de unidades de leitura (eventualmente consistente) para varrer a tabela inteira em busca dos pedidos pendentes de UMA loja. Isto é cálculo a partir do volume declarado, não medição — meça `ConsumedCapacity` na sua conta antes de confiar no número."
+              },
+              {
+                "symbol": "44 × ~700 B ÷ 4 KB",
+                "name": "O cálculo da Query no GSI2, mesmo resultado",
+                "description": "Cerca de 8 unidades de leitura para os ~44 pedidos diários de uma loja — a mesma resposta, seis ordens de grandeza mais barata. A diferença não é ajuste fino: é a pergunta ter, ou não ter, um caminho de índice."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "success",
+            "title": "O ajuste com maior efeito por decisão tomada",
+            "content": "Trocar duas tabelas espelhadas do Aurora por uma tabela com três GSIs não muda o volume de dados nem a infraestrutura de forma relevante — muda a FORMA como cada pergunta chega ao dado. É a mesma lição do L14, um nível mais fundo: o banco certo não é escolhido pela marca, é derivado da consulta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Como funciona, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O pedido nasce PENDENTE, e nasce com as quatro chaves já preenchidas: a base para o detalhe, GSI1 para o cliente, GSI2 para a loja no calendário, GSI3 para a fila. Mudar de status não apaga nada — remove só o que faz o item parar de aparecer onde ele não deveria mais aparecer."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Do pedido criado à fila de separação vazia — as quatro perguntas, uma tabela",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1. POST /pedidos chega à API",
+                "desc": "O corpo traz cliente, loja e itens. O total é calculado no servidor, nunca recebido pronto do cliente."
+              },
+              {
+                "label": "2. Uma TransactWriteItems grava o cabeçalho e os itens juntos",
+                "desc": "O cabeçalho leva `PK=PEDIDO#<id>`, `SK=METADADOS`, e já nasce com `GSI1PK`, `GSI2PK/SK` e `GSI3PK/SK` preenchidos — porque o pedido nasce pendente. Cada item leva `SK=ITEM#<n>` na mesma partição. `ConditionExpression: attribute_not_exists(PK)` impede duplicar o mesmo código de pedido."
+              },
+              {
+                "label": "3. A resposta 201 volta ao cliente com o código do pedido",
+                "desc": "É esse código que o atendente vai receber depois, sem saber quem é o cliente — e é ele que endereça a chave base."
+              },
+              {
+                "label": "4. Atendente pergunta pelo código: Query na chave base",
+                "desc": "`PK = PEDIDO#<id>` devolve o cabeçalho E os itens numa Query só, porque os dois estão na mesma partição. Zero informação sobre o cliente é necessária."
+              },
+              {
+                "label": "5. Cliente pagina o histórico: Query no GSI1",
+                "desc": "`GSI1PK = CLIENTE#<id>`, `ScanIndexForward = false`, `Limit = 20`. É a mesma forma de chave que o L14 já usava, agora vivendo num índice em vez da tabela."
+              },
+              {
+                "label": "6. Loja pede o dia: Query no GSI2 com intervalo",
+                "desc": "`GSI2PK = LOJA#<id>` e `GSI2SK BETWEEN \"2026-08-07T00:00:00Z\" AND \"2026-08-07T23:59:59Z\"`. Só os pedidos daquele dia e daquela loja são lidos."
+              },
+              {
+                "label": "7. Expedição confere a fila: Query no GSI3",
+                "desc": "`GSI3PK = LOJA#<id>`. Só existem itens ali enquanto o status é `PENDENTE` — o índice é a fila, sem `FilterExpression` nenhum."
+              },
+              {
+                "label": "8. Expedidor marca \"separado\": UpdateItem remove as chaves do GSI3",
+                "desc": "`SET status = SEPARADO REMOVE GSI3PK, GSI3SK`. O item deixa de ter os atributos que o índice indexa, e some do GSI3 no próximo instante — sem apagar o pedido, sem tocar no GSI1 nem no GSI2."
+              },
+              {
+                "label": "9. As três perguntas seguem servidas pelo mesmo item",
+                "desc": "O cabeçalho nunca deixou de existir na chave base nem no GSI1/GSI2. Só o GSI3 perdeu a referência — porque só ele representa \"ainda pendente\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "json",
+            "filename": "item-do-pedido.json",
+            "code": "// O cabecalho do pedido, como ele existe na tabela ENQUANTO pendente.\n// Repare que ha quatro \"vistas\" do MESMO item: PK/SK, GSI1, GSI2, GSI3.\n{\n  \"PK\": \"PEDIDO#b7a1f0b0-2c44-4e9a-9d31-000000009182\",\n  \"SK\": \"METADADOS\",\n  \"GSI1PK\": \"CLIENTE#3f2a1c10-8e3a-4a11-9c2e-000000000001\",\n  \"GSI1SK\": \"PEDIDO#2026-08-07T14:03:21Z#b7a1f0b0-2c44-4e9a-9d31-000000009182\",\n  \"GSI2PK\": \"LOJA#a10ecb4e-6f21-4a02-8b9d-000000000512\",\n  \"GSI2SK\": \"2026-08-07T14:03:21Z\",\n  \"GSI3PK\": \"LOJA#a10ecb4e-6f21-4a02-8b9d-000000000512\",\n  \"GSI3SK\": \"2026-08-07T14:03:21Z\",\n  \"total\": 187.90,\n  \"status\": \"PENDENTE\",\n  \"criado_em\": \"2026-08-07T14:03:21Z\",\n  \"itens_count\": 3\n}\n\n// Depois de MarcarComoSeparadoAsync: GSI3PK e GSI3SK foram REMOVIDOS.\n// O item continua existindo na chave base e no GSI1/GSI2 — so sumiu do GSI3.\n{\n  \"PK\": \"PEDIDO#b7a1f0b0-2c44-4e9a-9d31-000000009182\",\n  \"SK\": \"METADADOS\",\n  \"GSI1PK\": \"CLIENTE#3f2a1c10-8e3a-4a11-9c2e-000000000001\",\n  \"GSI1SK\": \"PEDIDO#2026-08-07T14:03:21Z#b7a1f0b0-2c44-4e9a-9d31-000000009182\",\n  \"GSI2PK\": \"LOJA#a10ecb4e-6f21-4a02-8b9d-000000000512\",\n  \"GSI2SK\": \"2026-08-07T14:03:21Z\",\n  \"total\": 187.90,\n  \"status\": \"SEPARADO\",\n  \"criado_em\": \"2026-08-07T14:03:21Z\",\n  \"itens_count\": 3\n}"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "Por que REMOVE, e não um segundo SET",
+            "content": "Um GSI esparso decide pertencimento pela PRESENÇA do atributo de chave, não pelo valor de nenhum campo. `SET status = \"SEPARADO\"` sozinho deixaria `GSI3PK` e `GSI3SK` intactos, e o pedido continuaria aparecendo na fila para sempre — separado, mas listado como se não estivesse. `REMOVE` é o que faz o índice refletir a realidade."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "A mesma aplicação de pedidos da Cadência — 900 lojas, 40 milhões de pedidos acumulados, 40 mil pedidos por dia — ganhando três padrões de acesso novos ao mesmo tempo: detalhe do pedido por código, pedidos de uma loja num intervalo, e fila de separação por loja. Equipe de duas pessoas, sem tempo para reescrever tudo do zero.",
+            "winner": "Tabela única com coleção de itens por pedido na chave base, e três GSIs — um deles esparso",
+            "why": "As quatro perguntas já são conhecidas e não mudam de forma: quem pergunta pelo código quer o pedido inteiro; quem pergunta pelo cliente quer uma lista paginada e recente; quem pergunta pela loja quer um intervalo; quem pergunta pela fila quer só o que ainda não foi resolvido. Cada uma vira uma chave, e a tabela única evita que a aplicação precise buscar em vários lugares e juntar na memória — que é exatamente o defeito que gerou o `Scan` no desenho anterior. Isso só funciona porque as perguntas são conhecidas de antemão; se amanhã aparecer um relatório ad-hoc, ele não entra aqui.",
+            "alternatives": [
+              {
+                "name": "Múltiplas tabelas por entidade (o desenho mínimo)",
+                "downside": "É a modelagem que o time já tinha. Continua legítima como ponto de partida e como prova do defeito — mas cada pergunta nova sem chave própria vira Scan, e o custo cresce com o tamanho da tabela, não com o do produto."
+              },
+              {
+                "name": "RDS/Aurora para os quatro padrões",
+                "downside": "Resolveria as quatro perguntas com SQL, inclusive relatório ad-hoc futuro — é exatamente o caso do L14. A troca é latência: uma chave conhecida em DynamoDB entrega tempo de resposta que não cresce com o volume da tabela, o que um plano de consulta relacional, por melhor que seja, não garante sozinho sob 20× de pico."
+              },
+              {
+                "name": "Uma tabela por padrão de acesso (quatro tabelas, cada uma com a chave certa)",
+                "downside": "Resolve o Scan sem inverter o esquema mental — cada tabela já nasce pela pergunta. O custo é duplicar a escrita em quatro lugares manualmente, sem a consistência que uma transação sobre a mesma partição garante, e sem o ganho de \"poucas tabelas\" que a documentação da AWS recomenda para reduzir permissão e sobrecarga de operação."
+              },
+              {
+                "name": "ElastiCache na frente das tabelas relacionais",
+                "downside": "Resolveria a latência do histórico e do painel sem remodelar nada — mas não resolve a fila de separação, que precisa de consistência imediata a cada mudança de status, nem elimina os quatro caminhos de escrita divergentes."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Dono da chave base",
+                "coleção de itens do pedido (cabeçalho + itens)",
+                "cliente (como no L14); loja; pedido sem itens embutidos",
+                "é a única pergunta que precisa de dois tipos de item na MESMA resposta",
+                "o histórico por cliente deixa de ser gratuito na chave base e passa a custar um GSI"
+              ],
+              [
+                "GSI1: histórico por cliente",
+                "promovido da chave base do L14",
+                "manter como chave base e mover o detalhe do pedido para índice",
+                "preserva a forma de chave já validada; troca o dono, não o desenho",
+                "consistência eventual: o histórico pode atrasar frações de segundo após a escrita"
+              ],
+              [
+                "GSI2: pedidos por loja/intervalo",
+                "SK = timestamp ISO, `BETWEEN` na Query",
+                "GSI separado por dia (partição por data)",
+                "um único índice cobre qualquer intervalo sem criar partição nova a cada dia",
+                "partição pode concentrar volume se uma loja crescer muito mais que as outras"
+              ],
+              [
+                "GSI3: fila de pendentes",
+                "esparso, chaves só existem enquanto PENDENTE",
+                "GSI2 com `FilterExpression status = PENDENTE`",
+                "a Query lê só o que está na fila, não a partição inteira da loja",
+                "mais um par de atributos para manter coerente a cada escrita e a cada transição"
+              ],
+              [
+                "Escrita do pedido",
+                "uma `TransactWriteItems` para cabeçalho e itens",
+                "um `PutItem` por item, sem transação",
+                "garante que não existe pedido sem item nem item órfão",
+                "custa o dobro da unidade de escrita por item, e tem teto de itens por transação"
+              ],
+              [
+                "Projeção de cada GSI",
+                "INCLUDE (GSI1), ALL (GSI2), KEYS_ONLY (GSI3)",
+                "ALL nos três",
+                "cada índice projeta só o que a consulta dele precisa, reduzindo armazenamento e escrita",
+                "GSI1 e GSI3 exigem uma segunda leitura na chave base se o chamador quiser mais campos"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que a tabela única cria, e que este módulo não paga",
+            "content": "Um GSI concentrado numa loja com volume muito acima das outras — a \"hot partition\" — não é resolvido por nenhuma decisão deste laboratório. `PK = LOJA#id` distribui bem enquanto o volume entre lojas é parecido; se uma loja crescer para ser 1000× as outras, a chave de GSI2/GSI3 precisa de um sufixo de dispersão. Isso fica para quando a Cadência tiver esse problema de verdade, não antes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: a tabela única e os três índices"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada índice é uma pergunta, e o Terraform documenta isso nos comentários — porque um GSI sem contexto vira \"índice genérico\" para quem chegar depois."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "dynamodb.tf",
+            "code": "# dynamodb.tf — a tabela unica e os tres indices, cada um por uma pergunta\n\nresource \"aws_dynamodb_table\" \"pedidos\" {\n  name         = \"${var.projeto}-pedidos\"\n  billing_mode = \"PAY_PER_REQUEST\" # sob demanda: a equipe de duas pessoas nao\n                                    # tem tempo para dimensionar RCU/WCU manualmente,\n                                    # e o pico de campanha e 20x em rajada\n\n  hash_key  = \"PK\"\n  range_key = \"SK\"\n\n  # So se declara ATRIBUTO aqui para o que e chave — de tabela ou de indice.\n  # Os demais campos do item (total, status, sku, quantidade...) NAO entram:\n  # DynamoDB nao tem schema fixo para atributo que nao e chave.\n  attribute {\n    name = \"PK\"\n    type = \"S\"\n  }\n  attribute {\n    name = \"SK\"\n    type = \"S\"\n  }\n  attribute {\n    name = \"GSI1PK\"\n    type = \"S\"\n  }\n  attribute {\n    name = \"GSI1SK\"\n    type = \"S\"\n  }\n  attribute {\n    name = \"GSI2PK\"\n    type = \"S\"\n  }\n  attribute {\n    name = \"GSI2SK\"\n    type = \"S\"\n  }\n  attribute {\n    name = \"GSI3PK\"\n    type = \"S\"\n  }\n  attribute {\n    name = \"GSI3SK\"\n    type = \"S\"\n  }\n\n  # GSI1 — historico por cliente. Mesma forma de chave que o L14 usava na base;\n  # aqui e indice porque a base foi reivindicada pela coleção de itens do pedido.\n  global_secondary_index {\n    name            = \"GSI1\"\n    hash_key        = \"GSI1PK\"\n    range_key       = \"GSI1SK\"\n    projection_type = \"INCLUDE\"\n    non_key_attributes = [\"total\", \"status\", \"criado_em\"]\n  }\n\n  # GSI2 — pedidos de uma loja num intervalo. SK e o timestamp ISO: BETWEEN\n  # funciona porque a ordem lexicografica de ISO 8601 coincide com a cronologica.\n  global_secondary_index {\n    name            = \"GSI2\"\n    hash_key        = \"GSI2PK\"\n    range_key       = \"GSI2SK\"\n    projection_type = \"ALL\" # o painel da loja le o pedido inteiro, sem segunda consulta\n  }\n\n  # GSI3 — fila de separacao, ESPARSO por desenho. So o pedido pendente carrega\n  # GSI3PK/GSI3SK; a aplicacao os REMOVE ao marcar como separado, e o item some\n  # do indice sozinho. Sem isto, a fila cresceria para sempre.\n  global_secondary_index {\n    name            = \"GSI3\"\n    hash_key        = \"GSI3PK\"\n    range_key       = \"GSI3SK\"\n    projection_type = \"KEYS_ONLY\" # a fila so precisa do PEDIDO#<id> para buscar o detalhe depois\n  }\n\n  point_in_time_recovery {\n    enabled = true\n  }\n\n  server_side_encryption {\n    enabled     = true\n    kms_key_arn = aws_kms_key.app.arn\n  }\n\n  # Ha um teto de indices secundarios globais por tabela — confira o valor\n  # atual em Service Quotas antes de planejar um quinto ou sexto GSI.\n  tags = {\n    Projeto = var.projeto\n  }\n}\n\n# A task LE e ESCREVE, mas nunca faz Scan em rota de producao. Nao conceder a\n# acao e o guardrail que torna o antipadrao do desenho minimo detectavel em\n# tempo de deploy — nao em incidente.\ndata \"aws_iam_policy_document\" \"app_dynamodb\" {\n  statement {\n    effect = \"Allow\"\n    actions = [\n      \"dynamodb:GetItem\",\n      \"dynamodb:Query\",\n      \"dynamodb:PutItem\",\n      \"dynamodb:UpdateItem\",\n      \"dynamodb:TransactWriteItems\",\n    ]\n    resources = [\n      aws_dynamodb_table.pedidos.arn,\n      \"${aws_dynamodb_table.pedidos.arn}/index/*\",\n    ]\n  }\n}\n\n# Endpoint de GATEWAY, nao de interface: DynamoDB e S3 sao os dois servicos que\n# usam este tipo. Entra na tabela de rotas da sub-rede, sem ENI e sem cobranca\n# por hora — diferente do endpoint de interface que Secrets Manager usa.\nresource \"aws_vpc_endpoint\" \"dynamodb\" {\n  vpc_id            = aws_vpc.principal.id\n  service_name      = \"com.amazonaws.${var.regiao}.dynamodb\"\n  vpc_endpoint_type = \"Gateway\"\n  route_table_ids   = aws_route_table.privada[*].id\n}\n\noutput \"tabela_pedidos\" {\n  value       = aws_dynamodb_table.pedidos.name\n  description = \"nome da tabela unica; os tres GSIs vivem dentro dela\"\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Não conceder `dynamodb:Scan` à role da aplicação",
+            "content": "A política acima concede `GetItem`, `Query`, `PutItem`, `UpdateItem` e `TransactWriteItems` — e nada mais. Sem `dynamodb:Scan`, qualquer código que tente reintroduzir o antipadrão deste laboratório falha com `AccessDeniedException` em vez de degradar silenciosamente em produção. É o guardrail que transforma uma decisão de modelagem em algo que o IAM aplica, não que a revisão de código precisa lembrar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: gravar o pedido com as quatro chaves certas"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O ponto que mais confunde quem chega do relacional: as chaves dos índices não são calculadas depois, num processo separado. Elas nascem no mesmo `PutItem` que cria o pedido, porque são atributos do item como outro qualquer — só que alguns deles têm significado especial para o motor de índice."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "PedidoRepository.cs",
+            "code": "// PedidoRepository.cs — quatro perguntas, quatro caminhos, nenhum Scan\n\npublic sealed class PedidoRepository\n{\n    private readonly IAmazonDynamoDB _ddb;\n    private const string Tabela = \"cadencia-pedidos\";\n\n    public PedidoRepository(IAmazonDynamoDB ddb) => _ddb = ddb;\n\n    // ── Escrita: cabecalho e itens na MESMA transacao, na MESMA particao ──────\n    public async Task CriarPedidoAsync(Pedido pedido, CancellationToken ct)\n    {\n        var itens = new List<TransactWriteItem>\n        {\n            new()\n            {\n                Put = new Put\n                {\n                    TableName = Tabela,\n                    // Condicao impede recriar um pedido com o mesmo codigo —\n                    // e e a unica garantia de idempotencia deste caminho.\n                    ConditionExpression = \"attribute_not_exists(PK)\",\n                    Item = new Dictionary<string, AttributeValue>\n                    {\n                        [\"PK\"] = new($\"PEDIDO#{pedido.Id}\"),\n                        [\"SK\"] = new(\"METADADOS\"),\n                        // GSI1: historico por cliente — mesma forma do L14.\n                        [\"GSI1PK\"] = new($\"CLIENTE#{pedido.ClienteId}\"),\n                        [\"GSI1SK\"] = new($\"PEDIDO#{pedido.CriadoEm:O}#{pedido.Id}\"),\n                        // GSI2: pedidos da loja, por data.\n                        [\"GSI2PK\"] = new($\"LOJA#{pedido.LojaId}\"),\n                        [\"GSI2SK\"] = new(pedido.CriadoEm.ToString(\"O\")),\n                        // GSI3: fila de pendentes — ESPARSO. So existe aqui\n                        // porque o pedido NASCE pendente. Some quando o status muda.\n                        [\"GSI3PK\"] = new($\"LOJA#{pedido.LojaId}\"),\n                        [\"GSI3SK\"] = new(pedido.CriadoEm.ToString(\"O\")),\n                        [\"total\"] = new() { N = pedido.Total.ToString(CultureInfo.InvariantCulture) },\n                        [\"status\"] = new(\"PENDENTE\"),\n                        [\"criado_em\"] = new(pedido.CriadoEm.ToString(\"O\")),\n                        [\"itens_count\"] = new() { N = pedido.Itens.Count.ToString() },\n                    },\n                },\n            },\n        };\n\n        itens.AddRange(pedido.Itens.Select((item, i) => new TransactWriteItem\n        {\n            Put = new Put\n            {\n                TableName = Tabela,\n                Item = new Dictionary<string, AttributeValue>\n                {\n                    [\"PK\"] = new($\"PEDIDO#{pedido.Id}\"),\n                    [\"SK\"] = new($\"ITEM#{i:D3}\"),\n                    [\"sku\"] = new(item.Sku),\n                    [\"quantidade\"] = new() { N = item.Quantidade.ToString() },\n                    [\"preco_unitario\"] = new() { N = item.PrecoUnitario.ToString(CultureInfo.InvariantCulture) },\n                },\n            },\n        }));\n\n        // Uma transacao so: ou o cabecalho e TODOS os itens gravam, ou nada\n        // grava. TransactWriteItems custa o dobro da unidade de escrita normal\n        // por item — o preco de garantir que nao existe pedido sem item.\n        await _ddb.TransactWriteItemsAsync(new TransactWriteItemsRequest { TransactItems = itens }, ct);\n    }\n\n    // ── AP2: detalhe do pedido + itens, por codigo — chave base, um round trip ─\n    public async Task<PedidoDetalhe?> ObterDetalheAsync(string pedidoId, CancellationToken ct)\n    {\n        var resp = await _ddb.QueryAsync(new QueryRequest\n        {\n            TableName = Tabela,\n            KeyConditionExpression = \"PK = :pk\",\n            ExpressionAttributeValues = new() { [\":pk\"] = new($\"PEDIDO#{pedidoId}\") },\n        }, ct);\n\n        if (resp.Items.Count == 0) return null;\n\n        // O cabecalho e SK=METADADOS; os itens sao os demais. Uma Query so\n        // trouxe os dois — nao ha segunda chamada para \"buscar os itens\".\n        var cabecalho = resp.Items.First(i => i[\"SK\"].S == \"METADADOS\");\n        var itens = resp.Items.Where(i => i[\"SK\"].S.StartsWith(\"ITEM#\"));\n        return PedidoDetalhe.De(cabecalho, itens);\n    }\n\n    // ── AP1: historico por cliente, paginado — GSI1 ────────────────────────────\n    public async Task<PaginaDePedidos> ObterHistoricoAsync(\n        string clienteId, string? cursor, CancellationToken ct)\n    {\n        var resp = await _ddb.QueryAsync(new QueryRequest\n        {\n            TableName = Tabela,\n            IndexName = \"GSI1\",\n            KeyConditionExpression = \"GSI1PK = :pk\",\n            ExpressionAttributeValues = new() { [\":pk\"] = new($\"CLIENTE#{clienteId}\") },\n            ScanIndexForward = false, // mais recente primeiro\n            Limit = 20,\n            ExclusiveStartKey = Cursor.Decodificar(cursor),\n        }, ct);\n\n        return PaginaDePedidos.De(resp.Items, resp.LastEvaluatedKey);\n    }\n\n    // ── AP3: pedidos da loja num intervalo — GSI2, SK entre datas ──────────────\n    public async Task<IReadOnlyList<Pedido>> ObterPorLojaEIntervaloAsync(\n        string lojaId, DateTimeOffset inicio, DateTimeOffset fim, CancellationToken ct)\n    {\n        var resp = await _ddb.QueryAsync(new QueryRequest\n        {\n            TableName = Tabela,\n            IndexName = \"GSI2\",\n            KeyConditionExpression = \"GSI2PK = :pk AND GSI2SK BETWEEN :ini AND :fim\",\n            ExpressionAttributeValues = new()\n            {\n                [\":pk\"] = new($\"LOJA#{lojaId}\"),\n                [\":ini\"] = new(inicio.ToString(\"O\")),\n                [\":fim\"] = new(fim.ToString(\"O\")),\n            },\n        }, ct);\n\n        return resp.Items.Select(Pedido.De).ToList();\n    }\n\n    // ── AP4: fila de pendentes da loja — GSI3, esparso, sem FilterExpression ───\n    public async Task<IReadOnlyList<string>> ObterFilaPendenteAsync(string lojaId, CancellationToken ct)\n    {\n        var resp = await _ddb.QueryAsync(new QueryRequest\n        {\n            TableName = Tabela,\n            IndexName = \"GSI3\",\n            KeyConditionExpression = \"GSI3PK = :pk\",\n            ExpressionAttributeValues = new() { [\":pk\"] = new($\"LOJA#{lojaId}\") },\n        }, ct);\n\n        // KEYS_ONLY: so o PK volta. Quem chama busca o detalhe pela chave base\n        // se precisar dos itens — a fila existe para LISTAR, nao para exibir tudo.\n        return resp.Items.Select(i => i[\"PK\"].S.Replace(\"PEDIDO#\", \"\")).ToList();\n    }\n\n    // ── Transicao de status: remove as chaves do GSI3, e o item some da fila ──\n    public async Task MarcarComoSeparadoAsync(string pedidoId, CancellationToken ct)\n    {\n        await _ddb.UpdateItemAsync(new UpdateItemRequest\n        {\n            TableName = Tabela,\n            Key = new()\n            {\n                [\"PK\"] = new($\"PEDIDO#{pedidoId}\"),\n                [\"SK\"] = new(\"METADADOS\"),\n            },\n            // REMOVE, nao SET status=\"SEPARADO\" sozinho. O indice filtra por\n            // PRESENCA de atributo, nao por valor — mudar so o status deixa o\n            // pedido separado aparecendo na fila para sempre.\n            UpdateExpression = \"SET #s = :novo REMOVE GSI3PK, GSI3SK\",\n            ExpressionAttributeNames = new() { [\"#s\"] = \"status\" },\n            ExpressionAttributeValues = new() { [\":novo\"] = new(\"SEPARADO\") },\n            ConditionExpression = \"attribute_exists(PK)\",\n        }, ct);\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que `TransactWriteItems`, e não um Put por vez",
+            "content": "Gravar o cabeçalho e cada item com `PutItem` separado parece mais simples, e é a tentação natural. Ela permite estado inconsistente: se a segunda escrita falhar, o cabeçalho já existe sem os itens correspondentes. `TransactWriteItems` garante tudo ou nada, ao custo de duas unidades de escrita por item — o preço de nunca ter pedido órfão."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: as quatro consultas, e a fila que se esvazia sozinha"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Repare que nenhum dos quatro métodos de leitura usa `Scan` nem `FilterExpression` sobre um conjunto grande. Cada um entra direto na chave — base ou de índice — que aquela pergunta reivindicou."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "key_value",
+          "position": 1,
+          "data": {
+            "items": [
+              {
+                "k": "AP1 — histórico por cliente",
+                "v": "Query no GSI1, `ScanIndexForward=false`, paginado com `Limit`"
+              },
+              {
+                "k": "AP2 — detalhe do pedido",
+                "v": "Query na chave base, `PK = PEDIDO#<id>`, um round trip"
+              },
+              {
+                "k": "AP3 — pedidos da loja no intervalo",
+                "v": "Query no GSI2, `GSI2SK BETWEEN` duas datas"
+              },
+              {
+                "k": "AP4 — fila de pendentes da loja",
+                "v": "Query no GSI3, esparso, sem `FilterExpression`"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "Query com FilterExpression ainda pode custar como Scan",
+            "content": "Se o GSI3 não fosse esparso e a fila fosse implementada como `Query` no GSI2 com `FilterExpression status = PENDENTE`, a operação leria TODOS os pedidos da loja — inclusive os já separados — antes de descartar o que não bate. `FilterExpression` aplicado dentro de uma partição grande tem o mesmo defeito de custo do Scan na tabela inteira, só que num escopo menor. O índice esparso resolve isso removendo o item do universo examinado, em vez de filtrá-lo depois de examinado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Implantar, e provar que não há Scan escondido"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "medir-scan-vs-query.sh",
+            "code": "#!/usr/bin/env bash\n# medir-scan-vs-query.sh — a mesma pergunta, dois caminhos, RCU real da conta\nset -euo pipefail\n\nLOJA=\"a10ecb4e-6f21-4a02-8b9d-000000000512\"\nHOJE=\"2026-08-07\"\n\necho \"== Scan na tabela Pedidos (desenho minimo), filtrando por loja e status ==\"\naws dynamodb scan \\\n  --table-name ffv-lab-pedidos \\\n  --filter-expression \"loja_id = :l AND #s = :p\" \\\n  --expression-attribute-names '{\"#s\":\"status\"}' \\\n  --expression-attribute-values \"{\\\":l\\\":{\\\"S\\\":\\\"$LOJA\\\"},\\\":p\\\":{\\\"S\\\":\\\"PENDENTE\\\"}}\" \\\n  --return-consumed-capacity TOTAL \\\n  --query '{lidos: ScannedCount, devolvidos: Count, RCU: ConsumedCapacity.CapacityUnits}'\n# Esperado: ScannedCount fecha perto do total de itens da tabela; Count e uma\n# fracao pequena disso. RCU cobra pelo primeiro numero, nao pelo segundo.\n\necho \"== Query no GSI3 (desenho de producao), mesma pergunta ==\"\naws dynamodb query \\\n  --table-name ffv-lab-pedidos-cadencia \\\n  --index-name GSI3 \\\n  --key-condition-expression \"GSI3PK = :pk\" \\\n  --expression-attribute-values \"{\\\":pk\\\":{\\\"S\\\":\\\"LOJA#$LOJA\\\"}}\" \\\n  --return-consumed-capacity TOTAL \\\n  --query '{lidos: ScannedCount, devolvidos: Count, RCU: ConsumedCapacity.CapacityUnits}'\n# Esperado: ScannedCount = Count (a Query so le o que bate com a chave), e RCU\n# ordens de grandeza menor que o Scan acima — para a MESMA resposta.\n"
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma aceita \"parece rápido\" como resultado — cada uma tem um número ou um estado esperado, e a terceira é a que mais gente pula."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medicoes; nenhuma conclusao vem de \"parece rapido\"\n\nTABELA=ffv-lab-pedidos-cadencia\n\n# ── Prova 1: as quatro Query devolvem o mesmo dado que o Scan devolvia ───────\nCODIGO=$(aws dynamodb scan --table-name $TABELA --index-name GSI1 --limit 1 \\\n  --query 'Items[0].PK.S' --output text | sed 's/PEDIDO#//')\naws dynamodb query --table-name $TABELA \\\n  --key-condition-expression \"PK = :pk\" \\\n  --expression-attribute-values \"{\\\":pk\\\":{\\\"S\\\":\\\"PEDIDO#$CODIGO\\\"}}\" \\\n  --query 'Items[].SK.S'\n# Esperado: METADADOS + um ou mais ITEM#NNN — cabecalho e itens na mesma resposta.\n\n# ── Prova 2: nenhuma chamada de producao usa Scan ────────────────────────────\naws cloudtrail lookup-events \\\n  --lookup-attributes AttributeKey=EventName,AttributeValue=Scan \\\n  --start-time \"$(date -u -d '1 hour ago' +%FT%TZ)\" \\\n  --query 'Events[].Username'\n# Esperado: vazio, ou so a identidade de ferramenta de migracao/backfill — nunca\n# a role da task da API.\n\n# ── Prova 3: o GSI3 e realmente esparso ──────────────────────────────────────\nTOTAL_TABELA=$(aws dynamodb describe-table --table-name $TABELA \\\n  --query 'Table.ItemCount' --output text)\nTOTAL_GSI3=$(aws dynamodb describe-table --table-name $TABELA \\\n  --query \"Table.GlobalSecondaryIndexes[?IndexName=='GSI3'].ItemCount | [0]\" --output text)\necho \"tabela: $TOTAL_TABELA itens · GSI3: $TOTAL_GSI3 itens\"\n# Esperado: GSI3 bem menor que a tabela, e proporcional a quantos pedidos estao\n# HOJE pendentes — nao ao total historico. ItemCount do describe-table e\n# atualizado a cada ~6h; para o numero exato agora, conte via Query.\n\n# ── Prova 4: marcar como separado tira o pedido da fila, sem apagar nada ─────\naws dynamodb query --table-name $TABELA --index-name GSI3 \\\n  --key-condition-expression \"GSI3PK = :pk\" \\\n  --expression-attribute-values \"{\\\":pk\\\":{\\\"S\\\":\\\"LOJA#$LOJA_TESTE\\\"}}\" \\\n  --query 'length(Items)'\n# anote o numero, rode MarcarComoSeparadoAsync num pedido dessa loja, repita:\naws dynamodb query --table-name $TABELA --index-name GSI3 \\\n  --key-condition-expression \"GSI3PK = :pk\" \\\n  --expression-attribute-values \"{\\\":pk\\\":{\\\"S\\\":\\\"LOJA#$LOJA_TESTE\\\"}}\" \\\n  --query 'length(Items)'\n# Esperado: o segundo numero e o primeiro menos um. O pedido continua existindo\n# (prova 1 ainda o encontra pela chave base) — so saiu do indice esparso.\n\n# ── Prova 5: a diferenca de RCU entre Scan e Query, na sua conta ────────────\n# Rode medir-scan-vs-query.sh e compare ConsumedCapacity.CapacityUnits dos dois.\n# Esperado: a Query fica ordens de grandeza abaixo do Scan para o mesmo resultado.\n"
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Detalhe num round trip",
+                "Query na chave base",
+                "cabeçalho e itens na mesma resposta",
+                "se vierem só itens ou só cabeçalho, a SK não está diferenciando os tipos certo"
+              ],
+              [
+                "2 · Nenhum Scan em produção",
+                "CloudTrail em `Scan`",
+                "vazio, ou só identidade de ferramenta de migração",
+                "a role da API aparecendo aqui é o antipadrão voltando"
+              ],
+              [
+                "3 · GSI3 é esparso de verdade",
+                "`describe-table` dos dois `ItemCount`",
+                "GSI3 bem menor que a tabela, proporcional ao pendente do dia",
+                "se GSI3 ≈ tabela, as chaves nunca estão sendo removidas"
+              ],
+              [
+                "4 · A transição some da fila sem apagar o pedido",
+                "contar o GSI3 antes e depois de `MarcarComoSeparadoAsync`",
+                "a contagem cai em um, e a Prova 1 ainda encontra o pedido",
+                "se a Prova 1 falhar depois, o `REMOVE` apagou atributo demais"
+              ],
+              [
+                "5 · A diferença de custo é real, não teórica",
+                "RCU do Scan vs. da Query",
+                "ordens de grandeza de diferença para o mesmo resultado",
+                "diferença pequena sugere tabela de teste ainda não representativa do volume real"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três acontecem de verdade, e a primeira é a mais traiçoeira: passa em todo teste com poucos dados e só aparece quando a fila já tem volume."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Esqueceu o REMOVE na transição",
+                "troque `REMOVE GSI3PK, GSI3SK` por só `SET status = :novo`",
+                "pedidos separados continuam aparecendo na fila de expedição, para sempre",
+                "GSI3 cresce monotonicamente; `ItemCount` do índice nunca cai",
+                "`UpdateExpression` precisa do `REMOVE` explícito — mudar valor não tira do índice esparso"
+              ],
+              [
+                "GSI2 com FilterExpression em vez de esparso",
+                "implemente a fila como Query no GSI2 filtrando por status",
+                "RCU alto e crescente na fila, mesmo com poucos pedidos pendentes",
+                "`ConsumedCapacity` do GSI2 sobe com o total histórico da loja, não com o pendente",
+                "GSI3 esparso, dedicado, com a chave presente só enquanto PENDENTE"
+              ],
+              [
+                "Chave de partição com prefixo errado",
+                "grave `GSI1PK = cliente_id` sem o prefixo `CLIENTE#`",
+                "a Query devolve vazio, ou pior, mistura com outro tipo de item por coincidência de valor",
+                "compare o valor gravado com o valor consultado, caractere a caractere",
+                "todo prefixo é parte da chave — `CLIENTE#123` e `123` são valores diferentes"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A falha que só aparece com volume, e é a mais perigosa das três",
+            "content": "Um GSI3 sem `REMOVE` passa em qualquer teste de aceitação, porque a fila com dez pedidos parece funcionar — o expedidor vê os pendentes E os separados, e como ninguém está prestando atenção a dez itens, o erro não salta aos olhos. Ele só vira incidente quando a fila acumula milhares de itens \"separados fantasmas\" e o painel operacional fica ilegível. É o mesmo padrão do Scan: o defeito não aparece na demonstração, porque a demonstração nunca tem volume."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25_0",
+      "type": "quiz",
+      "position": 13,
+      "data": {
+        "question": "No L14, a chave base da projeção em DynamoDB era `CLIENTE#id`. Neste laboratório, ela passa a ser `PEDIDO#id`, e o histórico por cliente migra para um GSI. Por que a chave base mudou de dono?",
+        "options": [
+          "Porque o DynamoDB exige que a chave de partição seja sempre o identificador mais recente criado",
+          "Porque o detalhe do pedido precisa de cabeçalho e itens na mesma partição, e só a chave base pode ser essa partição",
+          "Porque uma tabela não pode ter mais de um GSI apontando para o mesmo tipo de dado",
+          "Porque GSI é mais lento que a chave base, e a consulta mais frequente sempre fica na base"
+        ],
+        "correctIndex": 1,
+        "explanation": "A chave base é a única partição que pode hospedar uma COLEÇÃO DE ITENS — cabeçalho e linhas de pedido juntos, respondidos numa Query só. O detalhe do pedido por código depende dessa coleção; o histórico por cliente não — ele só precisa de uma lista ordenada, que um GSI serve igualmente bem. Por isso a coleção de itens reivindica a chave base, e não a consulta mais frequente.\n\nA primeira alternativa inverte a lógica: nada nesta modelagem depende de frequência, e GSI não é \"mais lento\" por natureza — ele só é eventualmente consistente. A terceira é falsa: uma tabela DynamoDB aceita muitos índices secundários globais (há um teto de conta, ajustável via Service Quotas, mas está longe de um por tabela). A quarta inventa uma regra que não existe: a chave de partição é escolhida pelo desenhista, pela pergunta que ela serve — não por uma exigência do serviço sobre recência."
+      }
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 14,
+      "data": {
+        "title": "Segurança: o que muda quando a tabela concentra tudo"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Uma tabela única com todos os dados de pedido é mais fácil de proteger com uma política só — e é também um alvo mais valioso se essa política for permissiva demais."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Código de aplicação reintroduz Scan",
+                "alta",
+                "médio",
+                "IAM sem `dynamodb:Scan` na role da task",
+                "CloudTrail em `Scan` com a identidade da API",
+                "revisar o código que tentou; corrigir para Query pela chave certa"
+              ],
+              [
+                "GSI esparso vaza pedido de outra loja",
+                "baixa",
+                "alto",
+                "a chave `LOJA#id` no GSI2/GSI3 é derivada do servidor, nunca aceita do cliente",
+                "auditar chamadas com `loja_id` fora do conjunto do usuário autenticado",
+                "revogar acesso; corrigir a validação de origem da chave"
+              ],
+              [
+                "Transação parcial deixa item órfão",
+                "baixa",
+                "médio",
+                "`TransactWriteItems` é tudo-ou-nada por desenho — não há escrita parcial possível",
+                "métrica de `TransactionConflict` e itens de pedido sem `METADADOS` correspondente",
+                "reprocessar a partir do evento de origem, se a aplicação tiver outbox"
+              ],
+              [
+                "Leitura de item entre inquilinos por engano de prefixo",
+                "baixa",
+                "alto",
+                "toda consulta usa a chave com prefixo derivado do contexto autenticado, nunca de query string livre",
+                "teste automatizado que tenta ler `PEDIDO#` de outra conta",
+                "corrigir a construção da chave; auditar o histórico de acesso"
+              ],
+              [
+                "Excesso de permissão na role da task",
+                "média",
+                "médio",
+                "política restrita às cinco ações necessárias, sobre a tabela e seus índices",
+                "IAM Access Analyzer sobre uso real",
+                "apertar a política a partir do uso medido — é o mesmo raciocínio do L41"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O `Resource` que aparece com `/index/*`, e por que ele é necessário",
+            "content": "A ação `Query` sobre um GSI é autorizada pelo ARN do ÍNDICE, não só da tabela — mesmo que os dois compartilhem a mesma role. Sem `${aws_dynamodb_table.pedidos.arn}/index/*` na política, as três Query que usam `IndexName` falham com `AccessDeniedException`, e o erro não deixa claro que o problema é o recurso, não a ação."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O painel deste laboratório tem uma função estreita: dizer se alguma consulta está lendo mais do que deveria — porque no DynamoDB isso não aparece como erro, aparece como capacidade consumida crescendo sem motivo aparente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "Alguma consulta virou Scan?",
+                "`ConsumedReadCapacityUnits` por operação, no código",
+                "salto de RCU sem salto de tráfego é sinal de leitura examinando demais",
+                "> 10× a média móvel de 1 h"
+              ],
+              [
+                "Um índice está sendo estrangulado?",
+                "`ThrottledRequests` por GSI",
+                "um GSI específico sofrendo enquanto os outros estão normais",
+                "qualquer valor > 0, sustentado por mais de 1 min"
+              ],
+              [
+                "A tabela está balanceada entre lojas?",
+                "`ConsumedWriteCapacityUnits` por partição não é métrica nativa — aproxime por contagem de itens por `GSI2PK` numa consulta periódica",
+                "concentração revela candidato a hot partition antes do throttling aparecer",
+                "uma loja acima de 10× a mediana das outras"
+              ],
+              [
+                "A fila de separação está saudável?",
+                "contagem do GSI3 por loja, exposta como métrica própria",
+                "crescimento sem queda correspondente é sinal do antipadrão \"esqueceu o REMOVE\"",
+                "crescimento líquido positivo por mais de 24 h"
+              ],
+              [
+                "A transação de escrita está falhando?",
+                "`TransactionConflict` e `SystemErrors`",
+                "conflito de condição, geralmente pedido duplicado sendo reenviado",
+                "> 1% das tentativas de criação de pedido"
+              ],
+              [
+                "Quem está usando o endpoint de gateway?",
+                "CloudTrail em `Query`/`Scan` do DynamoDB",
+                "identidade fora da role esperada da task",
+                "qualquer identidade que não seja a role da API"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana: ItemCount da tabela",
+            "content": "`describe-table` atualiza `ItemCount` a cada seis horas aproximadamente, não em tempo real. Usar esse número para decidir se o GSI3 está esparso de verdade num teste que acabou de rodar dá falso negativo — o índice pode estar correto e o número, simplesmente desatualizado. Para contagem exata agora, faça uma Query e conte os itens devolvidos."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 pedidos, 1 loja",
+                "as quatro Query respondem em poucos milissegundos",
+                "nada; é o cenário de desenvolvimento",
+                "nada"
+              ],
+              [
+                "40 mil pedidos/dia, 900 lojas",
+                "GSI2 e GSI3 distribuem bem, uma partição por loja",
+                "nenhuma loja isolada ainda concentra volume desproporcional",
+                "monitorar a métrica de concentração por `GSI2PK` como rotina, não como reação"
+              ],
+              [
+                "20× em campanha (rajada)",
+                "modo sob demanda absorve, mas throttling pode aparecer no pico exato",
+                "escrita concentrada num curto intervalo, mesmo distribuída entre lojas",
+                "sob demanda escala automaticamente; medir `ThrottledRequests` durante o próximo pico real"
+              ],
+              [
+                "Uma loja vira 1000× as outras",
+                "a partição `LOJA#<id>` dela concentra todo o tráfego dela sozinha",
+                "hot partition: throttling isolado num GSI, mesmo com capacidade agregada de sobra",
+                "sufixo de dispersão na chave dessa loja específica — fora do escopo deste laboratório"
+              ],
+              [
+                "Falha de AZ",
+                "DynamoDB é multi-AZ por padrão dentro da região; nenhuma ação do cliente muda isso",
+                "a API em Fargate perde uma AZ; a tabela, não",
+                "a resiliência da tabela já está coberta — a atenção vai para a camada de computação"
+              ],
+              [
+                "1 bilhão de itens",
+                "a mesma Query continua O(resultado), não O(tabela)",
+                "o que cresce é o `ItemCount` reportado e o tempo do backup, não a latência da Query",
+                "nenhuma mudança de desenho — é exatamente o ponto de ter modelado pela chave"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O contraste que mais vale lembrar desta seção",
+            "content": "No desenho mínimo, cada ordem de grandeza de crescimento da tabela piora a latência de TODAS as consultas que dependiam de Scan. No desenho de produção, o crescimento da tabela não piora nenhuma das quatro Query — porque cada uma lê só a fração que a chave endereça. É a diferença entre custo O(tabela) e custo O(resultado)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Custo: o que a modelagem certa evita, e o que ela acrescenta"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A tabela única com três GSIs custa mais linhas de configuração que duas tabelas soltas — e custa MENOS dinheiro, porque o volume de leitura por Query é ordens de grandeza menor que o de Scan pela mesma resposta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "centenas de pedidos, 1 loja de teste",
+                "três GSIs vazios, quase sem capacidade consumida",
+                "desprezível",
+                "nenhuma; a diferença de custo só aparece em volume"
+              ],
+              [
+                "Produção atual",
+                "40 mil pedidos/dia, 900 lojas",
+                "RCU proporcional ao resultado de cada consulta, não ao total da tabela",
+                "baixa e previsível",
+                "projeção INCLUDE/KEYS_ONLY nos GSIs que não precisam do item inteiro"
+              ],
+              [
+                "Se tivesse ficado no desenho mínimo",
+                "mesma carga, com Scan nas 3 consultas novas",
+                "RCU crescendo com o total histórico da tabela, não com o tráfego diário",
+                "alta e piorando a cada dia que passa",
+                "não há otimização de configuração que resolva — é a modelagem que precisa mudar"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Leitura (Query/GetItem)",
+                "unidades de leitura, proporcionais ao resultado",
+                "é a dimensão que a modelagem por chave otimiza diretamente"
+              ],
+              [
+                "Leitura (Scan)",
+                "unidades de leitura, proporcionais ao total examinado",
+                "independe do que a `FilterExpression` descarta depois"
+              ],
+              [
+                "Escrita",
+                "unidades de escrita por item, e CADA GSI recebe uma cópia da escrita",
+                "três GSIs por item somam ao custo de escrita — é o custo oculto mais comum"
+              ],
+              [
+                "`TransactWriteItems`",
+                "o dobro da unidade de escrita normal, por item na transação",
+                "compensa pela garantia; não use transação onde um `PutItem` isolado já basta"
+              ],
+              [
+                "Armazenamento",
+                "GB-mês da tabela mais TODOS os GSIs somados",
+                "projeção ALL num índice grande duplica armazenamento; escolha por necessidade real"
+              ],
+              [
+                "Point-in-time recovery",
+                "GB-mês do histórico retido",
+                "cresce com o volume da tabela; avalie a janela de retenção pela necessidade real"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho de custo que a fatura da AWS não mostra sozinha",
+            "content": "A diferença de RCU entre Scan e Query não aparece como uma linha isolada — ela some dentro do total de leitura do DynamoDB, misturada com tudo o mais. Calcule as duas contas separadamente, como a fórmula desta seção fez, porque é a única forma de ver o efeito antes de a fatura chegar maior do que devia."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "quatro padrões de acesso documentados, cada GSI com a pergunta que ele serve",
+                "hot partition numa loja que cresça muito acima das outras",
+                "sufixo de dispersão sob demanda, quando o volume real exigir",
+                "média"
+              ],
+              [
+                "Segurança",
+                "IAM sem `Scan`; chave de loja/cliente sempre derivada do contexto autenticado",
+                "nenhuma criptografia em nível de item além da tabela inteira",
+                "avaliar campo sensível com criptografia de aplicação, se houver dado regulado",
+                "baixa"
+              ],
+              [
+                "Confiabilidade",
+                "transação garante coerência entre cabeçalho e itens; sem escrita órfã possível",
+                "GSI esparso depende de disciplina de código para o REMOVE correto",
+                "teste automatizado que reprova qualquer transição sem `REMOVE` explícito",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "custo O(resultado) nas quatro consultas, medido e comparado ao Scan",
+                "nenhum cache na frente ainda; toda leitura vai à tabela",
+                "ElastiCache para o histórico do cliente, se a latência de Query deixar de bastar",
+                "baixa"
+              ],
+              [
+                "Otimização de custos",
+                "projeção de cada GSI ajustada ao que a consulta dele realmente lê",
+                "três GSIs multiplicam o custo de escrita por item",
+                "revisar se GSI2 e GSI3 poderiam compartilhar mais atributos projetados",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "Query lê só o necessário; menos bytes movidos por consulta que o Scan equivalente",
+                "point-in-time recovery retém histórico proporcional ao volume, indefinidamente",
+                "revisar a janela de retenção com dado real de uso, não com o padrão",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO a modelagem precisa mudar de novo. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Da tabela espelhada do Aurora à plataforma de dados — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Tabelas por entidade, espelhando o esquema relacional. É onde a Cadência estava, e continua aceitável para uma consulta só, sem volume.",
+                "note": "Risco resolvido: nenhum. Novo risco: toda pergunta nova sem chave própria vira Scan. Custo: o mais baixo em desenvolvimento — e o que mais cresce em produção."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Tabela única, coleção de itens por pedido, três GSIs (um esparso), quatro padrões de acesso conhecidos servidos sem Scan.",
+                "note": "Risco resolvido: custo O(tabela) nas consultas. Novo risco: toda pergunta que a modelagem não previu não tem caminho — exige migração de schema, não um WHERE novo. Custo: baixo e proporcional ao resultado."
+              },
+              {
+                "label": "Nível 3 — DynamoDB Streams para sistemas secundários",
+                "instruction": "Mudança de status e criação de pedido publicam evento por Streams, sem consulta periódica a outros sistemas (L29).",
+                "note": "Risco resolvido: sistema secundário desatualizado por polling. Novo risco: ordem de evento por partição precisa de tratamento explícito no consumidor. Custo: leitura de Streams, geralmente pequena."
+              },
+              {
+                "label": "Nível 4 — Cache na frente do caminho mais quente",
+                "instruction": "ElastiCache para o histórico por cliente, que é a consulta de maior volume; invalidação disparada pelo mesmo evento do nível 3.",
+                "note": "Risco resolvido: latência de Query em pico extremo. Novo risco: dado divergente entre cache e tabela, se a invalidação falhar silenciosamente. Custo: instância de cache, ligada o tempo todo."
+              },
+              {
+                "label": "Nível 5 — Múltiplas tabelas por domínio, cada uma single-table",
+                "instruction": "Quando pedidos, catálogo e faturamento crescem em times separados, cada domínio ganha sua própria tabela única — não uma tabela gigante para a empresa inteira.",
+                "note": "Risco resolvido: um time não pode travar o schema de outro. Novo risco: consulta que cruza domínios exige agregação fora do DynamoDB. Custo: duplicação de infraestrutura fixa por domínio."
+              },
+              {
+                "label": "Nível 6 — Dados e análise sobre o que ficou fora da tabela",
+                "instruction": "Streams alimentando um data lake (S3 + Glue + Athena) para os relatórios ad-hoc que a tabela única, por desenho, nunca deveria servir.",
+                "note": "Risco resolvido: alguém tentando forçar relatório ad-hoc na tabela operacional. Novo risco: latência de horas até o dado aparecer no lake. Custo: baixo; o Streams já existe desde o nível 3."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Cache no nível 4 depende de invalidação disparada por evento, que depende de Streams existir — que é o nível 3. Quem tenta cache antes de ter um sinal de mudança confiável monta a mecânica de invalidação sem saber quando ela deveria disparar, e o resultado é dado velho servido com confiança de dado novo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não resolve o problema central, e forçá-la seria o antipadrão que a própria série critica. Derivar chave a partir de padrão de acesso é raciocínio determinístico: lista-se a pergunta, deriva-se a chave, mede-se o resultado. Um modelo não melhora nenhuma das três etapas — elas são análise de requisito, não previsão."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Não há, neste catálogo, um laboratório dedicado a sugerir modelagem de acesso assistida por IA a partir de log de consulta — e forçar uma citação aqui seria o mesmo exagero que este texto existe para evitar. Se um dia esse laboratório existir, o material dele seria justamente o CloudTrail e as métricas por índice que este módulo já produz."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "nenhum na modelagem em si; ela é derivação de requisito conhecido, não previsão sobre dado incerto"
+              ],
+              [
+                "Onde IA teria mais chance de ajudar?",
+                "sugerir candidatos a padrão de acesso a partir de log de consulta relacional ainda não migrado — mas isso é hipótese de produto de terceiros, não parte deste laboratório"
+              ],
+              [
+                "Por que não usar um classificador para decidir Scan vs. Query?",
+                "a decisão é determinística e verificável em tempo de deploy pelo IAM — usar um modelo aqui trocaria uma garantia por uma previsão"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b19_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"sugerir os índices certos\" a partir da descrição da aplicação troca uma derivação verificável — pergunta conhecida vira chave conhecida — por uma sugestão que pode parecer plausível e estar sutilmente errada, como um GSI não esparso onde a fila precisava ser esparsa. O defeito só apareceria em produção, com volume — exatamente como o Scan deste laboratório."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Uma tabela por entidade, espelhando o relacional",
+                "é o modelo mental que já se domina, e o `CREATE TABLE` sai em minutos",
+                "toda consulta sem chave própria vira Scan, e o custo cresce com o tamanho da tabela",
+                "latência crescente ao longo dos meses, sem mudança de tráfego",
+                "listar os padrões de acesso primeiro, e uma tabela única com chaves derivadas deles",
+                "protótipo com poucas centenas de linhas, sem intenção de ir a produção"
+              ],
+              [
+                "`FilterExpression` em vez de `KeyConditionExpression`",
+                "o código \"funciona\" e parece equivalente a um WHERE do SQL",
+                "não reduz capacidade consumida nenhuma — só decide o que volta na resposta",
+                "RCU alto com resultado pequeno; ninguém suspeita porque a resposta está certa",
+                "`KeyConditionExpression` sobre a chave certa; `FilterExpression` só como refinamento leve",
+                "refinar um resultado já pequeno vindo de uma Query bem endereçada"
+              ],
+              [
+                "Mudar status sem remover as chaves do GSI esparso",
+                "parece bastar `SET status`, como um UPDATE de coluna",
+                "o índice esparso filtra por presença de atributo, não por valor",
+                "item \"resolvido\" continua aparecendo onde só deveria aparecer o pendente",
+                "`REMOVE` explícito das chaves do índice, na mesma expressão de atualização",
+                "nunca; é sempre o comportamento correto para índice esparso"
+              ],
+              [
+                "Escrever cabeçalho e itens com `PutItem` separados",
+                "parece mais simples que configurar uma transação",
+                "permite estado inconsistente se a segunda escrita falhar",
+                "pedido sem item, ou item sem pedido correspondente, achado só em auditoria",
+                "`TransactWriteItems`, tudo-ou-nada, com `ConditionExpression` contra duplicata",
+                "item que genuinamente não precisa de coerência com o cabeçalho no mesmo instante"
+              ],
+              [
+                "Conceder `dynamodb:Scan` \"por garantia\"",
+                "medo de bloquear alguma ferramenta de suporte ou migração",
+                "remove o guardrail que faria o antipadrão falhar em deploy, não em incidente",
+                "nenhum sintoma até alguém escrever Scan em rota de produção sem ninguém notar",
+                "role separada, só para ferramenta de migração/backfill, nunca a da API",
+                "operação pontual de carga inicial, com role temporária e revisada"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Query devolve vazio, mas o item existe",
+                "prefixo da chave não bate exatamente com o gravado",
+                "compare `GSI1PK` gravado e consultado, caractere a caractere",
+                "`GetItem` direto pela chave base, comparando com o valor usado na Query",
+                "padronizar a construção da chave num único ponto do código, nunca duplicado"
+              ],
+              [
+                "`AccessDeniedException` numa Query com `IndexName`",
+                "a política IAM não inclui `/index/*` no `Resource`",
+                "confira o `Resource` da política contra o ARN do índice",
+                "mensagem de erro cita o ARN exato que faltou",
+                "acrescentar `${arn_da_tabela}/index/*` à política"
+              ],
+              [
+                "GSI3 não esvazia mesmo após marcar como separado",
+                "`UpdateExpression` mudou o valor de `status` sem `REMOVE`",
+                "leia o item pela chave base depois da atualização; confira se `GSI3PK` ainda existe",
+                "presença dos atributos `GSI3PK`/`GSI3SK` no item, não o valor de `status`",
+                "incluir `REMOVE GSI3PK, GSI3SK` na mesma `UpdateExpression`"
+              ],
+              [
+                "RCU alto numa rota que deveria ser barata",
+                "a rota está fazendo Scan em vez de Query, direta ou por engano de índice",
+                "log da chamada com `ConsumedCapacity`; compare `ScannedCount` com `Count`",
+                "CloudWatch da tabela e, se possível, log estruturado por operação no código",
+                "trocar por `KeyConditionExpression` na chave certa"
+              ],
+              [
+                "`TransactionCanceledException` ao criar pedido",
+                "código do pedido já existe — a `ConditionExpression` funcionou como esperado",
+                "confira se é reenvio de requisição (retry) ou geração de código colidindo",
+                "razão do cancelamento no corpo da exceção, por item da transação",
+                "se for retry legítimo, tratar como sucesso idempotente; se for colisão, revisar geração do código"
+              ],
+              [
+                "GSI2 devolve pedidos fora do intervalo pedido",
+                "formato de data inconsistente entre gravação e consulta",
+                "compare o formato ISO 8601 gravado com o usado no `BETWEEN`",
+                "os valores de `GSI2SK` gravados, olhando fuso horário e precisão",
+                "padronizar sempre UTC com o mesmo número de casas decimais"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em índice ou permissão, pergunte: esta operação usa `KeyConditionExpression` ou só `FilterExpression`? Se for só filtro, o problema não é de configuração — é que a consulta nunca teve chave própria, e a correção é modelar uma, não ajustar parâmetro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório acrescenta pouco recurso fora da própria tabela — mas a tabela e seus GSIs são o que mais cobra por armazenamento se ficarem esquecidos."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Derrube o que o Terraform administra.\nterraform destroy -auto-approve\n\n# 2. TABELA DYNAMODB: o destroy remove a tabela E os GSIs junto, sem\n#    confirmacao adicional. Confirme que era mesmo isso que voce queria antes\n#    de rodar o passo 1 — nao ha lixeira.\naws dynamodb describe-table --table-name ffv-lab-pedidos-cadencia 2>/dev/null \\\n  && echo \"AINDA EXISTE\" || echo \"removida\"\n\n# 3. BACKUPS SOB DEMANDA: point-in-time recovery nao deixa arquivo separado,\n#    mas um backup MANUAL criado a parte sobrevive ao destroy da tabela.\naws dynamodb list-backups --table-name ffv-lab-pedidos-cadencia \\\n  --query \"BackupSummaries[].BackupArn\" --output table\n\n# 4. ENDPOINT DE VPC: nao cobra por hora (e gateway), mas fica na tabela de\n#    rotas se nao for removido pelo Terraform.\naws ec2 describe-vpc-endpoints \\\n  --filters Name=service-name,Values=com.amazonaws.us-east-1.dynamodb \\\n  --query \"VpcEndpoints[].VpcEndpointId\" --output table\n\n# 5. E o que veio do L01/L07/L14 e continua cobrando por hora: ALB, RDS/Aurora,\n#    NAT Gateway e o Elastic IP dele. Se voce nao vai seguir para o L15 ou L19,\n#    rode a limpeza deles tambem.\n\n# 6. Prova final: nada com nome do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab --output table"
+          }
+        },
+        {
+          "id": "b22_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Tabela e os três GSIs",
+                "sim, junto",
+                "sim, GB-mês e RCU/WCU se ainda em uso",
+                "o destroy da tabela é irreversível e leva os índices — sem confirmação extra"
+              ],
+              [
+                "Backup sob demanda (manual)",
+                "não",
+                "sim, GB-mês",
+                "é um recurso separado do point-in-time recovery, criado à parte"
+              ],
+              [
+                "Point-in-time recovery",
+                "sim, junto com a tabela",
+                "não depois de removida",
+                "o histórico de restauração deixa de existir quando a tabela é apagada"
+              ],
+              [
+                "Endpoint de VPC (gateway)",
+                "sim, se em Terraform",
+                "não, gateway é gratuito",
+                "sobrevive só se foi criado fora do estado do Terraform"
+              ],
+              [
+                "Log de CloudTrail com eventos de Scan",
+                "depende da retenção do trail",
+                "sim, se o trail grava em S3 com retenção própria",
+                "não pertence a este laboratório; segue o ciclo de vida do trail da conta"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Resumo: problema, chave e motivo"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Detalhe do pedido só com o código",
+                "coleção de itens na chave base",
+                "cabeçalho e itens na mesma partição respondem numa Query só, sem segunda chamada"
+              ],
+              [
+                "Histórico por cliente",
+                "GSI1, mesma forma de chave do L14",
+                "preserva o padrão já validado, movido de chave base para índice"
+              ],
+              [
+                "Pedidos da loja num intervalo",
+                "GSI2, SK em timestamp ISO",
+                "ISO ordena como string, então BETWEEN funciona sem transformação nenhuma"
+              ],
+              [
+                "Fila que não pode crescer para sempre",
+                "GSI3, esparso",
+                "presença de atributo, não valor, decide o que aparece — some sozinho ao mudar status"
+              ],
+              [
+                "Coerência entre cabeçalho e itens",
+                "`TransactWriteItems`",
+                "tudo-ou-nada; nunca existe pedido sem item nem item órfão"
+              ],
+              [
+                "Pergunta nova, sem Scan",
+                "IAM sem `dynamodb:Scan` na role da API",
+                "transforma decisão de modelagem em guardrail aplicado no deploy"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Consulta lenta com volume grande",
+                "chave derivada do padrão de acesso",
+                "consulta ad-hoc não prevista — essa continua sendo problema do Aurora, por desenho"
+              ],
+              [
+                "Item órfão numa escrita parcial",
+                "`TransactWriteItems`",
+                "falha lógica no cálculo do total, que nenhuma transação detecta sozinha"
+              ],
+              [
+                "Fila que cresce para sempre",
+                "GSI3 esparso com REMOVE na transição",
+                "esquecer o REMOVE no código — a proteção depende de disciplina de implementação"
+              ],
+              [
+                "Scan reintroduzido em produção",
+                "IAM sem a ação concedida",
+                "ferramenta de migração legítima que compartilhar a mesma role por engano"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "A aplicação lista quatro perguntas antes de desenhar qualquer tabela.",
+              "A que precisa de cabeçalho e itens juntos reivindica a chave base.",
+              "As outras três viram GSI1, GSI2 e GSI3 — cada um com a forma que a pergunta pede.",
+              "O pedido nasce com as quatro chaves preenchidas, numa transação só.",
+              "Detalhe por código: Query na chave base, um round trip.",
+              "Histórico por cliente: Query no GSI1, paginado.",
+              "Pedidos da loja por data: Query no GSI2, com BETWEEN.",
+              "Fila de pendentes: Query no GSI3, sem FilterExpression nenhum.",
+              "Ao separar, a aplicação remove as chaves do GSI3 — o item some da fila, não da tabela.",
+              "Nenhuma das quatro rotas nunca precisou de dynamodb:Scan."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Preciso modelar por entidade no DynamoDB, como faço no Postgres?",
+            "answer": "Não — e essa inversão é a causa mais comum de `Scan` em produção. No modelo relacional você normaliza por entidade e decide a consulta depois, porque o otimizador resolve o plano de acesso em tempo de execução. No DynamoDB não existe esse otimizador: a chave que você desenha É o único caminho de acesso eficiente que vai existir. A ordem certa é listar as perguntas que a aplicação faz, e só depois desenhar a chave que responde a cada uma — a documentação da AWS chama isso explicitamente de identificar os padrões de consulta antes de qualquer schema."
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Quando devo usar Scan no DynamoDB?",
+            "answer": "Praticamente nunca em código de rota de produção. Scan é apropriado para migração de dados, exportação completa de tabela, ou análise ad-hoc rodada uma vez por um operador — sempre com paginação e, se possível, `Segments`/`TotalSegments` para paralelizar sem monopolizar a capacidade da tabela. Se uma rota do seu produto precisa de Scan para responder, o sintoma real é que ela representa um padrão de acesso sem chave — e a correção é modelar essa chave, não otimizar o Scan."
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "GSI aceita leitura fortemente consistente?",
+            "answer": "Não. Todo Global Secondary Index no DynamoDB só oferece leitura eventualmente consistente, porque os dados dele são replicados de forma assíncrona a partir da tabela base. Leitura fortemente consistente existe na tabela base e em Local Secondary Index — que compartilha a partição física com a base. Se sua aplicação precisa ler o próprio dado imediatamente após escrever, e essa leitura passa por um GSI, existe uma janela — geralmente de milissegundos — em que o dado ainda não chegou lá."
+          }
+        },
+        {
+          "id": "b24_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Quantas tabelas devo ter numa aplicação DynamoDB?",
+            "answer": "O menor número possível, segundo a própria recomendação da AWS: manter poucas tabelas reduz a superfície de permissão a gerenciar e a sobrecarga operacional, e a estratégia recomendada é uma tabela única com índices invertidos servindo estruturas de dado complexas. A exceção documentada é dado com padrão de acesso MUITO diferente — como série temporal de altíssimo volume — ou volume que justifique isolamento próprio. Este laboratório é o caso comum: quatro padrões relacionados, uma tabela."
+          }
+        },
+        {
+          "id": "b24_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Índice esparso realmente economiza dinheiro, ou só organiza a consulta?",
+            "answer": "Economiza os dois lados. Um item sem o atributo de chave do índice simplesmente não é replicado para ele — não ocupa espaço no GSI e não é examinado por nenhuma Query sobre ele. No GSI3 deste laboratório, um pedido já separado não existe mais naquele índice: ele não consome armazenamento ali, e a fila de separação nunca varre histórico que já foi resolvido. A economia de consulta é consequência direta da economia de armazenamento, não um efeito separado."
+          }
+        },
+        {
+          "id": "b24_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Preciso de NAT Gateway para minha task no Fargate falar com o DynamoDB?",
+            "answer": "Não, se você criar um endpoint de VPC do tipo Gateway para o DynamoDB — ele entra direto na tabela de rotas da sub-rede privada, sem interface de rede e sem cobrança por hora, porque DynamoDB e S3 são os dois serviços que usam esse tipo de endpoint. Com NAT Gateway também funciona, mas cada Query da task passaria pelo NAT, pagando hora ligada mais byte processado por um tráfego que nunca precisava sair da rede da AWS. É uma das economias mais simples de configurar e mais fáceis de esquecer."
+          }
+        },
+        {
+          "id": "b24_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "TransactWriteItems é a forma certa de gravar pedido e itens juntos?",
+            "answer": "Sim, quando a coerência entre eles precisa ser imediata e nenhuma escrita pode ficar parcial — que é exatamente o caso de um pedido sem itens não fazer sentido. O custo é o dobro da unidade de escrita normal por item envolvido, e existe um teto de itens por transação, então ela não serve para gravar um pedido com centenas de linhas. Para coerência que pode tolerar segundos de atraso, como projetar um dado num sistema secundário, a resposta costuma ser assíncrona — outbox e Streams — não transação síncrona maior."
+          }
+        },
+        {
+          "id": "b24_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Por que a consulta por cliente virou GSI aqui, se no L14 ela era a chave base?",
+            "answer": "Porque a chave base só pode servir UM dono, e neste laboratório apareceu uma pergunta que precisa dela mais: o detalhe do pedido com os itens, que só cabe numa Query só se os dois tipos de item morarem na mesma partição. Isso não é degradar o histórico por cliente — ele continua servido em uma Query, só que através de um índice em vez da chave base, com a mesma forma de chave e o mesmo custo por resultado. A regra geral: a chave base pertence a quem precisa de uma coleção de itens, não necessariamente à consulta mais frequente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b25_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Uma tabela DynamoDB tem 40 milhões de itens. Uma rota faz `Scan` com `FilterExpression` para achar os ~44 pedidos pendentes de uma loja. O resultado sai correto. Por que essa rota ainda é um problema a corrigir?",
+            "options": [
+              "Porque o Scan lê e cobra pelos 40 milhões de itens antes de o filtro descartar o que não bate, mesmo devolvendo poucas linhas",
+              "Porque FilterExpression tem limite de 44 itens por chamada",
+              "Porque Scan sempre devolve dado desatualizado, diferente de Query",
+              "Porque um índice secundário global sempre custa menos que qualquer Scan, independente do volume"
+            ],
+            "correctIndex": 0,
+            "explanation": "O custo do Scan é proporcional ao TOTAL EXAMINADO, não ao total devolvido — `FilterExpression` roda depois de a operação já ter lido (e cobrado) cada item da tabela. Uma resposta de 44 linhas saindo de uma leitura de 40 milhões é o sintoma exato deste laboratório: a resposta está certa, o preço está errado, e o preço só aparece grande na fatura ou na métrica de capacidade consumida — nunca no teste funcional.\n\nA primeira alternativa inventa um limite que não existe: `FilterExpression` não tem teto de itens devolvidos por si. A terceira confunde consistência com custo — Scan e Query podem ser ambos eventualmente ou fortemente consistentes (Scan também aceita `ConsistentRead`), a diferença não está aí. A quarta generaliza uma verdade real demais: um GSI SEM chave que sirva a consulta também degeneraria em Scan sobre o índice — o que salva é a chave certa, não o rótulo \"índice\"."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Um GSI esparso serve a fila de pedidos pendentes de uma loja: só o pedido com `status = PENDENTE` carrega as chaves do índice. Depois de marcar um pedido como \"separado\" com `SET status = :novo` (sem mais nada), ele continua aparecendo na fila. Qual é a causa?",
+            "options": [
+              "O índice esparso ainda não terminou de replicar a mudança, e vai sumir sozinho em alguns minutos",
+              "A UpdateExpression mudou o VALOR do atributo status, mas não removeu as chaves `GSI3PK`/`GSI3SK` — e o índice esparso decide pertencimento pela PRESENÇA delas, não pelo valor de status",
+              "GSI esparso não suporta UpdateItem, só PutItem completo",
+              "A Query no GSI3 precisa de um FilterExpression adicional para excluir status = SEPARADO"
+            ],
+            "correctIndex": 1,
+            "explanation": "Um índice esparso replica um item para o GSI quando ele TEM os atributos de chave do índice — o valor de `status` não é usado por essa decisão a menos que `status` seja, ele mesmo, o atributo de chave. Aqui a chave do GSI3 é `GSI3PK`/`GSI3SK`, atributos separados que a aplicação preencheu na criação e precisa REMOVER na transição. `SET status` sozinho deixa essas duas chaves intactas, e o item continua no índice — correto do ponto de vista do motor, porque ele nunca foi instruído a sair dali.\n\nA primeira alternativa erra o mecanismo: não é atraso de replicação, é ausência de instrução — o item ficaria ali para sempre, não só \"por um tempo\". A terceira é falsa: `UpdateItem` funciona normalmente com GSI, incluindo `REMOVE` de atributos de chave de índice, que é justamente a correção certa. A quarta resolveria o SINTOMA (a fila pareceria correta na tela) mas não o CUSTO: a Query continuaria lendo todos os pedidos da loja — inclusive os já separados — antes do filtro descartar, voltando ao mesmo defeito de custo que o índice esparso existe para evitar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b26_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L14 no ar (DynamoDB como caminho conhecido, réplica de leitura do Aurora), .NET 8, Docker, Git e Terraform básicos"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "derivar chave a partir de padrão de acesso; overloading de PK/SK com prefixos; coleção de itens; GSI com chave própria e consistência eventual; índice esparso por presença de atributo; o custo real de Scan vs. Query, calculado e medido"
+              ],
+              [
+                "Limitação que fica",
+                "hot partition numa loja com volume muito acima das outras não é resolvida aqui; e relatório ad-hoc continua fora desta tabela, por desenho — é o L14 revisitado"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L29 — Streaming de mudança do banco. Usa a mesma tabela deste laboratório como fonte, e troca a consulta periódica por reação a evento via DynamoDB Streams"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L26 (API 100% serverless) reaproveita a modelagem de tabela única sem Fargate; L84 (onde guardar vetor) usa o mesmo raciocínio de \"a pergunta decide o índice\" aplicado a busca vetorial"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b26_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "NoSQL design for DynamoDB",
+                "code": true
+              },
+              {
+                "text": " — a orientação de desenhar pelo padrão de acesso antes da entidade, e a recomendação de manter poucas tabelas; e "
+              },
+              {
+                "text": "Best practices for using secondary indexes in DynamoDB",
+                "code": true
+              },
+              {
+                "text": " — o comportamento de GSI (chave própria, consistência eventual, índice esparso, projeção de atributos). Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "Os números de RCU desta seção — os ~6,8 milhões do Scan e os ~8 da Query — são CÁLCULO a partir do volume declarado da Cadência (40 milhões de itens, ~700 bytes cada), aplicando a fórmula documentada de unidades de leitura. Não são medição de conta real, e o tamanho médio de item da SUA tabela decide o número final. Use `--return-consumed-capacity TOTAL` nas suas próprias chamadas antes de levar este cálculo como referência de custo. O teto de GSIs por tabela também não tem valor fixado aqui de propósito — confira o atual em Service Quotas."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -27,11 +27,23 @@ export function HomeRanking() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    getPublicLeaderboard(period, 7).then(data => {
-      if (cancelled) return;
-      setEntries(data?.entries ?? null);
-      setLoading(false);
-    });
+    // Cap em 6s: se a API demorar/falhar, cai no EmptyState em vez de skeleton eterno.
+    // Na home isso é aceitável — a seção é secundária e o visitante não está ali
+    // para conferir ranking. Em /ranking, onde é o conteúdo principal, a falha é
+    // mostrada explicitamente (ver FalhaAoCarregar em RankingClient).
+    const timeout = new Promise<null>(resolve => setTimeout(() => resolve(null), 6000));
+    Promise.race([getPublicLeaderboard(period, 7), timeout])
+      .then(resultado => {
+        if (cancelled) return;
+        const dados = resultado && resultado.status === 'ok' ? resultado.dados : null;
+        setEntries(dados?.entries ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setEntries(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -179,8 +191,8 @@ function MobilePodiumRow({ entry, place }: { entry: PublicLeaderboardEntry; plac
         <div className="flex items-center gap-2 mb-0.5">
           <span className="text-xl">{config.emoji}</span>
           <p
-            className="font-mono text-[10px]"
-            style={{ color: config.color, letterSpacing: '0.08em', fontWeight: 700 }}
+            className="font-mono text-[10px] ffv-acento-texto"
+            style={{ '--ffv-acento': config.color, letterSpacing: '0.08em', fontWeight: 700 } as React.CSSProperties}
           >
             {config.label}
           </p>
@@ -188,7 +200,7 @@ function MobilePodiumRow({ entry, place }: { entry: PublicLeaderboardEntry; plac
         <p className="font-bold text-sm truncate">{entry.name}</p>
       </div>
       <div className="text-right flex-shrink-0">
-        <p className="font-mono text-lg font-bold" style={{ color: config.color }}>
+        <p className="font-mono text-lg font-bold ffv-acento-texto" style={{ '--ffv-acento': config.color } as React.CSSProperties}>
           {entry.xpGained.toLocaleString('pt-BR')}
         </p>
         <p
@@ -255,8 +267,8 @@ function PodiumCard({ entry, place }: { entry: PublicLeaderboardEntry; place: 1 
         <div>
           <div className="text-2xl md:text-3xl mb-2">{config.emoji}</div>
           <p
-            className="font-mono text-[10px] mb-2"
-            style={{ color: config.color, letterSpacing: '0.08em', fontWeight: 700 }}
+            className="font-mono text-[10px] mb-2 ffv-acento-texto"
+            style={{ '--ffv-acento': config.color, letterSpacing: '0.08em', fontWeight: 700 } as React.CSSProperties}
           >
             {config.label}
           </p>
@@ -268,7 +280,7 @@ function PodiumCard({ entry, place }: { entry: PublicLeaderboardEntry; place: 1 
           </p>
         </div>
         <div>
-          <p className="font-mono text-xl md:text-2xl font-bold" style={{ color: config.color }}>
+          <p className="font-mono text-xl md:text-2xl font-bold ffv-acento-texto" style={{ '--ffv-acento': config.color } as React.CSSProperties}>
             {entry.xpGained.toLocaleString('pt-BR')}
           </p>
           <p

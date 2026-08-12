@@ -3,7 +3,7 @@
   "title": null,
   "blocks": [
     {
-      "id": "597d5a4d-a724-49c6-b9dd-bdbd0c79d61a",
+      "id": "q505-0",
       "type": "section",
       "position": 0,
       "data": {
@@ -11,18 +11,205 @@
       },
       "children": [
         {
-          "id": "334c50c1-fab5-46a5-8c92-f6f3f6ef4acf",
+          "id": "q505-1",
           "type": "code_block",
           "position": 0,
           "data": {
             "language": "sql",
             "code": "-- Inspect xmin/xmax diretamente\nSELECT xmin, xmax, * FROM users WHERE id = 1;\n\n-- UPDATE cria NOVA versão\nBEGIN;\nUPDATE users SET email = 'new' WHERE id = 1;\n-- Row antiga: xmax = current_xact\n-- Row nova: xmin = current_xact\n-- Outras txs ainda veem antiga até COMMIT\n\n-- Dead tuples acumulam → vacuum periódico\nVACUUM ANALYZE users;"
           }
+        },
+        {
+          "type": "arch_diagram",
+          "data": {
+            "title": "Cada transação vê uma versão diferente da mesma linha",
+            "groups": [
+              {
+                "label": "Transações",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "t1",
+                    "service": "compute",
+                    "label": "Transação A",
+                    "note": "começou antes"
+                  },
+                  {
+                    "id": "t2",
+                    "service": "compute",
+                    "label": "Transação B",
+                    "note": "atualiza a linha"
+                  }
+                ]
+              },
+              {
+                "label": "Versões da linha",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "v1",
+                    "service": "doc",
+                    "label": "Versão antiga",
+                    "note": "criada por uma transação já concluída"
+                  },
+                  {
+                    "id": "v2",
+                    "service": "doc",
+                    "label": "Versão nova",
+                    "note": "criada por B; invisível até B confirmar"
+                  },
+                  {
+                    "id": "marca",
+                    "service": "relogio",
+                    "label": "Marcas de criação e remoção",
+                    "note": "cada versão sabe quem a criou e quem a apagou"
+                  }
+                ]
+              },
+              {
+                "label": "Consequências",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sem_lock",
+                    "service": "checkpoint",
+                    "label": "Leitura não trava escrita",
+                    "note": "e vice-versa"
+                  },
+                  {
+                    "id": "lixo",
+                    "service": "alerta",
+                    "label": "Versões mortas",
+                    "note": "ninguém mais as enxerga e elas ocupam disco"
+                  },
+                  {
+                    "id": "limpeza",
+                    "service": "pipeline",
+                    "label": "Limpeza",
+                    "note": "recupera o espaço das versões mortas"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "t2",
+                "to": "v2",
+                "label": "cria"
+              },
+              {
+                "from": "v1",
+                "to": "v2",
+                "label": "a antiga é marcada como removida",
+                "style": "dashed"
+              },
+              {
+                "from": "t1",
+                "to": "v1",
+                "label": "ainda enxerga"
+              },
+              {
+                "from": "marca",
+                "to": "v1",
+                "style": "dashed"
+              },
+              {
+                "from": "marca",
+                "to": "v2",
+                "style": "dashed"
+              },
+              {
+                "from": "v1",
+                "to": "lixo",
+                "label": "quando ninguém mais a vê"
+              },
+              {
+                "from": "lixo",
+                "to": "limpeza"
+              },
+              {
+                "from": "sem_lock",
+                "to": "t1",
+                "style": "dashed"
+              }
+            ],
+            "caption": "Toda a mecânica sai de uma decisão: atualizar cria versão em vez de sobrescrever. Dela vêm a concorrência boa, o inchaço e o fato de uma transação esquecida ser capaz de degradar o banco inteiro.",
+            "steps": [
+              {
+                "label": "1 · Atualizar não sobrescreve — cria versão",
+                "detail": "A linha antiga continua no disco, marcada como removida por aquela transação. É essa escolha que sustenta tudo o mais.",
+                "nodes": [
+                  "t2",
+                  "v1",
+                  "v2"
+                ],
+                "edges": [
+                  "t2>v2"
+                ]
+              },
+              {
+                "label": "2 · Cada transação enxerga um instantâneo",
+                "detail": "A transação que começou antes continua vendo a versão antiga, mesmo depois de B confirmar. Não é dado velho por acidente: é a garantia de consistência dela.",
+                "nodes": [
+                  "t1",
+                  "v1"
+                ],
+                "edges": [
+                  "t1>v1"
+                ]
+              },
+              {
+                "label": "3 · Leitor não bloqueia escritor",
+                "detail": "É a consequência prática mais importante. Uma consulta longa de relatório não trava as escritas, porque ela lê versões que ninguém está alterando.",
+                "nodes": [
+                  "sem_lock",
+                  "t1",
+                  "t2"
+                ],
+                "edges": [
+                  "sem_lock>t1"
+                ]
+              },
+              {
+                "label": "4 · O nível de isolamento é quando o instantâneo é tirado",
+                "detail": "Por comando ou por transação — essa é a diferença essencial entre os níveis mais usados, e ela explica por que um vê mudança no meio da transação e o outro não.",
+                "nodes": [
+                  "t1",
+                  "v1",
+                  "v2"
+                ],
+                "edges": []
+              },
+              {
+                "label": "5 · O custo é acumular versão morta",
+                "detail": "Toda atualização deixa lixo. Sem limpeza, a tabela cresce mesmo com o número de linhas estável, e a leitura fica mais lenta porque percorre versões que já não valem.",
+                "nodes": [
+                  "lixo",
+                  "limpeza"
+                ],
+                "edges": [
+                  "v1>lixo",
+                  "lixo>limpeza"
+                ]
+              },
+              {
+                "label": "6 · Transação aberta e esquecida bloqueia a limpeza",
+                "detail": "A limpeza só remove o que NENHUMA transação ainda pode ver. Uma conexão ociosa com transação aberta segura versões antigas por horas — é a causa mais comum de inchaço.",
+                "nodes": [
+                  "t1",
+                  "limpeza"
+                ],
+                "edges": []
+              }
+            ]
+          },
+          "id": "q505-2",
+          "position": 1
         }
       ]
     },
     {
-      "id": "6f7f5fc4-0283-4f27-be76-9556941fce3b",
+      "id": "q505-3",
       "type": "section",
       "position": 1,
       "data": {
@@ -30,7 +217,7 @@
       },
       "children": [
         {
-          "id": "09250997-6243-49e8-a34c-3971f1d4bac6",
+          "id": "q505-4",
           "type": "comparison_table",
           "position": 0,
           "data": {
@@ -74,7 +261,7 @@
           }
         },
         {
-          "id": "0711b7db-33aa-4400-852b-553fd4e1e469",
+          "id": "q505-5",
           "type": "callout",
           "position": 1,
           "data": {
@@ -86,15 +273,31 @@
       ]
     },
     {
-      "id": "d830f4c0-50b1-4ad5-bf6d-55f0a3b47296",
-      "type": "section",
+      "id": "q505-13",
+      "type": "quiz",
       "position": 2,
+      "data": {
+        "question": "Qual anomalia o nível de isolamento padrão da maioria dos bancos NÃO previne?",
+        "options": [
+          "Escrita simultânea na mesma linha",
+          "Atualização perdida em leitura seguida de escrita — duas transações leem o mesmo valor, calculam e a segunda sobrescreve a primeira, sem erro",
+          "Leitura de dado não confirmado",
+          "Leitura suja"
+        ],
+        "correctIndex": 1,
+        "explanation": "Leitura confirmada impede ver dado não confirmado e não impede o padrão ler-calcular-escrever de perder atualizações — que é a anomalia mais comum em código de aplicação. A defesa é travar a linha na leitura ou usar nível mais estrito. Leitura suja e dado não confirmado são a mesma coisa, já prevenida, e escrita simultânea na mesma linha é serializada pelo banco."
+      }
+    },
+    {
+      "id": "q505-6",
+      "type": "section",
+      "position": 3,
       "data": {
         "title": "Quando usar cada level"
       },
       "children": [
         {
-          "id": "51c55615-133b-4bb6-aebe-b713693b9ed3",
+          "id": "q505-7",
           "type": "list",
           "position": 0,
           "data": {
@@ -105,6 +308,85 @@
               "SELECT FOR UPDATE: locking explícito em Read Committed pra evitar lost update."
             ],
             "ordered": false
+          }
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "O que o MVCC realmente faz?",
+            "answer": "Mantém versões da mesma linha para que leitura não espere escrita: cada transação vê a versão consistente com o instante em que começou. É o que dá leitura concorrente sem trava — e o preço é a versão antiga permanecer no disco até ser recolhida."
+          },
+          "id": "q505-9",
+          "position": 0
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Leitura nunca bloqueia no Postgres?",
+            "answer": "Leitura comum não bloqueia escrita nem é bloqueada por ela. Mas leitura com trava explícita bloqueia, e alteração de esquema pega trava que bloqueia tudo. Dizer \"leitura nunca espera\" é a simplificação que faz alguém rodar mudança de esquema em horário de pico."
+          },
+          "id": "q505-10",
+          "position": 1
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Por que a transação vê dado antigo?",
+            "answer": "Porque no nível de isolamento repetível ela fixa uma visão no início e mantém — é comportamento correto, não defeito. Aplicação que espera ver escrita de outra transação dentro de uma transação longa está usando o nível errado, ou deveria ter fechado a transação."
+          },
+          "id": "q505-11",
+          "position": 2
+        }
+      ],
+      "id": "q505-8",
+      "position": 4
+    },
+    {
+      "id": "q505-12",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "q505-14",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Quando o nível serializável é a escolha certa, apesar do custo?",
+            "options": [
+              "Quando a tabela é pequena",
+              "Sempre, por segurança",
+              "Quando a lógica depende de invariantes entre várias linhas — como \"a soma não pode ultrapassar X\" — que nenhum trava-linha isolado consegue proteger",
+              "Quando há muitas leituras"
+            ],
+            "correctIndex": 2,
+            "explanation": "Restrições que envolvem conjunto de linhas não se protegem travando uma linha, porque a violação surge da combinação — e é aí que o nível mais estrito se paga, ao custo de reinícios de transação que a aplicação precisa tratar. Usar sempre aumenta conflito sem necessidade, e volume de leitura e tamanho de tabela não são critério."
+          }
+        },
+        {
+          "id": "q505-15",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "O que a aplicação precisa fazer ao usar o nível mais estrito?",
+            "options": [
+              "Reduzir o tamanho das transações",
+              "Desabilitar o cache de consultas",
+              "Tratar falha de serialização repetindo a transação — o banco aborta uma das concorrentes, e sem retentativa o erro chega ao usuário",
+              "Aumentar o tempo limite das transações"
+            ],
+            "correctIndex": 2,
+            "explanation": "O nível estrito não bloqueia mais; ele detecta conflito e aborta, transferindo à aplicação a responsabilidade de repetir. Sem isso, o comportamento correto do banco vira erro visível. Transações menores reduzem a taxa de conflito e são boa prática complementar. Tempo limite e cache não têm relação."
           }
         }
       ]

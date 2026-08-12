@@ -55,14 +55,24 @@ export function QuizBlock({ data }: { data: QuizBlockData }) {
       style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
       aria-label="Quiz"
     >
+      {/*
+        A PERGUNTA é o cabeçalho; "Quiz rápido" é rótulo decorativo.
+        Estava invertido: o `<h3>` dizia "Quiz rápido" e a pergunta era um `<p>`.
+        Duas consequências concretas:
+          - navegação por cabeçalho em leitor de tela listava três "Quiz rápido"
+            idênticos, sem dizer sobre o quê;
+          - resumos de IA e buscadores privilegiam conteúdo em que o cabeçalho É a
+            pergunta e a resposta vem logo abaixo. O rótulo genérico desperdiçava
+            exatamente o sinal que a pergunta carrega.
+      */}
       <div className="flex items-center gap-2 mb-3">
         <span className="text-xl" aria-hidden>🧩</span>
-        <h3 className="text-sm font-bold uppercase tracking-widest" style={{ color: 'var(--ffv-muted)' }}>
+        <span className="text-sm font-bold uppercase tracking-widest" style={{ color: 'var(--ffv-muted)' }}>
           Quiz rápido
-        </h3>
+        </span>
       </div>
 
-      <p className="font-semibold mb-4" style={{ color: 'var(--foreground)' }}>{question}</p>
+      <h3 className="font-semibold mb-4" style={{ color: 'var(--foreground)' }}>{question}</h3>
 
       <div role="radiogroup" aria-label={question} className="flex flex-col gap-2">
         {options.map((opt, i) => {
@@ -112,7 +122,7 @@ export function QuizBlock({ data }: { data: QuizBlockData }) {
           onClick={handleSubmit}
           disabled={selected === null}
           className="mt-4 px-5 py-2 rounded-full font-semibold text-sm transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-          style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
+          style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
         >
           Responder
         </button>

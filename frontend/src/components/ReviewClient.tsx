@@ -1,13 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useGameState } from '@/hooks/useGameState';
+import { BackButton } from '@/components/BackButton';
 import type { ReviewCard } from '@/lib/srs';
 import type { ReviewQuality } from '@/lib/srs';
 import { playXPCoin, playPop, unlockAudio } from '@/lib/sounds';
 
-type Phase = 'empty' | 'answering' | 'revealed' | 'finished';
+type Phase = 'loading' | 'empty' | 'answering' | 'revealed' | 'finished';
 
 interface SessionStats {
   total: number;
@@ -36,25 +37,45 @@ export function ReviewClient(props: ReviewClientProps = {}) {
   const [finished, setFinished] = useState(false);
   const [stats, setStats] = useState<SessionStats>({ total: 0, correct: 0, xpGained: 0 });
   const [queue, setQueue] = useState<ReviewCard[] | null>(null);
+  // Cards já contabilizados nesta sessão (na fila OU já revisados) — evita
+  // que o refresh de fila reinsira um card que o usuário acabou de responder.
+  const seenIdsRef = useRef<Set<string>>(new Set());
+  const initializedRef = useRef(false);
 
   useEffect(() => {
-    if (queue !== null || !state) return;
+    if (!state) return;
     let pool = [...dueCards];
     if (props.trailFilter && props.slugToTrail) {
       pool = pool.filter(c => props.slugToTrail!(c.slug) === props.trailFilter);
     }
     pool.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
-    if (props.maxCards && props.maxCards > 0) {
-      pool = pool.slice(0, props.maxCards);
+
+    if (!initializedRef.current) {
+      initializedRef.current = true;
+      if (props.maxCards && props.maxCards > 0) {
+        pool = pool.slice(0, props.maxCards);
+      }
+      pool.forEach(c => seenIdsRef.current.add(c.id));
+      setQueue(pool);
+      return;
     }
-    setQueue(pool);
-    // Initialize once when state first loads — intentionally omit dueCards from deps
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state]);
+
+    // Refresh na sessão: cards que venceram DEPOIS da carga inicial entram no
+    // fim da fila, sem descartar o progresso já feito. Sessões com tamanho
+    // fixo (Maratona, `maxCards`) não recebem reforço — o tamanho é intencional.
+    if (props.maxCards && props.maxCards > 0) return;
+    const novas = pool.filter(c => !seenIdsRef.current.has(c.id));
+    if (novas.length === 0) return;
+    novas.forEach(c => seenIdsRef.current.add(c.id));
+    setQueue(prev => [...(prev ?? []), ...novas]);
+  }, [state, dueCards, props.trailFilter, props.slugToTrail, props.maxCards]);
 
   const currentCard: ReviewCard | null = queue && queue.length > 0 ? queue[0] : null;
+  // `state === null` é hidratação em andamento, não fila vazia — antes os dois
+  // caíam no mesmo `'empty'` e "sua fila está vazia" piscava em toda visita
+  // antes do useGameState terminar de carregar do localStorage.
   const phase: Phase = !state
-    ? 'empty'
+    ? 'loading'
     : finished
       ? 'finished'
       : !currentCard
@@ -104,7 +125,11 @@ export function ReviewClient(props: ReviewClientProps = {}) {
     if (rest.length === 0) setFinished(true);
   }
 
-  if (phase === 'empty' && (!state || (state.reviewCards?.length ?? 0) === 0)) {
+  if (phase === 'loading') {
+    return <LoadingState />;
+  }
+
+  if (phase === 'empty' && (state?.reviewCards?.length ?? 0) === 0) {
     return <EmptyStateNoCards />;
   }
 
@@ -119,16 +144,15 @@ export function ReviewClient(props: ReviewClientProps = {}) {
   if (!currentCard) return null;
 
   return (
-    <main className="max-w-2xl mx-auto px-6 pt-10 pb-20">
+    <div className="max-w-2xl mx-auto px-6 pt-10 pb-20">
       {/* Top bar: progress + exit */}
       <div className="flex items-center gap-4 mb-8">
-        <Link
+        <BackButton
           href="/"
-          className="text-xs px-3 py-1.5 rounded-full transition-colors hover:opacity-80"
-          style={{ color: 'var(--ffv-muted)', border: '1px solid var(--ffv-border)' }}
+          className="text-xs px-3 py-1.5 rounded-full transition-colors hover:opacity-80 inline-flex items-center gap-1.5"
         >
           Sair
-        </Link>
+        </BackButton>
         <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: 'var(--ffv-bg2)' }}>
           <div
             className="h-full transition-all"
@@ -230,7 +254,7 @@ export function ReviewClient(props: ReviewClientProps = {}) {
           </div>
         </div>
       )}
-    </main>
+    </div>
   );
 }
 
@@ -247,9 +271,25 @@ function RatingButton({ label, sublabel, tone, onClick }: { label: string; subla
   );
 }
 
+function LoadingState() {
+  return (
+    <div
+      className="max-w-lg mx-auto px-6 pt-20 pb-20 text-center animate-pulse"
+      role="status"
+      aria-live="polite"
+      aria-label="Carregando sua fila de revisão"
+    >
+      <div className="h-14 w-14 rounded-full mx-auto mb-6" style={{ background: 'var(--ffv-bg2)' }} />
+      <div className="h-6 rounded w-2/3 mx-auto mb-3" style={{ background: 'var(--ffv-bg2)' }} />
+      <div className="h-4 rounded w-full mx-auto mb-2" style={{ background: 'var(--ffv-bg2)' }} />
+      <div className="h-4 rounded w-4/5 mx-auto" style={{ background: 'var(--ffv-bg2)' }} />
+    </div>
+  );
+}
+
 function EmptyStateNoCards() {
   return (
-    <main className="max-w-lg mx-auto px-6 pt-20 pb-20 text-center">
+    <div className="max-w-lg mx-auto px-6 pt-20 pb-20 text-center">
       <div className="text-6xl mb-6">🧠</div>
       <h1 className="text-2xl font-bold mb-3">Sua fila de revisão está vazia</h1>
       <p className="text-sm mb-8 leading-relaxed" style={{ color: 'var(--ffv-muted)' }}>
@@ -260,17 +300,17 @@ function EmptyStateNoCards() {
       <Link
         href="/"
         className="inline-block px-6 py-3 rounded-full text-sm font-semibold transition-all hover:opacity-90"
-        style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
+        style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
       >
         Começar a estudar →
       </Link>
-    </main>
+    </div>
   );
 }
 
 function EmptyStateZeroDue({ streak, upcoming }: { streak: number; upcoming: number }) {
   return (
-    <main className="max-w-lg mx-auto px-6 pt-20 pb-20 text-center">
+    <div className="max-w-lg mx-auto px-6 pt-20 pb-20 text-center">
       <div className="text-6xl mb-6">✨</div>
       <h1 className="text-2xl font-bold mb-3">Fila zerada hoje</h1>
       <p className="text-sm mb-2 leading-relaxed" style={{ color: 'var(--ffv-muted)' }}>
@@ -290,18 +330,18 @@ function EmptyStateZeroDue({ streak, upcoming }: { streak: number; upcoming: num
       <Link
         href="/"
         className="inline-block px-6 py-3 rounded-full text-sm font-semibold transition-all hover:opacity-90"
-        style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
+        style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
       >
         Explorar artigos novos →
       </Link>
-    </main>
+    </div>
   );
 }
 
 function FinishedState({ stats }: { stats: SessionStats }) {
   const accuracy = stats.total > 0 ? Math.round((stats.correct / stats.total) * 100) : 0;
   return (
-    <main className="max-w-lg mx-auto px-6 pt-20 pb-20 text-center">
+    <div className="max-w-lg mx-auto px-6 pt-20 pb-20 text-center">
       <div className="text-6xl mb-6">🎯</div>
       <h1 className="text-2xl font-bold mb-3">Sessão concluída!</h1>
       <p className="text-sm mb-8 leading-relaxed" style={{ color: 'var(--ffv-muted)' }}>
@@ -336,11 +376,11 @@ function FinishedState({ stats }: { stats: SessionStats }) {
           href="/revisar"
           onClick={() => { if (typeof window !== 'undefined') window.location.reload(); }}
           className="px-5 py-2.5 rounded-full text-sm font-semibold transition-all hover:opacity-90"
-          style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
+          style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
         >
           Revisar de novo
         </Link>
       </div>
-    </main>
+    </div>
   );
 }

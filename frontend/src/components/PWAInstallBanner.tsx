@@ -86,7 +86,7 @@ export function PWAInstallBanner() {
         className="px-3 py-2 rounded-xl text-xs font-bold transition-transform hover:scale-[1.04]"
         style={{
           background: 'linear-gradient(90deg, var(--ffv-blue), var(--ffv-purple))',
-          color: '#fff',
+          color: 'var(--primary-foreground)',
           whiteSpace: 'nowrap',
         }}
       >

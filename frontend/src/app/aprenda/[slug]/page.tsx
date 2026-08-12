@@ -11,22 +11,45 @@
  */
 
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { fetchArticleWithBlocks } from '@/lib/curriculum-api';
+import { fetchArticleWithBlocksResult } from '@/lib/curriculum-api';
+import { fetchArticleFromSeeds } from '@/lib/curriculum-local';
 import { BlockTree } from '@/components/article/BlockRenderer';
 import { ViewTracker } from '@/components/article/ViewTracker';
+import { ConcluirModulo } from '@/components/article/ConcluirModulo';
+import { ConteudoIndisponivel } from '@/components/article/ConteudoIndisponivel';
+import type { ArticleWithBlocks } from '@/components/article/blocks/schemas';
 import { CommentSection } from '@/components/comments/CommentSection';
 import { NextSteps } from '@/components/article/NextSteps';
+import { Prerequisites } from '@/components/article/Prerequisites';
+import { ArticleToc } from '@/components/article/ArticleToc';
+import { MobileToc } from '@/components/article/MobileToc';
 import { TrailLeaderboard } from '@/components/ranking/TrailLeaderboard';
 import { AnkiExport } from '@/components/article/AnkiExport';
 import { TrailCertificateBanner } from '@/components/TrailCertificateBanner';
-import { safeJsonLd } from '@/lib/safe-json';
+import { extrairQuizzes, extractQA } from '@/lib/article-extract';
 
 interface PageProps {
   params: Promise<{ slug: string }>;
 }
 
-import { CURRICULUM } from '@/lib/curriculum';
+import {
+  CURRICULUM,
+  HUBS,
+  getModuleBySlug,
+  getTrailForModule,
+  getTrailHref,
+  getModuleNextSteps,
+  getModulePrerequisites,
+} from '@/lib/curriculum';
+import { ArticleJsonLd, type QuizParaLd } from '@/components/article/ArticleJsonLd';
+import {
+  MINIMO_PARA_PAGINA,
+  getTemaStats,
+  getTemasDoModulo,
+} from '@/lib/curriculum/temas';
+import { getSeoDescription } from '@/lib/seo-descriptions';
 
 /**
  * Slugs de fallback — extraídos do CURRICULUM constant local.
@@ -91,35 +114,162 @@ export async function generateStaticParams() {
 // pra `output: "standalone"` em 845eddb (15/mai/2026).
 export const dynamicParams = true;
 
+/**
+ * Nível em português. O campo vem do banco em inglês, e era exibido cru — o
+ * leitor de um site em português via "advanced" no cabeçalho.
+ */
+const NIVEL_PT: Record<string, string> = {
+  foundational: 'Fundamental',
+  beginner: 'Iniciante',
+  intermediate: 'Intermediário',
+  advanced: 'Avançado',
+};
+
+
+/**
+ * Busca o artigo no backend e, em DESENVOLVIMENTO, cai para os seeds em disco
+ * quando o backend não está de pé. Sem isso, /aprenda/<slug> retorna 404 em
+ * máquina de dev e parece que o conteúdo não existe.
+ */
+type ArticleOutcome =
+  | { kind: 'ok'; article: ArticleWithBlocks }
+  | { kind: 'not-found' }
+  | { kind: 'unavailable' };
+
+/**
+ * Distingue "não existe" de "não deu pra buscar agora" — a rota abaixo
+ * responde 404 real só para o primeiro caso. Ver `curriculum-api.ts` para o
+ * porquê da distinção (achado: backend fora derrubava 490 páginas em 404).
+ */
+async function getArticleOutcome(slug: string): Promise<ArticleOutcome> {
+  const result = await fetchArticleWithBlocksResult(slug);
+  if (result.status === 'ok') return { kind: 'ok', article: result.article };
+
+  const seedArticle = await fetchArticleFromSeeds(slug);
+  if (seedArticle) return { kind: 'ok', article: seedArticle };
+
+  return result.status === 'not-found' ? { kind: 'not-found' } : { kind: 'unavailable' };
+}
+
 // Metadata para SEO — também do banco.
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const article = await fetchArticleWithBlocks(slug);
-  if (!article) return { title: 'Módulo não encontrado' };
+  const outcome = await getArticleOutcome(slug);
+
+  if (outcome.kind === 'not-found') {
+    // 404 real precisa de noindex explícito — sem isso, o <meta robots> da
+    // rota conflita com o status HTTP (achado: dois `<meta robots>` na
+    // mesma resposta, um deles herdado do layout).
+    return { title: 'Módulo não encontrado', robots: { index: false, follow: false } };
+  }
+  if (outcome.kind === 'unavailable') {
+    // O módulo existe (ou pode existir) — só não deu pra confirmar agora.
+    // Não é "não encontrado", mas também não é uma página pronta pra indexar.
+    const meta = getModuleBySlug(slug);
+    return {
+      title: meta?.title ?? 'Conteúdo indisponível',
+      description: 'Este conteúdo está temporariamente indisponível.',
+      robots: { index: false, follow: true },
+    };
+  }
+  const article = outcome.article;
+
+  const modulo = getModuleBySlug(slug);
+
+  /**
+   * Dois defeitos que estavam em todas as 388 páginas de artigo — a rota de
+   * maior tráfego da plataforma:
+   *
+   * 1. TÍTULO DUPLICADO. Era `${article.title} — FFV Academy`, e o layout raiz
+   *    aplica o template '%s — FFV Academy' por cima: a aba e o resultado do
+   *    Google mostravam "Tokens e Tokenização — FFV Academy — FFV Academy".
+   *
+   * 2. DESCRIPTION GERADA POR MÁQUINA, COM ID INTERNO. Era "Aprenda Tokens e
+   *    Tokenização na trilha trail1 do hub hub-ia." — `trail1` e `hub-ia`
+   *    aparecendo no snippet de busca. E os 415 `seoDesc` escritos à mão eram
+   *    ignorados. O de tokens, por exemplo, já existia: "O que são tokens em IA,
+   *    como funciona tokenização BPE, por que contexto é medido em tokens e como
+   *    isso afeta o custo."
+   */
+  const description =
+    getSeoDescription(slug) ??
+    modulo?.desc ??
+    `${article.title} — módulo da FFV Academy, escola de engenharia para a era da IA.`;
+
   return {
-    title: `${article.title} — FFV Academy`,
-    description: `Aprenda ${article.title} na trilha ${article.trail_id} do hub ${article.hub_id}.`,
+    title: article.title,
+    description,
+    keywords: modulo?.keywords,
+    // SEM barra final. O servidor não usa `trailingSlash`, então `/aprenda/x/`
+    // responde 308 para `/aprenda/x` — e canônica apontando para redirect é
+    // sinal conflitante: o buscador descarta a declaração e escolhe sozinho.
+    // Eram 415 páginas entregando essa decisão de graça.
+    alternates: { canonical: `/aprenda/${slug}` },
+    openGraph: {
+      // aqui o título completo é o certo: rede social não aplica template
+      title: `${article.title} — FFV Academy`,
+      description,
+      url: `/aprenda/${slug}`,
+      type: 'article',
+      siteName: 'FFV Academy',
+      locale: 'pt_BR',
+      /**
+       * TERCEIRO defeito desta rota, achado lendo o `<head>` SERVIDO em
+       * 05/ago/2026: não saía `og:image` nenhum nas 426 páginas.
+       *
+       * Declarar o objeto `openGraph` sem `images` não faz a imagem da
+       * convenção do segmento raiz virar `og:image` — só o `twitter:image` do
+       * layout raiz sobrevivia, e ele serve ao X e a mais nada. Facebook,
+       * LinkedIn, WhatsApp, Slack, Telegram e Discord leem `og:image`: todo
+       * link de módulo compartilhado neles aparecia sem imagem.
+       *
+       * Apontar explicitamente é determinístico. A imagem é gerada por
+       * `opengraph-image.tsx` nesta mesma pasta, com o título do módulo.
+       */
+      images: [{
+        url: `/aprenda/${slug}/opengraph-image`,
+        width: 1200,
+        height: 630,
+        alt: article.title,
+      }],
+    },
+    /**
+     * QUARTO defeito: `twitter:title` e `twitter:description` vinham do layout
+     * raiz — "FFV Academy — Escola de Engenharia para a Era da IA" — em TODAS as
+     * 426 páginas. Quem compartilhava um módulo no X anunciava o site, não o
+     * módulo. `twitter` não herda de `openGraph`: precisa ser declarado.
+     */
+    twitter: {
+      card: 'summary_large_image',
+      title: `${article.title} — FFV Academy`,
+      description,
+      images: [`/aprenda/${slug}/opengraph-image`],
+    },
   };
 }
 
 export default async function ModulePage({ params }: PageProps) {
   const { slug } = await params;
-  const article = await fetchArticleWithBlocks(slug);
+  const outcome = await getArticleOutcome(slug);
 
-  if (!article) {
-    // Sem backend disponível no build (CI) ou slug fora do índice: renderiza
-    // placeholder rico — busca metadata no CURRICULUM local pra ter title +
-    // hub + trail + xp reais. Em produção, este caminho não dispara porque
-    // o backend está presente. Em E2E o title precisa ser real pros testes
-    // de navegação validarem o H1.
+  if (outcome.kind === 'not-found') {
+    notFound();
+  }
+
+  if (outcome.kind === 'unavailable') {
     const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || '';
+    const meta = CURRICULUM.flatMap(t =>
+      t.modules.map(m => ({ ...m, trailId: t.id })),
+    ).find(m => m.slug === slug);
+
     if (!apiBase) {
-      const meta = CURRICULUM.flatMap(t =>
-        t.modules.map(m => ({ ...m, trailId: t.id })),
-      ).find(m => m.slug === slug);
+      // Sem backend configurado (CI/build local) — não é uma indisponibilidade
+      // temporária real, então "tentar novamente" não faria sentido. Renderiza
+      // placeholder rico com a metadata do CURRICULUM local pra ter title +
+      // hub + trail + xp reais (E2E precisa de um <h1> real pra validar nav).
       if (meta) {
         return (
-          <main className="max-w-3xl mx-auto px-6 py-12">
+          <article className="max-w-3xl mx-auto px-6 py-12">
             <header className="mb-8 pb-6" style={{ borderBottom: '1px solid var(--ffv-border)' }}>
               <div className="flex gap-2 mb-2 text-xs font-mono uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
                 <span>{meta.trailId}</span>
@@ -134,81 +284,248 @@ export default async function ModulePage({ params }: PageProps) {
             <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
               Conteúdo deste módulo será carregado do CMS quando o backend estiver disponível.
             </p>
-          </main>
+          </article>
         );
       }
       return (
-        <main className="max-w-3xl mx-auto px-6 py-12">
+        <article className="max-w-3xl mx-auto px-6 py-12">
           <h1 className="text-3xl font-bold mb-3">Módulo: {slug}</h1>
           <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
             Conteúdo será carregado do backend quando disponível.
           </p>
-        </main>
+        </article>
       );
     }
-    notFound();
+
+    // Backend CONFIGURADO mas a consulta falhou agora (rede, 5xx, payload
+    // inválido) — indisponibilidade real, não ausência de conteúdo. Achado
+    // #5: sem esta distinção, o backend fora derrubava as 490 páginas de
+    // módulo em 404, e o rastreador de busca via "esta página não existe".
+    return <ConteudoIndisponivel title={meta?.title} />;
   }
 
-  // JSON-LD Article — rich results no Google. headline + description em todas
-  // as páginas de módulo. Servidor renderiza, search engines indexam.
-  const jsonLd = {
-    '@context': 'https://schema.org',
-    '@type': 'Article',
-    headline: article.title,
-    description: `Aprenda ${article.title} na trilha ${article.trail_id} (hub ${article.hub_id}) — FFV Academy.`,
-    inLanguage: 'pt-BR',
-    isAccessibleForFree: true,
-    datePublished: article.updated_at,
-    dateModified: article.updated_at,
-    publisher: {
-      '@type': 'Organization',
-      name: 'FFV Academy',
-      url: 'https://fernandofrancovalle.com',
-    },
-    mainEntityOfPage: {
-      '@type': 'WebPage',
-      '@id': `https://fernandofrancovalle.com/aprenda/${slug}/`,
-    },
-    educationalLevel: article.difficulty,
-    timeRequired: `PT${article.read_time}M`,
-    learningResourceType: 'Article',
+  const article = outcome.article;
+
+  /**
+   * Dados estruturados: delegados a `ArticleJsonLd`.
+   *
+   * O bloco que ficava aqui era mais pobre e tinha um defeito — a `description`
+   * era montada como `Aprenda X na trilha trail1 (hub hub-ia)`, com os
+   * IDENTIFICADORES INTERNOS. O `generateMetadata` acima já usava as descrições
+   * escritas à mão; o JSON-LD, que é a declaração da página sobre si mesma para
+   * o buscador, tinha ficado para trás. Existia até um componente correto no
+   * repositório, nunca importado.
+   */
+  const modulo = getModuleBySlug(slug);
+  const trilha = getTrailForModule(slug);
+  const hub = trilha ? HUBS.find(h => h.trailIds.includes(trilha.id)) : undefined;
+  // Calculado aqui (servidor) e passado como prop — `NextSteps` não chama mais
+  // `getModuleNextSteps` no cliente, o que evitava arrastar `CURRICULUM`
+  // completo para o bundle de TODA página de artigo.
+  const proximosPassos = getModuleNextSteps(slug);
+  // Mesmo padrão para `Prerequisites` (religado em 12/ago/2026 — ver o
+  // componente para o achado). `completedSlugs=[]` porque o servidor não tem
+  // acesso ao GameState (localStorage); o componente recomputa `completed` no
+  // cliente a partir do estado real do leitor.
+  const prerequisitos = getModulePrerequisites(slug, []);
+  // Extraídos aqui (servidor) e passados já prontos para `ConcluirModulo` e
+  // `AnkiExport` — que antes recebiam `article.blocks` inteiro (a árvore do
+  // artigo) só para rodar esta mesma extração no cliente. Como os dois são
+  // `'use client'`, isso duplicava o conteúdo do módulo no payload RSC — e é
+  // fatia direta do 61% de payload RSC medido nas páginas `lab-*`.
+  const quizzesParaConcluir = extrairQuizzes(article.blocks);
+  const itemsAnki = extractQA(article.blocks);
+  const descricao =
+    getSeoDescription(slug) ??
+    modulo?.desc ??
+    `${article.title} — módulo da FFV Academy, escola de engenharia para a era da IA.`;
+
+  // As perguntas do módulo, achatadas da árvore de blocos. Elas são visíveis na
+  // página e cada uma vira carta de revisão espaçada — declará-las como
+  // flashcard descreve o que existe, não uma promessa.
+  const quizzes: QuizParaLd[] = [];
+  const colher = (bs: typeof article.blocks) => {
+    for (const b of bs) {
+      if (b.type === 'quiz') {
+        const d = b.data as { question?: string; options?: string[]; correctIndex?: number; explanation?: string };
+        if (d?.question && Array.isArray(d.options) && typeof d.correctIndex === 'number') {
+          quizzes.push({
+            question: d.question,
+            options: d.options,
+            correctIndex: d.correctIndex,
+            explanation: d.explanation,
+          });
+        }
+      }
+      if (b.children?.length) colher(b.children);
+    }
   };
+  colher(article.blocks);
+
+  const temasDoModulo = getTemasDoModulo(slug).filter(
+    t => getTemaStats(t.id).modules >= MINIMO_PARA_PAGINA,
+  );
 
   return (
-    <main className="max-w-3xl mx-auto px-6 py-12">
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: safeJsonLd(jsonLd) }}
+    <article className="max-w-3xl mx-auto px-6 py-12">
+      <ArticleJsonLd
+        title={article.title}
+        description={descricao}
+        slug={slug}
+        readTime={article.read_time}
+        datePublished={article.updated_at}
+        dateModified={article.updated_at}
+        educationalLevel={article.difficulty}
+        trailName={trilha?.name}
+        trailHref={trilha ? getTrailHref(trilha.id) : undefined}
+        hubName={hub?.name}
+        hubHref={hub?.href}
+        quizzes={quizzes}
       />
+      {/*
+        Trilha de navegação com NOMES, e navegável.
+        Ela mostrava `hub-engenharia · trail10 · advanced` — identificadores de
+        banco e o nível em inglês, nas 415 páginas de módulo. Era o que o leitor
+        via e o que o buscador indexava, no lugar mais visível da página, logo
+        acima do título. Agora são os nomes reais, com link, e o `nav` casa com a
+        BreadcrumbList declarada em JSON-LD: o que o buscador lê e o que a pessoa
+        vê passam a ser a mesma coisa.
+      */}
       <header className="mb-8 pb-6" style={{ borderBottom: '1px solid var(--ffv-border)' }}>
-        <div className="flex gap-2 mb-2 text-xs font-mono uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
-          <span>{article.hub_id}</span>
-          <span>·</span>
-          <span>{article.trail_id}</span>
-          <span>·</span>
-          <span>{article.difficulty}</span>
-        </div>
+        <nav aria-label="Você está em" className="mb-2">
+          <ol className="flex flex-wrap items-center gap-2 text-xs" style={{ color: 'var(--ffv-muted)' }}>
+            {hub?.href && hub.name && (
+              <li>
+                <Link href={hub.href} style={{ color: 'inherit' }}>{hub.name}</Link>
+              </li>
+            )}
+            {trilha && (
+              <>
+                <li aria-hidden="true">·</li>
+                <li>
+                  <Link href={getTrailHref(trilha.id)} style={{ color: 'inherit' }}>{trilha.name}</Link>
+                </li>
+              </>
+            )}
+            <li aria-hidden="true">·</li>
+            <li>{NIVEL_PT[article.difficulty] ?? article.difficulty}</li>
+          </ol>
+        </nav>
         <h1 className="text-3xl md:text-4xl font-bold mb-3">{article.title}</h1>
         <div className="flex gap-4 text-sm" style={{ color: 'var(--ffv-muted)' }}>
           <span>⏱ {article.read_time} min</span>
           <span>·</span>
           <span>⭐ {article.xp} XP</span>
         </div>
+        {/*
+          `objetivo` — resultado, não conteúdo (achado da auditoria
+          pedagógica de 12/ago/2026: 96% dos `desc` listavam conteúdo).
+          Campo opcional e ainda raro (38 de 490 módulos, os de entrada de
+          cada trilha — ver `validate_cobertura_objetivo.py`); some quando
+          ausente, não deixa vazio no lugar.
+        */}
+        {modulo?.objetivo && (
+          <p
+            className="mt-4 text-sm"
+            style={{ color: 'var(--foreground)' }}
+          >
+            <strong style={{ color: trilha?.color ?? 'var(--ffv-blue)' }}>Ao terminar: </strong>
+            {modulo.objetivo}
+          </p>
+        )}
       </header>
 
-      <article className="prose prose-invert max-w-none">
+      {/*
+        Sumário do artigo — religado em 12/ago/2026 (auditoria pedagógica).
+        `ArticleToc`/`MobileToc` existiam prontos desde o `ModuleLayout` legado
+        (que a rota CMS-driven substituiu) e ficaram órfãos: nenhuma rota os
+        importava. Medido: HTML servido de módulo típico tem mediana de 19
+        headings (h2+h3) e até 45, sem nenhum sumário — 490 de 490 páginas.
+        `containerSelector` mira o wrapper marcado `data-article-content`
+        abaixo; a posição flutuante replica a matemática do layout legado
+        (coluna central 768px = `max-w-3xl`, sumário à direita dela).
+      */}
+      <aside
+        className="hidden xl:block"
+        style={{
+          position: 'fixed',
+          top: 80,
+          right: 'max(24px, calc((100vw - 768px) / 2 - 260px))',
+          width: 220,
+          zIndex: 10,
+        }}
+      >
+        <ArticleToc containerSelector="[data-article-content]" accent={trilha?.color} />
+      </aside>
+      <MobileToc containerSelector="[data-article-content]" accent={trilha?.color} />
+
+      {/*
+        Pré-requisitos — religado em 12/ago/2026 (mesma auditoria). 364 de 490
+        módulos (74%) declaram `prerequisites`, mas o dado só chegava ao
+        JSON-LD (`coursePrerequisites`); a tela nunca mostrava. Antes do
+        conteúdo, de propósito: é o que o leitor precisa saber ANTES de ler,
+        não depois.
+      */}
+      <Prerequisites prereqs={prerequisitos} accent={trilha?.color} />
+
+      <article className="prose prose-invert max-w-none" data-article-content>
         <BlockTree blocks={article.blocks} />
       </article>
 
       <ViewTracker slug={slug} hubId={article.hub_id} trailId={article.trail_id} />
 
-      <TrailCertificateBanner trailId={article.trail_id} />
+      {/*
+        Fecha o laço de gamificação, que estava desconectado desta rota:
+        `markComplete` só era chamado pelo ModuleLayout legado, então ler qualquer
+        um dos 393 módulos não dava XP, não movia streak e — o mais grave — não
+        criava nenhum card de revisão espaçada, porque `addCardsFromQuiz` é a única
+        fonte de cards. O SM-2 nunca recebia material.
+      */}
+      <ConcluirModulo
+        slug={slug}
+        title={article.title}
+        readTime={article.read_time ?? 5}
+        trail={trilha}
+        quizzes={quizzesParaConcluir}
+      />
+
+      <TrailCertificateBanner trail={trilha} />
 
       <div className="mt-8 flex justify-end">
-        <AnkiExport slug={slug} title={article.title} blocks={article.blocks} />
+        <AnkiExport slug={slug} title={article.title} items={itemsAnki} />
       </div>
 
-      <NextSteps slug={slug} />
+      <NextSteps steps={proximosPassos} />
+
+      {/*
+        Temas do módulo — o eixo de assunto, transversal a hub e trilha.
+        Cada módulo passa a linkar para as páginas de tema a que pertence, o que
+        dá ao assunto uma URL que a busca pode associar ao conjunto em vez de a
+        415 artigos soltos. Só entra tema publicado: `MINIMO_PARA_PAGINA` é o
+        mesmo limiar de `generateStaticParams`, e chip que aponta para rota não
+        gerada é 404 com aparência de navegação.
+      */}
+      {temasDoModulo.length > 0 && (
+        <section className="mt-12">
+          <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--ffv-muted)' }}>
+            Temas deste módulo
+          </h2>
+          <ul className="flex flex-wrap gap-2">
+            {temasDoModulo.map(t => (
+              <li key={t.id}>
+                <Link
+                  href={`/temas/${t.slug}`}
+                  className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] transition-colors"
+                  style={{ border: '1px solid var(--ffv-border)', color: 'var(--ffv-muted)' }}
+                >
+                  <span aria-hidden>{t.icon}</span>
+                  {t.name}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="mt-12">
         <TrailLeaderboard trailId={article.trail_id} />
@@ -217,6 +534,6 @@ export default async function ModulePage({ params }: PageProps) {
       <section className="mt-12">
         <CommentSection targetType="article" targetId={slug} />
       </section>
-    </main>
+    </article>
   );
 }

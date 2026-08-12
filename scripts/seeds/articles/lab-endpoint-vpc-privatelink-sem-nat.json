@@ -1,0 +1,2265 @@
+{
+  "slug": "lab-endpoint-vpc-privatelink-sem-nat",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b6",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência resolveu, um por um, os problemas do L01 ao L17: rede privada de verdade (L02), deploy sem indisponibilidade (L03), segredo fora do código (L04), upload direto ao S3 (L17). Cada um desses laboratórios acrescentou tráfego que sai da sub-rede privada — e todo ele, hoje, sai pelo mesmo NAT Gateway que o L02 criou."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "No fechamento trimestral, o time de duas pessoas olhou a fatura da AWS pela primeira vez linha a linha. O NAT Gateway era a terceira maior linha, atrás só de Fargate e RDS — maior que o próprio ECR, maior que o Secrets Manager, maior que o CloudWatch Logs. Nenhum desses três serviços aparece separado na fatura como \"tráfego de rede\": o custo está escondido dentro da conta do NAT, como GB processado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A pergunta que motivou este laboratório não foi \"como reduzir o NAT\" — foi \"para onde esse tráfego realmente vai\". A resposta, depois de uma semana de Flow Logs: cem por cento para S3, ECR, Secrets Manager e CloudWatch Logs. Nenhum byte para um destino verdadeiramente fora da AWS."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado — depende do L02 e pressupõe a infraestrutura do L03, L04 e L17"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L02 concluído e no ar; VPC com sub-rede pública e privada existentes"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 40 min · implementação 1 h 30 a 2 h"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Reduz custo existente: troca a conta do NAT por endpoints — o Gateway é de graça, os de Interface custam menos que o NAT no volume medido"
+              },
+              {
+                "k": "Serviços",
+                "v": "VPC Gateway endpoint, VPC Interface endpoint (AWS PrivateLink)"
+              },
+              {
+                "k": "Volume atual",
+                "v": "100% do tráfego de saída medido é para S3, ECR, Secrets Manager e CloudWatch Logs"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "nenhum byte que já é da AWS deve pagar pedágio de NAT"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "depois da migração, não sobra tráfego genuinamente externo à AWS — medida por duas semanas de Flow Logs antes de decidir remover o NAT"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "Gateway endpoint para o S3, quatro endpoints de interface (incluindo ssmmessages para o ECS Exec continuar funcionando), NAT e Elastic IP removidos, e a queda de GB processado medida antes e depois"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é \"sempre remova o NAT\". A decisão inteira depende de uma medição prévia — se a Cadência tivesse uma integração com um gateway de pagamento externo, por exemplo, o NAT continuaria necessário para esse único destino, e a pergunta mudaria para \"vale a pena manter um NAT para um destino só\". O laboratório ensina o mecanismo; a decisão de remover ou não depende do que a SUA medição mostrar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b12",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação, não com a sensação de ter entendido a diferença entre os dois tipos de endpoint."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que Gateway endpoint e Interface endpoint não são o mesmo mecanismo com nome diferente — um usa PrivateLink, o outro não.",
+              "Provar, com `dig` de dentro da task, que o DNS privado faz um hostname público resolver para um IP privado, sem mudar o código da aplicação.",
+              "Associar um Gateway endpoint a uma tabela de rotas e explicar por que ele não cria ENI.",
+              "Criar endpoints de interface para ECR, Secrets Manager e CloudWatch Logs, com security group e política restrita.",
+              "Medir, por Flow Logs ou métrica do NAT, se resta tráfego genuinamente externo antes de decidir remover o NAT.",
+              "Remover o NAT Gateway e o Elastic IP, e confirmar que a tabela de rotas privada não tem mais rota padrão nenhuma.",
+              "Escrever uma política de endpoint que restrinja o Gateway endpoint do S3 a um único bucket, evitando o alcance a bucket de outra conta.",
+              "Diagnosticar o sintoma de DNS privado esquecido, e distingui-lo de security group bloqueando a ENI."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b15",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Gateway endpoint",
+                "SAA-C03, SOA-C02, SAP-C02",
+                "entrada de rota para o prefixo do S3, sem ENI",
+                "que ele só serve S3 e DynamoDB, e não usa AWS PrivateLink"
+              ],
+              [
+                "Interface endpoint / PrivateLink",
+                "SAA-C03, SAP-C02, ANS-C01",
+                "ENI por sub-rede habilitada, para os demais serviços",
+                "que ele É cobrado, por hora, por AZ, mais GB — não é gratuito como o Gateway"
+              ],
+              [
+                "DNS privado do endpoint",
+                "SAA-C03, DVA-C02",
+                "zona hospedada privada que reescreve a resolução do hostname público",
+                "que sem ele o código não muda de rota sozinho, e a chamada falha sem NAT"
+              ],
+              [
+                "Correspondência mais específica de rota",
+                "SAA-C03, SAP-C02",
+                "a rota do prefixo do S3 vence o antigo 0.0.0.0/0",
+                "que rotas mais específicas sempre vencem, independente da ordem de criação"
+              ],
+              [
+                "Política de endpoint",
+                "SAP-C02, SCS-C02",
+                "restrição do Gateway endpoint a um bucket, e do Interface ao segredo específico",
+                "que a política padrão libera tudo, e por que isso é um risco de exfiltração"
+              ],
+              [
+                "Security group de endpoint de interface",
+                "SAA-C03",
+                "regra própria liberando 443 a partir do security group da task",
+                "que o endpoint tem security group dele mesmo — o NAT nunca teve"
+              ],
+              [
+                "Custo de NAT vs PrivateLink",
+                "SAP-C02, FinOps",
+                "a comparação de gigabyte contra hora-AZ mais gigabyte",
+                "que abaixo de certo volume o Interface endpoint pode custar MAIS que o NAT"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve uma sub-rede privada precisando alcançar o S3 \"sem NAT Gateway e sem tráfego passando pela internet\" e pede a solução mais barata. O distrator mais forte é \"criar um Interface endpoint para o S3\" — que funciona, mas cobra por hora e por GB quando existe uma opção gratuita para exatamente esse serviço. Quem lembra que S3 e DynamoDB têm Gateway endpoint acerta sem hesitar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b18",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Nenhum requisito aqui pede um recurso novo por adorno. Cada linha decide qual tipo de endpoint entra e onde."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Tráfego para S3 sem custo adicional",
+                "obrigatório",
+                "Gateway endpoint — é o único mecanismo gratuito disponível para esse destino"
+              ],
+              [
+                "ECR, Secrets Manager e Logs sem sair da AWS",
+                "obrigatório",
+                "quatro endpoints de interface: dois para o ECR (api e dkr), um para Secrets Manager, um para Logs — mais o ssmmessages, obrigatório à parte para o ECS Exec continuar funcionando sem NAT"
+              ],
+              [
+                "Zero mudança de código da aplicação",
+                "obrigatório",
+                "DNS privado habilitado em cada endpoint de interface — sem isso, o requisito falha"
+              ],
+              [
+                "NAT removido só se seguro",
+                "condicional",
+                "medição de Flow Logs por duas semanas antes de qualquer `terraform destroy`"
+              ],
+              [
+                "Nenhum bucket de outra conta alcançável",
+                "segurança",
+                "política de endpoint do Gateway restrita ao ARN do bucket de laudos"
+              ],
+              [
+                "Disponibilidade em duas AZs",
+                "já declarado desde o L02",
+                "cada endpoint de interface habilitado nas duas sub-redes privadas, não só numa"
+              ],
+              [
+                "Rastreabilidade da mudança",
+                "operacional",
+                "medição do GB processado pelo NAT antes e depois, documentada e não apenas assumida"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A hipótese sustenta a arquitetura inteira, e ela tem prazo de validade",
+            "content": "Todo o desenho de produção deste laboratório depende de \"não sobra tráfego genuinamente externo\". No dia em que a Cadência integrar um gateway de pagamento ou qualquer API de terceiro, essa hipótese deixa de valer, e a pergunta muda de \"remover o NAT\" para \"manter um caminho de saída só para esse destino novo\". Revisite a hipótese a cada integração externa nova, não só uma vez."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o estado que o L02 deixou"
+      },
+      "children": [
+        {
+          "id": "b22",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este não é um desenho a construir — é o estado atual da Cadência, herdado do L02. Ele funciona bem, e é exatamente por isso que o defeito passa despercebido: nada está quebrado, só está caro sem necessidade."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Uma linha de rota cobrindo quatro destinos que já são da AWS",
+            "caption": "Este é o desenho que o L02 deixou, e ele funciona: a sub-rede privada tem uma rota padrão para o NAT, e o NAT resolve qualquer saída. O defeito não é nenhuma linha errada — é que a MESMA rota atende tráfego para fora da AWS e tráfego para dentro dela, e o NAT cobra os dois pelo mesmo preço. Percorra os passos: cada serviço que a Cadência já usa está, hoje, pagando pedágio.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente das lojas",
+                    "note": "só alcança o ALB; não participa da história deste laboratório além de contexto"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB",
+                    "note": "entrada da aplicação; não muda neste laboratório"
+                  },
+                  {
+                    "id": "nat",
+                    "service": "natgateway",
+                    "label": "NAT Gateway",
+                    "note": "único caminho de saída hoje, para QUALQUER destino — externo ou da própria AWS"
+                  },
+                  {
+                    "id": "eip",
+                    "service": "eip",
+                    "label": "Elastic IP",
+                    "note": "endereço fixo de saída; continua cobrando sozinho se o NAT for apagado sem ele"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "ecs",
+                    "service": "ecs",
+                    "label": "Tasks da Cadência",
+                    "note": "toda saída consulta a mesma tabela de rotas, com uma única linha catch-all"
+                  }
+                ]
+              },
+              {
+                "label": "Regional, alcançado só através do NAT hoje",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3",
+                    "service": "s3",
+                    "label": "S3",
+                    "note": "recebe o laudo de garantia enviado pelo app do L17 — tráfego 100% interno à AWS"
+                  },
+                  {
+                    "id": "ecr",
+                    "service": "ecr",
+                    "label": "ECR",
+                    "note": "entrega a imagem a cada deploy do L03 — o mesmo registro, o mesmo pedágio"
+                  },
+                  {
+                    "id": "secretsmanager",
+                    "service": "secretsmanager",
+                    "label": "Secrets Manager",
+                    "note": "entrega a credencial do banco do L04 toda vez que uma task nasce"
+                  },
+                  {
+                    "id": "cloudwatch",
+                    "service": "cloudwatch",
+                    "label": "CloudWatch Logs",
+                    "note": "recebe cada linha de log emitida pela aplicação, o tempo todo"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "HTTPS 443",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "ecs",
+                "label": "encaminha para a task",
+                "style": "solid"
+              },
+              {
+                "from": "ecs",
+                "to": "nat",
+                "label": "saída padrão: 0.0.0.0/0 → NAT, para qualquer destino",
+                "style": "solid"
+              },
+              {
+                "from": "nat",
+                "to": "eip",
+                "label": "traduz para o endereço de saída fixo",
+                "style": "solid"
+              },
+              {
+                "from": "nat",
+                "to": "s3",
+                "label": "export diário de laudo (L17)",
+                "style": "dashed"
+              },
+              {
+                "from": "nat",
+                "to": "ecr",
+                "label": "pull de imagem a cada deploy (L03)",
+                "style": "dashed"
+              },
+              {
+                "from": "nat",
+                "to": "secretsmanager",
+                "label": "leitura da credencial (L04)",
+                "style": "dashed"
+              },
+              {
+                "from": "nat",
+                "to": "cloudwatch",
+                "label": "envio de log de cada task",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Uma linha cobre quatro destinos diferentes",
+                "detail": "A tabela de rotas da sub-rede privada tem uma única entrada — 0.0.0.0/0 → NAT — e ela não distingue \"chamada a um fornecedor de fora\" de \"chamada a outro serviço da própria conta AWS\". As duas saem pelo mesmo lugar.",
+                "nodes": [
+                  "ecs",
+                  "nat"
+                ],
+                "edges": [
+                  "ecs>nat"
+                ]
+              },
+              {
+                "label": "O NAT não sabe que o destino é da AWS",
+                "detail": "Ele é um tradutor de endereço: troca o IP de origem da task pelo Elastic IP e mantém a tabela de conexões para a resposta voltar. Do ponto de vista dele, uma chamada ao S3 e uma chamada a um site qualquer são o mesmo tipo de pacote.",
+                "nodes": [
+                  "nat",
+                  "eip"
+                ],
+                "edges": [
+                  "nat>eip"
+                ]
+              },
+              {
+                "label": "O S3 leva o laudo de garantia, do L17",
+                "detail": "Cada upload processado pela aplicação grava o resultado no bucket — tráfego que nunca sai fisicamente da rede da AWS, mas que estruturalmente atravessa o NAT e é cobrado por gigabyte processado, nos dois sentidos.",
+                "nodes": [
+                  "nat",
+                  "s3"
+                ],
+                "edges": [
+                  "nat>s3"
+                ]
+              },
+              {
+                "label": "O ECR leva a imagem, a cada deploy do L03",
+                "detail": "O rolling update do L03 puxa uma imagem inteira por task nova. Multiplicado pela frequência de deploy que o próprio L03 tornou possível, é o segundo maior consumidor de GB processado pelo NAT — e cresce junto com a velocidade de entrega.",
+                "nodes": [
+                  "nat",
+                  "ecr"
+                ],
+                "edges": [
+                  "nat>ecr"
+                ]
+              },
+              {
+                "label": "O Secrets Manager leva a credencial, do L04",
+                "detail": "Toda vez que uma task nasce — em deploy, em escala automática, em substituição depois de falha — ela lê a credencial do banco pelo mesmo caminho. É tráfego pequeno em bytes, mas ele soma ao mesmo NAT que os demais.",
+                "nodes": [
+                  "nat",
+                  "secretsmanager"
+                ],
+                "edges": [
+                  "nat>secretsmanager"
+                ]
+              },
+              {
+                "label": "O CloudWatch Logs leva cada linha, o tempo todo",
+                "detail": "Diferente dos anteriores, este não é um evento: é um fluxo contínuo. Em volume de log alto, ele é frequentemente o maior consumidor silencioso de GB processado, porque ninguém pensa em \"logging\" como tráfego de rede.",
+                "nodes": [
+                  "nat",
+                  "cloudwatch"
+                ],
+                "edges": [
+                  "nat>cloudwatch"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O NAT em si não fez nada errado",
+            "content": "Ele foi o desenho certo no L02, quando a alternativa era o banco publicamente acessível. O que mudou não foi o NAT — foi o volume de tráfego para dentro da própria AWS crescendo junto com o produto: mais deploys (L03), mais uploads (L17), mais log. Um mecanismo correto ontem pode deixar de ser o mais barato hoje, sem que ninguém tenha decidido errado em nenhum momento."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção: sem NAT"
+      },
+      "children": [
+        {
+          "id": "b25",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A diferença estrutural em relação ao desenho anterior não é um endpoint a mais ao lado do NAT — é a AUSÊNCIA do NAT, porque nada do que restou precisa dele."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b2",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Sem NAT: a rota vira uma linha de tabela, e o DNS aponta para dentro",
+            "caption": "O NAT não perde uma função — ele deixa de existir, porque nada do que sobrou precisa dele. O S3 é alcançado por uma entrada na tabela de rotas, sem ENI. Os outros três ganham uma ENI cada, e o DNS privado faz o código não notar a diferença. Percorra os passos: a mudança estrutural é a AUSÊNCIA do NAT no desenho, não uma peça a mais ao lado dele.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente das lojas",
+                    "note": "não percebe nada — a entrada da aplicação não mudou"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública, sem NAT",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB",
+                    "note": "a única peça pública que sobra no desenho; NAT e Elastic IP foram removidos"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "ecs",
+                    "service": "ecs",
+                    "label": "Tasks da Cadência",
+                    "note": "o código da aplicação não mudou uma linha — só o caminho por baixo dele"
+                  },
+                  {
+                    "id": "rt",
+                    "service": "routetable",
+                    "label": "Tabela de rotas privada",
+                    "note": "perdeu a linha 0.0.0.0/0 → NAT; ganhou uma entrada de prefixo para o S3"
+                  },
+                  {
+                    "id": "ep_s3",
+                    "service": "routetable",
+                    "label": "Gateway endpoint: S3",
+                    "note": "não é um recurso com interface de rede — é o ALVO da rota de prefixo, e é de graça"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada — ENIs do PrivateLink",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "ep_ecr",
+                    "service": "privatelink",
+                    "label": "Endpoint de interface: ECR (api + dkr)",
+                    "note": "duas ENIs — uma por sub-serviço do ECR — cobradas por hora, por AZ, mais GB"
+                  },
+                  {
+                    "id": "ep_sm",
+                    "service": "privatelink",
+                    "label": "Endpoint de interface: Secrets Manager",
+                    "note": "ENI própria; o DNS privado faz o hostname público resolver para o IP dela"
+                  },
+                  {
+                    "id": "ep_logs",
+                    "service": "privatelink",
+                    "label": "Endpoint de interface: CloudWatch Logs",
+                    "note": "recebe o fluxo contínuo de log; é o endpoint com maior GB processado aqui"
+                  }
+                ]
+              },
+              {
+                "label": "Regional, alcançado sem sair da rede da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3",
+                    "service": "s3",
+                    "label": "S3",
+                    "note": "mesmo bucket do L17, alcançado agora pela rota de prefixo"
+                  },
+                  {
+                    "id": "ecr",
+                    "service": "ecr",
+                    "label": "ECR",
+                    "note": "mesmo registro do L03; a imagem chega pela ENI, não pelo NAT"
+                  },
+                  {
+                    "id": "secretsmanager",
+                    "service": "secretsmanager",
+                    "label": "Secrets Manager",
+                    "note": "mesma credencial do L04, lida pelo caminho privado"
+                  },
+                  {
+                    "id": "cloudwatch",
+                    "service": "cloudwatch",
+                    "label": "CloudWatch Logs",
+                    "note": "recebe o mesmo volume de log de antes, agora sem pedágio de NAT"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "HTTPS 443, sem mudança para quem usa a API",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "ecs",
+                "label": "encaminha para o IP privado da task",
+                "style": "solid"
+              },
+              {
+                "from": "ecs",
+                "to": "rt",
+                "label": "toda saída passa pela tabela antes de qualquer decisão",
+                "style": "solid"
+              },
+              {
+                "from": "rt",
+                "to": "ep_s3",
+                "label": "prefixo do S3 vence o antigo catch-all, por especificidade",
+                "style": "solid"
+              },
+              {
+                "from": "ep_s3",
+                "to": "s3",
+                "label": "entrega ao serviço, sem ENI e sem cobrança",
+                "style": "solid"
+              },
+              {
+                "from": "ecs",
+                "to": "ep_ecr",
+                "label": "pull de imagem: o hostname de sempre resolve para a ENI",
+                "style": "dashed"
+              },
+              {
+                "from": "ep_ecr",
+                "to": "ecr",
+                "label": "download da camada, dentro da rede da AWS",
+                "style": "dashed"
+              },
+              {
+                "from": "ecs",
+                "to": "ep_sm",
+                "label": "GetSecretValue, sem mudar uma linha da aplicação",
+                "style": "dashed"
+              },
+              {
+                "from": "ep_sm",
+                "to": "secretsmanager",
+                "label": "leitura da credencial do banco",
+                "style": "dashed"
+              },
+              {
+                "from": "ecs",
+                "to": "ep_logs",
+                "label": "PutLogEvents a cada linha emitida",
+                "style": "dashed"
+              },
+              {
+                "from": "ep_logs",
+                "to": "cloudwatch",
+                "label": "grava o log, pela ENI",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A rota do S3 não tem mais hop nenhum",
+                "detail": "A tabela de rotas ganha uma entrada cujo destino é o prefixo gerenciado pela AWS para o S3 na região, e cujo alvo é o próprio Gateway endpoint. Por correspondência mais específica, ela vence qualquer 0.0.0.0/0 remanescente.",
+                "nodes": [
+                  "rt",
+                  "ep_s3"
+                ],
+                "edges": [
+                  "rt>ep_s3"
+                ]
+              },
+              {
+                "label": "O Gateway endpoint é a rota, não um recurso a mais",
+                "detail": "Não existe ENI aqui, não existe security group do lado do endpoint, e não existe cobrança. É por isso que ele não aparece na fatura de PrivateLink: tecnicamente, ele nem usa PrivateLink — é um mecanismo de roteamento separado.",
+                "nodes": [
+                  "ep_s3",
+                  "s3"
+                ],
+                "edges": [
+                  "ep_s3>s3"
+                ]
+              },
+              {
+                "label": "O DNS passou a responder de dentro",
+                "detail": "Com o DNS privado habilitado, a AWS cria uma zona hospedada privada que faz o hostname público de sempre — o mesmo que o SDK já chamava — resolver para o IP privado da ENI do endpoint. Nenhuma linha de configuração de conexão mudou.",
+                "nodes": [
+                  "ep_ecr",
+                  "ep_sm"
+                ],
+                "edges": [
+                  "ecs>ep_ecr",
+                  "ecs>ep_sm"
+                ]
+              },
+              {
+                "label": "Cada interface endpoint é uma ENI, com hora e GB cobrados",
+                "detail": "Diferente do Gateway, o Interface endpoint É um recurso: uma interface de rede por sub-rede habilitada, cobrada por hora ligada em cada zona de disponibilidade, mais gigabyte processado. É uma conta previsível, não gratuita.",
+                "nodes": [
+                  "ep_ecr",
+                  "ecr"
+                ],
+                "edges": [
+                  "ep_ecr>ecr"
+                ]
+              },
+              {
+                "label": "O NAT saiu do desenho porque não sobrou tráfego genuinamente externo",
+                "detail": "Depois de medir o que passava pelo NAT antes da migração, a Cadência não encontrou nenhum destino fora da AWS — só os quatro serviços agora atendidos por endpoint. Sem tráfego para justificá-lo, o NAT e o Elastic IP foram removidos.",
+                "nodes": [
+                  "ecs",
+                  "rt"
+                ],
+                "edges": [
+                  "ecs>rt"
+                ]
+              },
+              {
+                "label": "O security group da ENI é a fronteira nova",
+                "detail": "Cada endpoint de interface tem o seu próprio security group, e ele precisa liberar a porta 443 para o security group da task explicitamente — senão o DNS resolve certo e a conexão é recusada mesmo assim, um sintoma que engana.",
+                "nodes": [
+                  "ep_sm",
+                  "secretsmanager"
+                ],
+                "edges": [
+                  "ep_sm>secretsmanager"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4",
+          "type": "annotated_formula",
+          "position": 2,
+          "data": {
+            "title": "Três modelos de cobrança para o mesmo tráfego, e por que não são intercambiáveis",
+            "formula": "NAT = (horas × taxa_hora) + (GB_processado × taxa_GB)   |   Interface = (horas × AZs × taxa_hora) + (GB × taxa_GB)   |   Gateway = 0",
+            "parts": [
+              {
+                "symbol": "NAT Gateway",
+                "name": "Por hora ligado, mais por GB, nos dois sentidos",
+                "description": "Cobra mesmo parado, e cobra de novo por cada gigabyte que passa por ele — de qualquer origem, para qualquer destino. É o modelo mais simples e o menos discriminado: ele não sabe se o destino era da AWS."
+              },
+              {
+                "symbol": "Interface endpoint (PrivateLink)",
+                "name": "Por hora, por AZ habilitada, mais por GB processado",
+                "description": "A parte fixa multiplica pelo número de zonas de disponibilidade em que você habilita o endpoint — dois é o mínimo recomendado, não um teto. Para um serviço chamado poucas vezes, a hora parada pode custar mais do que o GB custava no NAT. É o cálculo que a seção de custo faz.",
+                "highlight": true
+              },
+              {
+                "symbol": "Gateway endpoint (S3 e DynamoDB só)",
+                "name": "Sem cobrança adicional",
+                "description": "Não existe recurso cobrado: é uma entrada na tabela de rotas. É a exceção boa da série — a única peça deste laboratório que reduz custo em vez de trocar uma cobrança por outra."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b26",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho que não é só custo",
+            "content": "Tráfego que passa por um endpoint nunca atravessa o Internet Gateway, mesmo estruturalmente. Isso reduz a superfície de rede da aplicação — menos caminho para um Flow Log precisar explicar em uma auditoria — e é um benefício que fica mesmo se, no seu caso, o cálculo de custo desse empate com o NAT."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b32",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Como a resolução de nome muda, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b28",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O mecanismo inteiro deste laboratório vive numa única pergunta: quando o código chama um hostname público que ele sempre chamou, para onde o DNS manda essa consulta? A resposta muda com o endpoint, e o código nunca fica sabendo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Uma chamada ao Secrets Manager, antes e depois — o mesmo hostname, dois caminhos",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "O código chama o hostname público de sempre",
+                "desc": "secretsmanager.us-east-1.amazonaws.com — nem antes nem depois da migração isso muda. O SDK da AWS não sabe, e não precisa saber, que existe um endpoint."
+              },
+              {
+                "label": "O resolvedor de DNS da VPC recebe a consulta",
+                "desc": "O Route 53 Resolver embutido na VPC (o endereço .2 da faixa) é quem responde a consultas de dentro da rede antes de qualquer coisa sair."
+              },
+              {
+                "label": "ANTES: nenhuma zona privada corresponde",
+                "desc": "Sem endpoint, o resolvedor devolve o registro público de sempre — um IP público do Secrets Manager — e a rota até ele dependia do NAT."
+              },
+              {
+                "label": "DEPOIS: a zona hospedada privada intercepta",
+                "desc": "Com o DNS privado do endpoint habilitado, a AWS cria uma zona hospedada privada oculta que tem um registro para ESSE MESMO hostname, apontando para o IP privado da ENI do endpoint na AZ da task."
+              },
+              {
+                "label": "A conexão TLS valida normalmente",
+                "desc": "O certificado emitido pela AWS cobre o hostname público, então a validação TLS passa mesmo a conexão indo para um IP privado — não há nada para o cliente notar."
+              },
+              {
+                "label": "A política do endpoint decide se a chamada é permitida",
+                "desc": "Antes de a chamada chegar ao serviço, a policy do endpoint é avaliada. A padrão libera tudo; uma política restrita pode negar aqui, e o erro parece autorização, não rede."
+              },
+              {
+                "label": "A resposta volta pela mesma ENI",
+                "desc": "Sem atravessar NAT, sem atravessar Internet Gateway — o pacote de resposta nunca sai da sub-rede da task."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b29",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A pegadinha que faz o laboratório inteiro parecer não funcionar",
+            "content": "Criar o endpoint sem marcar `private_dns_enabled = true` é o erro mais caro deste módulo. O endpoint fica `available`, a ENI existe, e nada muda: o hostname público continua resolvendo para o IP público de sempre, porque só o DNS privado reescreve essa resolução. Sem NAT no ar, a chamada simplesmente para de funcionar — e o sintoma (\"não consigo mais ler o segredo\") aponta para tudo, menos para essa uma linha."
+          }
+        },
+        {
+          "id": "b30",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "A ordem importa na prática: habilite o DNS privado do endpoint e confirme a resolução com "
+              },
+              {
+                "text": "dig",
+                "code": true
+              },
+              {
+                "text": " ANTES de remover o NAT. Assim, se algo estiver errado, a aplicação ainda tem o caminho antigo funcionando enquanto você corrige."
+              }
+            ]
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Um registro de Flow Log real, depois da migração: origem e destino são os DOIS privados. Antes do endpoint, o dstaddr desta mesma chamada seria o IP da interface do NAT, e o pacote teria um segundo salto ate o IGW."
+              }
+            ]
+          },
+          "position": 4
+        },
+        {
+          "id": "b31",
+          "type": "code_block",
+          "position": 5,
+          "data": {
+            "language": "json",
+            "filename": "registro-de-fluxo-vpc.json",
+            "code": "{\n  \"version\": 2,\n  \"account-id\": \"111122223333\",\n  \"interface-id\": \"eni-0f7a2b9c1d3e4f567\",\n  \"srcaddr\": \"10.0.32.14\",\n  \"dstaddr\": \"10.0.32.201\",\n  \"srcport\": 51224,\n  \"dstport\": 443,\n  \"protocol\": 6,\n  \"packets\": 12,\n  \"bytes\": 3140,\n  \"start\": 1754524800,\n  \"end\": 1754524860,\n  \"action\": \"ACCEPT\",\n  \"log-status\": \"OK\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b34",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b5",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Reduzir a fatura de rede de uma equipe de duas pessoas, cujo tráfego de saída — medido por Flow Logs durante duas semanas — é 100% dirigido a S3, ECR, Secrets Manager e CloudWatch Logs, sem nenhum destino verdadeiramente externo à AWS.",
+            "winner": "Gateway endpoint para o S3, endpoints de interface para ECR, Secrets Manager e CloudWatch Logs, com o NAT Gateway e o Elastic IP removidos",
+            "why": "A medição prévia é o que sustenta a decisão: sem ela, remover o NAT seria aposta, não engenharia. Com ela, cada gigabyte que hoje passa pelo NAT tem um endpoint correspondente que o atende sem sair da rede da AWS — de graça no caso do S3, por hora e GB nos outros três. A soma das horas de três ENIs em duas AZs é, para o volume medido da Cadência, menor que a conta atual do NAT — e o ganho de segurança (tráfego que nunca atravessa a fronteira pública) vem junto, sem custo adicional.",
+            "alternatives": [
+              {
+                "name": "Manter o NAT como está",
+                "downside": "continua funcionando e não exige nenhuma mudança — mas cobra pedágio sobre tráfego que nunca precisou sair da AWS, para sempre, crescendo com o produto"
+              },
+              {
+                "name": "NAT Gateway por AZ",
+                "downside": "resolve dependência de zona, não custo — dobra a parte fixa sem tocar no problema real, que é o tipo de tráfego, não a topologia do NAT"
+              },
+              {
+                "name": "Proxy HTTP centralizado numa conta de rede compartilhada",
+                "downside": "é o desenho certo quando várias contas dividem saída — over-engineering para uma equipe de duas pessoas com uma VPC só; é conversa do L45 em diante"
+              },
+              {
+                "name": "Endpoint para todo serviço que a AWS oferece, por precaução",
+                "downside": "troca o pedágio do NAT por hora de ENI parada sem tráfego — o oposto de economizar; endpoint sem volume medido é a mesma aposta ao contrário"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b33",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Endpoint do S3",
+                "Gateway",
+                "Interface endpoint para o S3 (também suportado)",
+                "é gratuito e S3 suporta os dois; não há razão para pagar pelo mesmo destino",
+                "nada relevante — o Gateway cobre o caso de uso por inteiro"
+              ],
+              [
+                "Endpoint do ECR",
+                "dois Interface (api + dkr)",
+                "só o `dkr`, assumindo que o `api` não é chamado",
+                "a autenticação usa o `api`; faltando ele, o pull falha antes de baixar qualquer camada",
+                "duas ENIs por AZ em vez de uma — dobro do custo fixo deste serviço"
+              ],
+              [
+                "Habilitação por AZ",
+                "as duas sub-redes privadas",
+                "só a AZ a, mais barato",
+                "o requisito de disponibilidade de duas AZs, herdado do L02, não é negociável aqui",
+                "dobra a parte fixa de cada endpoint de interface"
+              ],
+              [
+                "Remoção do NAT",
+                "total, depois de medir",
+                "manter \"por garantia\"",
+                "sem tráfego que o justifique, manter é pagar por um recurso comprovadamente ocioso",
+                "perde-se a saída genérica: qualquer destino externo NOVO no futuro exige revisitar isto"
+              ],
+              [
+                "Política do Gateway endpoint",
+                "restrita ao bucket de laudos",
+                "política padrão (libera tudo)",
+                "evita que o mesmo endpoint alcance bucket de outra conta AWS",
+                "qualquer bucket novo da própria Cadência precisa ser adicionado à política"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b38",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: o Gateway endpoint para o S3"
+      },
+      "children": [
+        {
+          "id": "b35",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "É o único recurso deste laboratório que reduz custo em vez de trocar uma cobrança por outra. Repare no que ele NÃO tem: nenhum `subnet_ids`, porque ele não cria interface de rede — ele se associa a tabelas de rotas inteiras."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b36",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "s3-gateway-endpoint.tf",
+            "code": "# s3-gateway-endpoint.tf — a rota que substitui o hop, e a política que evita vazamento\n\n# Sem interface de rede, sem security group do lado do endpoint, sem cobrança.\n# O que este recurso FAZ é adicionar uma entrada na(s) tabela(s) de rotas\n# listadas em `route_table_ids`: destino = prefixo gerenciado do S3 na região,\n# alvo = este endpoint.\nresource \"aws_vpc_endpoint\" \"s3\" {\n  vpc_id            = aws_vpc.principal.id\n  service_name      = \"com.amazonaws.${var.regiao}.s3\"\n  vpc_endpoint_type = \"Gateway\"\n\n  route_table_ids = [aws_route_table.privada.id]\n\n  # A política padrão de um VPC endpoint libera QUALQUER ação, de QUALQUER\n  # principal, sobre QUALQUER recurso. Isso significa que, sem restringir aqui,\n  # uma task comprometida alcança o bucket de QUALQUER conta AWS através do\n  # mesmo endpoint criado para o bucket da Cadência — porque a rota vale para\n  # todo tráfego destinado ao S3 na região, não só para o seu bucket.\n  policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect    = \"Allow\"\n      Principal = \"*\"\n      Action    = [\"s3:GetObject\", \"s3:PutObject\", \"s3:ListBucket\"]\n      # Restrito ao ARN do bucket de laudos do L17. Qualquer outro bucket,\n      # inclusive de outra conta AWS, fica fora do que este endpoint permite.\n      Resource = [\n        aws_s3_bucket.laudos.arn,\n        \"${aws_s3_bucket.laudos.arn}/*\",\n      ]\n    }]\n  })\n}\n\n# O security group da TASK precisa liberar saída para o prefixo do S3 na porta\n# 443 — o endpoint não tem security group próprio para isso. Sem esta regra, a\n# rota existe e o pacote não sai da task mesmo assim.\ndata \"aws_ec2_managed_prefix_list\" \"s3\" {\n  name = \"com.amazonaws.${var.regiao}.s3\"\n}\n\nresource \"aws_vpc_security_group_egress_rule\" \"task_para_s3\" {\n  security_group_id = aws_security_group.task.id\n  prefix_list_id     = data.aws_ec2_managed_prefix_list.s3.id\n  from_port          = 443\n  to_port            = 443\n  ip_protocol        = \"tcp\"\n  description        = \"S3 via gateway endpoint — NACL nao aceita prefix list, so security group\"\n}\n"
+          }
+        },
+        {
+          "id": "b37",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A política padrão é a porta destrancada mais barata da AWS",
+            "content": "Sem restringir `policy`, o Gateway endpoint libera qualquer ação de qualquer principal sobre qualquer recurso do S3 na região — incluindo buckets de OUTRAS contas AWS, porque a rota vale para todo tráfego destinado ao serviço, não só ao seu bucket. É um vetor de exfiltração de dado documentado: uma task comprometida usa o endpoint que você criou para o SEU bucket para alcançar o bucket de qualquer outro lugar que aceite a credencial dela."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b42",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: os endpoints de interface, e o security group que os protege"
+      },
+      "children": [
+        {
+          "id": "b39",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Quatro serviços, cinco endpoints — o ECR sozinho pede dois, e o ECS Exec (não é um serviço que a aplicação chama, mas uma dependência operacional do próprio laboratório) pede o quinto. Cada um cria uma ENI de verdade por sub-rede habilitada, e é por isso que eles aparecem na fatura de um jeito que o Gateway endpoint nunca aparece."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b40",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "interface-endpoints.tf",
+            "code": "# interface-endpoints.tf — uma ENI por sub-rede habilitada, para os tres servicos restantes\n\n# Security group PROPRIO dos endpoints. E a fronteira nova depois que o NAT\n# sai do desenho: sem esta regra liberando 443 a partir do security group da\n# task, o DNS resolve certo e a conexao e recusada mesmo assim.\nresource \"aws_security_group\" \"endpoints\" {\n  name   = \"${var.projeto}-endpoints\"\n  vpc_id = aws_vpc.principal.id\n}\n\nresource \"aws_vpc_security_group_ingress_rule\" \"endpoints_da_task\" {\n  security_group_id            = aws_security_group.endpoints.id\n  referenced_security_group_id = aws_security_group.task.id\n  from_port                    = 443\n  to_port                      = 443\n  ip_protocol                  = \"tcp\"\n  description                  = \"HTTPS das tasks para as ENIs dos endpoints de interface\"\n}\n\nlocals {\n  # ECR precisa de DOIS endpoints: \"api\" resolve chamadas de controle\n  # (autenticacao, describe), \"dkr\" resolve o pull de camada de imagem em si.\n  # Faltando qualquer um dos dois, o pull falha depois de autenticar.\n  #\n  # ssm_msgs e OBRIGATORIO por um motivo separado do ECR: e o que o ECS Exec\n  # usa para o agente SSM dentro da task alcancar o Session Manager. Sem NAT\n  # e sem este endpoint, \"aws ecs execute-command\" — usado nas provas mais\n  # adiante — para de funcionar depois do destroy do NAT, porque o agente\n  # nao tem mais rota nenhuma ate o Session Manager. Em Fargate plataforma\n  # 1.4.0+ isto basta; em plataformas mais antigas some tambem precisar dos\n  # endpoints ecs-agent e ecs-telemetry — confirme a versao da sua platform_version.\n  servicos_interface = {\n    ecr_api  = \"ecr.api\"\n    ecr_dkr  = \"ecr.dkr\"\n    secretos = \"secretsmanager\"\n    logs     = \"logs\"\n    ssm_msgs = \"ssmmessages\"\n  }\n}\n\nresource \"aws_vpc_endpoint\" \"interface\" {\n  for_each = local.servicos_interface\n\n  vpc_id              = aws_vpc.principal.id\n  service_name        = \"com.amazonaws.${var.regiao}.${each.value}\"\n  vpc_endpoint_type    = \"Interface\"\n  subnet_ids           = [for s in aws_subnet.privada : s.id]\n  security_group_ids   = [aws_security_group.endpoints.id]\n\n  # E ESTA linha que faz o codigo existente atravessar o endpoint sem mudar.\n  # Sem ela, o hostname publico de sempre continua resolvendo para o IP\n  # publico do servico, e sem NAT essa chamada nao tem mais rota nenhuma.\n  private_dns_enabled = true\n\n  tags = { Name = \"${var.projeto}-vpce-${each.key}\" }\n}\n\n# Politica restrita ao Secrets Manager: so o segredo do banco, so a acao de\n# leitura. O padrao (liberar tudo) autorizaria a task a ler QUALQUER segredo\n# da conta atraves deste endpoint, nao so o dela.\nresource \"aws_vpc_endpoint_policy\" \"secrets\" {\n  vpc_endpoint_id = aws_vpc_endpoint.interface[\"secretos\"].id\n\n  policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect   = \"Allow\"\n      Principal = \"*\"\n      Action   = \"secretsmanager:GetSecretValue\"\n      Resource = aws_secretsmanager_secret.banco.arn\n    }]\n  })\n}\n"
+          }
+        },
+        {
+          "id": "b41",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O security group do endpoint é regra nova, não herança do NAT",
+            "content": "O NAT nunca teve security group próprio — o controle vivia só do lado da task. Um endpoint de interface tem o dele, e ele filtra de forma independente: mesmo com o security group da task liberando saída, uma ENI de endpoint sem a regra de entrada correspondente recusa a conexão. As duas pontas precisam concordar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b47",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: removendo o NAT, e o que sobra na tabela de rotas"
+      },
+      "children": [
+        {
+          "id": "b43",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Esta seção não é um recurso novo — é a ausência de três. O `terraform plan` depois desta mudança mostra `destroy` no NAT Gateway e no Elastic IP, e uma tabela de rotas sem nenhuma linha além da local."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b44",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "rede.tf (diff)",
+            "code": "# rede.tf — o que sai, e o que muda na tabela de rotas privada\n\n# Estes tres recursos do L02 SAEM do Terraform. O `terraform plan` mostra os\n# tres como destroy — e SO faz sentido rodar isto depois de confirmar, pela\n# medicao de Flow Logs da secao de provas, que nao sobra trafego externo real.\n#\n# resource \"aws_nat_gateway\" \"nat\" { ... }            # REMOVIDO\n# resource \"aws_eip\" \"nat\" { ... }                     # REMOVIDO — Elastic IP\n#                                                       # continua cobrando se\n#                                                       # ficar orfao; ver limpeza\n# route {\n#   cidr_block     = \"0.0.0.0/0\"                       # REMOVIDO desta tabela\n#   nat_gateway_id = aws_nat_gateway.nat.id\n# }\n\n# A tabela privada do L02, depois da mudanca. Repare no que NAO existe mais:\n# nenhuma linha 0.0.0.0/0. A unica rota alem da local (implicita) e a que o\n# `aws_vpc_endpoint.s3` do Gateway endpoint acrescenta sozinho — voce nao\n# escreve essa rota, ela vem do `route_table_ids` do recurso do endpoint.\nresource \"aws_route_table\" \"privada\" {\n  vpc_id = aws_vpc.principal.id\n\n  tags = { Name = \"${var.projeto}-rt-privada-sem-nat\" }\n\n  # Nenhum `route {}` bloco aqui. A tabela nasce so com a rota local implicita\n  # da VPC. A rota para o S3 e injetada pelo endpoint, nao declarada aqui —\n  # e por isso `terraform plan` nesta tabela nao mostra diferenca nenhuma\n  # quando o endpoint muda, o que confunde quem espera ver a rota no arquivo.\n}\n\n# Sem NAT, nao ha mais recurso na sub-rede PUBLICA alem do ALB. Se nenhum\n# outro workload precisar de saida publica de verdade, a sub-rede publica\n# passa a existir so para o balanceador — e isso e uma informacao, nao um erro.\n"
+          }
+        },
+        {
+          "id": "b45",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Do lado da aplicação, nada muda — é a prova de que o laboratório funcionou. O código abaixo é idêntico antes e depois; o único trecho novo é um log de diagnóstico opcional, que existe só para o laboratório medir o IP resolvido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b46",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "csharp",
+            "filename": "Program.cs",
+            "code": "// Program.cs — o que NAO muda, e por que isso e a prova do laboratorio\n\nvar builder = WebApplication.CreateBuilder(args);\n\n// As tres linhas abaixo sao IDENTICAS antes e depois deste laboratorio. O SDK\n// da AWS chama o hostname publico regional de cada servico; quem decide se\n// esse hostname resolve para um IP publico (via NAT) ou para a ENI de um\n// endpoint de interface (via DNS privado) e a REDE, nao a aplicacao.\nbuilder.Services.AddAWSService<IAmazonSecretsManager>();\nbuilder.Services.AddAWSService<IAmazonS3>();\n\n// A credencial do banco (L04) chega da mesma forma: a aplicacao pede o\n// segredo pelo nome, sem saber — e sem precisar saber — se a chamada\n// atravessou o NAT ou uma ENI do PrivateLink.\nvar segredo = await app.Services.GetRequiredService<IAmazonSecretsManager>()\n    .GetSecretValueAsync(new GetSecretValueRequest { SecretId = \"cadencia/banco/senha\" });\n\n// O unico jeito de PROVAR que o caminho mudou, do lado da aplicacao, e medir\n// o tempo de resolucao de DNS — nao o codigo de negocio. Deixamos isto como\n// log de diagnostico, desligavel por configuracao, para o laboratorio: nao e\n// algo que uma aplicacao de producao precisa emitir permanentemente.\nif (builder.Configuration.GetValue(\"DIAGNOSTICO_DNS\", false))\n{\n    var sw = System.Diagnostics.Stopwatch.StartNew();\n    var enderecos = await System.Net.Dns.GetHostAddressesAsync(\n        $\"secretsmanager.{builder.Configuration[\"AWS:Region\"]}.amazonaws.com\");\n    app.Logger.LogInformation(\n        \"secretsmanager resolveu para {Ip} em {Ms} ms — {Tipo}\",\n        enderecos.FirstOrDefault(), sw.ElapsedMilliseconds,\n        enderecos.FirstOrDefault()?.ToString().StartsWith(\"10.\") == true ? \"IP privado (endpoint)\" : \"IP publico (sem endpoint)\");\n}\n\nvar app2 = builder.Build();\napp2.Run();\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b52",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Implantar, e provar que a rota mudou de verdade"
+      },
+      "children": [
+        {
+          "id": "b48",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. A quarta é a mais importante e a mais fácil de pular: ela mede o NAT ANTES de apagá-lo, e é o que separa \"decidimos\" de \"torcemos para dar certo\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b49",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "#!/usr/bin/env bash\n# provas.sh — cinco medicoes; a mudanca de rota se prova, nao se assume\nset -euo pipefail\n\nPROJETO=cadencia; REGIAO=us-east-1\nTASK=$(aws ecs list-tasks --cluster $PROJETO --service-name api --query 'taskArns[0]' --output text)\n\n# -- Prova 1: o hostname publico do Secrets Manager resolve para IP PRIVADO --\naws ecs execute-command --cluster $PROJETO --task \"$TASK\" --container api \\\n  --interactive --command \"dig +short secretsmanager.$REGIAO.amazonaws.com\"\n# Esperado: um IP na faixa 10.0.x.x — o IP privado da ENI do endpoint.\n# Um IP publico aqui significa que private_dns_enabled esta false, ou que o\n# endpoint nao existe.\n\n# -- Prova 2: a tabela de rotas privada NAO tem 0.0.0.0/0 --\naws ec2 describe-route-tables --route-table-ids \"$(terraform output -raw rt_privada_id)\" \\\n  --query 'RouteTables[0].Routes[*].DestinationCidrBlock' --output text\n# Esperado: so a rota local (10.0.0.0/16) e a de prefixo do S3. Qualquer\n# 0.0.0.0/0 aqui significa que o NAT nao foi removido de fato.\n\n# -- Prova 3: o S3 responde sem NAT no ar --\naws ecs execute-command --cluster $PROJETO --task \"$TASK\" --container api \\\n  --interactive --command \\\n  \"curl -s -o /dev/null -w '%{http_code}' https://cadencia-laudos.s3.$REGIAO.amazonaws.com/\"\n# Esperado: um codigo HTTP (403 sem credencial ja prova conectividade). Timeout\n# aqui, com o NAT removido, significa que a rota do gateway endpoint nao\n# esta associada a esta tabela.\n\n# -- Prova 4: o NAT parou de processar bytes, ANTES de ser removido --\naws cloudwatch get-metric-statistics --namespace AWS/NATGateway \\\n  --metric-name BytesOutToDestination --statistics Sum --period 3600 \\\n  --start-time \"$(date -u -d '2 hours ago' +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --dimensions Name=NatGatewayId,Value=\"$(terraform output -raw nat_gateway_id 2>/dev/null || echo none)\"\n# Esperado: soma proxima de zero na ultima hora, medida ANTES do destroy —\n# e a evidencia de que remover o NAT nao vai quebrar trafego real.\n\n# -- Prova 5: a politica do S3 endpoint recusa bucket de fora --\naws ecs execute-command --cluster $PROJETO --task \"$TASK\" --container api \\\n  --interactive --command \\\n  \"curl -s -o /dev/null -w '%{http_code}' https://algum-bucket-de-outra-conta.s3.$REGIAO.amazonaws.com/objeto\" \\\n  && echo \"FALHA DA PROVA: a politica do endpoint deixou passar\" \\\n  || echo \"OK: a politica restrita ao bucket da Cadencia bloqueou o resto do S3\"\n"
+          }
+        },
+        {
+          "id": "b50",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · DNS resolve para IP privado",
+                "`dig` de dentro da task",
+                "endereço na faixa 10.0.x.x",
+                "IP público significa DNS privado desligado, ou endpoint ausente"
+              ],
+              [
+                "2 · Tabela sem rota padrão",
+                "`describe-route-tables`",
+                "só a rota local e a de prefixo do S3",
+                "0.0.0.0/0 presente significa que o NAT não foi removido de fato"
+              ],
+              [
+                "3 · S3 responde sem NAT",
+                "`curl` de dentro da task",
+                "qualquer código HTTP (mesmo 403)",
+                "timeout significa que a rota do Gateway endpoint não está associada à tabela"
+              ],
+              [
+                "4 · NAT sem tráfego, antes do destroy",
+                "métrica `BytesOutToDestination`",
+                "soma próxima de zero na última hora",
+                "bytes ainda fluindo significa que resta tráfego não migrado — não remova ainda"
+              ],
+              [
+                "5 · Política do S3 endpoint restringe",
+                "`curl` a bucket de outra conta",
+                "a chamada é recusada",
+                "sucesso aqui é falha da prova: a política ficou como o padrão, que libera tudo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b51",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "A prova 4 é a que sustenta a decisão",
+            "content": "Ela não pergunta se o desenho novo funciona — pergunta se o antigo já não estava sendo usado. É a diferença entre \"parece seguro remover\" e \"medimos e não sobrou nada\", e é a segunda que se defende numa revisão de arquitetura."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b55",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b53",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "O que fazer",
+              "Sintoma",
+              "Como diagnosticar",
+              "O que a falha ensina"
+            ],
+            "rows": [
+              [
+                "Criar o endpoint de interface sem `private_dns_enabled`",
+                "sem NAT, a chamada ao serviço falha por timeout; com NAT ainda no ar, \"funciona\" mas não usa o endpoint",
+                "`dig` do hostname público de dentro da task devolve IP público, não privado",
+                "que o DNS privado é o que faz o código atravessar o endpoint — a ENI sozinha não basta"
+              ],
+              [
+                "Remover o NAT sem associar o Gateway endpoint à tabela certa",
+                "o S3 para de responder; os outros três serviços continuam OK se tiverem endpoint",
+                "`describe-route-tables` na tabela da sub-rede que falhou não mostra a rota de prefixo",
+                "que `route_table_ids` do endpoint precisa listar TODAS as tabelas privadas, não só uma"
+              ],
+              [
+                "Esquecer a regra de entrada no security group dos endpoints",
+                "DNS resolve certo, mas a conexão TCP é recusada — sintoma que engana, porque parece rede",
+                "tentativa de conexão TCP direta na porta 443 do IP resolvido falha; DNS não é o problema",
+                "que o endpoint de interface tem security group PRÓPRIO, independente do da task"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b54",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "danger",
+            "title": "A combinação que apaga dados de verdade",
+            "content": "Remover o NAT E deixar a política do Gateway endpoint no padrão (libera tudo) ao mesmo tempo não quebra nada visível — e é justamente por isso que é a pior combinação: nada no comportamento observável avisa que o alcance a outros buckets ficou aberto. Trate a política restrita como parte do MESMO commit que cria o endpoint, nunca como um ajuste \"para depois\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b101",
+      "type": "quiz",
+      "position": 13,
+      "data": {
+        "question": "Uma aplicação numa sub-rede privada, sem NAT Gateway, ainda consegue ler um objeto do S3 depois que um Gateway endpoint é associado à tabela de rotas dessa sub-rede. Por que isso funciona sem nenhuma interface de rede nova?",
+        "options": [
+          "Porque o Gateway endpoint cria uma ENI oculta na sub-rede, que o console não mostra",
+          "Porque o S3 é um serviço público e por isso nunca precisou de rota nenhuma para ser alcançado",
+          "Porque a tabela de rotas passa a ter uma entrada para o prefixo do S3 apontando para o endpoint, e essa rota vence por correspondência mais específica",
+          "Porque o Gateway endpoint reativa automaticamente uma rota para o Internet Gateway só para tráfego do S3"
+        ],
+        "correctIndex": 2,
+        "explanation": "A segunda alternativa é a correta: o Gateway endpoint não é um recurso com interface de rede — ele é implementado como uma entrada na tabela de rotas, com destino no prefixo gerenciado pela AWS para o S3 e alvo no próprio endpoint. Por correspondência mais específica de prefixo, essa rota vence qualquer 0.0.0.0/0 remanescente, e é isso que leva o tráfego ao S3 sem custo adicional. A primeira alternativa confunde Gateway com Interface endpoint: é o Interface endpoint que cria ENI de verdade em cada sub-rede habilitada, não o Gateway. A terceira alternativa erra o mecanismo: o Internet Gateway trata de tráfego que entra e sai da VPC pela internet, e o Gateway endpoint não usa esse caminho — o tráfego nunca sai da rede da AWS. A quarta alternativa ignora que uma sub-rede privada, por definição, não tem rota nenhuma para fora dela; sem a rota do endpoint (ou sem NAT), a chamada ao S3 simplesmente não teria caminho e falharia por tempo esgotado."
+      }
+    },
+    {
+      "id": "b59",
+      "type": "section",
+      "position": 14,
+      "data": {
+        "title": "Segurança: o que muda quando o tráfego para de sair da VPC"
+      },
+      "children": [
+        {
+          "id": "b56",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Tirar tráfego da internet reduz uma classe de risco e desloca outra: a superfície deixa de ser \"alguém interceptando pacote na borda\" e passa a ser \"o próprio endpoint alcançando mais do que devia\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b57",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Exfiltração via Gateway endpoint sem política restrita",
+                "média",
+                "crítico",
+                "política do endpoint limitada ao ARN do bucket próprio",
+                "CloudTrail em `GetObject`/`PutObject` com bucket fora da lista esperada",
+                "restringir a política; girar credenciais da task se houve alcance indevido"
+              ],
+              [
+                "Interface endpoint sem DNS privado, tráfego volta ao público em silêncio",
+                "média",
+                "médio",
+                "checagem de `private_dns_enabled = true` na revisão do Terraform",
+                "prova 1 (dig) na esteira de CI; sem isso, ninguém percebe até o NAT ser removido",
+                "habilitar o DNS privado; validar de novo antes de remover o NAT"
+              ],
+              [
+                "Security group do endpoint liberado para além da task",
+                "baixa",
+                "médio",
+                "ingress só do security group da task, nunca de faixa de IP",
+                "IAM Access Analyzer / revisão periódica das regras do SG de endpoints",
+                "restringir a regra ao SG correto"
+              ],
+              [
+                "NAT removido com tráfego externo residual não medido",
+                "média",
+                "alto",
+                "medição de Flow Logs por pelo menos duas semanas antes do destroy",
+                "alarme de erro de conexão na aplicação logo após a remoção",
+                "recriar o NAT rapidamente; ele não deixa estado, só volta a existir"
+              ],
+              [
+                "Elastic IP órfão depois do destroy do NAT",
+                "alta",
+                "baixo, e permanente",
+                "EIP declarado no mesmo Terraform do NAT, removido junto",
+                "Cost Explorer mostra cobrança de endereço não associado",
+                "liberar o endereço manualmente se sobrar"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b58",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O `Principal = \"*\"` que aparece nas políticas de endpoint acima",
+            "content": "Diferente do `Resource: \"*\"` em IAM, aqui o `*` no `Principal` é o padrão normal — a política de endpoint não substitui a policy de IAM da task, ela ACRESCENTA uma segunda checagem. O `Resource` restrito ao bucket ou ao segredo específico é o que faz o trabalho de segurança; o `Principal = \"*\"` só diz \"qualquer identidade que já tenha permissão de IAM pode usar este endpoint\", o que é o comportamento esperado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b62",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b60",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "O NAT ainda processa algum byte?",
+                "`BytesOutToDestination` do NAT",
+                "qualquer valor acima de zero é tráfego não migrado, ou destino externo real",
+                "zero por 2 semanas antes de considerar remover"
+              ],
+              [
+                "O endpoint de interface está saudável?",
+                "estado do endpoint via `describe-vpc-endpoints`",
+                "`available` é o único estado que atende tráfego",
+                "qualquer estado diferente por mais de alguns minutos"
+              ],
+              [
+                "O DNS está resolvendo para dentro?",
+                "consulta periódica de `dig` a partir de uma task",
+                "IP público de volta indica DNS privado desabilitado ou endpoint removido",
+                "qualquer resposta fora da faixa privada da VPC"
+              ],
+              [
+                "O Gateway endpoint está alcançando bucket inesperado?",
+                "CloudTrail `GetObject`/`PutObject`",
+                "bucket fora do ARN esperado é sinal de política aberta demais",
+                "qualquer chamada a bucket fora da lista"
+              ],
+              [
+                "Quanto cada endpoint de interface processa?",
+                "métrica de bytes por VPC endpoint",
+                "endpoint com volume baixo pode custar mais em hora parada que gerava em GB no NAT",
+                "revisar mensalmente contra o volume do NAT antigo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b61",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "O NAT não avisa quando fica ocioso",
+            "content": "Diferente de uma instância parada, um NAT Gateway sem tráfego continua com aparência normal no console — disponível, saudável, sem alarme nenhum. A única forma de saber que ele não tem mais função é olhar a métrica de bytes de propósito, o que raramente entra em painel algum até alguém perguntar pela fatura."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b65",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão"
+      },
+      "children": [
+        {
+          "id": "b63",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece com os endpoints",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 requisições/dia ao Secrets Manager",
+                "endpoint de interface ocioso a maior parte do tempo",
+                "a hora-AZ do endpoint pode custar mais que o GB que esse tráfego gerava no NAT",
+                "medir antes: nem todo serviço de baixo volume compensa endpoint próprio"
+              ],
+              [
+                "Centenas de deploys/dia pelo ECR",
+                "os dois endpoints do ECR processam GB proporcional aos pulls",
+                "volume alto de pull é onde o Interface endpoint mais se paga frente ao NAT",
+                "nada — é o caso de uso ideal do endpoint de interface"
+              ],
+              [
+                "Log em volume alto pelo CloudWatch Logs",
+                "o endpoint de logs concentra a maior parte do GB processado",
+                "ele tende a ser, sozinho, maior que os outros três somados",
+                "considerar amostragem ou retenção mais curta antes de otimizar o transporte"
+              ],
+              [
+                "Múltiplas VPCs precisando dos mesmos endpoints",
+                "cada VPC precisa do seu próprio conjunto",
+                "endpoint não é compartilhável entre VPCs sem peering ou Transit Gateway",
+                "centralizar numa conta de rede compartilhada — é o L45"
+              ],
+              [
+                "Falha de uma AZ",
+                "a ENI daquela AZ some; a outra AZ continua respondendo",
+                "com endpoint em uma AZ só, a outra fica sem acesso ao serviço",
+                "sempre as duas AZs — é o mesmo requisito de disponibilidade do L02"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b64",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O limite que raramente aparece na teoria e existe na prática",
+            "content": "Endpoints de interface têm limite de largura de banda por ENI, documentado por serviço. Para a maioria das cargas de ECR, Secrets Manager e Logs de uma aplicação de porte médio isso nunca é alcançado — mas é uma dimensão real de escala que o Gateway endpoint, sem ENI, simplesmente não tem."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b70",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Custo: o que este laboratório troca por o quê"
+      },
+      "children": [
+        {
+          "id": "b66",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "É o primeiro laboratório da série em que a arquitetura de produção custa MENOS que a mínima, no volume medido da Cadência. Isso não é garantido para todo mundo — depende do quanto cada serviço é chamado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b67",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que muda na fatura",
+              "Tendência"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "poucas chamadas por dia a cada serviço",
+                "os quatro Interface endpoints, por hora-AZ, podem custar mais que o GB que geravam no NAT",
+                "considerar manter o NAT até o volume justificar os endpoints"
+              ],
+              [
+                "Produção pequena (Cadência hoje)",
+                "deploys diários, uploads diários, log contínuo",
+                "a soma das horas-AZ dos quatro endpoints fica abaixo da conta atual do NAT",
+                "queda visível já no primeiro mês"
+              ],
+              [
+                "Alta escala",
+                "dezenas de deploys/dia, log em volume alto",
+                "o GB processado pelos endpoints de interface cresce, mas sem a parte fixa do NAT crescer junto — e o S3 continua de graça",
+                "a vantagem dos endpoints aumenta com o volume, não diminui"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b68",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Gateway endpoint (S3)",
+                "nada",
+                "única linha desta tabela sem custo — é por isso que ele entra sempre que o serviço suporta"
+              ],
+              [
+                "Interface endpoint",
+                "hora ligada por AZ habilitada, mais GB processado",
+                "a parte fixa corre mesmo sem tráfego — não crie endpoint para serviço não medido"
+              ],
+              [
+                "NAT Gateway removido",
+                "deixa de cobrar hora e GB",
+                "o Elastic IP associado a ele precisa ser liberado à parte, ou continua cobrando sozinho"
+              ],
+              [
+                "Transferência entre AZs",
+                "GB entre zonas, independente de endpoint",
+                "endpoint não elimina custo de tráfego cross-AZ que já existia por outro motivo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b69",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "A economia que só aparece se alguém medir",
+            "content": "Sem a prova 4 (bytes do NAT antes do destroy), a decisão de remover vira aposta. Com ela, a Cadência tem o número exato de quanto o NAT processava — e o mesmo número, comparado à soma das horas-AZ dos endpoints, é o que sustenta a decisão numa revisão de orçamento, não só na intuição de que \"deve ser mais barato\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b73",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b71",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "rota documentada, com prova de que o NAT não tinha mais tráfego antes de sair",
+                "endpoint novo esquecido de private DNS em serviço futuro",
+                "checklist de revisão de Terraform cobrando `private_dns_enabled`",
+                "média"
+              ],
+              [
+                "Segurança",
+                "tráfego para dentro da AWS nunca atravessa a fronteira pública; políticas restritas",
+                "ainda existe um `Principal = \"*\"` nas políticas de endpoint, aceitável mas revisável",
+                "condição `aws:SourceVpce` na policy do bucket, do outro lado",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "dois endpoints por serviço, um por AZ, mesmo requisito do L02",
+                "endpoint único de serviço é ponto de falha regional, não só de AZ",
+                "nenhuma ação aqui; é risco aceito na escala atual",
+                "baixa"
+              ],
+              [
+                "Eficiência de performance",
+                "menos saltos de rede para tráfego interno à AWS",
+                "nenhum, na escala atual",
+                "nenhuma ação necessária",
+                "baixa"
+              ],
+              [
+                "Otimização de custos",
+                "NAT removido; Gateway de graça; Interface medido contra o volume real",
+                "endpoint de interface pode ficar ocioso se o padrão de uso do serviço mudar",
+                "revisão trimestral de bytes processados por endpoint",
+                "alta"
+              ],
+              [
+                "Sustentabilidade",
+                "menos hops de rede por requisição",
+                "nenhum adicional",
+                "nenhuma ação necessária",
+                "baixa"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b72",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O pilar que mais se move aqui não é o de custo",
+            "content": "É tentador ler este laboratório como puramente FinOps, mas o pilar que mais avança é segurança: tráfego que nunca atravessa a fronteira pública reduz a superfície que uma auditoria de rede precisa explicar. A economia de custo é o efeito mais visível na fatura; a redução de superfície é o efeito mais relevante numa revisão de arquitetura."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b77",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b74",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho novo: é a resposta a até onde levar a ideia de \"tráfego que não precisa sair\" — e cada nível troca um risco por outro, não só reduz custo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b75",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do NAT genérico ao tráfego roteado por decisão — e o risco que cada nível troca",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "NAT Gateway único, do L02, atendendo qualquer saída sem distinção.",
+                "note": "Risco resolvido: nenhum além do que o L02 já resolveu. Novo risco: todo tráfego — interno e externo à AWS — paga o mesmo pedágio, sem visibilidade de para onde vai. Custo: cresce com o produto, sem relação com necessidade real."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Gateway endpoint para S3, três Interface endpoints para o resto, NAT removido depois de medir.",
+                "note": "Risco resolvido: pedágio sobre tráfego que já é da AWS. Novo risco: política de endpoint aberta demais alcança recurso de fora se não for restrita. Custo: menor que o NAT, no volume medido da Cadência."
+              },
+              {
+                "label": "Nível 3 — Egress controlado para o que é externo de verdade",
+                "instruction": "Um NAT (ou proxy) dedicado, com política de saída explícita, só para os destinos genuinamente fora da AWS que restarem.",
+                "note": "Risco resolvido: tráfego externo sem controle nenhum de destino. Novo risco: a lista de destinos permitidos vira mais um artefato para manter atualizado. Custo: um NAT pequeno, ou um proxy, para volume residual."
+              },
+              {
+                "label": "Nível 4 — Endpoints compartilhados entre contas",
+                "instruction": "Endpoint centralizado numa conta de rede, compartilhado por Resource Access Manager entre várias VPCs e contas da organização (L45).",
+                "note": "Risco resolvido: cada VPC pagando pela mesma hora-AZ de endpoint repetida. Novo risco: uma conta de rede compartilhada vira ponto único de governança — e de falha, se mal operada. Custo: a parte fixa é diluída entre contas."
+              },
+              {
+                "label": "Nível 5 — Plataforma e política automática",
+                "instruction": "Service Control Policy exigindo que toda VPC nova tenha endpoint para S3 e DynamoDB por padrão, e proibindo `0.0.0.0/0` em tabela de rotas privada sem justificativa registrada.",
+                "note": "Risco resolvido: equipe nova repetindo o mesmo NAT genérico do nível 1 por não saber do padrão. Novo risco: exceção legítima (destino externo real) precisa de processo de aprovação, ou a política trava trabalho válido. Custo: operacional, não de infraestrutura."
+              },
+              {
+                "label": "Nível 6 — Dados sobre o próprio tráfego",
+                "instruction": "Histórico de bytes processados por endpoint e por NAT, correlacionado a deploy e a feature, para prever qual serviço novo já nasce precisando de endpoint dedicado.",
+                "note": "Risco resolvido: decisão de endpoint refeita do zero a cada novo serviço, sem aprender do histórico. Novo risco: otimizar para o padrão médio esconde um serviço novo com padrão de tráfego atípico. Custo: baixo — o dado já existe em Flow Logs e métricas de endpoint."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b76",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Centralizar endpoints entre contas (nível 4) sem primeiro ter a decisão de QUAIS serviços merecem endpoint (nível 2) é compartilhar a pergunta errada em escala. É a mesma medição de Flow Logs deste laboratório, só que decidida uma vez para a organização inteira em vez de uma VPC — e ela precisa existir antes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b79",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Onde IA entra, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b78",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "Aqui, IA não agrega — e a razão é específica",
+            "content": "A decisão deste laboratório (qual endpoint criar, se o NAT pode sair) é determinística: depende de bytes medidos, contra um catálogo fechado de dois tipos de endpoint. Um modelo não decide isso melhor que uma consulta de Flow Logs com limiar documentado — ele só adicionaria uma caixa preta onde já existe uma resposta exata. Onde IA realmente ajuda nesta vizinhança é detectar o padrão ANÔMALO de tráfego que uma regra fixa não prevê — por exemplo, um endpoint de repente processando volume muito acima do histórico, possível sinal de exfiltração via política aberta demais. Essa é a tarefa do GuardDuty, tratada no L48, e não algo para construir aqui com um modelo próprio."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b81",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Anti-padrões"
+      },
+      "children": [
+        {
+          "id": "b80",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Sintoma em produção",
+              "Forma correta"
+            ],
+            "rows": [
+              [
+                "Criar Interface endpoint para o S3",
+                "parece consistente usar o mesmo tipo de recurso para tudo, e a diferença entre os dois tipos não é óbvia pelo nome",
+                "cobrança de hora-AZ para um destino que tinha opção gratuita",
+                "Gateway endpoint sempre que o serviço suportar — hoje, só S3 e DynamoDB"
+              ],
+              [
+                "Remover o NAT sem medir tráfego antes",
+                "a fatura já convenceu, e medir parece burocracia quando \"obviamente\" só sobrou tráfego migrado",
+                "apagão de um destino externo que ninguém tinha listado",
+                "duas semanas de Flow Logs, ou a métrica de bytes do NAT, antes de qualquer `destroy`"
+              ],
+              [
+                "Endpoint de interface sem DNS privado",
+                "a criação padrão do console não marca a caixa por padrão, e o endpoint \"parece\" pronto assim que fica `available`",
+                "tudo funciona enquanto o NAT existe; quebra em silêncio quando ele sai",
+                "`private_dns_enabled = true` explícito, e prova 1 (dig) antes de remover o NAT"
+              ],
+              [
+                "Política de endpoint no padrão (libera tudo)",
+                "o padrão já funciona, e escrever a política restrita exige saber o ARN exato do recurso, um passo a mais",
+                "alcance a bucket ou segredo fora do que a aplicação deveria tocar",
+                "política restrita ao ARN específico, no mesmo commit que cria o endpoint"
+              ],
+              [
+                "Endpoint de interface numa AZ só, para economizar",
+                "metade da parte fixa parece economia óbvia, e \"funciona\" nos testes que rodam numa AZ só",
+                "a outra AZ perde acesso ao serviço se a primeira falhar, ou sofre latência cross-AZ",
+                "as duas AZs, sempre — é o mesmo requisito de disponibilidade que o L02 já declarou"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b83",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b82",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Onde investigar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Aplicação não lê mais o segredo, sem NAT no ar",
+                "DNS privado não habilitado no endpoint",
+                "`dig` do hostname público de dentro da task",
+                "habilitar `private_dns_enabled` e recriar o registro DNS"
+              ],
+              [
+                "DNS resolve para IP privado, mas a conexão falha",
+                "security group do endpoint sem regra de entrada do security group da task",
+                "tentativa de conexão TCP direta na porta resolvida",
+                "adicionar a regra de ingress correspondente"
+              ],
+              [
+                "S3 responde em uma sub-rede e não na outra",
+                "Gateway endpoint associado a uma tabela de rotas só",
+                "comparar `route_table_ids` do endpoint com as tabelas privadas existentes",
+                "adicionar a tabela faltante em `route_table_ids`"
+              ],
+              [
+                "Chamada ao S3 funciona, mas a um bucket específico dá acesso negado",
+                "política do endpoint restrita a outro ARN, ou IAM da task sem a permissão",
+                "comparar o ARN chamado com o `Resource` da política do endpoint E a policy IAM da task",
+                "as duas políticas — endpoint e IAM — têm de permitir; qualquer uma negando barra a chamada"
+              ],
+              [
+                "Fatura de rede não caiu como esperado",
+                "endpoint de interface de baixo volume custando mais em hora do que o NAT custava em GB para aquele serviço",
+                "comparar bytes processados pelo endpoint com a hora-AZ acumulada no mês",
+                "reverter esse serviço específico para NAT, se ele voltar a existir, ou aceitar o custo fixo"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b87",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Limpeza: o que o destroy leva, e o que não leva"
+      },
+      "children": [
+        {
+          "id": "b84",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# Ordem importa: remover o Gateway endpoint antes da tabela de rotas que o referencia\n# falha (dependencia); o Terraform resolve isso sozinho num destroy completo, mas nao\n# numa remocao parcial manual.\nterraform destroy \\\n  -target=aws_vpc_endpoint.interface \\\n  -target=aws_vpc_endpoint_policy.secrets \\\n  -target=aws_security_group.endpoints\n\n# So depois de confirmar (prova 4) que o NAT nao processa bytes:\nterraform destroy -target=aws_nat_gateway.nat -target=aws_eip.nat\n\n# Confirme que nao sobrou Elastic IP orfao — ele cobra sozinho, sem nenhum\n# recurso visivel apontando para ele.\naws ec2 describe-addresses --query 'Addresses[?AssociationId==null]' --output table"
+          }
+        },
+        {
+          "id": "b85",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Recurso",
+              "O `destroy` remove?",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Gateway endpoint",
+                "sim, junto com a rota que ele injetou na tabela",
+                "nenhum — a rota some com o endpoint, automaticamente"
+              ],
+              [
+                "Interface endpoint",
+                "sim, junto com a ENI",
+                "a ENI pode levar alguns minutos para desaparecer do console depois do comando retornar"
+              ],
+              [
+                "Security group dos endpoints",
+                "sim, se nada mais o referenciar",
+                "falha se ainda houver endpoint usando — destrua os endpoints primeiro"
+              ],
+              [
+                "NAT Gateway",
+                "sim",
+                "não some instantaneamente; o Elastic IP associado é um recurso separado"
+              ],
+              [
+                "Elastic IP do NAT",
+                "só se declarado no mesmo Terraform e alvo do destroy",
+                "IP não associado a nada continua sendo cobrado até ser liberado explicitamente"
+              ],
+              [
+                "Política de endpoint restrita",
+                "sim, junto com o endpoint",
+                "se você recriar o endpoint depois, a política volta ao padrão até ser reaplicada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b86",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O Elastic IP é o recurso que mais sobrevive a uma limpeza incompleta",
+            "content": "Ele não depende de nada e nada depende dele depois que o NAT some — é fácil esquecer porque ele não aparece como \"quebrado\" nem como \"em uso\": aparece só como uma linha pequena e recorrente na fatura, exatamente do jeito que o NAT inteiro aparecia antes deste laboratório."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b91",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Resumo"
+      },
+      "children": [
+        {
+          "id": "b88",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça que resolve",
+              "Motivo"
+            ],
+            "rows": [
+              [
+                "Tráfego para o S3 pagando NAT",
+                "Gateway endpoint",
+                "rota de prefixo, sem ENI, sem cobrança — o único mecanismo gratuito do laboratório"
+              ],
+              [
+                "Tráfego para ECR, Secrets Manager e Logs pagando NAT",
+                "três Interface endpoints",
+                "ENI por sub-rede, com DNS privado fazendo o código não mudar"
+              ],
+              [
+                "Código que não pode mudar",
+                "DNS privado habilitado",
+                "reescreve a resolução do hostname público para o IP da ENI, de forma transparente"
+              ],
+              [
+                "Alcance indevido a recurso de outra conta",
+                "política de endpoint restrita ao ARN",
+                "a política padrão libera tudo; restringir é decisão explícita, não acidente"
+              ],
+              [
+                "NAT sem função depois da migração",
+                "remoção medida, não assumida",
+                "Flow Logs por duas semanas provam ausência de tráfego externo antes do destroy"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b89",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O fluxo em "
+              },
+              {
+                "text": "10",
+                "code": true
+              },
+              {
+                "text": " passos: medir o tráfego do NAT por Flow Logs → identificar que é 100% S3/ECR/Secrets Manager/Logs → criar o Gateway endpoint do S3, restrito por política → associá-lo às tabelas de rotas privadas → criar os três Interface endpoints, com DNS privado e security group próprio → provar a resolução de DNS com `dig` → provar conectividade com o NAT ainda no ar → confirmar bytes zerados no NAT → remover NAT e Elastic IP → confirmar a tabela de rotas sem 0.0.0.0/0."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b90",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "O que a Cadência levou deste laboratório",
+            "content": "Não foi só a queda na fatura — foi o hábito de medir antes de remover. O mesmo raciocínio (Flow Logs, hipótese declarada, prova antes do destroy) volta a valer no L45, quando a pergunta deixa de ser \"este tráfego é da AWS\" e passa a ser \"este tráfego precisa mesmo sair para outra rede\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b100",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b92",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Preciso de NAT Gateway para a task no Fargate falar com o S3?",
+            "answer": "Não, se você criar um Gateway endpoint para o S3 e associá-lo à tabela de rotas da sub-rede privada — o tráfego passa a ser roteado por correspondência mais específica de prefixo, sem custo adicional e sem que a task precise de rota para a internet. O NAT continua sendo necessário só se sobrar algum destino que realmente está fora da AWS."
+          }
+        },
+        {
+          "id": "b93",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Gateway endpoint e Interface endpoint são a mesma coisa com nome diferente?",
+            "answer": "Não — são dois mecanismos diferentes por trás do mesmo nome genérico \"VPC endpoint\". O Gateway endpoint (só para S3 e DynamoDB) é uma linha na tabela de rotas, sem interface de rede e sem cobrança adicional. O Interface endpoint usa AWS PrivateLink, cria uma interface de rede de verdade em cada sub-rede habilitada, e é cobrado por hora ligada em cada zona de disponibilidade mais gigabyte processado."
+          }
+        },
+        {
+          "id": "b94",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "O que acontece se eu esquecer de habilitar o DNS privado no endpoint de interface?",
+            "answer": "A aplicação continua chamando o hostname público de sempre, mas esse hostname resolve para o IP público do serviço em vez do IP privado da ENI — então, sem um NAT Gateway para completar o caminho, a chamada falha por falta de rota, mesmo com o endpoint criado e saudável. O DNS privado é o que faz o código existente atravessar o endpoint sem qualquer alteração."
+          }
+        },
+        {
+          "id": "b95",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Um endpoint de gateway para o S3 deixa meu tráfego privado por padrão?",
+            "answer": "Não sozinho — a política padrão de um VPC endpoint libera qualquer ação, de qualquer principal, sobre qualquer recurso, então uma task comprometida pode alcançar um bucket de outra conta AWS através do mesmo endpoint que você criou para o seu. Privacidade de rede e controle de acesso são camadas diferentes: o endpoint tira o tráfego da internet, mas só uma política de endpoint restrita ao ARN do seu bucket impede o alcance a buckets alheios."
+          }
+        },
+        {
+          "id": "b96",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Vale a pena criar endpoint de interface para um serviço que a aplicação usa pouco?",
+            "answer": "Depende do volume medido, não da lista de serviços em uso: o Interface endpoint cobra por hora ligada em cada zona de disponibilidade independentemente de tráfego, então um serviço chamado poucas vezes por dia pode custar mais em horas paradas do que custava em gigabytes pelo NAT. A decisão certa compara o GB que esse serviço gerava no NAT com a soma das horas do endpoint nas AZs habilitadas."
+          }
+        },
+        {
+          "id": "b97",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Remover o NAT Gateway quebra o acesso à internet de toda a aplicação?",
+            "answer": "Só quebra o que dependia dele — e a diferença entre isso e um apagão total é medir, antes de remover, se sobra algum destino genuinamente fora da AWS. Sem tráfego externo real, remover o NAT não tira nenhuma capacidade da aplicação; com tráfego externo real ainda existindo, é preciso outro caminho de saída, não apenas apagar o recurso."
+          }
+        },
+        {
+          "id": "b98",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Preciso de um endpoint de interface por zona de disponibilidade?",
+            "answer": "Um único endpoint já cria uma interface de rede em cada sub-rede que você associar a ele, então a decisão não é \"quantos endpoints\" e sim \"em quantas sub-redes habilitar o mesmo endpoint\". Habilitar em uma AZ só concentra tráfego de todas as AZs nela e derruba esse acesso inteiro se aquela zona falhar; a recomendação da AWS para produção é pelo menos duas."
+          }
+        },
+        {
+          "id": "b99",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "O Gateway endpoint do S3 usa security group?",
+            "answer": "Não da forma como uma instância usa: como ele não é um recurso com interface de rede, o security group que importa é o do lado do cliente — da task ou da instância — que precisa permitir tráfego de saída para a lista de prefixos do serviço na porta 443. Quem administra rede por listas de controle de acesso tradicionais precisa lembrar que elas não aceitam essa lista de prefixos diretamente, só faixas de IP explícitas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b104",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b102",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Uma equipe substitui o NAT Gateway por um Interface endpoint para o Secrets Manager, mas a aplicação — sem nenhuma mudança de código — continua tentando resolver o hostname público do serviço para um IP público, e falhando. O que provavelmente foi esquecido?",
+            "options": [
+              "O security group do endpoint não libera a porta 443 para o security group da task",
+              "A ENI do endpoint foi criada na sub-rede pública em vez da privada",
+              "O DNS privado (private DNS) não foi habilitado na criação do endpoint de interface",
+              "A política do endpoint (endpoint policy) está bloqueando a ação GetSecretValue"
+            ],
+            "correctIndex": 2,
+            "explanation": "A segunda alternativa é a correta: sem o DNS privado habilitado, a AWS não cria a zona hospedada privada que faz o hostname público do serviço resolver para o IP privado da ENI do endpoint — e o código, que chama exatamente esse hostname público sem saber que existe um endpoint, continua recebendo o IP público de sempre. A primeira alternativa descreve um problema real, mas produziria outro sintoma: seria conexão recusada ou tempo esgotado na camada de rede, depois que o DNS já resolveu certo — não uma resolução para IP público. A terceira também é um erro possível, mas o sintoma seria a ausência de rota utilizável a partir da sub-rede da task, não uma resolução de nome que aponta para fora. A quarta alternativa produziria um erro de autorização explícito na chamada à API, depois de a conexão já ter sido estabelecida com sucesso — o oposto de uma falha de resolução de nome, que acontece antes de qualquer tentativa de conexão."
+          }
+        },
+        {
+          "id": "b103",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "A Cadência mede o volume mensal de cada tipo de tráfego antes de decidir a arquitetura de rede. Qual das afirmações abaixo descreve corretamente quando manter o NAT Gateway, mesmo depois de criar os endpoints para S3, ECR, Secrets Manager e CloudWatch Logs?",
+            "options": [
+              "Nunca: uma vez criados os cinco endpoints, o NAT Gateway sempre pode ser removido",
+              "Sempre: o NAT Gateway é a única forma segura de acessar qualquer serviço fora da própria VPC",
+              "Quando o volume de tráfego para os quatro serviços migrados ultrapassa uma cota fixa de gigabytes por mês",
+              "Quando sobra algum destino genuinamente fora da AWS que a aplicação precisa alcançar, e que não tem endpoint de PrivateLink disponível"
+            ],
+            "correctIndex": 3,
+            "explanation": "A terceira alternativa é a correta: o NAT Gateway continua tendo um papel depois da migração se, e somente se, restar algum destino verdadeiramente externo à AWS — uma API de terceiros, um webhook de outro fornecedor — que não tenha um endpoint de PrivateLink publicado. Migrar os quatro serviços internos não elimina a necessidade de sair para a internet quando essa necessidade é real. A primeira alternativa erra ao generalizar: ela seria verdadeira só se TODO o tráfego de saída fosse coberto por endpoint, o que precisa ser medido, não assumido. A segunda alternativa inverte a lógica do laboratório inteiro — o NAT não é mais seguro que um endpoint, ele só é necessário quando não existe alternativa de PrivateLink para o destino. A quarta alternativa inventa uma cota que não existe: nem o Gateway endpoint nem o Interface endpoint têm teto de gigabytes processados que force a volta ao NAT; o que existe é cobrança proporcional ao uso, sem limite superior técnico."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b108",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fechamento"
+      },
+      "children": [
+        {
+          "id": "b105",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Conhecimentos anteriores: sub-rede privada e tabela de rotas (L02), rolling update e ECR (L03), Secrets Manager (L04), upload direto ao S3 (L17). Conhecimento adquirido: a diferença mecânica entre Gateway e Interface endpoint, a leitura de DNS privado, e a disciplina de medir antes de remover infraestrutura que parece ociosa."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b106",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Próximo laboratório",
+            "content": "O L45 estende a mesma pergunta — \"esse tráfego precisa mesmo sair?\" — para fora da AWS: VPN, Direct Connect e Transit Gateway, para quando existe um datacenter ou escritório do outro lado. O L99 volta ao PrivateLink numa escala maior: roteamento multi-região para IA, quando o modelo e o dado podem não estar na mesma região."
+          }
+        },
+        {
+          "id": "b107",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação consultada em 07/ago/2026: AWS PrivateLink concepts, Gateway endpoints e Access AWS services through AWS PrivateLink, em docs.aws.amazon.com/vpc/latest/privatelink/. Data da última validação técnica: 07/ago/2026."
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

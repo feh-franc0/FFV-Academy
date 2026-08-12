@@ -1,0 +1,2595 @@
+{
+  "slug": "lab-migration-expand-contract-sem-janela",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência resolveu o deploy: desde o "
+              },
+              {
+                "text": "L03",
+                "code": true
+              },
+              {
+                "text": ", publicar não derruba ninguém, e a equipe de duas pessoas passou a implantar várias vezes por dia. O efeito colateral apareceu num incidente que ninguém tinha previsto — porque ele mora exatamente na peça que o L03 deixou como dívida declarada."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O time precisava trocar `valor_total` — `numeric`, em reais, com os problemas de arredondamento que ponto flutuante decimal já carrega — por `total_centavos`, `bigint`, inteiro. A migration rodava em 5 milissegundos isolada. Em produção, o deploy travou a aplicação inteira por quatro minutos, e o log da API não mostrava nada de errado: o processo estava vivo, só não respondia."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A causa não foi a migration em si. Foi que ela rodava na partida do contêiner (o que o "
+              },
+              {
+                "text": "L01",
+                "code": true
+              },
+              {
+                "text": " faz), e o rolling update do L03 sobe duas tasks novas ao mesmo tempo — as duas tentando alterar a mesma tabela, enquanto a versão velha ainda atendia pedido real com o schema antigo por baixo dela mudando. O incidente juntou três coisas que, sozinhas, ninguém teria notado: tabela grande, deploy concorrente e uma consulta de relatório que, por acaso, estava aberta havia três minutos quando o deploy começou."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado — depende do L03 (rollout sem parar) e do L07 (réplica de leitura)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L03 e L07 concluídos e no ar; EF Core; SQL básico de PostgreSQL"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 55 min · implementação 2 h 30 a 3 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo: a task de migração e o backfill custam minutos de Fargate por vez"
+              },
+              {
+                "k": "Serviços",
+                "v": "RDS PostgreSQL (parameter group, réplica), ECS Fargate (task avulsa), EF Core"
+              },
+              {
+                "k": "Volume atual",
+                "v": "tabela `pedidos` com 2,1 milhões de linhas, p99 de escrita em 40 ms"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "zero erro visível ao cliente durante toda a migração, sem janela"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "a coluna trocada não participa de nenhuma constraint de chave estrangeira nem de índice único preexistente — isso simplifica a fase de contração e é o que autoriza pular verificação extra nela"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "quatro implantações observadas sem erro de cliente, e a fila de bloqueio reproduzida e medida de propósito"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é um tutorial geral de \"zero-downtime schema change\" para qualquer banco. O mecanismo aqui é especificamente do PostgreSQL — os modos de lock, o comportamento de fila, o `CONCURRENTLY` — e não se transporta sem adaptação para MySQL ou para um banco não relacional. Também não é sobre decidir ENTRE tráfego dividido (blue/green, canário): isso é o L39, que depende deste porque pressupõe schema já compatível para trás."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que uma migration de 5 ms consegue derrubar a produção por minutos, nomeando a fila de bloqueio como causa — não a duração do comando.",
+              "Distinguir, para cada forma de `ALTER TABLE`, se ela reescreve a tabela ou é só catálogo.",
+              "Configurar `lock_timeout` e `statement_timeout` como padrão da instância, e explicar por que eles defendem da fila e não do comando.",
+              "Rodar `CREATE INDEX CONCURRENTLY` a partir de uma migration do EF Core, e recuperar de um índice `INVALID`.",
+              "Executar as três fases de expand/contract, e derivar por que a ordem entre elas não é negociável.",
+              "Escrever um backfill em lotes que respeita o atraso da réplica de leitura do L07.",
+              "Reconhecer o caso de renomear coluna como uma sequência de quatro implantações, não três.",
+              "Provar, com `pg_locks`, quem está esperando quem durante uma migração."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Níveis de bloqueio do ALTER TABLE",
+                "DVA-C02, DOP-C02",
+                "ADD COLUMN aditivo vs. formas que reescrevem a tabela",
+                "quais formas exigem varredura completa e quais são só catálogo"
+              ],
+              [
+                "CREATE INDEX CONCURRENTLY",
+                "DVA-C02, DOP-C02",
+                "índice sem bloquear escrita, fora de transação",
+                "o custo de duas varreduras, e o que fazer com um índice INVALID"
+              ],
+              [
+                "Fila de bloqueio (lock queue)",
+                "DOP-C02",
+                "transação longa segura o ALTER, que segura todo SELECT novo",
+                "por que um ACCESS EXCLUSIVE pendente bloqueia até leitura compatível com o que já roda"
+              ],
+              [
+                "lock_timeout e statement_timeout",
+                "DOP-C02",
+                "defesa de sessão contra fila indefinida",
+                "a diferença entre os dois parâmetros e o que cada um aborta"
+              ],
+              [
+                "Expand/contract e compatibilidade para frente",
+                "DOP-C02, SAP-C02",
+                "as três a quatro fases deste laboratório",
+                "por que parar de escrever no antigo precede apagá-lo, sempre"
+              ],
+              [
+                "Backfill em lotes e atraso de réplica",
+                "SAA-C03, DOP-C02",
+                "UPDATE em lotes monitorando pg_stat_replication",
+                "o efeito de uma transação longa no WAL e na réplica do L07"
+              ],
+              [
+                "Estratégia de deploy vs. estratégia de dados",
+                "DOP-C02",
+                "por que o rolling update (L03) não resolve migration destrutiva sozinho",
+                "diferenciar zero-downtime de código de zero-downtime de schema"
+              ],
+              [
+                "Migrations customizadas do EF Core",
+                "DVA-C02",
+                "SQL cru fora de transação para CONCURRENTLY",
+                "quando a migration builder não basta, e por quê"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica dá uma tabela pequena, um `ALTER TABLE` que \"deveria ser instantâneo\" e um relato de produção com minutos de indisponibilidade, pedindo a causa. A resposta certa é a fila: uma transação aberta segurando um lock incompatível, com o `ALTER` esperando indefinidamente e todo `SELECT` novo esperando atrás dele. A resposta errada mais escolhida é \"a tabela era grande demais\" — mas o enunciado nunca diz o tamanho da tabela, só a duração do incidente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Erro visível ao cliente durante a migração",
+                "zero",
+                "proíbe migration única destrutiva; obriga expand/contract em fases"
+              ],
+              [
+                "Duas versões da app convivem (herdado do L03)",
+                "minutos, a cada deploy",
+                "toda mudança de schema tem de servir a v1 E a v2 ao mesmo tempo"
+              ],
+              [
+                "Tamanho da tabela `pedidos`",
+                "2,1 milhões de linhas",
+                "decide backfill em lotes, não um `UPDATE` único na tabela toda"
+              ],
+              [
+                "Réplica de leitura em uso (herdado do L07)",
+                "existe, atende consulta real",
+                "obriga medir atraso de réplica como porta de avanço do backfill"
+              ],
+              [
+                "Equipe",
+                "duas pessoas, sem plantão noturno",
+                "decide fases pequenas e reversíveis; nada que exija vigília contínua"
+              ],
+              [
+                "Rollback continua possível (herdado do L03)",
+                "obrigatório",
+                "proíbe apagar a coluna antiga enquanto a v1 for destino de rollback"
+              ],
+              [
+                "Horário da migração",
+                "sem prazo rígido, mas não pode competir com o pico",
+                "decide backfill fora do horário de pico e sob teto de atraso de réplica"
+              ],
+              [
+                "Auditabilidade de quem mudou o schema",
+                "obrigatória",
+                "decide task de migração com papel IAM próprio e log group dedicado"
+              ],
+              [
+                "Nenhuma janela de manutenção anunciada",
+                "requisito herdado do L03",
+                "decide que as quatro implantações rodam com a aplicação sempre no ar"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b3_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Requisito que não muda nada no desenho é enfeite",
+            "content": "Cada linha desta tabela existe porque aponta para uma decisão concreta mais adiante — o tamanho do lote, o teto de espera, o papel IAM separado. Se um requisito não consegue apontar para nenhuma peça do desenho, ele não pertence a esta tabela: pertence à conversa que ainda não terminou de decidir o que o sistema precisa fazer."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: a migration que trava a tabela"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tinha, herdado do L01, e ele é legítimo como ponto de partida: a migration roda na partida do contêiner, funciona sem passo extra, e ninguém nota nada — até existirem duas tasks concorrentes e uma transação de relatório aberta no momento errado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A migration como efeito colateral do arranque",
+            "caption": "Este desenho funciona há dois anos, e é por isso que ninguém o questiona: uma linha no arranque mantém o schema em dia sem passo extra. Percorra os passos e repare que o defeito não é a linha — é que ela transforma \"subir uma task\" em \"mudar o schema\", e o rolling update do L03 sobe duas tasks ao mesmo tempo.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "dev",
+                    "service": "ide",
+                    "label": "Máquina do dev",
+                    "note": "dispara o deploy; não existe nenhum passo que fale de banco, e é isso que engana"
+                  },
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente das 30 lojas",
+                    "note": "vê 503 e 500 sem que ninguém tenha pedido janela — é quem mede o defeito"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB do L03",
+                    "note": "continua encaminhando para a versão velha enquanto a nova sobe: é o desenho certo, e é o que expõe o problema"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada: o rollout do L03 em curso",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "svc",
+                    "service": "ecs",
+                    "label": "Serviço ECS 100% / 200%",
+                    "note": "o excedente que o L03 configurou sobe DUAS tasks novas em paralelo, não uma"
+                  },
+                  {
+                    "id": "ta",
+                    "service": "fargate",
+                    "label": "Task nova A",
+                    "note": "roda `Migrate()` na partida e ganha o bloqueio da tabela"
+                  },
+                  {
+                    "id": "tb",
+                    "service": "fargate",
+                    "label": "Task nova B",
+                    "note": "roda a MESMA migration ao mesmo tempo e fica parada esperando o bloqueio de A"
+                  },
+                  {
+                    "id": "velha",
+                    "service": "fargate",
+                    "label": "Task da versão velha",
+                    "note": "ainda atende tráfego real com o código que espera o schema ANTIGO"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede de dados",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "rds",
+                    "service": "rds",
+                    "label": "RDS PostgreSQL, instância única",
+                    "note": "concede ACCESS EXCLUSIVE a uma task e enfileira todo o resto atrás dela, inclusive leitura"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "dev",
+                "to": "svc",
+                "label": "update-service com a imagem nova",
+                "style": "solid"
+              },
+              {
+                "from": "svc",
+                "to": "ta",
+                "label": "sobe a primeira task nova",
+                "style": "solid"
+              },
+              {
+                "from": "svc",
+                "to": "tb",
+                "label": "sobe a segunda ao mesmo tempo",
+                "style": "solid"
+              },
+              {
+                "from": "ta",
+                "to": "rds",
+                "label": "ALTER TABLE: pede ACCESS EXCLUSIVE",
+                "style": "solid"
+              },
+              {
+                "from": "tb",
+                "to": "rds",
+                "label": "a mesma migration, concorrente e bloqueada",
+                "style": "dashed"
+              },
+              {
+                "from": "velha",
+                "to": "rds",
+                "label": "SELECT que entra na fila atrás do ALTER",
+                "style": "solid"
+              },
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "HTTPS 443 durante o deploy",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "velha",
+                "label": "tráfego real na versão velha",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O schema muda porque um contêiner subiu",
+                "detail": "Uma linha no arranque — `db.Database.Migrate()` — acopla duas coisas que não têm a mesma natureza: implantar código, que é reversível e acontece muitas vezes por dia, e alterar schema, que é global e quase sempre irreversível. Enquanto havia uma task e uma tabela vazia, a diferença não aparecia.",
+                "nodes": [
+                  "ta",
+                  "rds"
+                ],
+                "edges": [
+                  "ta>rds"
+                ]
+              },
+              {
+                "label": "O rolling update sobe DUAS tasks, e as duas migram",
+                "detail": "O excedente que o L03 configurou para não haver janela é o que produz a concorrência aqui: com `desired_count = 2` e máximo de 200%, o ECS cria as duas tasks novas praticamente juntas. Ambas executam a mesma migration; uma ganha o bloqueio, a outra fica parada até o `startPeriod` acabar e o ECS a matar.",
+                "nodes": [
+                  "svc",
+                  "ta",
+                  "tb"
+                ],
+                "edges": [
+                  "svc>ta",
+                  "svc>tb",
+                  "tb>rds"
+                ]
+              },
+              {
+                "label": "ACCESS EXCLUSIVE conflita com tudo, inclusive leitura",
+                "detail": "A documentação do PostgreSQL é direta: `ALTER TABLE` adquire `ACCESS EXCLUSIVE` a menos que a forma específica diga outra coisa, e esse modo conflita com todos os oito modos — incluindo o `ACCESS SHARE` que um `SELECT` simples pega. É o único modo que bloqueia leitura.",
+                "nodes": [
+                  "rds",
+                  "ta"
+                ],
+                "edges": [
+                  "ta>rds"
+                ]
+              },
+              {
+                "label": "A versão velha ainda está no ar, e o schema mudou sob ela",
+                "detail": "É a dívida que o L03 declarou e não pagou. Durante o rollout, o código antigo atende requisição real. Se a migration removeu ou renomeou coluna, esse código passa a consultar algo que não existe mais e responde 500 — e o erro aparece na versão que ninguém acabou de mexer.",
+                "nodes": [
+                  "velha",
+                  "rds"
+                ],
+                "edges": [
+                  "alb>velha",
+                  "velha>rds"
+                ]
+              },
+              {
+                "label": "A fila de bloqueio é o que transforma 5 ms em minutos",
+                "detail": "O `ALTER` só executa quando ganha o bloqueio. Se há uma transação de relatório aberta, ele espera — e cada `SELECT` novo entra atrás dele, porque o PostgreSQL não deixa um pedido compatível furar a fila na frente de um pedido incompatível que já está esperando. A tabela fica ilegível pelo tempo da transação mais longa, não pelo tempo do comando.",
+                "nodes": [
+                  "rds",
+                  "velha"
+                ],
+                "edges": [
+                  "velha>rds"
+                ]
+              },
+              {
+                "label": "Por que alguém publica assim",
+                "detail": "Porque é uma linha, funciona em desenvolvimento com uma task e uma tabela de trezentas linhas, e evita um passo no pipeline. O defeito é invisível até existirem duas tasks, tabela grande e transação concorrente — ou seja, até a produção. O remendo social é o de sempre: avisar no canal e escolher a madrugada, que é exatamente a janela que o L03 eliminou.",
+                "nodes": [
+                  "dev",
+                  "svc"
+                ],
+                "edges": [
+                  "dev>svc"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A fila de bloqueio, não a duração do DDL, é o que derruba",
+            "content": "O comando que a Cadência rodou levava 5 ms isolado. O que consumiu quatro minutos foi a espera pelo bloqueio de uma transação de relatório já aberta, mais o efeito de que nenhum `SELECT` novo furava a fila na frente do `ALTER` que já esperava. Confundir \"migration rápida\" com \"migration segura\" é o erro de raciocínio central deste laboratório — e é o que mais fonte secundária sobre o assunto erra."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A diferença estrutural em relação ao desenho anterior não é uma caixa a mais: é que alterar schema deixa de acontecer dentro da aplicação e vira um passo com identidade, ordem e critério de avanço próprios."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A migração como passo próprio, em três fases e com bloqueio controlado",
+            "caption": "A mudança estrutural não é uma caixa a mais: é que alterar schema deixa de acontecer dentro da aplicação e passa a ser um passo com identidade, ordem e critério de avanço próprios. Percorra os passos e repare que o que autoriza ir para a fase seguinte é medição — atraso de réplica e bloqueio esperando — e não o fim do comando anterior.",
+            "groups": [
+              {
+                "label": "Orquestração, fora da VPC",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "pipe",
+                    "service": "codepipeline",
+                    "label": "Pipeline com fases nomeadas",
+                    "note": "expandir, implantar, migrar dados e contrair são passos distintos; a ordem entre eles é o conteúdo deste laboratório"
+                  },
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente das 30 lojas",
+                    "note": "não percebe nenhuma das quatro implantações; é o critério de aceite do módulo"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — passo de migração (task avulsa, morre ao terminar)",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "mig",
+                    "service": "fargate",
+                    "label": "Task de migração",
+                    "note": "mesma imagem da API com outro entrypoint; roda uma vez por fase e não atende tráfego"
+                  },
+                  {
+                    "id": "guarda",
+                    "service": "relogio",
+                    "label": "lock_timeout e statement_timeout",
+                    "note": "fazem o DDL desistir em 3 s em vez de formar fila; é a diferença entre migration que falha e banco que para"
+                  },
+                  {
+                    "id": "bf",
+                    "service": "lote",
+                    "label": "Backfill em lotes com pausa",
+                    "note": "processo separado do DDL porque dura minutos ou horas e não pode manter transação aberta"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — aplicação: as duas versões convivem",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "svc",
+                    "service": "ecs",
+                    "label": "Serviço ECS do L03",
+                    "note": "o rolling update continua igual; o que mudou é que o schema já serve as duas versões antes de o rollout começar"
+                  },
+                  {
+                    "id": "v1",
+                    "service": "fargate",
+                    "label": "Versão velha (v1)",
+                    "note": "lê e escreve só o que a fase 1 não tocou; sobrevive porque nada foi removido ainda"
+                  },
+                  {
+                    "id": "v2",
+                    "service": "fargate",
+                    "label": "Versão nova (v2)",
+                    "note": "escreve na coluna antiga E na nova durante a fase 2, e lê da nova com recuo para a antiga"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede de dados",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "rds",
+                    "service": "rds",
+                    "label": "RDS PostgreSQL primário",
+                    "note": "recebe DDL curto e sob teto de espera; o schema aqui é a única coisa que as duas versões compartilham"
+                  },
+                  {
+                    "id": "replica",
+                    "service": "replica",
+                    "label": "Réplica de leitura do L07",
+                    "note": "o atraso dela é o que dita o tamanho do lote do backfill; ignorá-la faz leitura antiga voltar para o cliente"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — borda interna",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB e grupo de destino",
+                    "note": "distribui entre v1 e v2 sem saber que são versões diferentes — por isso a compatibilidade é do schema, não dele"
+                  }
+                ]
+              },
+              {
+                "label": "Medição que autoriza avançar",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "pi",
+                    "service": "performanceinsights",
+                    "label": "Performance Insights",
+                    "note": "mostra sessão em espera de bloqueio sem abrir psql: é onde se vê a fila nascer"
+                  },
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Alarmes de replicação e de espera",
+                    "note": "atraso de réplica alto ou bloqueio esperando param o pipeline antes da fase seguinte"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "pipe",
+                "to": "mig",
+                "label": "run-task de uma fase por vez",
+                "style": "solid"
+              },
+              {
+                "from": "guarda",
+                "to": "mig",
+                "label": "aborta o DDL antes de a fila crescer",
+                "style": "dashed"
+              },
+              {
+                "from": "mig",
+                "to": "rds",
+                "label": "DDL aditivo, curto e sob lock_timeout",
+                "style": "solid"
+              },
+              {
+                "from": "pipe",
+                "to": "svc",
+                "label": "só depois da fase 1: implanta a v2",
+                "style": "solid"
+              },
+              {
+                "from": "svc",
+                "to": "v2",
+                "label": "sobe a versão nova sem parar a velha",
+                "style": "solid"
+              },
+              {
+                "from": "svc",
+                "to": "v1",
+                "label": "mantém a velha até o rollout terminar",
+                "style": "solid"
+              },
+              {
+                "from": "v1",
+                "to": "rds",
+                "label": "escreve no esquema antigo, que continua existindo",
+                "style": "solid"
+              },
+              {
+                "from": "v2",
+                "to": "rds",
+                "label": "escreve nas duas colunas, lê da nova",
+                "style": "solid"
+              },
+              {
+                "from": "bf",
+                "to": "rds",
+                "label": "UPDATE de 5 mil linhas por lote, com pausa",
+                "style": "solid"
+              },
+              {
+                "from": "rds",
+                "to": "replica",
+                "label": "WAL do backfill: lote grande alonga o atraso",
+                "style": "dashed"
+              },
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "HTTPS 443 durante as quatro implantações",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "v1",
+                "label": "parte do tráfego na versão velha",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "v2",
+                "label": "parte do tráfego na versão nova",
+                "style": "solid"
+              },
+              {
+                "from": "pi",
+                "to": "rds",
+                "label": "amostra sessões em espera de bloqueio",
+                "style": "dashed"
+              },
+              {
+                "from": "cw",
+                "to": "pipe",
+                "label": "atraso ou espera alta: a fase seguinte não começa",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Alterar schema deixa de ser efeito colateral de subir código",
+                "detail": "A mesma imagem passa a ter dois entrypoints: um serve HTTP, o outro aplica uma fase da migração e termina. A task de migração roda UMA vez, com uma conexão, sob um papel do banco com tempos-limite próprios. Nenhuma das tasks da API toca em DDL — e é isso que elimina a corrida entre elas.",
+                "nodes": [
+                  "pipe",
+                  "mig"
+                ],
+                "edges": [
+                  "pipe>mig"
+                ]
+              },
+              {
+                "label": "Fase 1 — expandir: só o que é aditivo e barato",
+                "detail": "Colunas novas anuláveis, sem `NOT NULL` e sem default volátil; constraint como `NOT VALID`; índice com `CONCURRENTLY`. Ao fim da fase 1 o schema serve as duas versões, e a v1 continua no ar sem saber que algo mudou. É a fase que compra o direito de implantar código.",
+                "nodes": [
+                  "mig",
+                  "rds"
+                ],
+                "edges": [
+                  "mig>rds"
+                ]
+              },
+              {
+                "label": "lock_timeout defende da fila, não do comando",
+                "detail": "Com `lock_timeout = 3s`, um `ALTER` que não consegue o bloqueio em três segundos aborta — e a fila que estava se formando atrás dele se desfaz. Sem isso, a espera pelo bloqueio é indefinida e leva a tabela inteira com ela. Migration que falha e você repete é um inconveniente; fila de bloqueio é indisponibilidade.",
+                "nodes": [
+                  "guarda",
+                  "mig"
+                ],
+                "edges": [
+                  "guarda>mig"
+                ]
+              },
+              {
+                "label": "Fase 2 — a v2 escreve nos dois lugares enquanto a v1 vive",
+                "detail": "A escrita dupla é o que torna o backfill convergente: enquanto ele varre o passado, o presente já nasce correto nas duas colunas. Sem escrita dupla, cada lote processado é imediatamente invalidado por gravações novas, e o backfill nunca termina — só parece terminar.",
+                "nodes": [
+                  "v2",
+                  "v1",
+                  "rds"
+                ],
+                "edges": [
+                  "svc>v2",
+                  "v2>rds",
+                  "v1>rds"
+                ]
+              },
+              {
+                "label": "O backfill é em lotes por causa do WAL e da réplica",
+                "detail": "Um `UPDATE` único na tabela toda é uma transação longa: gera uma versão nova de cada linha (bloat), escreve tudo no WAL de uma vez e alonga o atraso da réplica do L07. Lotes de alguns milhares de linhas, com pausa entre eles, dão ao autovacuum e à replicação tempo de acompanhar.",
+                "nodes": [
+                  "bf",
+                  "rds",
+                  "replica"
+                ],
+                "edges": [
+                  "bf>rds",
+                  "rds>replica"
+                ]
+              },
+              {
+                "label": "Fase 3 — contrair, e só depois de a v1 sair de cena",
+                "detail": "Remover a coluna antiga é a única operação irreversível da sequência, e ela espera duas condições: nenhuma task da v1 no ar e a v1 já descartada como destino de rollback. Enquanto o disjuntor do L03 puder devolver a v1, contrair é apagar o plano de volta.",
+                "nodes": [
+                  "mig",
+                  "rds",
+                  "svc"
+                ],
+                "edges": [
+                  "mig>rds",
+                  "pipe>svc"
+                ]
+              },
+              {
+                "label": "Quem autoriza a fase seguinte é medição, não relógio",
+                "detail": "Duas portas: atraso de réplica abaixo do limiar e nenhuma sessão em espera de bloqueio no Performance Insights. Uma terceira, específica desta mudança: contagem de linhas divergentes igual a zero. Avançar por tempo decorrido é o que faz alguém contrair com 40 mil linhas ainda sem valor na coluna nova.",
+                "nodes": [
+                  "cw",
+                  "pi",
+                  "pipe"
+                ],
+                "edges": [
+                  "cw>pipe",
+                  "pi>rds"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "annotated_formula",
+          "position": 2,
+          "data": {
+            "title": "Quanto tempo a tabela fica indisponível, e qual parcela você controla",
+            "formula": "parada_percebida = espera_pelo_bloqueio (≤ lock_timeout) + duração_do_DDL + drenagem_da_fila",
+            "parts": [
+              {
+                "symbol": "espera_pelo_bloqueio",
+                "name": "O tempo até o DDL ganhar o bloqueio",
+                "description": "É a transação aberta mais longa que conflita — um relatório, um `BEGIN` esquecido numa sessão de psql, um pool que não devolveu conexão. Sem teto, a espera é indefinida, e é ela que domina o total. Aqui é onde uma migration de 5 ms custa minutos.",
+                "highlight": true
+              },
+              {
+                "symbol": "lock_timeout",
+                "name": "O teto que você escolhe para essa espera",
+                "description": "Faz o comando abortar em vez de esperar. Não acelera nada: troca uma indisponibilidade silenciosa por uma falha explícita que você repete. É a única parcela que é decisão, e não consequência."
+              },
+              {
+                "symbol": "duração_do_DDL",
+                "name": "O tempo de execução do comando em si",
+                "description": "Milissegundos quando é só catálogo (`ADD COLUMN` sem default volátil, `DROP COLUMN`); proporcional ao tamanho da tabela quando há reescrita (`SET DATA TYPE`, default volátil, coluna gerada armazenada)."
+              },
+              {
+                "symbol": "drenagem_da_fila",
+                "name": "O que acontece quando o bloqueio é liberado",
+                "description": "Tudo o que se acumulou atrás executa de uma vez: o pool esgota, a CPU do banco salta e a latência fica alta por mais tempo que o próprio DDL. É por isso que o incidente parece maior do que o comando."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "A parcela que você realmente controla",
+            "content": "Das quatro parcelas da fórmula, três dependem do tamanho dos dados ou de quem mais está usando o banco no momento — fora do seu controle direto. `lock_timeout` é a única que é decisão pura: você escolhe o teto de paciência, e ele transforma uma espera indefinida em uma falha rápida e repetível."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de uma migração, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O caso concreto é trocar `valor_total` (reais, `numeric`) por `total_centavos` (`bigint`) — uma mudança de TIPO, que é o caso mais difícil do padrão porque não existe coluna que sirva às duas versões sem que uma delas seja, temporariamente, redundante."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Trocar `valor_total` (reais, numeric) por `total_centavos` (bigint): quatro implantações",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "Implantação 1 — expandir o schema, sem tocar no código",
+                "desc": "Cria `total_centavos bigint NULL` e `frete_centavos bigint NOT NULL DEFAULT 0`, mais o índice novo com CONCURRENTLY. Nenhuma coluna sai, nada vira obrigatório. A v1 continua no ar e nada nela muda de comportamento."
+              },
+              {
+                "label": "Implantação 2 — a v2 entra escrevendo nos dois lugares",
+                "desc": "A v2 grava `valor_total` E `total_centavos` em toda escrita, e lê de `total_centavos` com recuo para `valor_total` quando ele estiver nulo. Durante o rollout do L03, v1 e v2 convivem — e as duas funcionam, porque o schema serve as duas. É o entregável deste laboratório."
+              },
+              {
+                "label": "Backfill — o passado converge para o presente",
+                "desc": "Lotes de 5 mil linhas com pausa, cursor por chave primária, commit por lote. Roda fora do horário de pico por escolha, não por necessidade: ele é interrompível e retomável, porque o critério é `total_centavos IS NULL`."
+              },
+              {
+                "label": "Porta de avanço — divergência zero, medida",
+                "desc": "A contagem de linhas em que a coluna nova está nula ou diferente da antiga tem de ser zero em duas medições separadas por minutos. Zero uma vez pode ser lote terminando; zero duas vezes com escrita acontecendo é convergência."
+              },
+              {
+                "label": "Implantação 3 — a v3 para de escrever no antigo",
+                "desc": "Só então o código deixa de gravar `valor_total`. Este passo existe porque, enquanto alguma versão no ar ainda escreve lá, apagar a coluna quebra essa versão. É a implantação que quase todo roteiro de expand/contract esquece."
+              },
+              {
+                "label": "Implantação 4 — contrair",
+                "desc": "Agora `DROP COLUMN valor_total`, e `total_centavos` vira obrigatória via CHECK `NOT VALID` seguido de `VALIDATE CONSTRAINT`. Irreversível: a partir daqui, voltar para a v1 exige restauração, não rollback."
+              },
+              {
+                "label": "O que ficou feio, e por quanto tempo",
+                "desc": "Entre a implantação 1 e a 4 o schema tem duas colunas para o mesmo dado, uma delas anulável sem precisar ser. Essa feiura é o preço de não ter janela, e ela tem prazo: uma migração que fica meio-caminho por três meses vira dívida com aparência de decisão."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A pergunta que a certificação mais cobra errado é sobre a fila. A documentação do PostgreSQL confirma o mecanismo: um `ACCESS EXCLUSIVE` pendente não é furado por um pedido de `ACCESS SHARE` que chega depois — mesmo que os dois pedidos, isolados, não tivessem conflito nenhum entre si. É a forma como o gerenciador de locks evita que um escritor espere para sempre, e o efeito colateral é que todo leitor que chega depois também espera."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "sql",
+            "filename": "quem-espera-quem.sql",
+            "code": "-- A consulta que transforma \"parece travado\" em \"está esperando ESTE pid\".\n-- Roda contra a instancia PRINCIPAL, nunca a replica.\nSELECT\n  blocked.pid       AS bloqueado,\n  blocked.query     AS o_que_espera,\n  blocking.pid      AS bloqueador,\n  blocking.query    AS o_que_segura_o_lock,\n  now() - blocking.xact_start AS ha_quanto_tempo_a_transacao_esta_aberta\nFROM pg_locks blocked_locks\nJOIN pg_stat_activity blocked  ON blocked.pid = blocked_locks.pid\nJOIN pg_locks blocking_locks   ON blocking_locks.locktype = blocked_locks.locktype\n  AND blocking_locks.relation = blocked_locks.relation\n  AND blocking_locks.pid != blocked_locks.pid\nJOIN pg_stat_activity blocking ON blocking.pid = blocking_locks.pid\nWHERE NOT blocked_locks.granted;"
+          }
+        },
+        {
+          "id": "b6_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "A consulta encontra o pid; encerrar a sessão é o passo seguinte",
+            "content": "A consulta acima diz QUEM está segurando o lock. Terminar a transação ofensora é `SELECT pg_terminate_backend(<pid_bloqueador>);`, e é uma ação drástica — ela mata a conexão, não só a transação, e qualquer trabalho não commitado daquela sessão some. Use `pg_cancel_backend` quando bastar cancelar a consulta em curso sem fechar a conexão inteira."
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Saida da consulta de convergencia (implantar-fases.sh), publicada como metrica customizada a cada execucao. E o payload que decide se a fase 3 pode comecar."
+              }
+            ]
+          },
+          "position": 5
+        },
+        {
+          "id": "b6_5",
+          "type": "code_block",
+          "position": 6,
+          "data": {
+            "language": "json",
+            "filename": "divergencia-do-backfill.json",
+            "code": "{\n  \"medido_em\": \"2026-08-07T14:05:00Z\",\n  \"tabela\": \"pedidos\",\n  \"linhas_totais\": 2134982,\n  \"linhas_divergentes\": 0,\n  \"medicao_anterior_ha_5min\": 0,\n  \"atraso_da_replica_segundos\": 1.8,\n  \"decisao\": \"AVANCAR\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Uma API .NET 8 em ECS Fargate com rolling update (L03) e RDS PostgreSQL com réplica (L07) precisa trocar o tipo de uma coluna numa tabela de 2,1 milhões de linhas, sem janela e sem plantão noturno, com duas pessoas no time.",
+            "winner": "Expand/contract em quatro implantações, com a migração fora do arranque e sob lock_timeout",
+            "why": "A restrição real não é o comando SQL: é que o rolling update faz duas versões do código conviverem por minutos, e um schema só pode estar em um estado. Expand/contract resolve isso invertendo o que é rígido: em vez de exigir que as duas versões concordem, exige que o schema sirva às duas. O custo é organizacional — quatro implantações em vez de uma, e um schema temporariamente redundante — e é um custo que cabe numa equipe de duas pessoas, porque cada passo é pequeno, reversível e verificável isoladamente.",
+            "alternatives": [
+              {
+                "name": "Janela de manutenção anunciada",
+                "downside": "Resolve de verdade, e é honesto reconhecer: com a aplicação parada, migration destrutiva é trivial. O que ela cobra é o que o L03 acabou de eliminar — e, pior, ensina a equipe a agrupar mudanças de schema para \"aproveitar a janela\", o que aumenta o tamanho do lote e a chance de erro."
+              },
+              {
+                "name": "Blue/green com dois bancos e sincronização",
+                "downside": "Duas frotas e dois schemas ao mesmo tempo. Parece eliminar o problema, mas apenas o move: a escrita que acontece no banco velho durante a troca precisa chegar ao novo, e você acaba escrevendo a mesma lógica de escrita dupla — sem a vantagem de poder voltar. É o L39 para tráfego, não para dados."
+              },
+              {
+                "name": "Migration na partida com bloqueio de coordenação",
+                "downside": "Um `pg_advisory_lock` no arranque impede a corrida entre as duas tasks, e é melhor que nada. Não resolve nada do resto: o DDL continua acontecendo no meio do rollout, continua podendo formar fila e continua destrutivo enquanto a v1 atende."
+              },
+              {
+                "name": "Nova tabela e troca de nome no fim",
+                "downside": "Copiar para `pedidos_novo` e renomear parece limpo e é o caminho de ferramentas como pg_repack. O `ALTER TABLE ... RENAME` final pega `ACCESS EXCLUSIVE` e, sobretudo, a escrita que ocorreu durante a cópia precisa de gatilho para chegar à cópia. Vale quando a tabela precisa ser reescrita de todo modo — não para acrescentar uma coluna."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Onde a migração roda",
+                "task avulsa, fora do arranque do contêiner",
+                "`Migrate()` na partida (o L01); job cron separado",
+                "elimina a corrida entre tasks concorrentes do rolling update",
+                "mais uma peça de infraestrutura — task definition e papel IAM próprios"
+              ],
+              [
+                "Teto de espera pelo bloqueio",
+                "`lock_timeout = 3s` na migration, 5s de padrão na instância",
+                "sem teto (padrão do PostgreSQL); teto muito alto (30s+)",
+                "troca espera indefinida por falha rápida e repetível",
+                "a migration pode falhar sob carga adversa e precisar ser repetida"
+              ],
+              [
+                "Índice novo",
+                "`CREATE INDEX CONCURRENTLY`",
+                "índice padrão (bloqueia escrita); sem índice até a contração",
+                "não bloqueia escrita, ao custo de duas varreduras da tabela",
+                "não pode rodar dentro da transação da migration — exige SQL cru com suppressTransaction"
+              ],
+              [
+                "Tamanho do lote do backfill",
+                "5 mil linhas, com pausa de 200 ms e teto de atraso de réplica",
+                "lote único (tabela toda); lote maior sem checar réplica",
+                "mantém o atraso da réplica do L07 dentro do tolerável",
+                "o backfill de 2,1 milhões de linhas leva minutos a mais que um UPDATE único"
+              ],
+              [
+                "Coluna nova",
+                "anulável, sem `NOT NULL` na criação",
+                "`NOT NULL DEFAULT` direto na criação",
+                "evita ACCESS EXCLUSIVE com varredura da tabela inteira na fase 1",
+                "o schema fica temporariamente permissivo — a fase 3 fecha isso com `CHECK NOT VALID`"
+              ],
+              [
+                "Momento da contração",
+                "só após divergência zero medida duas vezes, e v1 fora do plano de rollback",
+                "contrair assim que o backfill \"parece\" terminar",
+                "a única operação irreversível da sequência espera prova, não estimativa",
+                "a migração leva mais tempo de ponta a ponta do que uma contração otimista"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Contrair antes de a v1 sair de cena apaga o plano de volta",
+            "content": "Enquanto o disjuntor de implantação do L03 puder reverter para a v1, a coluna antiga é o caminho de volta dela. `DROP COLUMN` não reescreve a tabela — é rápido — mas o dado fica inacessível a partir dali. Se a v1 ainda estiver no ar, ou ainda for o destino de um rollback automático, ela vai consultar uma coluna que não existe mais e responder 500 para todo cliente. Não há como desfazer isso com uma migration reversa: o caminho de volta passa a ser restauração pelo `pg_dump`/PITR do L10, com o tempo de RTO que ele custar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: RDS com tempos-limite como padrão, e a task de migração"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os tempos-limite viram propriedade da INSTÂNCIA, não gambiarra de sessão isolada — assim toda conexão nova, inclusive uma que ninguém pensou em proteger, já nasce com teto. A migração pede um valor ainda mais estrito por cima, via `SET LOCAL`."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "migration.tf",
+            "code": "# migration.tf — tempos-limite como padrão da instância, e a task de migração\n# como cidadão de primeira classe, fora do servico da API\n\n# lock_timeout e statement_timeout sao parametros DINAMICOS (contexto \"user\" no\n# PostgreSQL): mudam sem reiniciar o RDS, e qualquer sessao pode sobrescreve-los\n# com SET LOCAL. Aqui eles viram padrao da INSTANCIA — nao gambiarra ad hoc — e a\n# migracao pede um teto ainda mais estrito (3 s) via SET LOCAL na propria migration.\nresource \"aws_db_parameter_group\" \"postgres\" {\n  name   = \"${var.projeto}-postgres16\"\n  family = \"postgres16\"\n\n  parameter {\n    name         = \"lock_timeout\"\n    value        = \"5000\" # ms; qualquer sessao que nao redefina espera no maximo 5 s por um lock\n    apply_method = \"immediate\"\n  }\n\n  parameter {\n    name         = \"statement_timeout\"\n    value        = \"30000\" # ms; protege QUALQUER sessao de rodar para sempre — migration ou nao\n    apply_method = \"immediate\"\n  }\n\n  parameter {\n    # Registra no log toda espera de lock mais longa que deadlock_timeout (1 s,\n    # padrao). E o que torna a fila do diagrama de producao observavel sem\n    # precisar reproduzir o incidente para ve-la.\n    name         = \"log_lock_waits\"\n    value        = \"1\"\n    apply_method = \"immediate\"\n  }\n}\n\nresource \"aws_db_instance\" \"principal\" {\n  # ... (recursos ja existentes do L01/L07; aqui so o que este laboratorio muda)\n  parameter_group_name = aws_db_parameter_group.postgres.name\n}\n\n# A task de migracao usa a MESMA imagem da API, com outro entrypoint (ver\n# Program.cs). Nao e um servico: nao tem desired_count, nao tem grupo de\n# destino, nao recebe trafego. Ela roda com `run-task`, faz UMA coisa e termina.\nresource \"aws_ecs_task_definition\" \"migracao\" {\n  family                   = \"${var.projeto}-migracao\"\n  requires_compatibilities = [\"FARGATE\"]\n  network_mode             = \"awsvpc\"\n  cpu                      = 256\n  memory                   = 512\n  execution_role_arn       = aws_iam_role.execucao.arn\n  task_role_arn            = aws_iam_role.migracao.arn # papel PROPRIO, nao o da API\n\n  container_definitions = jsonencode([{\n    name      = \"migracao\"\n    image     = \"${aws_ecr_repository.api.repository_url}:${var.sha_da_imagem}\"\n    essential = true\n\n    # A mesma imagem da API que atende trafego real (L03) — nunca um build\n    # \"quase igual\" compilado a parte. O argumento decide a fase; o pipeline\n    # passa um valor por vez.\n    command = [\"dotnet\", \"Api.dll\", \"--migrate\", var.fase_da_migracao]\n\n    secrets = [{\n      name      = \"ConnectionStrings__Migracao\"\n      valueFrom = aws_secretsmanager_secret.banco_migracao.arn\n    }]\n\n    logConfiguration = {\n      logDriver = \"awslogs\"\n      options = {\n        \"awslogs-group\"         = aws_cloudwatch_log_group.migracao.name\n        \"awslogs-region\"        = var.regiao\n        \"awslogs-stream-prefix\" = \"migracao\"\n      }\n    }\n  }])\n}\n\n# Papel PROPRIO da migracao, separado do task role da API (aws_iam_role.task no\n# L03). A API nunca precisa de DDL; a migracao nunca precisa das rotas de\n# negocio. Separar os dois e o que faz uma credencial vazada da API nao servir\n# para alterar schema — e vice-versa.\nresource \"aws_iam_role\" \"migracao\" {\n  name               = \"${var.projeto}-migracao\"\n  assume_role_policy = data.aws_iam_policy_document.ecs_assume.json\n}\n\ndata \"aws_iam_policy_document\" \"migracao_permite\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"secretsmanager:GetSecretValue\"]\n    # Recurso especifico: o secret da migracao, nunca o da API. Nao ha \"*\" aqui\n    # porque a acao aceita ARN, e nao existe motivo para nao restringir.\n    resources = [aws_secretsmanager_secret.banco_migracao.arn]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"migracao\" {\n  role   = aws_iam_role.migracao.id\n  policy = data.aws_iam_policy_document.migracao_permite.json\n}\n\n# Metrica CUSTOM, publicada pelo pipeline (ver observabilidade.sh) apos cada\n# consulta a pg_locks. Nao existe metrica pronta do AWS/RDS para \"sessoes\n# esperando bloqueio\" — Performance Insights tem o dado, mas via API propria,\n# nao como dimensao de alarme do CloudWatch. Publicar a metrica e o que torna\n# possivel alarmar sobre ela.\nresource \"aws_cloudwatch_metric_alarm\" \"sessoes_bloqueadas\" {\n  alarm_name          = \"${var.projeto}-sessoes-bloqueadas-por-ddl\"\n  namespace           = \"FFV/Migracao\"\n  metric_name         = \"SessoesEsperandoBloqueio\"\n  statistic           = \"Maximum\"\n  period              = 30\n  evaluation_periods  = 2\n  threshold           = 5\n  comparison_operator = \"GreaterThanThreshold\"\n  treat_missing_data  = \"notBreaching\"\n  alarm_actions       = [aws_sns_topic.alertas.arn]\n}\n\n# ReplicaLag e metrica nativa do RDS PostgreSQL, em segundos, medida na\n# instancia de REPLICA (L07). E a porta de avanco do backfill: lote demais e\n# ela sobe antes de qualquer erro aparecer para o cliente.\nresource \"aws_cloudwatch_metric_alarm\" \"atraso_da_replica\" {\n  alarm_name          = \"${var.projeto}-atraso-replica-backfill\"\n  namespace           = \"AWS/RDS\"\n  metric_name         = \"ReplicaLag\"\n  statistic           = \"Maximum\"\n  period              = 60\n  evaluation_periods  = 2\n  threshold           = 10 # segundos; acima disso o backfill pausa (ver backfill.sh)\n  comparison_operator = \"GreaterThanThreshold\"\n\n  dimensions = {\n    DBInstanceIdentifier = aws_db_instance.replica.id\n  }\n\n  alarm_actions = [aws_sns_topic.alertas.arn]\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O `*` que NÃO aparece aqui, de propósito",
+            "content": "A política do papel de migração tem `Resource` específico — o ARN do secret dela, nada além disso. Diferente do `ecr:GetAuthorizationToken` do L03 (que é operação de conta e não aceita recurso), `secretsmanager:GetSecretValue` aceita ARN e não há motivo para não restringir. Regra prática: `*` só quando a AÇÃO não suporta recurso — nunca por economia de linha."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: a migration aditiva, e a que é irreversível"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A fase 1 e a fase 3 são as duas pontas da sequência, e é onde o mecanismo de bloqueio do PostgreSQL aparece com mais clareza: uma é catálogo puro, quase instantânea; a outra apaga dado de verdade."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Migrations/Fase1ExpandirTotalCentavos.cs",
+            "code": "// Migrations/20260807120000_Fase1ExpandirTotalCentavos.cs\n// Fase 1 — EXPANDIR. So o que e aditivo e barato. A v1 continua no ar sem\n// saber que isto rodou: nenhuma coluna virou obrigatoria, nada foi removido.\n\npublic partial class Fase1ExpandirTotalCentavos : Migration\n{\n    protected override void Up(MigrationBuilder mb)\n    {\n        // SET LOCAL vale so para esta transacao: mais estrito que o padrao de\n        // 5 s da instancia (migration.tf), porque aqui preferimos a migration\n        // FALHAR rapido e ser repetida a formar fila atras dela.\n        mb.Sql(\"SET LOCAL lock_timeout = '3s';\");\n\n        // Sem DEFAULT (ou com DEFAULT nao-volatil) e sem NOT NULL: e catalogo\n        // puro, ACCESS EXCLUSIVE por milissegundos. Um DEFAULT volatil aqui\n        // reescreveria a tabela inteira — e e exatamente o que este laboratorio\n        // ensina a NAO fazer numa tabela de 2,1 milhoes de linhas.\n        mb.AddColumn<long>(\n            name: \"total_centavos\",\n            table: \"pedidos\",\n            type: \"bigint\",\n            nullable: true);\n\n        // CREATE INDEX CONCURRENTLY nao pode rodar dentro de um bloco de\n        // transacao — e as migrations do EF Core sao executadas dentro de uma\n        // transacao por padrao. suppressTransaction: true tira ESTA operacao\n        // do BEGIN/COMMIT da migration, sem tirar a migration inteira. Custa\n        // duas varreduras da tabela em vez de uma, e nao bloqueia escrita.\n        mb.Sql(\n            \"CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_pedidos_total_centavos \" +\n            \"ON pedidos (total_centavos) WHERE total_centavos IS NOT NULL;\",\n            suppressTransaction: true);\n    }\n\n    protected override void Down(MigrationBuilder mb)\n    {\n        mb.Sql(\"DROP INDEX CONCURRENTLY IF EXISTS ix_pedidos_total_centavos;\",\n            suppressTransaction: true);\n        mb.DropColumn(name: \"total_centavos\", table: \"pedidos\");\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A armadilha do EF Core com CONCURRENTLY",
+            "content": "Uma migration do EF Core roda inteira dentro de uma transação, por padrão — e `CREATE INDEX CONCURRENTLY` recusa rodar dentro de transação nenhuma. Sem `suppressTransaction: true` no `Sql()`, o comando falha com um erro do PostgreSQL sobre bloco de transação, não com um erro do EF Core — o que confunde quem não sabe que o parâmetro existe. Isso custa uma migration inteira reescrita a quem descobre isso lendo o stack trace em produção."
+          }
+        },
+        {
+          "id": "b9_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "csharp",
+            "filename": "Migrations/Fase3ContrairValorTotal.cs",
+            "code": "// Migrations/20260814090000_Fase3ContrairValorTotal.cs\n// Fase 3 — CONTRAIR. So roda depois de duas portas medidas: divergencia zero\n// (backfill.sh) e nenhuma task da v1 no ar nem no plano de rollback do L03.\n// A partir daqui, voltar para a v1 exige restauracao (L10), nao redeploy.\n\npublic partial class Fase3ContrairValorTotal : Migration\n{\n    protected override void Up(MigrationBuilder mb)\n    {\n        mb.Sql(\"SET LOCAL lock_timeout = '3s';\");\n\n        // NOT VALID nao escaneia a tabela: e so catalogo, ACCESS EXCLUSIVE por\n        // milissegundos. A validacao (que exige o scan) vira o passo seguinte,\n        // com um lock mais fraco.\n        mb.Sql(\n            \"ALTER TABLE pedidos ADD CONSTRAINT total_centavos_not_null \" +\n            \"CHECK (total_centavos IS NOT NULL) NOT VALID;\");\n\n        // VALIDATE CONSTRAINT pede SHARE UPDATE EXCLUSIVE, nao ACCESS\n        // EXCLUSIVE: escrita concorrente continua liberada enquanto ele varre\n        // a tabela inteira para confirmar que nenhuma linha viola a regra.\n        // E o motivo de nao ter feito isso com um NOT NULL direto na fase 1.\n        mb.Sql(\"ALTER TABLE pedidos VALIDATE CONSTRAINT total_centavos_not_null;\");\n\n        // A operacao irreversivel da sequencia inteira. DROP COLUMN nao\n        // reescreve a tabela — e so catalogo — mas o dado fica inacessivel a\n        // partir daqui. Sem backup ou PITR (L10), nao ha volta.\n        mb.DropColumn(name: \"valor_total\", table: \"pedidos\");\n    }\n\n    // Sem Down(): contrair nao tem downgrade que devolva o dado. O caminho de\n    // volta desta fase e restauracao, nao migration reversa — e e por isso que\n    // a porta de avanco (divergencia zero, medida duas vezes) existe.\n}\n"
+          }
+        },
+        {
+          "id": "b9_4",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "csharp",
+            "filename": "Program.cs (entrypoint)",
+            "code": "// Program.cs — o mesmo binario, dois caminhos: servir HTTP ou aplicar uma fase\n\nvar builder = WebApplication.CreateBuilder(args);\nbuilder.Services.AddDbContextPool<AppDb>(o =>\n    o.UseNpgsql(builder.Configuration.GetConnectionString(\"Padrao\")));\n\n// `--migrate <fase>` e o argumento que a task_definition.migracao passa\n// (migration.tf). Fora deste caminho, o binario sobe o servidor HTTP normal —\n// e essa e a garantia de que a migracao roda o MESMO codigo que atende trafego.\nif (args.Contains(\"--migrate\"))\n{\n    var fase = args[Array.IndexOf(args, \"--migrate\") + 1];\n    using var app = builder.Build();\n    using var escopo = app.Services.CreateScope();\n    var db = escopo.ServiceProvider.GetRequiredService<AppDb>();\n\n    // Cada fase e uma migration nomeada do EF Core. Rodar `Migrate()` sem alvo\n    // aplicaria TODAS as pendentes de uma vez — o oposto do que este\n    // laboratorio ensina, que e uma fase por implantacao.\n    var migrador = db.GetInfrastructure().GetRequiredService<IMigrator>();\n    migrador.Migrate(fase); // ex.: \"Fase1ExpandirTotalCentavos\"\n\n    Console.WriteLine($\"fase {fase} aplicada\");\n    return; // a task termina aqui; nao ha `app.Run()` neste caminho\n}\n\nvar app2 = builder.Build();\napp2.MapHealthChecks(\"/health/live\");\napp2.MapHealthChecks(\"/health/ready\");\napp2.Run();\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: a v2 escreve nos dois lugares"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A escrita dupla é o que torna o backfill convergente: sem ela, cada lote processado é imediatamente invalidado por uma escrita nova que só tocou a coluna antiga."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "PedidoService.cs",
+            "code": "// PedidoService.cs — a v2 escreve nos dois lugares e le com recuo\n\npublic class PedidoService(AppDb db)\n{\n    public async Task<Guid> CriarPedidoAsync(NovoPedidoDto dto, CancellationToken ct)\n    {\n        var centavos = (long)Math.Round(dto.ValorTotal * 100m, MidpointRounding.AwayFromZero);\n\n        var pedido = new Pedido\n        {\n            Id = Guid.NewGuid(),\n            // Escreve nos DOIS lugares. Enquanto a v1 conviver com a v2\n            // durante o rollout do L03, o dado tem de estar correto nos dois\n            // esquemas ao mesmo tempo — e sao consultas DIFERENTES que leem\n            // cada um.\n            ValorTotal = dto.ValorTotal,\n            TotalCentavos = centavos,\n        };\n\n        db.Pedidos.Add(pedido);\n        await db.SaveChangesAsync(ct);\n        return pedido.Id;\n    }\n\n    public async Task<decimal> ObterValorTotalAsync(Guid id, CancellationToken ct)\n    {\n        // Projecao explicita das DUAS colunas — nunca `SELECT *` / `FindAsync`\n        // sem projecao aqui. Se a v1 (que nao conhece total_centavos) ainda\n        // estiver mapeando a mesma entidade sem a coluna nova, um `SELECT *`\n        // corre o risco de o EF Core tentar materializar um campo que a\n        // versao antiga do modelo nao declara — e e exatamente esse acoplamento\n        // implicito que expand/contract existe para evitar.\n        var pedido = await db.Pedidos\n            .Where(x => x.Id == id)\n            .Select(x => new { x.TotalCentavos, x.ValorTotal })\n            .SingleAsync(ct);\n\n        // Le da coluna NOVA; recua para a antiga so enquanto o backfill nao\n        // convergiu. Depois da fase 3 (contrair), TotalCentavos nunca sera\n        // nulo, e este recuo vira codigo morto que a fase 3 seguinte remove.\n        return pedido.TotalCentavos.HasValue\n            ? pedido.TotalCentavos.Value / 100m\n            : pedido.ValorTotal;\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que `SELECT *` é a armadilha, com precisão",
+            "content": "Não é sintaticamente proibido — é que ele acopla a consulta ao formato inteiro da tabela no momento em que ela roda. Uma versão antiga que não conhece `total_centavos` e uma consulta sem projeção explícita formam uma dependência implícita em \"o schema não muda\", que é exatamente o que este laboratório existe para quebrar. Projeção explícita — nomear as colunas que a consulta usa — é o que deixa a v1 indiferente à coluna nova."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: o backfill, em lotes e de olho na réplica"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um `UPDATE` na tabela toda é uma transação longa: gera bloat proporcional ao total de linhas, escreve o WAL de uma vez e alonga o atraso da réplica do L07. Lotes pequenos com pausa trocam velocidade total por previsibilidade — e é a previsibilidade que este laboratório está comprando."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Backfill.cs",
+            "code": "// Backfill.cs — task avulsa, mesma imagem, entrypoint `--backfill`. Roda uma\n// vez, fora de horario de pico por escolha (nao por necessidade: e\n// interrompivel e retomavel pelo cursor).\n\nconst int TamanhoDoLote = 5_000;\nconst int PausaEntreLotesMs = 200;\nconst double AtrasoMaximoDaReplicaSegundos = 10;\n\nvar cursor = Guid.Empty;\nwhile (true)\n{\n    // Checa a replica ANTES de cada lote, nao so no inicio: um lote grande\n    // alonga o atraso, e o PROXIMO lote precisa saber disso antes de rodar.\n    var atraso = await MedirAtrasoDaReplicaAsync(conexao);\n    if (atraso > TimeSpan.FromSeconds(AtrasoMaximoDaReplicaSegundos))\n    {\n        log.LogWarning(\"atraso de replica em {Atraso}s, acima do limite; pausando 10s\", atraso.TotalSeconds);\n        await Task.Delay(TimeSpan.FromSeconds(10));\n        continue;\n    }\n\n    // UPDATE por LOTE, nunca na tabela toda: um lote de 5 mil linhas e uma\n    // transacao curta, gera bloat proporcional ao lote (nao ao total) e\n    // escreve WAL em pedacos que a replica absorve entre um lote e outro.\n    var afetadas = await conexao.ExecuteAsync(\n        \"\"\"\n        UPDATE pedidos SET total_centavos = ROUND(valor_total * 100)\n        WHERE id IN (\n            SELECT id FROM pedidos\n            WHERE total_centavos IS NULL AND id > @cursor\n            ORDER BY id\n            LIMIT @tamanho\n        )\n        RETURNING id\n        \"\"\",\n        new { cursor, tamanho = TamanhoDoLote });\n\n    if (afetadas == 0)\n        break; // convergiu: nenhuma linha com total_centavos nula acima do cursor\n\n    cursor = await ObterMaiorIdDoLoteAsync(conexao, cursor, TamanhoDoLote);\n    log.LogInformation(\"lote aplicado: {Linhas} linhas, cursor em {Cursor}\", afetadas, cursor);\n\n    // A pausa da tempo ao autovacuum de processar as versoes mortas do lote\n    // anterior antes do proximo UPDATE gerar mais. Sem pausa, o bloat cresce\n    // mais rapido do que o autovacuum consegue reciclar.\n    await Task.Delay(PausaEntreLotesMs);\n}\n\n// pg_stat_replication e visao do lado do PRIMARIO: mostra, por replica\n// conectada, o atraso de reproducao em tempo real. Roda na conexao com a\n// instancia principal, nunca na replica.\nstatic async Task<TimeSpan> MedirAtrasoDaReplicaAsync(NpgsqlConnection conexao) =>\n    TimeSpan.FromSeconds(await conexao.ExecuteScalarAsync<double>(\n        \"SELECT EXTRACT(EPOCH FROM replay_lag) FROM pg_stat_replication LIMIT 1;\"));\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Parâmetro",
+              "Valor aqui",
+              "Por quê"
+            ],
+            "rows": [
+              [
+                "Tamanho do lote",
+                "5.000 linhas",
+                "grande o bastante para terminar em minutos; pequeno o bastante para não competir com o WAL de escrita real"
+              ],
+              [
+                "Pausa entre lotes",
+                "200 ms",
+                "dá tempo ao autovacuum de reciclar as versões mortas do lote anterior"
+              ],
+              [
+                "Teto de atraso de réplica",
+                "10 s",
+                "acima disso, uma leitura na réplica do L07 devolve dado desatualizado com folga perceptível"
+              ],
+              [
+                "Cursor",
+                "por chave primária, não por offset",
+                "interrompível e retomável sem reprocessar linha já convergida, mesmo se a task morrer no meio"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b11_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "Cursor por `OFFSET` é o erro que só aparece em tabela grande",
+            "content": "Um cursor por `OFFSET` reprocessa do início se a task morrer no meio, porque o `OFFSET` conta posição, não identidade — e cada `UPDATE` de lote muda quais linhas ainda satisfazem o filtro. Cursor por chave primária retoma exatamente de onde parou, porque a posição está no dado, não numa contagem que o próprio backfill invalida a cada lote."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar as quatro fases, e provar com número"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "implantar-fases.sh",
+            "code": "#!/usr/bin/env bash\n# implantar-fases.sh — quatro implantacoes, cada uma so avanca com a anterior confirmada\nset -euo pipefail\n\nPROJETO=\"${PROJETO:?defina PROJETO}\"\nREGIAO=\"${REGIAO:-us-east-1}\"\nSHA=\"$(git describe --always --dirty --match='' --abbrev=12)\"\n\nrodar_fase() {\n  local fase=\"$1\"\n  echo \"== fase ${fase}: run-task ==\"\n  TASK_ARN=$(aws ecs run-task --cluster \"$PROJETO\" \\\n    --task-definition \"${PROJETO}-migracao\" \\\n    --launch-type FARGATE \\\n    --overrides \"{\\\"containerOverrides\\\":[{\\\"name\\\":\\\"migracao\\\",\\\"command\\\":[\\\"dotnet\\\",\\\"Api.dll\\\",\\\"--migrate\\\",\\\"${fase}\\\"]}]}\" \\\n    --network-configuration \"awsvpcConfiguration={subnets=[$PRIVADA_A],securityGroups=[$SG_MIGRACAO]}\" \\\n    --query 'tasks[0].taskArn' --output text)\n\n  aws ecs wait tasks-stopped --cluster \"$PROJETO\" --tasks \"$TASK_ARN\"\n\n  # Exit code != 0 e falha silenciosa de DDL se ninguem checar. O `wait` acima\n  # so espera a task PARAR — nao diz se ela terminou bem.\n  EXIT_CODE=$(aws ecs describe-tasks --cluster \"$PROJETO\" --tasks \"$TASK_ARN\" \\\n    --query 'tasks[0].containers[0].exitCode' --output text)\n  [[ \"$EXIT_CODE\" == \"0\" ]] || { echo \"fase ${fase} falhou (exit ${EXIT_CODE})\" >&2; exit 1; }\n}\n\n# ── Fase 1: expandir ──────────────────────────────────────────────────────────\nrodar_fase \"Fase1ExpandirTotalCentavos\"\n\n# ── Implantação 2: a v2 sobe com escrita dupla, sem parar a v1 (rolling do L03) ─\nterraform apply -var=\"sha_da_imagem=${SHA}\" -auto-approve\naws ecs wait services-stable --cluster \"$PROJETO\" --services \"${PROJETO}-api\"\n\n# ── Backfill, fora do pipeline de deploy — roda uma vez, pode ser retomado ────\naws ecs run-task --cluster \"$PROJETO\" --task-definition \"${PROJETO}-backfill\" \\\n  --launch-type FARGATE \\\n  --network-configuration \"awsvpcConfiguration={subnets=[$PRIVADA_A],securityGroups=[$SG_MIGRACAO]}\"\n\n# ── Porta de avanço: divergência zero, medida DUAS vezes com 5 min de intervalo ─\nmedir_divergencia() {\n  psql \"$DATABASE_URL_SOMENTE_LEITURA\" -tAc \\\n    \"SELECT count(*) FROM pedidos WHERE total_centavos IS NULL OR total_centavos <> ROUND(valor_total * 100);\"\n}\nD1=$(medir_divergencia); sleep 300; D2=$(medir_divergencia)\nif [[ \"$D1\" != \"0\" || \"$D2\" != \"0\" ]]; then\n  echo \"divergência não convergiu (D1=${D1} D2=${D2}); NÃO prossiga para a implantação 3\" >&2\n  exit 1\nfi\n\n# ── Implantação 3: a v3 para de escrever no antigo ────────────────────────────\nterraform apply -var=\"sha_da_imagem=${SHA}-v3\" -auto-approve\naws ecs wait services-stable --cluster \"$PROJETO\" --services \"${PROJETO}-api\"\n\n# ── Confirma que a v1 já não é mais alvo de rollback antes de contrair ────────\nREVISAO_ATIVA=$(aws ecs describe-services --cluster \"$PROJETO\" --services \"${PROJETO}-api\" \\\n  --query 'services[0].taskDefinition' --output text)\necho \"revisão ativa: ${REVISAO_ATIVA} — confirme manualmente que não é mais a v1 antes de continuar\"\nread -r -p \"prosseguir para a fase 3 (contrair)? [s/N] \" CONFIRMA\n[[ \"$CONFIRMA\" == \"s\" ]] || { echo \"abortado antes da operação irreversível\"; exit 1; }\n\n# ── Fase 3: contrair — irreversível a partir daqui ────────────────────────────\nrodar_fase \"Fase3ContrairValorTotal\"\necho \"as quatro implantações concluíram\"\n"
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma aceita \"parece que funcionou\" como resultado — a prova 2 é a que mais gente pula, e é a que mostra o mecanismo central do módulo em vez de descrevê-lo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medições; nenhuma conclusão vem de \"parece que funcionou\"\n\nPROJETO=ffv-lab; REGIAO=us-east-1\n\n# ── Prova 1: zero erro do cliente durante as quatro implantações ─────────────\nURL=\"https://$(terraform output -raw dominio)/api/pedidos/health\"\n( while true; do curl -s -o /dev/null -w '%{http_code} ' \"$URL\"; sleep 0.2; done ) & LACO=$!\n./implantar-fases.sh\nkill $LACO\n# Medido na Cadência: 14.208 requisições, 0 diferente de 200, ao longo das\n# quatro implantações e do backfill. Qualquer não-200 aqui reprova o rollout.\n\n# ── Prova 2: a fila de bloqueio, observada — não decorada ────────────────────\n# Abra uma transação de relatório de propósito, dispare um ALTER concorrente, e\n# consulte quem espera quem. É a prova do mecanismo central deste módulo.\npsql \"$DATABASE_URL\" -c \"BEGIN; SELECT * FROM pedidos LIMIT 1;\" &  # segura ACCESS SHARE, sem COMMIT\npsql \"$DATABASE_URL\" -c \"ALTER TABLE pedidos ADD COLUMN teste_prova int;\" &\npsql \"$DATABASE_URL\" -c \"\n  SELECT blocked.pid AS bloqueado, blocking.pid AS bloqueador, blocked.query AS espera\n  FROM pg_locks blocked_locks\n  JOIN pg_stat_activity blocked ON blocked.pid = blocked_locks.pid\n  JOIN pg_locks blocking_locks ON blocking_locks.locktype = blocked_locks.locktype\n    AND blocking_locks.relation = blocked_locks.relation AND blocking_locks.pid != blocked_locks.pid\n  JOIN pg_stat_activity blocking ON blocking.pid = blocking_locks.pid\n  WHERE NOT blocked_locks.granted;\"\n# Esperado: uma linha mostrando o ALTER como bloqueado pela transação de\n# relatório — a prova de que a fila, não o comando, é a causa da espera.\n\n# ── Prova 3: lock_timeout defende da fila, e o erro é o esperado ─────────────\npsql \"$DATABASE_URL\" -c \"SET lock_timeout = '3s'; ALTER TABLE pedidos ADD COLUMN teste_prova2 int;\"\n# Com a transação de relatório ainda aberta: falha em ~3s com SQLSTATE 55P03\n# (\"lock_not_available\"), não trava indefinidamente. Reverta a transação de\n# relatório com ROLLBACK antes de seguir.\n\n# ── Prova 4: um CREATE INDEX CONCURRENTLY interrompido vira índice INVALID ───\npsql \"$DATABASE_URL\" -c \"SELECT indexrelid::regclass, indisvalid FROM pg_index WHERE NOT indisvalid;\"\n# Esperado em operação normal: zero linhas. Uma linha aqui é índice que falhou\n# no meio — consome espaço e overhead de escrita sem servir consulta nenhuma;\n# a correção é DROP INDEX e repetir o CONCURRENTLY.\n\n# ── Prova 5: o tamanho do lote muda o pico de atraso da réplica ──────────────\n# Repita o backfill em ambiente de teste com TamanhoDoLote = 50000 (sem pausa) e\n# depois com 5000 + 200 ms de pausa, medindo o pico de ReplicaLag em cada corrida.\n# Medido na Cadência: pico de 41 s de atraso com lote de 50 mil sem pausa,\n# contra pico de 2 s com lote de 5 mil e pausa — quase 20× de diferença para o\n# mesmo total de linhas processadas.\naws cloudwatch get-metric-statistics --namespace AWS/RDS --metric-name ReplicaLag \\\n  --dimensions Name=DBInstanceIdentifier,Value=\"${PROJETO}-replica\" \\\n  --start-time \"$(date -u -d '-1 hour' +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --period 60 --statistics Maximum --region \"$REGIAO\"\n"
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Cliente não vê erro nas 4 implantações",
+                "laço de `curl` durante o script inteiro",
+                "fileira contínua de 200 (medido: 14.208 requisições, 0 erro)",
+                "qualquer não-200 indica que alguma fase quebrou compatibilidade para trás"
+              ],
+              [
+                "2 · A fila de bloqueio, observada",
+                "consulta em `pg_locks` com transação de relatório aberta de propósito",
+                "o `ALTER` aparece como bloqueado pela transação",
+                "se nenhuma linha aparece, a transação de teste não estava realmente segurando o lock certo"
+              ],
+              [
+                "3 · lock_timeout aborta em vez de esperar",
+                "`ALTER` com `lock_timeout=3s` e a mesma transação aberta",
+                "falha em ~3s com SQLSTATE 55P03",
+                "se o comando ficar pendurado além de 3s, o parâmetro não foi aplicado na sessão"
+              ],
+              [
+                "4 · Índice CONCURRENTLY íntegro",
+                "`SELECT ... FROM pg_index WHERE NOT indisvalid`",
+                "zero linhas",
+                "uma linha é índice que falhou no meio — DROP e repita o CONCURRENTLY"
+              ],
+              [
+                "5 · O lote certo protege a réplica",
+                "comparar pico de `ReplicaLag` entre lote de 50 mil e de 5 mil",
+                "pico visivelmente menor com lote pequeno e pausa (medido: 41s vs. 2s)",
+                "se o pico não cai, o gargalo pode ser outro — CPU da réplica, não o tamanho do lote"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três acontecem de verdade, e a primeira é a que mais equipe reproduz sem querer, porque o sintoma demora a aparecer."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Escrita dupla esquecida",
+                "implante a v2 escrevendo só em `total_centavos`, sem tocar `valor_total`",
+                "o backfill parece convergir e depois diverge de novo, sem padrão aparente",
+                "a métrica de divergência oscila em vez de cair a zero e ficar",
+                "corrigir a v2 para escrever nas duas colunas; reiniciar o backfill do cursor"
+              ],
+              [
+                "lock_timeout ausente na sessão da migração",
+                "rode a fase 1 sem `SET LOCAL lock_timeout`, com uma transação de relatório aberta",
+                "a migration fica pendurada, e minutos depois o time inteiro vê 500 no cliente",
+                "`pg_locks` mostra o ALTER esperando, e a lista de sessões bloqueadas atrás dele cresce",
+                "aplicar o timeout no parameter group e por sessão; nunca deixar como opcional"
+              ],
+              [
+                "Contração antes da hora",
+                "rode a Fase 3 logo após o backfill zerar uma única vez, sem confirmar a v1 fora de cena",
+                "a v1 (ou o disjuntor de rollback do L03) responde 500 ao tentar ler a coluna apagada",
+                "log da task antiga citando `column \"valor_total\" does not exist`",
+                "restaurar via PITR (L10); a partir daqui não há migration reversa que resolva"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A falha que a fila de bloqueio produz é indisponibilidade total, não parcial",
+            "content": "Diferente de uma task individual falhando, uma transação segurando o lock que o `ALTER` espera derruba a leitura de TODA a aplicação ao mesmo tempo — inclusive das tasks que não têm nada a ver com o deploy. Numa loja com movimento real, cada minuto de fila é pedido não fechado. É por isso que `lock_timeout` não é uma otimização opcional neste módulo: é a diferença entre um incidente de segundos, visível e diagnosticável, e um de minutos que parece aleatório."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Uma tabela `pedidos` recebe `ALTER TABLE pedidos ADD COLUMN total_centavos bigint;` — sem valor padrão, e isolado o comando executa em cerca de 5 ms. Em produção, essa mesma migration deixou a aplicação respondendo 500 por quatro minutos. Qual é a explicação mais provável?",
+        "options": [
+          "O `CREATE INDEX CONCURRENTLY` que acompanhava a coluna nova bloqueou as escritas por causa das duas varreduras",
+          "Uma transação de relatório já aberta segurava um lock que conflitava com o `ACCESS EXCLUSIVE` do `ALTER`, e todo `SELECT` novo entrou na fila atrás dele",
+          "O `ADD COLUMN` sem padrão sempre reescreve a tabela inteira, e a reescrita levou os quatro minutos",
+          "O ALB removeu o alvo da rotação porque o health check falhou durante o DDL"
+        ],
+        "correctIndex": 1,
+        "explanation": "A causa é a fila de bloqueio, não a duração do comando. `ADD COLUMN` sem `DEFAULT` volátil é catálogo puro — não reescreve a tabela, e o lock `ACCESS EXCLUSIVE` que ele pede dura o tempo do comando em si. O que consumiu quatro minutos foi a espera: uma transação de relatório aberta segurava um lock conflitante, o `ALTER` ficou na fila esperando, e como o PostgreSQL não deixa um pedido compatível furar a fila na frente de um pedido incompatível já esperando, todo `SELECT` novo — mesmo sem conflito com a transação original — também esperou.\n\nA primeira alternativa erra o mecanismo: reescrita de tabela só acontece com `DEFAULT` volátil, coluna gerada armazenada ou mudança de tipo incompatível — nenhum dos quais está no enunciado, que já diz \"sem valor padrão\". A terceira confunde a camada: o ALB e o grupo de destino do L03 não têm visibilidade nenhuma sobre lock de banco, e um health check de aplicação não falha por causa de um `ALTER` pendente no PostgreSQL. A quarta inverte a causa: o enunciado não menciona índice nenhum, e mesmo que houvesse um, `CONCURRENTLY` foi desenhado para NÃO bloquear escrita — é o índice padrão, sem `CONCURRENTLY`, que bloquearia."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o que muda quando o schema também tem pipeline"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A migração ganha um caminho próprio de execução, e isso desloca o risco: a superfície deixa de ser só \"quem pode subir código\" e passa a incluir \"quem pode alterar o formato dos dados de todo mundo\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Papel da task de migração com privilégio amplo demais no banco",
+                "média",
+                "alto",
+                "papel do PostgreSQL específico para migração, sem `DROP DATABASE` nem superusuário",
+                "auditoria de `GRANT`/`REVOKE` e uso real do papel",
+                "revogar e recriar o papel com o mínimo medido"
+              ],
+              [
+                "Credencial da migração compartilhada com a da API",
+                "baixa",
+                "alto",
+                "secret dedicado (`banco_migracao`), nunca reaproveitar o `ConnectionStrings__Padrao` do L03",
+                "CloudTrail: dois ARNs de secret distintos, cada um usado só pelo papel esperado",
+                "rotacionar os dois secrets separadamente"
+              ],
+              [
+                "Fila de bloqueio derruba a leitura para todos os clientes ao mesmo tempo",
+                "média",
+                "alto",
+                "`lock_timeout` como padrão da instância, nunca opcional por sessão",
+                "alarme na métrica customizada de sessões bloqueadas, mais `log_lock_waits`",
+                "abortar a sessão ofensora (`pg_terminate_backend`); investigar de onde veio a transação longa"
+              ],
+              [
+                "Coluna antiga apagada com dado não migrado",
+                "baixa, se a porta de avanço existir",
+                "alto e irreversível",
+                "fase 3 exige divergência zero medida duas vezes, e v1 fora do plano de rollback",
+                "contagem de divergência antes de cada fase, publicada como métrica",
+                "restaurar via PITR (L10) para o ponto antes do DROP"
+              ],
+              [
+                "Task de migração disparada fora do pipeline",
+                "baixa",
+                "médio",
+                "orquestração via `implantar-fases.sh`, nunca `psql` interativo direto em produção",
+                "CloudTrail em `RunTask` para a task definition de migração, fora da execução esperada",
+                "interromper a task; nenhuma fase seguinte avança sem a anterior confirmada"
+              ],
+              [
+                "Segredo do banco vazando em log da aplicação",
+                "baixa",
+                "alto",
+                "connection string por Secrets Manager, nunca logada; log estruturado sem parâmetro cru",
+                "busca por padrão de credencial no grupo de logs de migração",
+                "rotacionar o secret e corrigir o ponto de log"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um painel de migração tem uma função estreita, e diferente da do L03: dizer se é seguro AVANÇAR para a próxima fase — não só se o deploy está saudável."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "Existe sessão esperando bloqueio agora?",
+                "métrica customizada `FFV/Migracao` a partir de `pg_locks`",
+                "fila se formando antes de virar incidente visível",
+                "> 0 sustentado por mais que o lock_timeout"
+              ],
+              [
+                "A réplica está acompanhando o backfill?",
+                "`ReplicaLag` (CloudWatch, RDS)",
+                "lote grande demais para o volume de WAL gerado",
+                "> 10 s"
+              ],
+              [
+                "A divergência entre as colunas está caindo?",
+                "contagem customizada de linhas divergentes",
+                "convergência real do backfill, não estimativa",
+                "deve tender a zero; estagnado por 30 min é alerta"
+              ],
+              [
+                "A fase atual do pipeline avançou?",
+                "log do orquestrador / estado da execução",
+                "fase presa esperando uma porta que não abre",
+                "> 15 min numa fase é alerta"
+              ],
+              [
+                "O cliente viu erro durante alguma implantação?",
+                "`HTTPCode_Target_5XX_Count` (herdado do L03)",
+                "versão nova ou schema incompatível",
+                "qualquer valor > 0 durante uma fase"
+              ],
+              [
+                "A task de migração terminou com sucesso?",
+                "exit code da task ECS avulsa",
+                "falha silenciosa de DDL que o `wait` sozinho não captura",
+                "exit code != 0"
+              ],
+              [
+                "Alguém rodou DDL fora do pipeline?",
+                "CloudTrail em `RunTask` fora da lista esperada",
+                "mudança de schema não auditada",
+                "qualquer identidade fora da esperada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A métrica que só existe porque alguém a publicou",
+            "content": "Diferente do `ReplicaLag`, não existe métrica nativa do CloudWatch para \"sessões esperando bloqueio\" — Performance Insights tem o dado, mas via consulta própria, não como dimensão de alarme padrão. A métrica customizada em `FFV/Migracao` existe porque o pipeline a publica a cada fase; sem essa publicação, a única forma de saber é abrir o `psql` e perguntar, o que ninguém faz durante um incidente às 3 da manhã."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão de linhas"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece com a migração",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 linhas",
+                "expandir, backfill e contrair terminam em segundos",
+                "nada; até migration única destrutiva passaria despercebida",
+                "nada"
+              ],
+              [
+                "10 mil linhas",
+                "backfill em 2 a 3 lotes; atraso de réplica desprezível",
+                "nada ainda, mas é onde a disciplina de lotes começa a valer a pena",
+                "manter o padrão de lotes mesmo sem necessidade real, para não reaprender sob pressão"
+              ],
+              [
+                "1 milhão de linhas",
+                "backfill em ~200 lotes; dezenas de minutos de execução total",
+                "o atraso de réplica passa a ser mensurável, não mais teórico",
+                "monitorar `ReplicaLag` durante toda a execução, não só no fim"
+              ],
+              [
+                "2,1 milhões de linhas (o caso da Cadência)",
+                "~430 lotes; a execução compete com o horário comercial",
+                "a janela de execução do backfill precisa ser escolhida, mesmo sem exigir parada",
+                "rodar fora do pico por escolha operacional, com o teto de atraso como guarda-corpo"
+              ],
+              [
+                "Pico de tráfego durante o backfill",
+                "escrita real e backfill competem pelo mesmo WAL",
+                "o atraso de réplica sobe mais rápido que o esperado pelo volume do lote sozinho",
+                "pausar o backfill automaticamente quando o alarme de `ReplicaLag` disparar"
+              ],
+              [
+                "Falha de AZ durante uma fase",
+                "a réplica pode ser promovida a primária no meio do backfill",
+                "a conexão do worker de backfill cai, e o cursor precisa sobreviver ao reinício",
+                "cursor persistido fora da memória do processo; o worker retoma do último lote confirmado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O que não muda com a escala: a mecânica do lock",
+            "content": "Uma tabela de 10 linhas e uma de 1 milhão pedem o MESMO modo de lock para o mesmo comando — a diferença de escala está em quanto tempo esse lock fica retido e em quantos lotes o backfill precisa. O gerenciador de locks do PostgreSQL não tem um modo \"cauteloso\" para tabela grande; a defesa continua sendo `lock_timeout`, do mesmo jeito, em qualquer volume."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "É barato em recurso novo — quase tudo aqui é orquestração e disciplina, não infraestrutura adicional. O custo real que ele evita não aparece na fatura da AWS."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "migration mensal, tabela pequena",
+                "minutos de Fargate para a task de migração",
+                "desprezível",
+                "nenhuma; otimizar aqui é gastar atenção onde não há dinheiro"
+              ],
+              [
+                "Produção pequena",
+                "migration quinzenal, tabela de centenas de milhares de linhas",
+                "minutos de Fargate por fase, mais o backfill rodando por dezenas de minutos",
+                "baixa e previsível",
+                "nenhuma ação especial — o padrão de lotes já é eficiente"
+              ],
+              [
+                "Alta escala",
+                "migration em tabela de dezenas de milhões de linhas",
+                "o backfill pode levar horas, e cada hora é tempo de engenharia acompanhando",
+                "o tempo de execução vira o item que mais pesa, não o Fargate",
+                "considerar ferramenta de reescrita online (pg_squeeze/pg_repack) — ver evolução em níveis"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Fargate da task de migração",
+                "vCPU-segundo e GB-segundo",
+                "minutos por fase; desprezível na maioria dos casos"
+              ],
+              [
+                "Fargate do backfill",
+                "vCPU-segundo e GB-segundo",
+                "proporcional ao número de lotes, não ao total de linhas isoladamente"
+              ],
+              [
+                "Armazenamento inflado (bloat)",
+                "GB-mês do volume do RDS",
+                "lote grande sem pausa cria mais versões mortas do que o autovacuum recicla a tempo"
+              ],
+              [
+                "CloudWatch Logs da migração",
+                "GB ingerido e retido",
+                "log de cada fase; retenção curta em ambiente de teste"
+              ],
+              [
+                "Métrica customizada e alarmes",
+                "por métrica e por alarme-mês",
+                "valor pequeno e fixo; não é onde se economiza"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O custo que este módulo evita não está em nenhuma linha da AWS",
+            "content": "Quatro minutos de indisponibilidade numa loja com movimento real é pedido não fechado e cliente que não volta na hora. Esse custo não aparece na fatura de infraestrutura — aparece na receita, e é maior do que qualquer economia de Fargate discutida nesta seção."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "migração roteirizada, com porta de avanço medida e prova de convergência",
+                "a confirmação de \"v1 fora de cena\" antes da contração ainda é manual",
+                "checagem automática de qual revisão está ativa antes de liberar a fase 3",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "papel de banco e credencial próprios para a migração, separados da API",
+                "a política do papel de PostgreSQL em si não é revisada automaticamente",
+                "auditoria periódica de `GRANT` com Access Analyzer equivalente (L41)",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "compatibilidade para frente garantida em cada fase; rollback preservado até a contração",
+                "a contração continua irreversível por natureza — nenhuma automação remove esse risco",
+                "ensaiar restauração por PITR (L10) antes de qualquer fase 3 real",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "backfill em lotes dimensionado pelo atraso de réplica medido",
+                "o tamanho do lote é fixo; não se adapta ao tráfego do momento",
+                "lote dinâmico por métrica de `ReplicaLag` em tempo real",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "sem recurso novo além de minutos de Fargate por fase",
+                "tabelas muito maiores tornariam o backfill um custo de tempo de engenharia relevante",
+                "avaliar ferramenta de reescrita online para tabelas acima de dezenas de milhões de linhas",
+                "baixa"
+              ],
+              [
+                "Sustentabilidade",
+                "lotes pequenos reduzem bloat e o trabalho extra do autovacuum",
+                "migração feita errado (lote único) desperdiça I/O e reprocessamento",
+                "o padrão de lotes já cobre; reforçar em revisão de código",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Da migration na partida à reescrita online — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Migration na partida do contêiner (o L01), sem tempos-limite explícitos. Legítimo em ambiente de desenvolvimento, com tabela pequena e uma task só.",
+                "note": "Risco resolvido: nenhum. Novo risco: corrida entre tasks concorrentes e fila de bloqueio sem defesa. Custo: o mais baixo — nenhuma peça extra."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Task de migração fora do arranque, `lock_timeout`/`statement_timeout` como padrão, expand/contract em três a quatro fases, backfill em lotes.",
+                "note": "Risco resolvido: fila de bloqueio derrubando a leitura, e migration destrutiva quebrando a versão velha. Novo risco: a contração é irreversível, e a disciplina de ordem entre fases depende de processo, não só de ferramenta. Custo: minutos de Fargate por fase."
+              },
+              {
+                "label": "Nível 3 — Produção com pipeline",
+                "instruction": "As fases entram no mesmo pipeline com credencial federada (L54), com porta de avanço automatizada e aprovação humana só na contração.",
+                "note": "Risco resolvido: fase disparada fora do fluxo esperado. Novo risco: um bug no pipeline pode automatizar a contração cedo demais se a porta de avanço for mal calibrada. Custo: minutos de build por fase."
+              },
+              {
+                "label": "Nível 4 — Reescrita online para tabelas grandes",
+                "instruction": "Quando a mudança exige reescrever a tabela inteira (não só adicionar coluna), ferramentas como `pg_squeeze`/`pg_repack` ou replicação lógica evitam o `ACCESS EXCLUSIVE` prolongado que um `ALTER` de reescrita pediria.",
+                "note": "Risco resolvido: janela de bloqueio proporcional ao tamanho da tabela em mudanças de tipo que não podem evitar reescrita. Novo risco: ferramenta externa com seu próprio modelo de falha, que precisa ser testado tão bem quanto o expand/contract. Custo: espaço em disco para a tabela espelho durante a reescrita."
+              },
+              {
+                "label": "Nível 5 — Plataforma e governança",
+                "instruction": "Revisão obrigatória de migration em CI: um linter recusa `DROP COLUMN` e `ALTER ... NOT NULL` direto sem a marcação de fase, e a contração exige aprovação de duas pessoas.",
+                "note": "Risco resolvido: erro humano de sequência (contrair antes da hora) chegando a produção. Novo risco: o processo de aprovação vira gargalo se não for rápido. Custo: tempo de revisão, não infraestrutura."
+              },
+              {
+                "label": "Nível 6 — Dados sobre as próprias migrações",
+                "instruction": "O histórico de fases, tempos de fila observados e picos de `ReplicaLag` por migração vira dado consultável, para prever o tamanho de lote e a janela mais segura da PRÓXIMA migração parecida.",
+                "note": "Risco resolvido: cada migração recalibrando lote e janela do zero, por tentativa. Novo risco: recomendação baseada em histórico curto erra em tabela com padrão de acesso diferente — precisa de checagem humana antes de aplicar. Custo: baixo; o dado já existe no CloudWatch e nos logs do pipeline."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Reescrita online (nível 4) só faz sentido quando o padrão do nível 2 — fases pequenas, aditivas, com porta de avanço medida — já é hábito da equipe. Quem tenta a ferramenta externa sem ter internalizado por que a ordem entre fases importa monta a mecânica sem entender quando ela é necessária, e usa reescrita online para o caso simples de `ADD COLUMN` que nunca precisou dela."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O mecanismo central deste laboratório — qual lock cada forma de `ALTER TABLE` pede, e como o gerenciador de locks do PostgreSQL ordena a fila — é comportamento determinístico e documentado, não um problema de previsão. IA não decide se um `ADD COLUMN` reescreve a tabela; a resposta está fixa na documentação, e é isso que este módulo ensina a ler."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde IA poderia agregar, e por que este laboratório não a usa",
+            "content": "Uma tarefa adjacente e real é revisar o DIFF de uma migration antes do merge, sinalizando operações potencialmente destrutivas — `DROP COLUMN`, `ALTER ... SET NOT NULL` sem `NOT VALID`, renomeação sem as quatro fases — antes que cheguem a produção. Isso é um classificador de padrão sobre texto, com dado de entrada claro (o diff) e um fallback óbvio (revisão humana, sempre, antes de aplicar em produção). Nenhum laboratório deste catálogo cobre isso ainda; forçar a peça aqui, num módulo cujo problema real é mecânica de lock, seria o hype que esta escola existe para não vender."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Antipadrão",
+              "Por que alguém faz",
+              "Sintoma em produção",
+              "Forma correta"
+            ],
+            "rows": [
+              [
+                "Migration na partida do contêiner (o L01)",
+                "é uma linha, e funciona em desenvolvimento com uma task e tabela pequena",
+                "corrida entre tasks concorrentes do rolling update, travando a tabela",
+                "task de migração fora do arranque, uma fase por vez (fases 1 e 3 deste módulo)"
+              ],
+              [
+                "`UPDATE` único na tabela inteira para o backfill",
+                "parece mais simples do que escrever um laço de lotes",
+                "bloat proporcional ao total de linhas, WAL disparado e réplica atrasando minutos",
+                "lotes de milhares de linhas com pausa, monitorando `ReplicaLag`"
+              ],
+              [
+                "Coluna `NOT NULL DEFAULT` direto na criação",
+                "\"já economiza uma etapa depois\" — parece produtivo",
+                "ACCESS EXCLUSIVE com varredura ou reescrita da tabela inteira, travando escrita",
+                "coluna anulável na fase 1; `CHECK NOT VALID` + `VALIDATE CONSTRAINT` na fase 3"
+              ],
+              [
+                "Apagar a coluna antiga assim que o backfill \"parece\" ter terminado",
+                "pressa de limpar um schema que ficou temporariamente feio",
+                "500 na versão que ainda lê a coluna, incluindo o alvo de rollback do L03",
+                "medir divergência zero duas vezes, e confirmar a v1 fora do plano de rollback antes"
+              ],
+              [
+                "`CREATE INDEX` sem `CONCURRENTLY` em tabela de produção",
+                "é a forma \"padrão\" que todo tutorial mostra primeiro",
+                "escrita bloqueada pelo tempo de construção do índice inteiro",
+                "`CONCURRENTLY`, fora de transação, aceitando o custo de duas varreduras"
+              ],
+              [
+                "Ignorar `lock_timeout` porque \"nunca deu problema antes\"",
+                "ausência de incidente prévio é lida como ausência de risco",
+                "incidente de fila de bloqueio descoberto só quando o cliente liga",
+                "tempos-limite como padrão da instância, não como configuração ad hoc"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Log ou métrica",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Pipeline trava na fase 1, o `ALTER` nunca conclui",
+                "transação longa (relatório, sessão de `psql` esquecida) segurando um lock conflitante",
+                "`pg_locks` junto com `pg_stat_activity`, pelo pid bloqueador",
+                "alarme customizado de sessões bloqueadas",
+                "encerrar a transação ofensora, ou deixar o `lock_timeout` abortar a migration e repetir"
+              ],
+              [
+                "500 na v1 durante ou depois da fase 3",
+                "coluna antiga apagada com a v1 ainda no ar ou como destino de rollback",
+                "`describe-services` pela revisão ativa; log da v1 citando a coluna ausente",
+                "`HTTPCode_Target_5XX_Count` do alvo antigo",
+                "restaurar via PITR (L10) — não há migration reversa que traga o dado de volta"
+              ],
+              [
+                "Backfill nunca zera a divergência",
+                "a v2 não está escrevendo nos dois lugares (escrita dupla ausente)",
+                "revisar o código de escrita da v2; a métrica de divergência oscila em vez de cair",
+                "métrica de divergência plana ou instável ao longo do tempo",
+                "corrigir a escrita dupla; reiniciar o backfill a partir do cursor salvo"
+              ],
+              [
+                "`ReplicaLag` dispara durante o backfill",
+                "lote grande demais para o volume de WAL que a réplica absorve por segundo",
+                "comparar o pico de `ReplicaLag` com o tamanho do lote em uso",
+                "`ReplicaLag` (CloudWatch, RDS)",
+                "reduzir o tamanho do lote e aumentar a pausa entre eles"
+              ],
+              [
+                "Índice novo não é usado mesmo depois de `CREATE INDEX CONCURRENTLY`",
+                "o comando falhou no meio e deixou um índice `INVALID`",
+                "`SELECT ... FROM pg_index WHERE NOT indisvalid`",
+                "log da migration task com erro de deadlock ou violação de unicidade",
+                "`DROP INDEX` do índice inválido e repetir o `CONCURRENTLY`"
+              ],
+              [
+                "CI acusa \"pending model changes\" depois da fase 1",
+                "o modelo do EF Core (Fluent API) não foi atualizado junto com a migration",
+                "`dotnet ef migrations has-pending-model-changes`",
+                "falha do passo de build/teste no pipeline",
+                "atualizar o modelo na MESMA migration, nunca numa posterior"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "Não reproduza a fila de bloqueio direto em produção",
+            "content": "As falhas desta seção e da seção anterior são seguras de reproduzir num ambiente de teste com volume de dados equivalente. Testar `lock_timeout` segurando um lock de propósito em produção é o mesmo incidente que o módulo inteiro ensina a evitar — a diferença entre ensaio e incidente real é só a intenção de quem abriu a transação."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "#!/usr/bin/env bash\n# limpar.sh — ordem exata; o que o destroy NAO leva está na tabela ao lado\nset -euo pipefail\nPROJETO=\"${PROJETO:?defina PROJETO}\"\n\n# 1. Nenhuma task avulsa deve estar rodando (migração ou backfill).\naws ecs list-tasks --cluster \"$PROJETO\" --family \"${PROJETO}-migracao\" --query 'taskArns' --output text\naws ecs list-tasks --cluster \"$PROJETO\" --family \"${PROJETO}-backfill\" --query 'taskArns' --output text\n\n# 2. O parameter group só pode ser removido depois da instância RDS.\nterraform destroy -target=aws_db_parameter_group.postgres -target=aws_db_instance.principal \\\n  -target=aws_db_instance.replica 2>/dev/null || true\n\n# 3. O restante do Terraform, na ordem inversa de dependência.\nterraform destroy -auto-approve\n\n# 4. O que sobrevive ao destroy e cobra parado — confira manualmente.\naws logs describe-log-groups --log-group-name-prefix \"/ecs/${PROJETO}-migracao\" \\\n  --query 'logGroups[].logGroupName' --output text\n"
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Recurso",
+              "O `destroy` remove?",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Task de migração / backfill em execução",
+                "não — precisa estar parada antes",
+                "confirme com `list-tasks` antes de destruir a infraestrutura de rede sob ela"
+              ],
+              [
+                "Parameter group do RDS",
+                "só se nenhuma instância o estiver usando",
+                "destrua a instância e a réplica antes, ou o Terraform falha com dependência pendente"
+              ],
+              [
+                "Log group da migração",
+                "sim, mas a retenção configurada pode manter dados por dias",
+                "confira `describe-log-groups` se a política de retenção não estiver curta em teste"
+              ],
+              [
+                "Snapshot ou backup usado num ensaio de PITR",
+                "não",
+                "snapshot manual do RDS sobrevive ao `destroy` e continua sendo cobrado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que o `destroy` não desfaz de jeito nenhum",
+            "content": "Se você chegou a rodar a fase 3 (contração) num ambiente de ensaio, os dados da coluna antiga já foram apagados antes de qualquer `terraform destroy`. Limpar a infraestrutura não devolve esse dado — só um `pg_dump` anterior ou uma restauração por PITR (L10) devolveriam, e nenhum dos dois é automático."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Motivo"
+            ],
+            "rows": [
+              [
+                "Migration destrutiva quebra a versão velha durante o rollout do L03",
+                "expand/contract em fases",
+                "o schema serve as duas versões ao mesmo tempo, em vez de exigir que concordem"
+              ],
+              [
+                "`ALTER TABLE` pode esperar indefinidamente por um lock",
+                "`lock_timeout` como padrão da instância",
+                "troca espera indefinida por falha rápida e repetível"
+              ],
+              [
+                "`CREATE INDEX` padrão bloqueia escrita durante a construção",
+                "`CREATE INDEX CONCURRENTLY`",
+                "não bloqueia escrita, ao custo de duas varreduras e de rodar fora de transação"
+              ],
+              [
+                "`UPDATE` na tabela toda gera bloat e atrasa a réplica",
+                "backfill em lotes, com pausa e teto de atraso",
+                "mantém o WAL e o atraso da réplica dentro do tolerável"
+              ],
+              [
+                "Apagar a coluna antiga cedo demais quebra quem ainda a lê",
+                "porta de avanço com divergência zero medida duas vezes",
+                "só contrai depois de provar que ninguém depende mais do estado antigo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Proteção"
+            ],
+            "rows": [
+              [
+                "Transação longa segurando o lock que o `ALTER` espera",
+                "`lock_timeout` aborta em vez de deixar a fila crescer"
+              ],
+              [
+                "`CREATE INDEX CONCURRENTLY` interrompido no meio",
+                "checagem de `pg_index.indisvalid` antes de confiar no índice"
+              ],
+              [
+                "Escrita dupla esquecida na v2",
+                "métrica de divergência acusa antes de a contração ser tentada"
+              ],
+              [
+                "Contração antes da hora",
+                "confirmação manual de que a v1 não é mais alvo de rollback"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Fase 1: expandir — coluna nova anulável e índice CONCURRENTLY, sem tocar código.",
+              "Implantação 2: a v2 sobe escrevendo nos dois lugares, sem parar a v1 (rolling do L03).",
+              "Backfill: lotes de 5 mil linhas, com pausa, respeitando o atraso da réplica do L07.",
+              "Porta de avanço: divergência zero medida duas vezes, com 5 minutos de intervalo.",
+              "Implantação 3: a v3 para de escrever na coluna antiga.",
+              "Confirmação: nenhuma task da v1 no ar, e ela não é mais alvo do disjuntor de rollback.",
+              "Fase 3: contrair — `CHECK NOT VALID` + `VALIDATE CONSTRAINT`, depois `DROP COLUMN`.",
+              "Prova: laço de requisições sem erro do início ao fim das quatro implantações."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que uma migration de 5 ms consegue derrubar a produção por minutos?",
+            "answer": "Porque o tempo que importa não é o do comando, é o da fila: o `ALTER TABLE` pede um lock `ACCESS EXCLUSIVE`, e se qualquer transação já aberta segura um lock conflitante — mesmo algo tão fraco quanto o `ACCESS SHARE` de um `SELECT` — o `ALTER` espera até ela liberar. Enquanto ele espera, o PostgreSQL não deixa um `SELECT` novo furar a fila na frente dele, então todo mundo que chega depois também espera. O comando em si nunca foi o problema; a transação aberta há minutos, sim."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "`ADD COLUMN` sempre trava a tabela inteira no PostgreSQL?",
+            "answer": "Não — depende do valor padrão da coluna. Sem `DEFAULT`, ou com um `DEFAULT` constante, o comando só grava metadado no catálogo e não reescreve a tabela, então o lock `ACCESS EXCLUSIVE` dura milissegundos. Com um `DEFAULT` volátil — algo como `clock_timestamp()` — o PostgreSQL reescreve a tabela inteira e seus índices, e o mesmo lock dura proporcionalmente ao tamanho dela. A diferença entre os dois casos é o que separa uma migration segura de uma que trava produção."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Preciso de `CREATE INDEX CONCURRENTLY` mesmo numa tabela pequena?",
+            "answer": "Tecnicamente não, mas o hábito compensa: `CONCURRENTLY` custa duas varreduras da tabela em vez de uma e não pode rodar dentro de uma transação — dois preços pequenos em tabela pequena. O índice padrão bloqueia toda escrita enquanto constrói, e numa tabela pequena isso passa despercebido só porque termina rápido. Adotar `CONCURRENTLY` como padrão evita ter de lembrar de trocar quando a tabela crescer."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Por que renomear uma coluna exige quatro implantações e não uma?",
+            "answer": "Porque nenhum estado intermediário pode quebrar a versão que está no ar, e renomear não tem meio-termo natural como `ADD COLUMN` tem. A sequência precisa criar a coluna nova (implantação de schema), fazer o código escrever nas duas ao mesmo tempo (implantação de código), parar de escrever na antiga só depois de o backfill convergir (outra implantação de código), e só então apagar a antiga (implantação de schema, irreversível). Pular qualquer uma dessas quatro faz alguma versão em produção ler ou escrever um dado que não existe mais do jeito que ela espera."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "`lock_timeout` e `statement_timeout` são a mesma coisa?",
+            "answer": "Não — cada um aborta um tipo diferente de espera. `statement_timeout` limita o tempo total de EXECUÇÃO de um comando, contando a partir do momento em que ele começa a rodar de fato. `lock_timeout` limita só o tempo de ESPERA por um lock, antes mesmo de o comando começar a executar. Um `ALTER TABLE` preso na fila de bloqueio é `lock_timeout` que resolve; uma consulta que roda de verdade e simplesmente demora demais é `statement_timeout`."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Posso rodar o backfill inteiro de uma vez, já que ele roda fora do horário de pico?",
+            "answer": "Não é recomendado, mesmo fora do pico: um `UPDATE` único na tabela toda ainda gera bloat proporcional ao total de linhas e ainda escreve todo o WAL de uma vez, o que alonga o atraso da réplica de leitura independentemente de haver cliente olhando o sistema naquele momento. Lotes com pausa continuam sendo mais seguros porque dão tempo ao autovacuum de reciclar espaço e à réplica de absorver o WAL em pedaços, e porque o processo fica interrompível sem perder o progresso já feito."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "O EF Core não resolve migration sem downtime sozinho?",
+            "answer": "Não — a ferramenta aplica o SQL que você escreve, mas não decide a ORDEM entre implantações de código e de schema, que é o problema real deste laboratório. Ela ajuda em pontos específicos, como permitir SQL cru fora de transação via `suppressTransaction: true`, essencial para `CREATE INDEX CONCURRENTLY`. Mas decidir que uma renomeação precisa de quatro implantações, ou que a contração espera divergência zero medida duas vezes, é decisão de arquitetura que nenhuma migration automática toma por você."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "O que acontece se eu apagar a coluna antiga antes de terminar o backfill?",
+            "answer": "Qualquer linha ainda não migrada perde o valor definitivamente, porque `DROP COLUMN` não é reversível por migration — o dado da coluna simplesmente deixa de existir. Se alguma versão da aplicação ainda em produção ler ou escrever essa coluna, ela passa a responder erro para todo cliente que acionar aquele caminho, porque a coluna que o código espera não está mais lá. A única recuperação possível nesse ponto é restaurar o banco a partir de um backup ou de um ponto no tempo anterior ao `DROP`, com o tempo de indisponibilidade que essa restauração exigir."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "No caso da Cadência, por que apagar a coluna `valor_total` (a fase de contração) não pode acontecer logo depois de a v2 começar a escrever em `total_centavos`?",
+            "options": [
+              "Porque o EF Core exige um intervalo mínimo de 24 horas entre migrations",
+              "Porque a v1 — e o alvo de rollback do disjuntor de implantação do L03 — ainda lê e escreve `valor_total`, e apagá-la quebra qualquer instância que ainda dependa dela",
+              "Porque o `CREATE INDEX CONCURRENTLY` da fase 1 ainda não terminou de validar",
+              "Porque o RDS bloqueia `DROP COLUMN` em tabelas que têm réplica de leitura ativa"
+            ],
+            "correctIndex": 1,
+            "explanation": "A restrição é de compatibilidade, não de ferramenta ou de infraestrutura. Enquanto a v1 estiver no ar — e, mais sutil, enquanto ela continuar sendo o alvo para o qual o disjuntor de implantação do L03 reverteria um rollout ruim — ela lê e escreve `valor_total` normalmente. Apagar essa coluna faz a v1 (ou o rollback automático que a traria de volta) responder erro na primeira consulta que tocar o campo removido. É exatamente por isso que a sequência inclui uma implantação intermediária: a v3 para de escrever na coluna antiga, e só DEPOIS disso, com a v1 confirmadamente fora do plano de rollback, a contração é segura.\n\nA primeira alternativa inventa uma restrição que não existe: o EF Core não impõe intervalo de tempo nenhum entre migrations, quem decide o espaçamento é a operação que a orquestra. A terceira confunde fases: a validação do índice da fase 1 é independente da fase de contração, e uma não bloqueia tecnicamente a outra — a ordem aqui é de disciplina de projeto, não de trava do banco. A quarta atribui ao RDS um comportamento que ele não tem: réplica de leitura não impede `DROP COLUMN` na primária; o motivo de esperar é de compatibilidade de aplicação, não de replicação."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Por que a migration da fase 1 precisa rodar `CREATE INDEX CONCURRENTLY` como SQL cru com `suppressTransaction: true`, em vez de usar `migrationBuilder.CreateIndex(...)` normal do EF Core?",
+            "options": [
+              "Porque o EF Core não suporta índices em colunas anuláveis",
+              "Porque `CONCURRENTLY` exige que a tabela esteja vazia no momento da criação do índice",
+              "Porque o Npgsql não reconhece a palavra-chave `CONCURRENTLY` na string de conexão padrão",
+              "Porque `CREATE INDEX CONCURRENTLY` não pode rodar dentro de um bloco de transação, e as migrations do EF Core são executadas dentro de uma transação por padrão"
+            ],
+            "correctIndex": 3,
+            "explanation": "É uma incompatibilidade estrutural entre duas regras, não uma limitação do EF Core sobre colunas. A documentação do PostgreSQL é explícita: um `CREATE INDEX CONCURRENTLY` não pode ser executado dentro de um bloco de transação. E o EF Core, por padrão, envolve toda a migration inteira num único `BEGIN`/`COMMIT`. As duas regras colidem, e `suppressTransaction: true` no `Sql()` é o que tira ESSA operação específica da transação da migration, sem tirar a migration inteira — as demais operações da mesma classe continuam protegidas por transação normalmente.\n\nA primeira alternativa inventa uma limitação que não existe: índice em coluna anulável é uso comum e suportado, inclusive com `WHERE total_centavos IS NOT NULL` como neste módulo. A terceira confunde `CONCURRENTLY` com uma restrição de estado da tabela — na verdade ele foi desenhado para o caso oposto, tabela em uso normal, e por isso paga o preço de duas varreduras em vez de uma. A quarta erra a camada do problema: a restrição é do PostgreSQL sobre blocos de transação, e nada tem a ver com o driver Npgsql reconhecer ou não uma palavra-chave — o Npgsql simplesmente envia o SQL que você escreveu."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L03 (rollout sem parar, disjuntor de implantação) e L07 (réplica de leitura, pool) no ar; EF Core; SQL básico de PostgreSQL"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "níveis de bloqueio do `ALTER TABLE`; a fila de bloqueio como causa real de indisponibilidade; `lock_timeout`/`statement_timeout`; `CREATE INDEX CONCURRENTLY` e sua incompatibilidade com transação; as fases de expand/contract e por que a ordem entre elas não é negociável; backfill em lotes limitado pelo atraso de réplica"
+              ],
+              [
+                "Limitação que fica",
+                "a confirmação de que a v1 saiu de cena antes da contração ainda é um passo manual no script; e tabelas muito maiores que a da Cadência exigiriam ferramenta de reescrita online, fora do escopo deste módulo"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L39 — blue/green e canário no ECS. Ele pressupõe schema já compatível para trás entre versões, que é exatamente o que expand/contract garante"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "qualquer laboratório futuro que precise alterar contrato de dados sem parar a aplicação herda o mesmo padrão de três a quatro fases"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "PostgreSQL — ALTER TABLE",
+                "code": true
+              },
+              {
+                "text": " — os níveis de bloqueio por forma do comando e o que exige reescrita da tabela; "
+              },
+              {
+                "text": "PostgreSQL — CREATE INDEX",
+                "code": true
+              },
+              {
+                "text": " — o comportamento de `CONCURRENTLY`, as duas varreduras e o índice `INVALID` em caso de falha; "
+              },
+              {
+                "text": "PostgreSQL — Explicit Locking",
+                "code": true
+              },
+              {
+                "text": " — a matriz de conflito entre modos de lock e a confirmação de que só `ACCESS EXCLUSIVE` bloqueia um `SELECT` simples, além do comportamento de fila que evita que um escritor em espera seja continuamente ultrapassado por leitores compatíveis. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "Os números de tempo citados — 5 ms para o `ADD COLUMN` isolado, quatro minutos de incidente, 41 s contra 2 s de pico de `ReplicaLag` entre tamanhos de lote — são os medidos na aplicação de exemplo, com o hardware e o volume dela, e servem como ordem de grandeza, não como referência. O tamanho de lote e o teto de atraso de réplica devem ser calibrados pela SUA medição: o volume real da sua tabela e a capacidade real da sua réplica, não o valor deste módulo copiado."
+          }
+        }
+      ]
+    }
+  ]
+}

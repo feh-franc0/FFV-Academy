@@ -7,7 +7,11 @@ import { BrainCircuit, Cloud, Wrench, Bot, ChartBarIncreasing, Target, Newspaper
 import { useGameState } from '@/hooks/useGameState';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { HUBS, LEVELS } from '@/lib/curriculum';
+// Importa os módulos ESTREITOS, não o barrel: `@/lib/curriculum` reexporta as
+// consultas, que dependem de CURRICULUM — e este componente vive no layout
+// raiz, então arrastaria os 224 KB do currículo para as 95 rotas.
+import { HUBS } from '@/lib/curriculum/hubs';
+import { LEVELS } from '@/lib/curriculum/levels';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { AuthBadge } from '@/components/auth/AuthBadge';
 import { CommandPaletteTrigger } from '@/components/CommandPalette';
@@ -127,7 +131,17 @@ export function GameHUD() {
         {/* Daily goal pill */}
         {state && state.dailyGoal > 0 && (
           <Tooltip>
-            <TooltipTrigger>
+            {/*
+              `nested-interactive`: `TooltipTrigger` renderiza um <button>, e havia
+              um <a> dentro dele — controle interativo dentro de controle
+              interativo. Leitor de tela anuncia um e some com o outro, e a
+              navegação por teclado fica ambígua. Era violação séria em TODA página.
+
+              `render` faz o gatilho USAR o link em vez de envolvê-lo: um só
+              elemento interativo, com o comportamento de tooltip por cima.
+            */}
+            <TooltipTrigger
+              render={
               <Link
                 href="/revisar"
                 aria-label={`Meta diária: ${todayReviewCount} de ${state.dailyGoal} cards`}
@@ -142,7 +156,8 @@ export function GameHUD() {
               >
                 🎯 {todayReviewCount}/{state.dailyGoal}
               </Link>
-            </TooltipTrigger>
+              }
+            />
             <TooltipContent side="bottom">
               <p>{dailyGoalMet ? '✅ Meta diária atingida!' : `Meta: ${todayReviewCount} de ${state.dailyGoal} cards hoje`}</p>
             </TooltipContent>
@@ -283,6 +298,9 @@ function HUDStats({
             <div className="flex flex-col justify-center" style={{ width: 72 }}>
               <Progress
                 value={levelPct}
+                /* `aria-progressbar-name`: barra de progresso sem nome acessível é
+                   violação séria, e esta aparecia em TODA página do site. */
+                aria-label={`Progresso do nível ${state.level}: ${xpInLevel} de ${xpNeeded} XP`}
                 className="h-1.5"
                 style={{ transition: 'all 0.6s cubic-bezier(0.4,0,0.2,1)' }}
               />
@@ -297,7 +315,12 @@ function HUDStats({
                 {state.xp} XP
               </span>
             </div>
-            <span className="text-xs font-semibold" style={{ color: levelInfo?.color }}>
+            {/* `ffv-acento-texto`: a cor do nível é da paleta dark e, como texto
+                sobre fundo claro, dava contraste 3,07:1 (mínimo 4,5). Ver globals.css. */}
+            <span
+              className="text-xs font-semibold ffv-acento-texto"
+              style={{ '--ffv-acento': levelInfo?.color } as React.CSSProperties}
+            >
               Nv.{state.level}
             </span>
           </div>

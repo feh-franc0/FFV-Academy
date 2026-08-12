@@ -118,3 +118,76 @@ describe('curriculum-api.fetchArticleWithBlocks', () => {
     );
   });
 });
+
+/**
+ * `fetchArticleWithBlocksResult` é o que `/aprenda/[slug]` usa para decidir
+ * 404 real vs "conteúdo indisponível" — a distinção que faltava e derrubava
+ * as 490 páginas de módulo em 404 quando o backend só estava fora do ar.
+ * `not-found` só pode vir do HTTP 404 explícito; qualquer outra falha é
+ * `error`, nunca `not-found`.
+ */
+describe('curriculum-api.fetchArticleWithBlocksResult', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('200 OK → status ok com o artigo', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, status: 200, json: async () => validResponse,
+    } as Response)));
+    const { fetchArticleWithBlocksResult } = await loadModule('http://api.test');
+    const out = await fetchArticleWithBlocksResult('o-que-e-ia');
+    expect(out.status).toBe('ok');
+    if (out.status === 'ok') expect(out.article.slug).toBe('o-que-e-ia');
+  });
+
+  it('404 explícito do backend → status not-found (NUNCA error)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false, status: 404, json: async () => ({}),
+    } as Response)));
+    const { fetchArticleWithBlocksResult } = await loadModule('http://api.test');
+    const out = await fetchArticleWithBlocksResult('nao-existe');
+    expect(out.status).toBe('not-found');
+  });
+
+  it('500 do backend → status error (NUNCA not-found)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false, status: 500, json: async () => ({}),
+    } as Response)));
+    const { fetchArticleWithBlocksResult } = await loadModule('http://api.test');
+    const out = await fetchArticleWithBlocksResult('boom');
+    expect(out.status).toBe('error');
+  });
+
+  it('exceção de rede (backend fora do ar) → status error, não not-found', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ECONNREFUSED'); }));
+    const { fetchArticleWithBlocksResult } = await loadModule('http://api.test');
+    const out = await fetchArticleWithBlocksResult('x');
+    expect(out.status).toBe('error');
+  });
+
+  it('payload inválido (Zod falha) → status error, não not-found', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, status: 200, json: async () => ({ slug: 'x' }),
+    } as Response)));
+    const { fetchArticleWithBlocksResult } = await loadModule('http://api.test');
+    const out = await fetchArticleWithBlocksResult('x');
+    expect(out.status).toBe('error');
+  });
+
+  it('sem NEXT_PUBLIC_API_BASE_URL → status error sem chamar fetch (build/CI)', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { fetchArticleWithBlocksResult } = await loadModule(undefined);
+    const out = await fetchArticleWithBlocksResult('x');
+    expect(out.status).toBe('error');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});

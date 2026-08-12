@@ -1,0 +1,2376 @@
+{
+  "slug": "lab-qualidade-dado-contrato-quarentena",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência é um marketplace de material de construção com 40 lojistas parceiros. O catálogo alimentado por crawler e o job idempotente que o L65 deixou no ar cuidam da tabela produtos — preço, categoria e unidade por loja, atualizada todo dia a partir do sistema de precificação interno, o Precifica. Desde então, qualquer analista descobre o preço vigente de um SKU consultando o Athena, sem perguntar a ninguém."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há três semanas, o time de Precificação migrou o Precifica para um novo módulo de promoções fracionadas — e passou a publicar preco_venda em centavos (4990) em vez de reais (49,90), para representar centavo a centavo numa régua de desconto progressivo. Ninguém avisou o time de dados. O job do L65 fez exatamente o que sempre fez: leu a partição, converteu o tipo com um cast explícito, e gravou em prata. preco_venda continuou sendo um double do início ao fim — o cast nunca teve motivo para falhar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O efeito não apareceu no pipeline. Apareceu no modelo de reposição automática que o time de dados treina toda sexta-feira sobre a tabela prata_produtos, para recomendar quanto cada uma das 40 lojas deveria reabastecer de cada SKU. Para os produtos tocados pela migração, o preço de treino saltou 100 vezes, e o modelo — sem saber que a escala mudou, só que o número mudou — passou a tratar cimento e argamassa como itens cem vezes mais caros do que realmente são, e recomendou reposição próxima de zero para lojas que estavam vendendo normalmente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado — depende do L65 (catálogo e job idempotente) e do tema do L68 (painel de BI sobre o mesmo lake); não pressupõe experiência prévia com SageMaker"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L65 (Glue Catalog, crawler, job idempotente): este módulo assume que prata/produtos/dt= já existe e é atualizada todo dia; o tema do L68 (Redshift para painel de BI) consome a mesma prata_produtos — o contrato que este módulo cria vale para os dois consumidores"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 45 min · implementação 1 h 45 a 2 h 15"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo: avaliação de Data Quality roda dentro do job existente, sem cluster novo — o que mais pesa é a atenção humana para calibrar o ruleset"
+              },
+              {
+                "k": "Serviços",
+                "v": "Glue Data Quality, Glue ETL Job, Glue Data Catalog, EventBridge, SNS, S3, SageMaker (consumidor)"
+              },
+              {
+                "k": "Volume atual",
+                "v": "12.400 pares produto-loja avaliados por dia, distribuídos em 40 lojas e 310 SKUs de material de construção"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "nenhum registro que viole o contrato de preço chega à tabela que o modelo de reposição consome, e quem mudou a unidade sabe em minutos, não em semanas"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "o schema já é conhecido e estável (é o que o L65 garante) — a mudança aqui é de VALOR dentro de um tipo que continua correto, não de tipo"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "um ruleset de contrato de dado avaliado linha a linha, quarentena rastreável por prefixo próprio, e um alerta que chega ao time de Precificação em menos de um minuto — com a prova numérica gravada"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é sobre schema — o L65 já garante que preco_venda é um double estável; aqui o tipo nunca muda, só o VALOR. Não é sobre detectar degradação lenta e estatística de um modelo em produção (isso é drift, e é o L77, que depende deste). E não é sobre escolher entre regra e modelo de ML para decidir reposição — isso é o L71. Este módulo resolve uma coisa: registro que viola um contrato explícito nunca chega à tabela que qualquer consumidor, incluindo um modelo, lê como verdade."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando ou uma consulta na seção de implantação."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "items": [
+              "Explicar por que o crawler e o Data Catalog do L65 não detectam uma mudança de unidade que preserva o tipo da coluna.",
+              "Escrever um ruleset de Glue Data Quality em DQDL com regras de completude, unicidade e faixa de valor por categoria.",
+              "Embutir a avaliação do ruleset dentro do job existente, sem subir um serviço novo.",
+              "Separar, linha a linha, o que passa no contrato do que vai para quarentena — sem rejeitar a partição inteira por causa de uma linha.",
+              "Publicar um evento customizado no EventBridge que identifica o produtor responsável pelo dado ruim, não só \"o job falhou\".",
+              "Rotear esse evento para o time que decidiu a mudança, e não apenas para o time de dados.",
+              "Justificar por que o alerta de contrato violado é um evento diferente do alerta de falha de job que o L65 já criou.",
+              "Provar com número: quantos registros entraram, quantos foram para quarentena, e quanto tempo levou até o alerta chegar."
+            ],
+            "ordered": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Glue Data Quality e DQDL",
+                "MLA-C01, DEA-C01",
+                "ruleset avaliado dentro do próprio job, linha a linha, via EvaluateDataQuality",
+                "a sintaxe das regras — IsComplete, ColumnValues, CustomSql, Uniqueness — e quando cada uma se aplica"
+              ],
+              [
+                "Contrato de dado como prática de MLOps",
+                "MLA-C01",
+                "ruleset versionado, revisado por PR, com dono declarado",
+                "por que \"o crawler já garante isso\" é a suposição que este módulo desmonta — schema não é valor"
+              ],
+              [
+                "Quarentena vs. descarte silencioso",
+                "MLA-C01, DEA-C01",
+                "linha reprovada vai para um prefixo próprio, nunca é apagada nem ignorada",
+                "rastreabilidade de dado reprovado como requisito de auditoria, não luxo"
+              ],
+              [
+                "EventBridge com eventos customizados de aplicação",
+                "DEA-C01, SAA-C03",
+                "o próprio job Spark publica um evento de domínio via put_events, além dos eventos nativos do serviço",
+                "diferença entre evento nativo do serviço (Job State Change) e evento de domínio (contrato violado) — e por que o segundo carrega contexto que o primeiro não tem"
+              ],
+              [
+                "Impacto de dado sem contrato num modelo treinado",
+                "MLA-C01",
+                "preço 100× maior vira feature de treino sem nenhum erro registrado em lugar nenhum",
+                "por que validar VALOR é pré-requisito de qualquer pipeline que alimenta um modelo, não só um pipeline de BI"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não muda uma linha de configuração é intenção, não requisito. A terceira coluna é onde cada um deixou marca no desenho."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Mudança de unidade upstream não pode virar dado silenciosamente errado",
+                "zero registro fora do contrato chega à tabela que qualquer consumidor lê",
+                "obriga um ruleset de Data Quality avaliado DENTRO do job, linha a linha — não uma checagem depois que o dado já circulou"
+              ],
+              [
+                "Registro ruim não pode simplesmente desaparecer",
+                "100% dos registros reprovados rastreáveis, com o motivo da reprovação",
+                "quarentena em prefixo próprio no S3, nunca descarte silencioso nem sobrescrita do que já existia"
+              ],
+              [
+                "Quem decidiu a mudança precisa saber, não só o time de dados",
+                "alerta chega ao produtor em minutos, com o nome da regra violada",
+                "evento customizado no EventBridge, roteado para o time de Precificação — diferente do alerta genérico de falha de job do L65"
+              ],
+              [
+                "O contrato tem de ser auditável, não conhecimento tribal",
+                "regra escrita, versionada, revisável em PR",
+                "ruleset DQDL como artefato de Terraform, nunca um if de limite escondido no meio do PySpark"
+              ],
+              [
+                "Falso positivo não pode travar o pipeline inteiro",
+                "quarentena de uma linha não impede as outras 12.399 de seguirem",
+                "avaliação e roteamento por LINHA, não por partição — a partição continua sendo gravada com o que passou"
+              ],
+              [
+                "Custo de avaliação contido",
+                "sem serviço novo, sem cluster dedicado a validação",
+                "EvaluateDataQuality embutido no mesmo Glue Job que já existe desde o L65"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o cast que sempre funciona, mesmo quando o número mente"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tinha até três semanas atrás, e ele é legítimo como ponto de partida: o L65 resolveu schema de verdade, com poucas peças. O defeito não está no job — está no que ninguém pediu a ele para verificar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O cast bem-sucedido que não prova nada sobre o valor",
+            "caption": "Este desenho converte tipo corretamente, todo dia, com as mesmas peças do L65. O defeito é que \"converter com sucesso\" e \"valor plausível\" são perguntas diferentes, e só a primeira tem resposta aqui. Percorra os passos e repare onde o número deixa de ser preço e vira ruído sem que nada acenda um alarme.",
+            "groups": [
+              {
+                "label": "Precifica — upstream",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "precifica",
+                    "service": "erp",
+                    "label": "Precifica, sistema de precificação",
+                    "note": "publica preco_venda todo dia às 23h; três semanas atrás passou a emitir centavos em vez de reais, sem avisar o time de dados"
+                  }
+                ]
+              },
+              {
+                "label": "Lake e catálogo, do L65",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3_bronze",
+                    "service": "s3",
+                    "label": "bronze/produtos/dt=",
+                    "note": "recebe o arquivo bruto do dia; o tipo declarado da coluna de preço nunca muda, só a escala do número dentro dela"
+                  },
+                  {
+                    "id": "glue_catalogo",
+                    "service": "glue",
+                    "label": "Glue Crawler + Data Catalog (do L65)",
+                    "note": "confirma que preco_venda continua sendo double; não tem nenhuma opinião sobre se 4990.0 é um preço razoável"
+                  },
+                  {
+                    "id": "glue_job",
+                    "service": "glue",
+                    "label": "Glue ETL Job idempotente (do L65)",
+                    "note": "aplica o cast explícito que sempre aplicou, grava a partição inteira de novo — e nunca falha, porque a conversão de tipo é exatamente a que ele esperava"
+                  }
+                ]
+              },
+              {
+                "label": "Consumo direto, sem contrato",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3_prata",
+                    "service": "s3",
+                    "label": "prata/produtos/dt=",
+                    "note": "recebe o Parquet com o preço na escala errada, indistinguível de um dia normal para qualquer consulta"
+                  },
+                  {
+                    "id": "modelo_reposicao",
+                    "service": "sagemaker",
+                    "label": "Modelo de reposição automática",
+                    "note": "retreina toda sexta-feira sobre prata; absorve o salto de cem vezes como se fosse um sinal real de mercado, sem checagem nenhuma"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "precifica",
+                "to": "s3_bronze",
+                "label": "publica o arquivo diário de preço, na unidade que o time de Precificação decidiu — sem contrato escrito",
+                "style": "solid"
+              },
+              {
+                "from": "glue_catalogo",
+                "to": "s3_bronze",
+                "label": "varre e confirma que o schema não mudou",
+                "style": "dashed"
+              },
+              {
+                "from": "glue_job",
+                "to": "s3_bronze",
+                "label": "lê a partição do dia pelo catálogo",
+                "style": "dashed"
+              },
+              {
+                "from": "glue_job",
+                "to": "s3_prata",
+                "label": "grava a partição convertida; o cast de tipo é bem-sucedido, o valor nunca é checado",
+                "style": "solid"
+              },
+              {
+                "from": "modelo_reposicao",
+                "to": "s3_prata",
+                "label": "lê preco_venda como feature de treino, toda sexta-feira",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Precifica muda a unidade sem que exista contrato para violar",
+                "detail": "Não há nenhum documento, nenhuma regra automatizada, dizendo qual é a faixa esperada de preco_venda por categoria. A mudança de reais para centavos é uma decisão interna do time de Precificação, e nada do lado de dados sabe que ela aconteceu.",
+                "nodes": [
+                  "precifica",
+                  "s3_bronze"
+                ],
+                "edges": [
+                  "precifica>s3_bronze"
+                ]
+              },
+              {
+                "label": "O crawler confirma schema, e schema não é o problema aqui",
+                "detail": "O L65 garante que preco_venda é sempre um double — e continua sendo. O crawler faz exatamente o trabalho para o qual foi desenhado: esse trabalho simplesmente não inclui perguntar se 4990.0 faz sentido para um saco de cimento.",
+                "nodes": [
+                  "glue_catalogo",
+                  "s3_bronze"
+                ],
+                "edges": [
+                  "glue_catalogo>s3_bronze"
+                ]
+              },
+              {
+                "label": "O job lê pelo catálogo, como sempre leu",
+                "detail": "from_catalog resolve schema e localização normalmente. Nada na leitura sinaliza problema, porque não há problema de leitura — o problema é de significado, e leitura não avalia significado.",
+                "nodes": [
+                  "glue_job",
+                  "s3_bronze"
+                ],
+                "edges": [
+                  "glue_job>s3_bronze"
+                ]
+              },
+              {
+                "label": "O cast é bem-sucedido, e sucesso de cast não é o mesmo que valor correto",
+                "detail": "O job grava a partição inteira de novo, exatamente como o L65 desenhou para garantir idempotência. A idempotência funciona perfeitamente aqui — e é irrelevante para o defeito, porque o problema não é duplicar linha, é gravar o número errado de forma consistente.",
+                "nodes": [
+                  "glue_job",
+                  "s3_prata"
+                ],
+                "edges": [
+                  "glue_job>s3_prata"
+                ]
+              },
+              {
+                "label": "O modelo treina sobre o número, não sobre a intenção por trás dele",
+                "detail": "Para o modelo, preco_venda é só uma coluna numérica que entrou na feature de elasticidade de preço. Um salto de cem vezes não dispara nenhuma validação, porque o modelo não sabe que existe uma escala \"certa\" — ele aprende a escala que os dados mostram.",
+                "nodes": [
+                  "modelo_reposicao",
+                  "s3_prata"
+                ],
+                "edges": [
+                  "modelo_reposicao>s3_prata"
+                ]
+              },
+              {
+                "label": "Por que a equipe pequena convive com isso até doer",
+                "detail": "Documentar e validar contrato de dado entre dois times parece trabalho sem retorno imediato — até a primeira mudança silenciosa. O sintoma só aparece longe da causa: numa recomendação de reposição sem sentido, semanas depois de o Precifica ter migrado, quando ninguém mais lembra da mudança.",
+                "nodes": [
+                  "precifica",
+                  "modelo_reposicao"
+                ],
+                "edges": [
+                  "precifica>s3_bronze",
+                  "modelo_reposicao>s3_prata"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "code": "# Simula a mudanca de unidade e mostra que o cast NAO acusa nada.\n# 1) grava um dia \"normal\", em reais\naws s3 cp - s3://cadencia-lake/bronze/produtos/dt=2026-07-18/produtos.json <<'JSON'\n{\"produto_id\":\"CIM-0042\",\"loja_id\":\"L07\",\"categoria\":\"cimento\",\"preco_venda\":32.90,\"atualizado_em\":\"2026-07-18T23:00:00Z\"}\nJSON\n\n# 2) grava o dia da migracao do Precifica, em centavos -- MESMO TIPO, escala 100x\naws s3 cp - s3://cadencia-lake/bronze/produtos/dt=2026-07-19/produtos.json <<'JSON'\n{\"produto_id\":\"CIM-0042\",\"loja_id\":\"L07\",\"categoria\":\"cimento\",\"preco_venda\":3290.00,\"atualizado_em\":\"2026-07-19T23:00:00Z\"}\nJSON\n\n# 3) roda o job do L65 sobre os dois dias\naws glue start-job-run --job-name cadencia-transformar-produtos --arguments '{\"--dt\":\"2026-07-18\"}'\naws glue start-job-run --job-name cadencia-transformar-produtos --arguments '{\"--dt\":\"2026-07-19\"}'\n\n# 4) confira: as duas execucoes terminam SUCCEEDED, e o tipo da coluna nao muda\naws glue get-table --database-name cadencia_lake --name prata_produtos \\\n  --query 'Table.StorageDescriptor.Columns[?Name==`preco_venda`]'\n# Esperado: type \"double\" nos dois dias. O cast nunca teve motivo para falhar --\n# e e exatamente por isso que ninguem percebeu por tres semanas.\n",
+            "filename": "reproduzir-o-defeito.sh"
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "A falha visível não é a pior — o cast bem-sucedido é",
+            "content": "Um COLUMN_NOT_FOUND do L65 pelo menos avisa. Aqui não há erro nenhum: o job termina SUCCEEDED nos dois dias, o tipo da coluna continua double, e a diferença entre 32,90 e 3.290,00 passa despercebida porque as duas são conversões de tipo perfeitamente válidas. O modelo de reposição treinou sobre o segundo número por 11 dias antes de alguém notar que as recomendações para cimento e argamassa tinham despencado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A troca não é \"acrescentar uma checagem\" ao desenho anterior — é substituir \"o cast funcionou\" por \"o valor respeita o contrato\", e \"ninguém sabe\" por \"o produtor sabe em menos de um minuto\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O contrato avaliado linha a linha, com quarentena rastreável e alerta ao produtor",
+            "caption": "A diferença não é uma caixa a mais: o job agora AVALIA cada linha contra um ruleset antes de decidir para onde ela vai, o destino se divide em dois caminhos com prefixo próprio cada um, e existe um caminho de alerta que nunca existiu — direto para quem decidiu a mudança de unidade. Percorra os passos: cada peça nova resolve exatamente um requisito da seção anterior.",
+            "groups": [
+              {
+                "label": "Precifica — agora também recebe alerta",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "precifica",
+                    "service": "erp",
+                    "label": "Precifica, sistema de precificação",
+                    "note": "continua publicando o arquivo diário; a diferença é que agora é notificado quando o próprio dado que publicou viola o contrato"
+                  }
+                ]
+              },
+              {
+                "label": "Ingestão e catalogação, do L65",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3_bronze",
+                    "service": "s3",
+                    "label": "bronze/produtos/dt=",
+                    "note": "inalterado desde o L65; este módulo não muda como o dado chega, só o que acontece com ele depois"
+                  },
+                  {
+                    "id": "glue_crawler",
+                    "service": "glue",
+                    "label": "Glue Crawler (do L65)",
+                    "note": "continua responsável só por schema; nenhuma mudança de comportamento em relação ao L65"
+                  },
+                  {
+                    "id": "glue_catalog",
+                    "service": "glue",
+                    "label": "Glue Data Catalog (do L65)",
+                    "note": "metastore compartilhado com Athena e, pelo tema do L68, com o painel de BI em Redshift"
+                  }
+                ]
+              },
+              {
+                "label": "Job com contrato embutido",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "glue_job",
+                    "service": "glue",
+                    "label": "Glue ETL Job (do L65, com contrato)",
+                    "note": "o mesmo job idempotente do L65, agora chamando EvaluateDataQuality antes de decidir o destino de cada linha"
+                  },
+                  {
+                    "id": "dq_ruleset",
+                    "service": "glue",
+                    "label": "Ruleset de Glue Data Quality (DQDL)",
+                    "note": "regras de completude, faixa por categoria e unicidade, versionadas em Terraform e revisadas com o time de Precificação"
+                  }
+                ]
+              },
+              {
+                "label": "Destino, dividido pelo contrato",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3_prata",
+                    "service": "s3",
+                    "label": "prata/produtos/dt=",
+                    "note": "recebe só as linhas que passaram no ruleset — a mesma tabela que o L65 criou, agora com garantia de valor"
+                  },
+                  {
+                    "id": "s3_quarentena",
+                    "service": "s3",
+                    "label": "quarentena/produtos/dt=",
+                    "note": "prefixo próprio, criado por este módulo; nenhuma linha reprovada é descartada ou some sem registro"
+                  }
+                ]
+              },
+              {
+                "label": "Alerta ao produtor",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "eventbridge_contrato",
+                    "service": "eventbridge",
+                    "label": "Regra: contrato de dado violado",
+                    "note": "dispara sobre um evento CUSTOMIZADO publicado pelo próprio job, distinto do alerta genérico de falha que o L65 já monitora"
+                  },
+                  {
+                    "id": "sns_precifica",
+                    "service": "sns",
+                    "label": "Tópico dedicado ao time de Precificação",
+                    "note": "assinatura própria, separada do canal de operação de dados — o alerta chega a quem decide a unidade, não só a quem opera o pipeline"
+                  }
+                ]
+              },
+              {
+                "label": "Consumo confiável",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "modelo_reposicao",
+                    "service": "sagemaker",
+                    "label": "Modelo de reposição automática",
+                    "note": "volta a treinar só sobre prata, agora garantidamente dentro do contrato de preço por categoria"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "precifica",
+                "to": "s3_bronze",
+                "label": "publica o arquivo diário; a unidade ainda é decisão exclusiva do time de Precificação",
+                "style": "solid"
+              },
+              {
+                "from": "glue_crawler",
+                "to": "s3_bronze",
+                "label": "varre e confirma schema, sem mudança em relação ao L65",
+                "style": "dashed"
+              },
+              {
+                "from": "glue_crawler",
+                "to": "glue_catalog",
+                "label": "atualiza a tabela raw",
+                "style": "solid"
+              },
+              {
+                "from": "glue_job",
+                "to": "s3_bronze",
+                "label": "lê a partição do dia via from_catalog",
+                "style": "dashed"
+              },
+              {
+                "from": "glue_job",
+                "to": "dq_ruleset",
+                "label": "avalia cada linha lida contra o ruleset, antes de gravar qualquer coisa",
+                "style": "solid"
+              },
+              {
+                "from": "dq_ruleset",
+                "to": "s3_prata",
+                "label": "linha que respeita o contrato segue para o destino de sempre",
+                "style": "solid"
+              },
+              {
+                "from": "dq_ruleset",
+                "to": "s3_quarentena",
+                "label": "linha que viola qualquer regra vai para o prefixo de quarentena, com o motivo anexado",
+                "style": "solid"
+              },
+              {
+                "from": "dq_ruleset",
+                "to": "eventbridge_contrato",
+                "label": "quando a quarentena do dia é maior que zero, o job publica um evento customizado via put_events",
+                "style": "dashed"
+              },
+              {
+                "from": "eventbridge_contrato",
+                "to": "sns_precifica",
+                "label": "roteia especificamente para o tópico do time de Precificação",
+                "style": "solid"
+              },
+              {
+                "from": "sns_precifica",
+                "to": "precifica",
+                "label": "e-mail/canal do time que decidiu a unidade, não do time de dados",
+                "style": "dashed"
+              },
+              {
+                "from": "glue_job",
+                "to": "glue_catalog",
+                "label": "atualiza a tabela prata no mesmo passo, como no L65",
+                "style": "solid"
+              },
+              {
+                "from": "modelo_reposicao",
+                "to": "s3_prata",
+                "label": "lê preco_venda só depois que o contrato garantiu a escala certa",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O contrato entra DENTRO do job, antes da escrita — não depois dela",
+                "detail": "EvaluateDataQuality roda sobre o DynamicFrame recém-lido, antes de qualquer gravação. A avaliação faz parte do mesmo Glue Job do L65 — não é um serviço novo nem uma etapa separada que alguém pode esquecer de rodar.",
+                "nodes": [
+                  "glue_job",
+                  "dq_ruleset"
+                ],
+                "edges": [
+                  "glue_job>dq_ruleset"
+                ]
+              },
+              {
+                "label": "Linha que respeita o contrato segue exatamente como no L65",
+                "detail": "Para as 12.363 linhas que passam no ruleset num dia normal, nada muda: mesmo destino, mesmo overwrite de partição, mesma atualização de catálogo que o L65 já fazia.",
+                "nodes": [
+                  "dq_ruleset",
+                  "s3_prata"
+                ],
+                "edges": [
+                  "dq_ruleset>s3_prata"
+                ]
+              },
+              {
+                "label": "Linha que viola vai para um prefixo próprio, nunca desaparece",
+                "detail": "quarentena/produtos/dt= é um destino novo, com o mesmo particionamento por dia — cada linha reprovada carrega o nome da regra que violou, então investigar não exige adivinhar.",
+                "nodes": [
+                  "dq_ruleset",
+                  "s3_quarentena"
+                ],
+                "edges": [
+                  "dq_ruleset>s3_quarentena"
+                ]
+              },
+              {
+                "label": "Quarentena não fica em silêncio: dispara um evento de domínio, não o alerta genérico",
+                "detail": "O evento ContratoDadoViolado é publicado pelo PRÓPRIO script Spark via put_events, com a categoria, a regra violada e a contagem — informação que o alerta nativo de \"Job State Change = FAILED\" do L65 não carrega, porque o job aqui não falhou.",
+                "nodes": [
+                  "dq_ruleset",
+                  "eventbridge_contrato"
+                ],
+                "edges": [
+                  "dq_ruleset>eventbridge_contrato"
+                ]
+              },
+              {
+                "label": "O alerta chega a quem decidiu a mudança, não só a quem opera o pipeline",
+                "detail": "Um tópico SNS dedicado, assinado pelo time de Precificação, é o destino da regra do EventBridge. É a peça que resolve o requisito de que o PRODUTOR saiba — o time de dados sozinho não decide a unidade, então alertá-lo sozinho não resolve a causa.",
+                "nodes": [
+                  "eventbridge_contrato",
+                  "sns_precifica",
+                  "precifica"
+                ],
+                "edges": [
+                  "eventbridge_contrato>sns_precifica",
+                  "sns_precifica>precifica"
+                ]
+              },
+              {
+                "label": "Catálogo e tabela prata continuam atualizados no mesmo job, como no L65",
+                "detail": "enableUpdateCatalog continua fazendo o que fazia — a diferença é que agora ele atualiza a tabela com dado que já passou pelo contrato, não antes dele.",
+                "nodes": [
+                  "glue_job",
+                  "glue_catalog"
+                ],
+                "edges": [
+                  "glue_job>glue_catalog"
+                ]
+              },
+              {
+                "label": "O modelo volta a treinar só sobre dado garantidamente dentro do contrato",
+                "detail": "Nenhuma mudança no lado do consumidor — o modelo continua lendo prata/produtos/. O que mudou é a garantia sobre o que existe ali, e é essa garantia que este módulo entrega.",
+                "nodes": [
+                  "modelo_reposicao",
+                  "s3_prata"
+                ],
+                "edges": [
+                  "modelo_reposicao>s3_prata"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação à arquitetura mínima não é a presença de uma checagem: é que o destino do dado deixou de ser único. Antes, toda linha ia para o mesmo lugar, boa ou ruim; agora o próprio contrato decide o caminho, e o produtor descobre o problema antes do modelo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho que o modelo nunca vê, e é o mais importante",
+            "content": "Antes, o modelo de reposição não tinha como saber que um número estava errado — ele só via números. Depois do contrato, o modelo nunca chega a ver o dado ruim: ele já foi para quarentena antes de a partição prata existir. A melhor validação de dado para um modelo é a que acontece longe dele, rio acima."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho do dado, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os nomes dos campos do evento customizado não são acidente: regra_violada e produtor são o que transforma um alerta genérico em um alerta acionável. É observável publicando um evento de teste com put-events, e a seção de provas faz exatamente isso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "De um arquivo com unidade errada a um alerta no time certo, em menos de um minuto",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "Precifica publica o arquivo do dia em bronze/produtos/dt=",
+                "desc": "Já resolvido pelo L65 em termos de schema. Este módulo começa aqui: o arquivo existe, o tipo está certo, o valor pode não estar."
+              },
+              {
+                "label": "Job lê a partição via from_catalog, como sempre",
+                "desc": "Nenhuma mudança na leitura. push_down_predicate continua filtrando só a partição do dia."
+              },
+              {
+                "label": "EvaluateDataQuality avalia cada linha contra o ruleset DQDL",
+                "desc": "Regras de completude, faixa por categoria e unicidade — todas rodam dentro do mesmo Spark job, sem chamada de rede externa."
+              },
+              {
+                "label": "Linhas que passam seguem para prata; linhas que falham vão para quarentena",
+                "desc": "A divisão acontece no mesmo DataFrame avaliado, por um filtro sobre o resultado da avaliação — não são dois jobs."
+              },
+              {
+                "label": "Se a quarentena do dia é maior que zero, o job publica um evento customizado",
+                "desc": "Source: cadencia.qualidade-dado, DetailType: ContratoDadoViolado — evento de domínio, não evento nativo de serviço."
+              },
+              {
+                "label": "Regra do EventBridge casa o evento e aciona o tópico SNS do time de Precificação",
+                "desc": "É uma regra separada da que o L65 já mantém para Glue Job State Change = FAILED — os dois continuam ativos, para sinais diferentes."
+              },
+              {
+                "label": "O time de Precificação recebe o alerta com a regra violada e a contagem",
+                "desc": "Sem precisar abrir o console do Glue nem consultar o Athena para entender o que quebrou."
+              },
+              {
+                "label": "Catálogo e tabela prata são atualizados no mesmo passo, como no L65",
+                "desc": "enableUpdateCatalog grava só o que passou no contrato."
+              }
+            ]
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O que o job publica via boto3 events.put_events(). Fonte e detail-type sao escolha DESTE modulo (evento de dominio, nao evento nativo de servico) -- diferente do evento \"Glue Job State Change\" do L65, que a AWS documenta."
+              }
+            ]
+          },
+          "position": 2
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "json",
+            "code": "{\n  \"Source\": \"cadencia.qualidade-dado\",\n  \"DetailType\": \"ContratoDadoViolado\",\n  \"Detail\": {\n    \"tabela\": \"prata_produtos\",\n    \"dt\": \"2026-07-19\",\n    \"categoria\": \"cimento\",\n    \"regra_violada\": \"CustomSql: preco_venda fora da faixa de cimento (15.00-120.00)\",\n    \"registros_avaliados\": 12400,\n    \"registros_quarentena\": 37,\n    \"produtor_responsavel\": \"time-precificacao\"\n  }\n}\n",
+            "filename": "evento-contrato-violado.json"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "Evento de domínio é decisão de quem escreve o job, não contrato documentado pela AWS",
+            "content": "Diferente do payload de Glue Job State Change, que a AWS documenta como parte do serviço, o formato acima é definido por este módulo — Source, DetailType e os campos de Detail são escolha de quem escreveu o job. Isso dá liberdade para incluir produtor_responsavel, que nenhum evento nativo do Glue carregaria, mas também significa que qualquer mudança no formato é sua responsabilidade de versionar, não da AWS."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Um contrato de preço entre dois times da Cadência — Precificação, que decide a unidade, e Dados, que serve o modelo de reposição — sem orçamento para um serviço de qualidade de dado dedicado, e com o requisito de que a partição continue sendo gravada mesmo quando uma fração das linhas falha.",
+            "winner": "Glue Data Quality embutido no job existente (DQDL avaliado linha a linha), quarentena em prefixo próprio no mesmo bucket, e evento customizado do EventBridge roteado direto ao produtor",
+            "why": "Resolve as três dívidas sem inventar peça de infraestrutura nova: a avaliação roda dentro do Glue Job que o L65 já mantém, a quarentena reaproveita o mesmo S3 do lake com um prefixo a mais, e o roteamento ao produtor usa o mesmo EventBridge que o L65 já usa para o alerta de falha — só que com um evento diferente, carregando contexto que o produtor entende sem abrir console nenhum.",
+            "alternatives": [
+              {
+                "name": "Great Expectations rodando fora do Glue (container ou Lambda separado)",
+                "downside": "Framework maduro e popular, mas exige operar um serviço a mais e duplicar a leitura do dado — o Glue já lê a partição uma vez; validar fora dele significa ler de novo."
+              },
+              {
+                "name": "Validação só no lado do consumidor (o próprio treino do modelo)",
+                "downside": "Empurra a checagem para o ponto mais tarde possível: cada consumidor novo — o modelo, o L68 futuro, qualquer relatório — reimplementaria a mesma regra de faixa de preço, com risco real de divergirem entre si."
+              },
+              {
+                "name": "Rejeitar a partição inteira quando qualquer linha falha",
+                "downside": "Mais simples de implementar, e é o antipadrão que a seção de anti-padrões deste módulo nomeia: uma linha ruim apaga 12.399 linhas boas do dia — o remédio causa mais dano que o problema original."
+              },
+              {
+                "name": "Revisão manual de amostra diária por um analista",
+                "downside": "Não escala com 40 lojas e centenas de SKUs, e depende de disciplina humana constante — exatamente o que um catálogo automatizado (L65) já provou não sobreviver a rotatividade de time."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Onde a validação roda",
+                "dentro do Glue Job existente, via EvaluateDataQuality",
+                "Great Expectations em serviço separado",
+                "sem ler a partição duas vezes, sem operar um serviço a mais",
+                "menos portabilidade para fora do ecossistema Glue — irrelevante para este caso"
+              ],
+              [
+                "Granularidade da rejeição",
+                "por linha, com quarentena",
+                "por partição inteira",
+                "12.399 linhas boas não pagam pela linha 12.400 ruim",
+                "quarentena exige um prefixo e uma rotina de revisão a mais para operar"
+              ],
+              [
+                "Quem recebe o alerta",
+                "time de Precificação, via tópico SNS dedicado",
+                "só o time de dados, via alerta genérico do L65",
+                "quem decide a unidade é quem corrige a causa; time de dados sozinho é intermediário",
+                "mais um tópico e uma assinatura para manter sincronizados com o time certo"
+              ],
+              [
+                "Forma do contrato",
+                "ruleset DQDL versionado em Terraform",
+                "threshold hardcoded no PySpark",
+                "revisável em PR, sem exigir deploy de job para ajustar um número",
+                "sintaxe própria (DQDL) que o time precisa aprender, além do PySpark"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este módulo cria, e que ele não paga",
+            "content": "O ruleset atual cobre preco_venda por categoria, produto_id e loja_id completos, e unicidade do par produto-loja-dia. Ele não detecta uma mudança de unidade DENTRO da faixa aceitável — se o Precifica tivesse mudado de reais para uma moeda com cotação parecida, em vez de centavos, o contrato de faixa fixa não pegaria. Detectar desvio estatístico sutil, não só violação de faixa, é o assunto do L77."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: o contrato de dado em DQDL"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A escolha mais consequente deste bloco não é o tipo de regra — é onde o ruleset MORA. Como recurso de Terraform, revisão de faixa de preço vira Pull Request; hardcoded no script, vira deploy silencioso que ninguém lembra de auditar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "code": "# contrato.tf — o ruleset de Glue Data Quality como artefato versionado\n\nresource \"aws_glue_data_quality_ruleset\" \"contrato_produtos\" {\n  name        = \"${var.projeto}-contrato-produtos\"\n  description = \"Contrato de preco por categoria da Cadencia. Revisado com o time de Precificacao a cada mudanca de faixa.\"\n\n  # DQDL (Data Quality Definition Language). A sintaxe evolui entre versoes do\n  # Glue -- confira a referencia atual antes de copiar regra por regra.\n  ruleset = <<-DQDL\n    Rules = [\n      IsComplete \"produto_id\",\n      IsComplete \"loja_id\",\n      ColumnValues \"preco_venda\" > 0,\n\n      # Faixas por categoria: o contrato de verdade. Um numero global (por\n      # exemplo, \"preco_venda entre 0 e 50000\") nao pegaria o salto de 100x do\n      # cimento, porque 3290.00 ainda cabe dentro de uma faixa larga o\n      # suficiente para cobrir equipamento caro. Faixa por categoria e o que\n      # torna a regra sensivel ao produto real.\n      CustomSql \"SELECT count(*) FROM primary WHERE categoria = 'cimento' AND (preco_venda < 15.00 OR preco_venda > 120.00)\" = 0,\n      CustomSql \"SELECT count(*) FROM primary WHERE categoria = 'tijolo' AND (preco_venda < 0.50 OR preco_venda > 3.50)\" = 0,\n      CustomSql \"SELECT count(*) FROM primary WHERE categoria = 'argamassa' AND (preco_venda < 12.00 OR preco_venda > 60.00)\" = 0,\n\n      # Um produto nao pode aparecer duas vezes na mesma loja, no mesmo dia.\n      Uniqueness \"produto_id\" > 0.98\n    ]\n  DQDL\n\n  target_table {\n    database_name = aws_glue_catalog_database.lake.name\n    table_name    = \"prata_produtos\"\n  }\n\n  tags = {\n    Projeto = var.projeto\n    Time    = \"dados\"\n    Revisa  = \"precificacao\"\n  }\n}\n\n# Saida usada pelo job para referenciar o ruleset pelo nome, sem hardcode.\noutput \"nome_do_ruleset\" {\n  value = aws_glue_data_quality_ruleset.contrato_produtos.name\n}\n",
+            "filename": "contrato.tf"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "Faixa por categoria é o contrato real; faixa global é decoração",
+            "content": "Uma única regra preco_venda BETWEEN 0.01 AND 50000.00 teria deixado passar o salto de reais para centavos do cimento — 3.290,00 ainda cabe numa faixa larga o bastante para cobrir uma betoneira. O contrato só funciona porque cada CustomSql conhece a faixa PLAUSÍVEL da categoria específica, negociada com quem entende o catálogo de produtos: o time de Precificação, não o time de dados sozinho."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o job dividindo dado bom de dado em quarentena"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A mudança em relação ao job do L65 é cirúrgica: uma chamada de EvaluateDataQuality entre a leitura e a escrita, e um filtro sobre o resultado. A idempotência — apagar e reescrever a partição inteira — continua exatamente como estava, agora aplicada a DOIS destinos em vez de um."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# transformar_produtos.py — le pelo catalogo (L65), avalia o contrato, grava\n# quem passa em prata e quem falha em quarentena, e alerta o produtor.\n\nimport sys\nimport json\nfrom datetime import datetime, timedelta, timezone\n\nimport boto3\nfrom awsglue.context import GlueContext\nfrom awsglue.dynamicframe import DynamicFrame\nfrom awsglue.job import Job\nfrom awsglue.transforms import SelectFromCollection\nfrom awsgluedq.transforms import EvaluateDataQuality\nfrom awsglue.utils import getResolvedOptions\nfrom pyspark.context import SparkContext\nfrom pyspark.sql import functions as F\n\nBUCKET = \"cadencia-lake\"\nDATABASE = \"cadencia_lake\"\nRAW_TABLE = \"raw_produtos\"\nPARTICAO = \"dt\"\nRULESET_NOME = \"cadencia-contrato-produtos\"\n\nargs = getResolvedOptions(sys.argv, [\"JOB_NAME\"])\n\ndata_ref = None\nfor i, arg in enumerate(sys.argv):\n    if arg == \"--dt\" and i + 1 < len(sys.argv):\n        data_ref = sys.argv[i + 1]\nif data_ref is None:\n    data_ref = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()\n\nsc = SparkContext()\nglueContext = GlueContext(sc)\nspark = glueContext.spark_session\njob = Job(glueContext)\njob.init(args[\"JOB_NAME\"], args)\nglue = boto3.client(\"glue\")\neventos = boto3.client(\"events\")\n\n# 1. Le a particao do dia PELO CATALOGO -- igual ao L65.\nbruto = glueContext.create_dynamic_frame.from_catalog(\n    database=DATABASE,\n    table_name=RAW_TABLE,\n    push_down_predicate=f\"{PARTICAO} = '{data_ref}'\",\n    transformation_ctx=\"fonte_raw_produtos\",\n)\n\nif bruto.count() == 0:\n    print(f\"nenhum arquivo novo para {PARTICAO}={data_ref}; nada a fazer\")\n    job.commit()\n    sys.exit(0)\n\n# 2. Cast explicito -- a mesma conversao de tipo do L65. Sozinho, NUNCA falha\n#    para o caso deste modulo: reais e centavos sao os DOIS validos como double.\ndf = bruto.toDF().withColumn(\"preco_venda\", F.col(\"preco_venda\").cast(\"double\"))\nconvertido = DynamicFrame.fromDF(df, glueContext, \"convertido\")\n\n# 3. O CONTRATO: avalia CADA LINHA contra o ruleset, antes de decidir destino.\n#    \"observations.scope\": \"ALL\" e o que habilita resultado POR LINHA, nao so\n#    o agregado por regra -- confirme os nomes exatos de coluna no console da\n#    sua conta antes de escrever logica de producao em cima deles; o Glue\n#    documenta o recurso, mas a versao pode mudar o detalhe.\nruleset_texto = glue.get_data_quality_ruleset(Name=RULESET_NOME)[\"Ruleset\"]\n\nresultado = EvaluateDataQuality().process_rows(\n    frame=convertido,\n    ruleset=ruleset_texto,\n    publishing_options={\n        \"dataQualityEvaluationContext\": \"avaliacao_contrato_produtos\",\n        \"enableDataQualityCloudWatchMetrics\": True,\n        \"enableDataQualityResultsPublishing\": True,\n    },\n    additional_options={\n        \"performanceTuning.caching\": \"CACHE_NOTHING\",\n        \"observations.scope\": \"ALL\",\n    },\n)\n\nlinhas_avaliadas = SelectFromCollection.apply(\n    dfc=resultado, key=\"rowLevelOutcomes\", transformation_ctx=\"linhas_avaliadas\"\n)\navaliado = linhas_avaliadas.toDF()\n\n# \"DataQualityEvaluationResult\" e a coluna que o Glue anexa a cada linha\n# quando \"observations.scope\" = \"ALL\". Passed / Failed sao os dois valores\n# documentados; nomes exatos de colunas auxiliares (regras que falharam por\n# linha) variam por versao -- inspecione o schema de \"avaliado\" no seu\n# ambiente antes de depender de mais colunas alem desta.\nboas = avaliado.filter(F.col(\"DataQualityEvaluationResult\") == \"Passed\") \\\n               .drop(\"DataQualityEvaluationResult\")\nquarentena = avaliado.filter(F.col(\"DataQualityEvaluationResult\") == \"Failed\")\n\nn_avaliadas = avaliado.count()\nn_quarentena = quarentena.count()\nprint(f\"avaliadas={n_avaliadas} quarentena={n_quarentena} dt={data_ref}\")\n\n# 4. IDEMPOTENCIA, como no L65: apaga a particao de destino ANTES de escrever\n#    -- agora para OS DOIS prefixos, prata e quarentena.\ns3 = boto3.client(\"s3\")\n\n\ndef limpar_particao(prefixo: str) -> None:\n    paginador = s3.get_paginator(\"list_objects_v2\")\n    chaves = [\n        obj[\"Key\"]\n        for pagina in paginador.paginate(Bucket=BUCKET, Prefix=prefixo)\n        for obj in pagina.get(\"Contents\", [])\n    ]\n    if chaves:\n        s3.delete_objects(Bucket=BUCKET, Delete={\"Keys\": [{\"Key\": k} for k in chaves]})\n\n\nlimpar_particao(f\"prata/produtos/{PARTICAO}={data_ref}/\")\nlimpar_particao(f\"quarentena/produtos/{PARTICAO}={data_ref}/\")\n\n# 5. Grava as boas em prata, e atualiza o catalogo no mesmo passo -- como L65.\nsaida_boas = DynamicFrame.fromDF(\n    boas.withColumn(PARTICAO, F.lit(data_ref)), glueContext, \"saida_boas\"\n)\nsink = glueContext.getSink(\n    connection_type=\"s3\",\n    path=f\"s3://{BUCKET}/prata/produtos/\",\n    enableUpdateCatalog=True,\n    updateBehavior=\"UPDATE_IN_DATABASE\",\n    partitionKeys=[PARTICAO],\n)\nsink.setFormat(\"parquet\", useGlueParquetWriter=True)\nsink.setCatalogInfo(catalogDatabase=DATABASE, catalogTableName=\"prata_produtos\")\nsink.writeFrame(saida_boas)\n\n# 6. Grava as reprovadas em quarentena -- prefixo PROPRIO, nunca descartadas.\nif n_quarentena > 0:\n    quarentena.withColumn(PARTICAO, F.lit(data_ref)) \\\n        .write.mode(\"overwrite\") \\\n        .partitionBy(PARTICAO) \\\n        .parquet(f\"s3://{BUCKET}/quarentena/produtos/\")\n\n    # 7. ALERTA AO PRODUTOR: evento customizado, nao o alerta generico de\n    #    falha do L65 -- este job nao falhou, ele fez exatamente o que devia.\n    eventos.put_events(Entries=[{\n        \"Source\": \"cadencia.qualidade-dado\",\n        \"DetailType\": \"ContratoDadoViolado\",\n        \"Detail\": json.dumps({\n            \"tabela\": \"prata_produtos\",\n            \"dt\": data_ref,\n            \"registros_avaliados\": n_avaliadas,\n            \"registros_quarentena\": n_quarentena,\n            \"produtor_responsavel\": \"time-precificacao\",\n        }),\n    }])\n\njob.commit()\n",
+            "filename": "transformar_produtos.py"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Escrever a quarentena SEM apagar a partição antes duplica a mesma linha ruim",
+            "content": "O passo de limpar_particao roda para os DOIS prefixos, prata e quarentena — esquecer o segundo reproduz exatamente o bug de idempotência que o L65 já resolveu, só que na tabela de quarentena: reprocessar o mesmo dia duas vezes empilharia a mesma linha reprovada repetidas vezes, inflando a contagem que a seção de observabilidade usa como sinal."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o alerta que chega ao produtor, não só ao time de dados"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Duas regras de EventBridge convivem depois deste módulo: a do L65, que observa Glue Job State Change = FAILED e avisa o time de dados; e esta, que observa um evento de DOMÍNIO publicado pelo próprio job e avisa o time de Precificação. Confundir as duas é achar que uma cobre a outra."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "code": "# alerta-produtor.tf — a regra que observa o CONTRATO, nao a falha do job\n\nresource \"aws_sns_topic\" \"alerta_precificacao\" {\n  name = \"${var.projeto}-alerta-contrato-precificacao\"\n}\n\nresource \"aws_sns_topic_subscription\" \"time_precificacao\" {\n  topic_arn = aws_sns_topic.alerta_precificacao.arn\n  protocol  = \"email\"\n  endpoint  = var.email_time_precificacao\n}\n\nresource \"aws_cloudwatch_event_rule\" \"contrato_violado\" {\n  name        = \"${var.projeto}-contrato-produtos-violado\"\n  description = \"Evento de DOMINIO publicado pelo job quando ha registro em quarentena -- nao e o alerta nativo de falha do L65\"\n\n  event_pattern = jsonencode({\n    source      = [\"cadencia.qualidade-dado\"]\n    detail-type = [\"ContratoDadoViolado\"]\n  })\n}\n\nresource \"aws_cloudwatch_event_target\" \"avisa_precificacao\" {\n  rule = aws_cloudwatch_event_rule.contrato_violado.name\n  arn  = aws_sns_topic.alerta_precificacao.arn\n}\n\nresource \"aws_sns_topic_policy\" \"permite_eventbridge\" {\n  arn    = aws_sns_topic.alerta_precificacao.arn\n  policy = data.aws_iam_policy_document.eventbridge_publica.json\n}\n\ndata \"aws_iam_policy_document\" \"eventbridge_publica\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"sns:Publish\"]\n    resources = [aws_sns_topic.alerta_precificacao.arn]\n    principals {\n      type        = \"Service\"\n      identifiers = [\"events.amazonaws.com\"]\n    }\n  }\n}\n\n# Permissao adicional ao papel do JOB (job.tf, do L65): sem isto, o\n# put_events do script falha com AccessDenied, e a quarentena grava mas o\n# alerta nunca sai.\ndata \"aws_iam_policy_document\" \"job_publica_evento\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"events:PutEvents\"]\n    resources = [\"arn:aws:events:${var.regiao}:${var.conta_id}:event-bus/default\"]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"job_publica_evento\" {\n  role   = aws_iam_role.job.id\n  policy = data.aws_iam_policy_document.job_publica_evento.json\n}\n\n# O job tambem precisa escrever no prefixo NOVO de quarentena -- estende a\n# policy de escrita do L65 (job.tf), que so cobria prata/produtos/*.\ndata \"aws_iam_policy_document\" \"job_escreve_quarentena\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"s3:GetObject\", \"s3:PutObject\", \"s3:DeleteObject\", \"s3:ListBucket\"]\n    resources = [\n      \"arn:aws:s3:::${var.bucket_lake}\",\n      \"arn:aws:s3:::${var.bucket_lake}/quarentena/produtos/*\",\n    ]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"job_escreve_quarentena\" {\n  role   = aws_iam_role.job.id\n  policy = data.aws_iam_policy_document.job_escreve_quarentena.json\n}\n",
+            "filename": "alerta-produtor.tf"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que duas regras de EventBridge, e não uma só mais genérica",
+            "content": "Fundir as duas regras num único alerta pareceria mais simples, mas misturaria dois sinais com donos diferentes: \"o job quebrou\" é problema de quem opera o pipeline (time de dados, alerta do L65); \"o dado que você publicou viola o contrato\" é problema de quem produz o dado (time de Precificação, alerta deste módulo). Um alerta só, endereçado ao time errado na metade dos casos, é pior que dois alertas específicos."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: reprocessar depois que o produtor corrige"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Depois que o Precifica corrige a unidade na origem, reprocessar o dia é seguro pelo mesmo motivo do L65: o job é idempotente. A diferença aqui é que o utilitário também confirma que a quarentena do dia zerou — reprocessar sem checar isso é declarar vitória sem prova."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "code": "// ConfirmarCorrecaoEReprocessar.cs — so declara corrigido com numero, nao com \"deve ter dado certo\"\n\nusing Amazon.Glue;\nusing Amazon.Glue.Model;\nusing Amazon.S3;\nusing Amazon.Lambda.Core;\n\nnamespace Cadencia.QualidadeDado;\n\npublic record ConfirmarCorrecao(string Dia); // \"2026-07-19\", ja validado antes de chegar aqui\n\npublic class ConfirmarCorrecaoHandler\n{\n    private static readonly AmazonGlueClient _glue = new();\n    private static readonly AmazonS3Client _s3 = new();\n    private const string Bucket = \"cadencia-lake\";\n\n    // Exposta ao time de Precificacao via API Gateway com autorizacao propria\n    // -- e o botao que eles apertam depois de corrigir a unidade na origem.\n    public async Task<string> ConfirmarAsync(ConfirmarCorrecao pedido, ILambdaContext contexto)\n    {\n        // 1. Reprocessa o dia -- seguro porque o job e idempotente (L65):\n        //    apaga e reescreve prata E quarentena do zero.\n        var execucao = await _glue.StartJobRunAsync(new StartJobRunRequest\n        {\n            JobName = \"cadencia-transformar-produtos\",\n            Arguments = new Dictionary<string, string> { [\"--dt\"] = pedido.Dia },\n        });\n\n        await AguardarConclusaoAsync(execucao.JobRunId, contexto);\n\n        // 2. NAO declara sucesso so porque o job terminou SUCCEEDED -- isso\n        //    prova so que o job rodou sem excecao, nao que a correcao\n        //    funcionou. A prova de verdade e a CONTAGEM da quarentena.\n        var restantes = await ContarObjetosAsync($\"quarentena/produtos/dt={pedido.Dia}/\");\n\n        contexto.Logger.LogInformation(\n            $\"reprocessamento de dt={pedido.Dia} concluido: {restantes} objeto(s) \" +\n            $\"ainda em quarentena\");\n\n        if (restantes > 0)\n        {\n            throw new InvalidOperationException(\n                $\"correcao incompleta: {restantes} registro(s) continuam violando o \" +\n                \"contrato apos o reprocessamento -- confira o ruleset ou a origem\");\n        }\n\n        return $\"dt={pedido.Dia} reprocessado, 0 registros em quarentena\";\n    }\n\n    private async Task<int> ContarObjetosAsync(string prefixo)\n    {\n        var resposta = await _s3.ListObjectsV2Async(new()\n        {\n            BucketName = Bucket,\n            Prefix = prefixo,\n        });\n        return resposta.S3Objects.Count;\n    }\n\n    private async Task AguardarConclusaoAsync(string jobRunId, ILambdaContext contexto)\n    {\n        // Poll simples; producao real trocaria por Step Functions com wait\n        // state, como o L25 desta serie mostra para orquestracao mais longa.\n        JobRun? execucao;\n        do\n        {\n            await Task.Delay(TimeSpan.FromSeconds(15));\n            var resposta = await _glue.GetJobRunAsync(new GetJobRunRequest\n            {\n                JobName = \"cadencia-transformar-produtos\",\n                RunId = jobRunId,\n            });\n            execucao = resposta.JobRun;\n        } while (execucao.JobRunState is \"RUNNING\" or \"STARTING\" or \"STOPPING\");\n\n        if (execucao.JobRunState != \"SUCCEEDED\")\n        {\n            throw new InvalidOperationException(\n                $\"job terminou em {execucao.JobRunState}: {execucao.ErrorMessage}\");\n        }\n    }\n}\n",
+            "filename": "ConfirmarCorrecaoEReprocessar.cs"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "A prova de correção é a contagem zerada, não o status do job",
+            "content": "Um JobRunState = SUCCEEDED prova que o job rodou sem exceção — não prova que a linha que estava em quarentena agora respeita o contrato. Só a segunda consulta, contando objetos no prefixo de quarentena do dia, responde a pergunta que realmente importa: a correção na origem funcionou, ou o dado continua fora do contrato?"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar que a quarentena captura o que deveria"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Quatro provas. A terceira é a que mais gente pula, porque exige simular o próprio bug — publicar uma linha com o preço na escala errada de propósito, e confirmar que ela nunca chega a prata."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# provas.sh — quatro medicoes; nenhuma conclusao vem de \"o pipeline rodou\"\n\nPROJETO=cadencia; BANCO=cadencia_lake; DIA=2026-07-19\n\n# ── Prova 1: volume avaliado bate com o volume publicado pelo Precifica ──────\naws s3 cp s3://cadencia-lake/bronze/produtos/dt=${DIA}/produtos.json - | wc -l\n# Esperado: 12400 linhas no arquivo bruto do dia.\n\naws glue start-job-run --job-name ${PROJETO}-transformar-produtos \\\n  --arguments \"{\\\"--dt\\\":\\\"${DIA}\\\"}\"\naws glue wait job-run-complete --job-name ${PROJETO}-transformar-produtos \\\n  --run-id \"$(aws glue get-job-runs --job-name ${PROJETO}-transformar-produtos \\\n              --query 'JobRuns[0].Id' --output text)\"\n\n# ── Prova 2: contagem em prata + contagem em quarentena == total avaliado ────\nN_PRATA=$(aws athena start-query-execution \\\n  --query-string \"SELECT COUNT(*) FROM ${BANCO}.prata_produtos WHERE dt = '${DIA}'\" \\\n  --result-configuration OutputLocation=s3://cadencia-lake/atenas-resultados/ \\\n  --query 'QueryExecutionId' --output text)\nN_QUARENTENA=$(aws s3api list-objects-v2 --bucket cadencia-lake \\\n  --prefix \"quarentena/produtos/dt=${DIA}/\" --query 'length(Contents)')\necho \"prata + quarentena deve somar 12400 -- confira os dois resultados acima\"\n\n# ── Prova 3: simular o bug de proposito, e confirmar que NAO chega a prata ──\naws s3 cp - s3://cadencia-lake/bronze/produtos/dt=2026-07-25/produtos-teste.json <<'JSON'\n{\"produto_id\":\"CIM-9999\",\"loja_id\":\"L99\",\"categoria\":\"cimento\",\"preco_venda\":9999.00,\"atualizado_em\":\"2026-07-25T23:00:00Z\"}\nJSON\naws glue start-job-run --job-name ${PROJETO}-transformar-produtos \\\n  --arguments '{\"--dt\":\"2026-07-25\"}'\naws athena start-query-execution \\\n  --query-string \"SELECT COUNT(*) FROM ${BANCO}.prata_produtos WHERE dt='2026-07-25' AND produto_id='CIM-9999'\" \\\n  --result-configuration OutputLocation=s3://cadencia-lake/atenas-resultados/\n# Esperado: 0. E confira o objeto em quarentena/produtos/dt=2026-07-25/.\n\n# ── Prova 4: tempo entre o evento e a entrega ao topico SNS ──────────────────\nINICIO=$(date +%s)\naws events put-events --entries '[{\n  \"Source\":\"cadencia.qualidade-dado\",\"DetailType\":\"ContratoDadoViolado\",\n  \"Detail\":\"{\\\"tabela\\\":\\\"teste\\\",\\\"dt\\\":\\\"2026-07-25\\\",\\\"registros_quarentena\\\":1}\"\n}]'\n# Confira no CloudTrail o timestamp de entrega ao SNS e subtraia de $INICIO.\n# Esperado: abaixo de 60 segundos -- e o limiar que a secao de observabilidade usa.\n",
+            "filename": "provas.sh"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Volume bate com o publicado",
+                "wc -l no arquivo bruto vs. execução do job",
+                "12.400 linhas avaliadas, igual ao arquivo de origem",
+                "número menor indica falha de leitura silenciosa antes mesmo da avaliação de contrato"
+              ],
+              [
+                "2 · Prata + quarentena == avaliado",
+                "COUNT(*) em prata mais contagem de objetos em quarentena",
+                "soma bate com 12.400",
+                "soma menor indica linha perdida entre a avaliação e a escrita — bug no filtro, não no ruleset"
+              ],
+              [
+                "3 · Preço fora da faixa nunca chega a prata",
+                "inserir linha de teste com preço 9999,00 para cimento (faixa 15-120)",
+                "0 linhas em prata para o produto de teste; 1 objeto em quarentena",
+                "linha aparecendo em prata significa que o ruleset não está sendo avaliado, ou a faixa da categoria está errada"
+              ],
+              [
+                "4 · Alerta chega em menos de 60 segundos",
+                "put-events manual, tempo até a entrega no SNS via CloudTrail",
+                "entrega registrada em menos de 1 minuto",
+                "atraso maior sugere regra do EventBridge mal configurada ou assinatura SNS com problema"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três se parecem no sintoma superficial — \"a quarentena não está certa\". O que separa uma da outra é ONDE o defeito mora: no ruleset, no roteamento do alerta, ou na suposição sobre o que o crawler garante."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Faixa de categoria desatualizada gera falso positivo",
+                "adicione um SKU legítimo de categoria nova (ex.: \"ferramenta elétrica\", R$ 450,00) sem ruleset para ela",
+                "linha correta cai em quarentena, mesmo sem nenhum bug de unidade",
+                "distribuição de categoria na quarentena via Athena — uma categoria concentra quase tudo",
+                "adicionar CustomSql para a categoria nova, revisado com o time de Precificação, não com o time de dados sozinho"
+              ],
+              [
+                "Alerta nunca sai porque o job não tem permissão para publicar evento",
+                "revogue events:PutEvents do papel do job e force uma linha ruim",
+                "quarentena grava normalmente, mas o SNS nunca recebe nada",
+                "log do job: AccessDenied na chamada de put_events, sem impedir o resto da execução",
+                "adicionar de volta a permissão de alerta-produtor.tf; a falha de alerta não deveria travar a escrita, e não trava"
+              ],
+              [
+                "Confiar que o L65 já cobre isso",
+                "peça a alguém que nunca leu este módulo para revisar o pipeline sem o contrato",
+                "produto com preço 100× maior passa pelo crawler, pelo catálogo e pelo job sem nenhum aviso, como na arquitetura mínima",
+                "comparar preço médio de uma categoria entre dois dias consecutivos",
+                "explicar a diferença entre schema (L65) e valor (este módulo) — são camadas complementares, nunca substitutas"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer no ruleset, pergunte: a linha está em quarentena porque o CONTRATO está certo e o DADO está errado, ou porque o CONTRATO está desatualizado e o dado é legítimo? A primeira exige falar com o produtor; a segunda exige revisar a faixa com quem entende o catálogo de produtos."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "O time de Precificação da Cadência muda preco_venda de reais para centavos sem avisar. O crawler do L65 varre o arquivo novo normalmente, e o Glue Job faz o cast de sempre. O que a arquitetura MÍNIMA deste módulo tem para impedir que esse número errado chegue a prata/produtos/?",
+        "options": [
+          "Nada — o crawler confirma que o tipo da coluna continua sendo double, e o job converte esse double com sucesso; nenhuma das duas etapas avalia se o VALOR ainda é plausível para a categoria do produto",
+          "O crawler detecta a mudança de escala e aplica DEPRECATE_IN_DATABASE, isolando a partição suspeita automaticamente",
+          "O Job Bookmarks do L65 identifica que o valor mudou de ordem de grandeza e bloqueia a releitura do arquivo",
+          "O enableUpdateCatalog do job rejeita a gravação quando detecta uma variação de mais de 10× no valor médio da coluna"
+        ],
+        "correctIndex": 0,
+        "explanation": "A arquitetura mínima literalmente não tem nenhuma peça desenhada para essa pergunta — e é exatamente esse vazio que o módulo existe para fechar. O crawler do L65 confirma SCHEMA (nome e tipo de coluna), não VALOR: preco_venda continua sendo um double antes e depois da mudança, então nenhuma política de schema tem motivo para disparar. O job aplica o mesmo cast explícito de sempre, que converte um double válido para outro double válido — sucesso de conversão de tipo não tem nenhuma relação com o número fazer sentido para a categoria do produto. A segunda alternativa inventa uma capacidade que DEPRECATE_IN_DATABASE não tem: essa política decide o que fazer com PARTIÇÃO que sumiu de uma varredura, não com valor suspeito dentro de uma partição que continua lá. A terceira confunde o propósito de Job Bookmarks — que evitam reler ARQUIVO já processado entre execuções agendadas — com uma capacidade de auditoria de valor que esse mecanismo nunca teve. A quarta atribui a enableUpdateCatalog uma regra de negócio (variação de 10×) que esse parâmetro do Glue simplesmente não implementa: ele só decide COMO o catálogo é atualizado quando o job grava, não SE o valor gravado é razoável."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o preço de um evento que carrega contexto de negócio"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O evento customizado é o que torna o alerta útil — e é também o que faz dele um vazamento em potencial se o roteamento for amplo demais: ele carrega preço, categoria e loja, dado comercial que nem todo assinante do barramento default precisa ver."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Evento customizado publicado no barramento default, lido por assinante não previsto",
+                "média",
+                "médio",
+                "considerar um Event Bus dedicado a eventos de qualidade de dado, com política de recurso restrita, em vez do barramento default compartilhado",
+                "CloudTrail em PutEvents/PutRule sobre o padrão cadencia.qualidade-dado",
+                "mover a regra para um bus dedicado e revisar quem tinha regra casando com o padrão antigo"
+              ],
+              [
+                "Papel do job com s3:PutObject/DeleteObject também em quarentena, além de prata",
+                "baixa",
+                "médio",
+                "escopo por prefixo (quarentena/produtos/*), nunca bucket inteiro — mesmo padrão do L65 para prata/produtos/*",
+                "CloudTrail em DeleteObject fora dos dois prefixos esperados",
+                "revisar e restringir a policy; reprocessar se algo foi apagado fora do escopo"
+              ],
+              [
+                "Ruleset alterado sem revisão do time de Precificação",
+                "média",
+                "alto",
+                "exigir aprovação do time de Precificação como reviewer obrigatório do PR que toca contrato.tf",
+                "diff de PR sem o reviewer certo, via regra de proteção de branch",
+                "reverter o PR e reabrir com o reviewer correto antes de reaplicar"
+              ],
+              [
+                "Tópico SNS do time de Precificação com assinatura de e-mail não confirmada",
+                "média",
+                "alto",
+                "teste periódico de entrega, igual ao que o L65 já recomenda para o alerta de falha",
+                "teste mensal de publicação sintética",
+                "reconfirmar a assinatura; considerar um segundo canal (Slack/chat) como redundância"
+              ],
+              [
+                "Governança de quem pode ver preço por loja no lake",
+                "baixa hoje, cresce com mais consumidores (L68)",
+                "médio",
+                "este módulo não resolve — é o L69, com Lake Formation, por cima do mesmo catálogo",
+                "consulta de auditoria do Lake Formation, quando existir",
+                "aplicar permissão por coluna antes de liberar novo consumidor ao catálogo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "O evento de domínio carrega preço e categoria — trate como dado de negócio, não como log operacional",
+            "content": "Diferente do alerta nativo Glue Job State Change, que só diz \"falhou\" ou \"não falhou\", o evento ContratoDadoViolado carrega o VALOR que violou o contrato. Publicar isso no barramento default, compartilhado por qualquer regra que qualquer time registre na conta, expõe preço por categoria a quem não precisa ver — é a mesma lógica de minimização de dado do L49, aplicada a um evento em vez de a uma coluna de banco."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um painel deste contrato tem uma função estreita: dizer se o dado que o modelo de reposição vai treinar hoje está dentro do combinado. Métrica que não ajuda essa pergunta pertence a outro painel."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "Quantos registros entraram em quarentena hoje?",
+                "COUNT(*) em quarentena/produtos/dt= via Athena",
+                "pico súbito indica mudança upstream, não ruído normal de dado",
+                "acima de 0,5% do total avaliado no dia (62 de 12.400)"
+              ],
+              [
+                "Quanto tempo até o alerta chegar ao produtor?",
+                "timestamp do PutEvents vs. timestamp de entrega no CloudTrail do SNS",
+                "atraso indica falha na cadeia EventBridge → SNS, não no ruleset",
+                "acima de 60 segundos"
+              ],
+              [
+                "A quarentena está concentrada numa categoria?",
+                "GROUP BY categoria em quarentena/produtos/",
+                "sinal de mudança sistemática de um produtor específico, não outlier disperso",
+                "uma categoria responde por mais de 80% da quarentena do dia"
+              ],
+              [
+                "O modelo está treinando sobre dado pós-contrato?",
+                "data do último treino do SageMaker vs. data do deploy do ruleset",
+                "treino anterior ao contrato usa dado potencialmente fora de faixa",
+                "qualquer treino datado antes do deploy do contrato.tf"
+              ],
+              [
+                "O ruleset está rejeitando mais que o normal?",
+                "taxa de reprovação por execução do job, últimos 30 dias",
+                "ruleset mal calibrado (falso positivo) ou dado realmente degradando",
+                "acima de 2× a taxa histórica"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana neste pipeline",
+            "content": "Quarentena em zero não significa \"dado perfeito\" — significa \"nenhuma linha violou as regras que existem hoje\". Um ruleset sem regra para uma categoria nova deixa passar qualquer preço absurdo daquela categoria com zero registro em quarentena, e o painel mostraria tudo verde."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 40 lojas, 400 lojas, e o que passa a doer sem AZ nenhuma"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "40 lojas, 310 SKUs (Cadência hoje)",
+                "avaliação de DQ roda em segundos por partição",
+                "nada",
+                "nada"
+              ],
+              [
+                "400 lojas (10×)",
+                "mais linhas por partição, mesma lógica de regra",
+                "tempo de avaliação cresce linearmente com o volume, não com o número de regras",
+                "DPU extra cobre; nada estrutural muda"
+              ],
+              [
+                "Categoria nova todo mês (novo fornecedor, nova linha de produto)",
+                "ruleset precisa de uma CustomSql nova a cada categoria",
+                "manutenção do ruleset vira gargalo humano se depender só do time de dados",
+                "template de faixa por categoria revisado em lote trimestral com Precificação"
+              ],
+              [
+                "Quarentena acima de 5% de uma partição",
+                "quarentena deixa de ser exceção e vira volume operacional",
+                "processo de revisão manual não escala além de uma dúzia de casos por dia",
+                "investigar causa raiz — quase sempre contrato quebrado na origem, não dado ruim disperso"
+              ],
+              [
+                "Falha de AZ",
+                "Glue e S3 são regionais, como no L65",
+                "nada específico deste módulo além do que o L65 já cobre",
+                "garantir versionamento do bucket, mesma proteção contra apagar errado do L65"
+              ],
+              [
+                "Mais de um produtor mudando unidade no mesmo dia",
+                "vários eventos ContratoDadoViolado simultâneos",
+                "um único tópico SNS vira ruído indistinto para o time de Precificação",
+                "segmentar o Detail.produtor_responsavel no roteamento, um filtro do EventBridge por produtor"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O gargalo que só aparece com muita categoria",
+            "content": "O ruleset cresce em número de CustomSql, não em complexidade de cada regra — cada categoria nova é uma linha a mais. Isso escala bem em execução, mas mal em governança: sem um dono declarado para revisar faixa por categoria, o ruleset vira uma lista que ninguém mais entende de cabeça."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A avaliação de Data Quality em si é barata — o que pesa é o volume adicional de leitura e escrita em quarentena, que antes deste módulo não existia."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Piloto",
+                "1 execução/dia, poucas centenas de linhas",
+                "minutos de DPU a mais para a avaliação",
+                "desprezível",
+                "nenhuma"
+              ],
+              [
+                "Produção pequena",
+                "Cadência hoje: 12.400 pares produto-loja/dia",
+                "DPU-hora extra da avaliação (curta) e escrita adicional em quarentena",
+                "baixa e previsível — tipicamente abaixo de 1% do volume vai para quarentena",
+                "ruleset com poucas CustomSql por categoria, sem regra redundante"
+              ],
+              [
+                "Alta escala",
+                "400 lojas, milhares de SKUs",
+                "DPU-hora cresce com volume de linha, não com número de regras do ruleset",
+                "passa a ser linha visível se a taxa de quarentena também crescer",
+                "investigar causa raiz de quarentena alta antes de otimizar custo de avaliação"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "DPU do job com EvaluateDataQuality",
+                "DPU-hora, proporcional a workers × duração",
+                "a avaliação linha a linha soma tempo sobre o que o L65 já cobrava — meça o antes/depois, não assuma"
+              ],
+              [
+                "Escrita em quarentena",
+                "requisições S3 e GB armazenado",
+                "prefixo novo que só existe desde este módulo; sem ciclo de vida configurado, acumula indefinidamente"
+              ],
+              [
+                "EventBridge PutEvents customizado",
+                "por milhão de eventos publicados",
+                "desprezível no volume da Cadência; relevante só se cada linha reprovada virasse um evento em vez de um por execução"
+              ],
+              [
+                "SNS ao time de Precificação",
+                "por notificação entregue",
+                "centavos; e-mail e SMS têm preços diferentes — confira antes de trocar o protocolo da assinatura"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O custo que este módulo evita, e que não aparece em nenhuma fatura da AWS",
+            "content": "Onze dias de recomendação de reposição errada, sobre 40 lojas, custaram à Cadência decisões de estoque tomadas sobre um sinal falso — capital parado ou faltando no lugar errado. Esse custo nunca teve linha na conta da AWS, e é maior que qualquer DPU-hora que este módulo acrescenta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "contrato avaliado automaticamente a cada execução; alerta chega ao produtor sem intervenção manual",
+                "ruleset desatualizado para categoria nova gera falso negativo silencioso",
+                "revisão trimestral do ruleset com o time de Precificação, como processo declarado",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "papel do job com escopo por prefixo; evento de domínio publicado no barramento",
+                "evento carrega dado de negócio (preço) num barramento potencialmente compartilhado",
+                "avaliar Event Bus dedicado a eventos de qualidade de dado",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "quarentena por linha não bloqueia o restante da partição; job continua idempotente como no L65",
+                "falso positivo de categoria nova sem regra pode acumular quarentena sem ninguém perceber a causa",
+                "alarme de taxa de quarentena por categoria (seção de observabilidade)",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "avaliação embutida no mesmo job, sem I/O extra de rede",
+                "custo de avaliação cresce linear com volume; não testado além de 12.400 linhas/dia",
+                "medir DPU-hora real antes de assumir que escala para 10× o volume",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "sem serviço novo — reaproveita o Glue Job do L65",
+                "prefixo de quarentena sem ciclo de vida configurado acumula custo de armazenamento",
+                "política de ciclo de vida no prefixo de quarentena após revisão confirmada",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "avaliação roda uma vez, no job que já processava o dado — sem pipeline paralelo",
+                "reprocessamento manual repetido, se o produtor demorar a corrigir, reavalia o mesmo dia várias vezes",
+                "agrupar correções do produtor antes de disparar reprocessamento, quando possível",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco deste módulo e compra outro — até o ponto em que o próprio MODELO que consome os dados passa a monitorar a si mesmo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do cast silencioso ao modelo que avisa quando o próprio dado de entrada muda",
+            "layers": [
+              {
+                "label": "Nível 1 — Cast silencioso (o antes)",
+                "instruction": "Job do L65 converte tipo e grava, sem checar valor — é onde a Cadência estava até três semanas atrás, e é legítimo enquanto só há um produtor e um consumidor confiando um no outro.",
+                "note": "Risco resolvido: nenhum. Novo risco: mudança de unidade upstream vira dado errado sem nenhum erro registrado. Custo: o mais baixo — sem avaliação nenhuma."
+              },
+              {
+                "label": "Nível 2 — Este laboratório: contrato e quarentena",
+                "instruction": "Glue Data Quality avaliado linha a linha dentro do job, quarentena em prefixo próprio, alerta customizado ao produtor via EventBridge.",
+                "note": "Risco resolvido: dado fora do contrato chegando à tabela que qualquer consumidor lê. Novo risco: ruleset desatualizado gera falso positivo ou falso negativo; evento de domínio expõe dado de negócio no barramento. Custo: DPU extra da avaliação, baixo."
+              },
+              {
+                "label": "Nível 3 — Mesma feature no treino e na inferência",
+                "instruction": "Feature Store garante que o cálculo de preco_venda normalizado é idêntico no pipeline de treino e no momento em que o modelo de reposição decide em produção (L72).",
+                "note": "Risco resolvido: o contrato valida o dado bruto, mas nada garante que o TREINO e a INFERÊNCIA calculam a mesma feature derivada da mesma forma — é o training/serving skew. Novo risco: store adiciona latência de leitura e complexidade operacional. Custo: armazenamento e I/O do Feature Store."
+              },
+              {
+                "label": "Nível 4 — Pipeline de ML orquestrado por evento",
+                "instruction": "Dado novo validado dispara retrain automaticamente, com linhagem rastreável do dado até o modelo publicado (L76).",
+                "note": "Risco resolvido: retrain manual que ninguém sabe se reflete o dado mais recente pós-contrato. Novo risco: retrain automático herda qualquer furo do próprio contrato, em escala. Custo: orquestração (Step Functions/Pipelines)."
+              },
+              {
+                "label": "Nível 5 — Avaliação ligada a métrica de negócio",
+                "instruction": "Acurácia de reposição não é a métrica que importa — ruptura de estoque e capital parado são; o modelo é avaliado contra essas, não só contra erro médio (tema do L78).",
+                "note": "Risco resolvido: modelo tecnicamente \"bom\" que ainda erra a decisão de negócio que a Cadência precisa. Novo risco: métrica de negócio exige instrumentação que times de dados às vezes não têm de saída. Custo: instrumentação adicional, baixo comparado ao resto."
+              },
+              {
+                "label": "Nível 6 — Dados e IA: o modelo monitora o próprio dado de entrada",
+                "instruction": "O MODELO de reposição passa a ter monitoramento contínuo de drift sobre os mesmos DADOS que este contrato valida — um alarme dispara quando a distribuição de preco_venda por categoria se desloca da baseline, mesmo dentro da faixa do contrato (L77).",
+                "note": "Risco resolvido: o contrato pega violação de faixa explícita, mas não pega desvio gradual e legítimo — uma categoria inteira subindo de preço por inflação real, por exemplo — que ainda assim muda o comportamento do modelo aos poucos. Novo risco: falso alarme de drift em sazonalidade legítima (Black Friday da construção, por exemplo). Custo: execução contínua do SageMaker Model Monitor."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Monitorar drift do nível 6 sobre um dado sem contrato do nível 2 mediria ruído: o alarme de drift dispararia toda vez que um produtor mudasse unidade sem avisar, confundindo violação explícita de contrato com desvio estatístico legítimo. O contrato deste módulo é o que torna o drift do L77 um sinal limpo, em vez de mais um sintoma do mesmo problema de origem."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O problema central deste módulo — \"esse valor respeita a faixa que combinamos?\" — tem resposta determinística: uma regra de faixa por categoria, revisada por gente que entende o catálogo. Forçar um modelo a decidir isso seria trocar uma verificação auditável por uma opinião de caixa-preta sobre exatamente o tipo de erro que este módulo existe para pegar de forma confiável."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar onde IA agrega de verdade neste tema, mas não é aqui — é um nível acima, na evolução: distinguir violação de faixa (o que a regra do contrato já pega, barato e auditável) de desvio estatístico sutil que ainda respeita a faixa mas já mudou de comportamento. Essa segunda pergunta é o assunto do L77, com SageMaker Model Monitor."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria aqui?",
+                "nenhum — a violação de faixa que este módulo trata é exatamente o caso em que uma regra explícita é mais confiável, mais rápida e mais barata que um modelo"
+              ],
+              [
+                "Por que uma regra basta, e não precisa de aprendizado?",
+                "porque a faixa de preço plausível por categoria é conhecimento de negócio estável — o time de Precificação SABE que cimento custa entre R$ 15 e R$ 120, não precisa de um modelo para inferir isso"
+              ],
+              [
+                "Onde IA entraria de fato neste tema?",
+                "no nível 6 da evolução (L77): detectar desvio estatístico gradual que ainda respeita a faixa explícita, mas já indica mudança de comportamento — problema que uma regra de limite fixo não pega por definição"
+              ],
+              [
+                "Qual o risco de usar IA para decidir violação de contrato hoje?",
+                "um classificador aprenderia os limites a partir do histórico, e herdaria qualquer viés ou erro que já existisse nesse histórico — trocando uma regra auditável por uma decisão que ninguém sabe explicar em uma frase"
+              ],
+              [
+                "Por que não agora?",
+                "a Cadência tem 310 SKUs e um time de Precificação que já sabe as faixas de cor — um ruleset revisado em PR resolve isso mais barato, mais rápido de auditar, e sem risco de alucinação"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"aprender\" a faixa de preço normal por categoria, em vez de escrever a regra com o time de Precificação, trocaria uma verificação que qualquer pessoa audita em uma linha de DQDL por uma fronteira de decisão que ninguém consegue explicar sem abrir o modelo. O ruleset já resolve isso de forma verificável — IA aqui removeria a auditabilidade, não acrescentaria precisão que faça diferença real."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Confiar que o crawler do L65 já garante qualidade do dado",
+                "o nome \"Data Catalog\" soa como \"já validado\", e o crawler realmente pega mudança de TIPO — parece cobrir mudança de VALOR também",
+                "o crawler infere e registra SCHEMA (nome, tipo); ele nunca avalia se um double de 4990.0 é um preço plausível — validação de valor é um problema completamente diferente, que exige regra própria",
+                "preço 100× maior passa pelo crawler, pelo catálogo e pelo job sem nenhum aviso, como na arquitetura mínima deste módulo",
+                "ruleset de Glue Data Quality avaliando VALOR, além do crawler validando schema — camadas complementares, não substitutas",
+                "nunca — schema e valor são perguntas diferentes em qualquer pipeline, não só neste"
+              ],
+              [
+                "Rejeitar a partição inteira quando uma linha viola o contrato",
+                "parece mais seguro \"não deixar passar nada duvidoso\" de uma vez",
+                "uma linha de cimento com preço fora da faixa vira zero produtos atualizados no dia inteiro — o remédio apaga 12.399 linhas boas junto com 1 ruim",
+                "prata do dia fica vazia por causa de um único produto com preço estranho",
+                "quarentena por linha; prata recebe o resto da partição normalmente",
+                "pipeline com poucas linhas por partição, onde uma reprovação já é sinal de corrupção sistêmica, não de outlier isolado"
+              ],
+              [
+                "Alertar só o time de dados, nunca o produtor",
+                "é o time que está olhando o painel de erro, é o caminho de menor resistência para configurar o alerta",
+                "o time de dados não decide a unidade de preço; sem esse contexto de negócio, ele vira um intermediário lento repassando a dúvida para quem realmente pode corrigir",
+                "quarentena cresce por dias porque ninguém do lado que decide a mudança sabe que precisa agir",
+                "evento customizado nomeando o produtor responsável, roteado direto para o canal dele",
+                "fase de protótipo, com produtor e consumidor sendo literalmente a mesma pessoa"
+              ],
+              [
+                "Hardcode do limite de preço dentro do script PySpark",
+                "é mais rápido escrever um if preco > 120 do que configurar um recurso de Terraform",
+                "ninguém revisa um threshold enterrado em código; mudar a regra vira deploy de job inteiro, não Pull Request de configuração revisável",
+                "regra desatualizada meses depois de uma categoria nova entrar no catálogo, porque ninguém lembrou de mexer no script",
+                "ruleset DQDL como artefato de Terraform versionado, revisável fora do código do job",
+                "protótipo de um dia, sem intenção nenhuma de ir para produção"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Quarentena cresce todo dia, sempre a mesma categoria",
+                "ruleset com faixa errada para aquela categoria, ou produtor realmente mudando de unidade de vez",
+                "comparar preço médio da categoria em quarentena com o histórico de 30 dias em prata",
+                "consulta Athena sobre quarentena/produtos/",
+                "ajustar a faixa da CustomSql se a mudança for legítima; abrir chamado com o produtor se for bug"
+              ],
+              [
+                "Prata não recebe nenhuma linha, mesmo com arquivo novo em bronze",
+                "ruleset rejeitando praticamente tudo por engano de sintaxe DQDL",
+                "testar o ruleset isolado com start-data-quality-ruleset-evaluation-run sobre uma amostra pequena",
+                "resultado da avaliação, campo de regras que falharam",
+                "corrigir a sintaxe do ruleset em contrato.tf e reaplicar"
+              ],
+              [
+                "Alerta nunca chega ao time de Precificação",
+                "assinatura do SNS expirada, ou regra do EventBridge com source/detail-type que não casa com o que o job publica",
+                "publicar um evento manual com put-events usando exatamente o Source e DetailType do script",
+                "list-subscriptions-by-topic, describe-rule da regra contrato_violado",
+                "reconfirmar assinatura; corrigir o event_pattern se o padrão não casar"
+              ],
+              [
+                "Modelo de reposição continua recomendando errado mesmo após o contrato implantado",
+                "o modelo treina sobre uma tabela prata congelada de antes da correção, sem retrain desde então",
+                "comparar a data do último treino do SageMaker com a data em que o contrato.tf entrou no ar",
+                "metadado de treino do modelo (experiment tracking)",
+                "forçar retrain sobre o prata corrigido — reprocessar dado antigo não retreina o modelo sozinho"
+              ],
+              [
+                "Linha correta cai em quarentena (falso positivo)",
+                "faixa do ruleset desatualizada — categoria nova, ou reajuste de preço legítimo (novo fornecedor, inflação)",
+                "revisar amostra da quarentena com o time de Precificação, não só com o time de dados",
+                "prefixo de quarentena via Athena, coluna de categoria",
+                "ajustar a faixa por PR revisado com quem entende o catálogo de produtos"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em qualquer parâmetro, pergunte: a linha está em quarentena porque o DADO está errado, ou porque o CONTRATO está desatualizado? São duas investigações diferentes — uma termina numa conversa com o produtor, a outra numa revisão de faixa com quem entende o catálogo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório cria dois recursos que sobrevivem por conta própria: o dado em quarentena, que não tem ciclo de vida configurado, e os resultados de consulta do Athena usados nas provas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "#!/usr/bin/env bash\n# limpar.sh — o que o destroy nao leva, e o que continua cobrando\nset -euo pipefail\n\nPROJETO=\"${PROJETO:?defina PROJETO}\"\n\n# 1. Derrube o que o Terraform administra (ruleset, regra do EventBridge,\n#    topico e assinatura SNS, policies adicionais do papel do job).\nterraform destroy -auto-approve\n\n# 2. O ruleset de Data Quality some do Glue com o destroy; confirme.\naws glue get-data-quality-ruleset --name \"${PROJETO}-contrato-produtos\" 2>&1 \\\n  | grep -q \"EntityNotFoundException\" && echo \"ruleset removido, ok\"\n\n# 3. O DADO em quarentena NAO e removido pelo destroy -- prefixo do S3.\naws s3 ls \"s3://cadencia-lake/quarentena/produtos/\" --recursive --summarize \\\n  | tail -2\n# Se o laboratorio terminou, decida: manter para auditoria (ate quando?) ou:\naws s3 rm \"s3://cadencia-lake/quarentena/produtos/\" --recursive\n\n# 4. RESULTADOS DE CONSULTA DO ATHENA usados nas provas, sem ciclo de vida.\naws s3 rm \"s3://cadencia-lake/atenas-resultados/\" --recursive\n\n# 5. Prova final: nada com o nome do projeto de pe fora do esperado.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=\"${PROJETO}\" \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table\n",
+            "filename": "limpar.sh"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Ruleset de Glue Data Quality",
+                "sim",
+                "não",
+                "é uma definição — sem execução, não gera custo"
+              ],
+              [
+                "Regra do EventBridge, tópico e assinatura SNS",
+                "sim, se em Terraform",
+                "centavos",
+                "regra ou assinatura criada à mão no console não aparece no estado do Terraform"
+              ],
+              [
+                "Dado em quarentena/produtos/ no S3",
+                "não — não pertence ao Terraform, é dado gravado pelo job",
+                "sim, GB-mês",
+                "decisão editorial: manter para auditoria por um período, ou apagar — este módulo não decide isso por você"
+              ],
+              [
+                "Resultados de consulta do Athena das provas",
+                "não",
+                "sim, GB-mês",
+                "cada execução grava um arquivo; sem ciclo de vida configurado, acumula para sempre"
+              ],
+              [
+                "Permissões adicionais no papel do job (do L65)",
+                "sim, se em Terraform",
+                "não",
+                "IAM não cobra por si só, mas uma policy órfã sobrevivendo ao módulo é risco de auditoria, não de fatura"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "Apagar o ruleset não apaga a decisão que ele documentava",
+            "content": "Remover aws_glue_data_quality_ruleset do Terraform tira a REGRA do ar, mas as faixas de preço por categoria que ela encapsulava continuam sendo a decisão de negócio combinada com o time de Precificação — perder o Terraform sem registrar a decisão em outro lugar é perder o contrato, não só o código dele."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Mudança de unidade upstream vira dado errado sem erro nenhum",
+                "ruleset de Glue Data Quality avaliado linha a linha, dentro do job",
+                "avalia VALOR, não só tipo — a lacuna que o L65 deixa aberta de propósito"
+              ],
+              [
+                "Linha reprovada não pode simplesmente sumir",
+                "quarentena em prefixo próprio no S3, com o motivo anexado",
+                "rastreável e auditável, nunca descarte silencioso"
+              ],
+              [
+                "Uma linha ruim não pode derrubar a partição inteira",
+                "avaliação e roteamento por linha, não por partição",
+                "12.399 linhas boas seguem para prata mesmo com 1 em quarentena"
+              ],
+              [
+                "Quem decidiu a mudança precisa saber, não só o time de dados",
+                "evento customizado no EventBridge, roteado a um tópico SNS dedicado ao produtor",
+                "contexto de negócio que o alerta genérico de falha de job (L65) não carrega"
+              ],
+              [
+                "Contrato precisa ser auditável, não conhecimento tribal",
+                "ruleset DQDL como artefato de Terraform, revisável em PR",
+                "mudar a faixa de uma categoria vira revisão, não deploy silencioso"
+              ],
+              [
+                "Modelo treinado sobre dado sem contrato aprende o erro como sinal real",
+                "modelo de reposição lê só prata, que agora só recebe dado validado",
+                "a melhor validação para um modelo acontece antes dele, não depois"
+              ],
+              [
+                "Faixa fixa não pega desvio gradual e legítimo dentro do limite",
+                "não resolvido neste módulo",
+                "risco residual aceito e documentado; é o assunto do L77 (drift)"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Preço 100× maior chegando ao modelo",
+                "ruleset com faixa por categoria, avaliado linha a linha",
+                "desvio dentro da faixa aceitável, mesmo que também seja sinal de mudança real (L77)"
+              ],
+              [
+                "Linha ruim apagando a partição inteira",
+                "quarentena por linha, não rejeição da partição",
+                "falha na própria escrita da quarentena, se a permissão de IAM estiver errada"
+              ],
+              [
+                "Alerta chegando ao time errado",
+                "evento customizado roteado especificamente ao produtor",
+                "assinatura de e-mail expirada ou não confirmada"
+              ],
+              [
+                "Ruleset hardcoded e não auditável",
+                "DQDL como artefato de Terraform, revisável em PR",
+                "PR aprovado por quem não entende o catálogo de produtos"
+              ],
+              [
+                "Dado pessoal exposto a quem não deveria",
+                "nada neste módulo",
+                "é o L69 inteiro, com Lake Formation"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "items": [
+              "Precifica publica o arquivo do dia em bronze/produtos/dt= (resolvido pelo L65).",
+              "O job lê a partição via from_catalog, com o mesmo cast de tipo do L65.",
+              "EvaluateDataQuality avalia cada linha contra o ruleset DQDL, antes de qualquer escrita.",
+              "Linha que respeita o contrato segue para prata/produtos/, exatamente como no L65.",
+              "Linha que viola qualquer regra vai para quarentena/produtos/, com o motivo anexado.",
+              "Se a quarentena do dia é maior que zero, o job publica um evento customizado via EventBridge.",
+              "A regra do EventBridge roteia o evento para o tópico SNS do time de Precificação, não para o time de dados.",
+              "O time de Precificação recebe o alerta com a regra violada e a contagem, em menos de um minuto.",
+              "Catálogo e tabela prata são atualizados no mesmo passo, como no L65.",
+              "O modelo de reposição volta a treinar só sobre dado garantidamente dentro do contrato."
+            ],
+            "ordered": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que o crawler e o catálogo do L65 não detectam essa mudança de preço?",
+            "answer": "O crawler resolve SCHEMA, não VALOR: ele confirma que preco_venda continua sendo um double, e um double que passou de 49,90 para 4990,00 ainda é um double perfeitamente válido — nenhuma regra de tipo quebra com essa mudança. Detectar que o número deixou de fazer sentido para a categoria do produto é um problema diferente, que exige uma regra própria sobre o valor — exatamente o que o ruleset de Glue Data Quality deste módulo adiciona por cima do que o L65 já garantia."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Uma linha que cai em quarentena fica perdida para sempre?",
+            "answer": "Não fica: ela é gravada num prefixo próprio (quarentena/produtos/dt=), com o motivo da reprovação anexado, e continua lá até alguém investigar e decidir — corrigir na origem e reprocessar, ou ajustar o ruleset se a regra é que estava errada. O único destino que uma linha reprovada NUNCA tem, neste desenho, é sumir sem deixar rastro; descartar silenciosamente é exatamente o antipadrão que a quarentena existe para evitar."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Por que alertar o time de Precificação e não só corrigir o dado sozinho?",
+            "answer": "Porque o time de dados não tem como saber se 4990,00 é o preço certo em centavos ou um erro — só quem decidiu mudar a unidade na origem sabe qual é a intenção real, e só ele pode corrigir a causa em vez do sintoma. Corrigir automaticamente \"adivinhando\" a conversão certa (dividir por 100, por exemplo) resolveria esse caso específico e quebraria silenciosamente no dia em que a mudança real for outra coisa, como um produto genuinamente mais caro entrando no catálogo."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Por que usar CustomSql em vez de só ColumnValues no ruleset?",
+            "answer": "Porque ColumnValues aplica uma única faixa para a coluna inteira, e uma faixa larga o suficiente para cobrir uma betoneira também deixaria passar cimento a 100 vezes o preço normal — 3.290,00 ainda cabe numa faixa que vai até 50.000,00. CustomSql permite condicionar a faixa à categoria do produto (WHERE categoria = 'cimento'), que é o nível de granularidade em que o contrato de preço da Cadência realmente faz sentido."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "O ruleset de Data Quality substitui os Job Bookmarks do L65?",
+            "answer": "Não — são mecanismos para problemas completamente diferentes, e um pipeline maduro usa os dois ao mesmo tempo. Job Bookmarks evitam reler um arquivo de origem já processado entre execuções agendadas; o ruleset de Data Quality avalia se o VALOR de cada linha lida respeita um contrato de negócio, independentemente de o arquivo já ter sido lido antes ou não. Um não faz o trabalho do outro."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Preciso do Lake Formation para ter esse contrato de dado funcionando?",
+            "answer": "Não; o ruleset de Glue Data Quality funciona sozinho, embutido no job, sem nenhuma dependência de Lake Formation. O Lake Formation resolve um problema diferente — quem pode VER qual coluna ou linha — e entra por cima do mesmo catálogo quando o requisito muda de \"o dado está dentro do contrato\" para \"quem tem permissão de acessar esse dado\", que é o L69, tratado depois deste na trilha."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Quanto tempo leva para o alerta chegar ao time de Precificação depois de uma violação?",
+            "answer": "Na configuração deste módulo, o alerta chega ao tópico SNS do time de Precificação em menos de um minuto após o job detectar a violação. O caminho inteiro — publicação do evento customizado, casamento da regra do EventBridge e entrega ao SNS — é assíncrono e gerenciado pela AWS, sem nenhuma etapa de polling no meio, o que torna esse tempo previsível. A prova numérica está na seção de implantação, medida com um evento de teste publicado manualmente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "O ruleset da Cadência tem uma CustomSql que reprova cimento fora da faixa R$ 15,00–R$ 120,00. No dia 19/07, 37 das 12.400 linhas violam essa regra. O que a arquitetura de PRODUÇÃO faz com a partição prata/produtos/dt=2026-07-19 inteira?",
+            "options": [
+              "Cancela a execução do job com erro, exigindo que alguém corrija manualmente o arquivo de origem antes de tentar de novo",
+              "Grava as 12.400 linhas em prata, incluindo as 37 reprovadas, e apenas registra um aviso no CloudWatch Logs",
+              "Rejeita a partição inteira, porque qualquer violação de contrato invalida o dia todo até revisão manual",
+              "Grava as 12.363 linhas que passaram no ruleset normalmente em prata, e desvia as 37 reprovadas para quarentena/produtos/dt=2026-07-19/, sem bloquear as demais"
+            ],
+            "correctIndex": 3,
+            "explanation": "A avaliação e o roteamento acontecem por LINHA, não por partição — é exatamente o requisito que a seção de requisitos declara como \"falso positivo não pode travar o pipeline inteiro\". As 12.363 linhas que respeitam o contrato seguem o caminho de sempre para prata, e as 37 reprovadas vão para um prefixo de quarentena separado, com o motivo da reprovação anexado — nenhuma delas some, e nenhuma delas atrasa as demais. A primeira alternativa é o antipadrão que a seção de anti-padrões nomeia explicitamente: rejeitar a partição inteira por causa de uma fração de linhas ruins apaga dado bom junto com o ruim, e é mais dano do que o problema original causaria sozinho. A terceira inverte o propósito do contrato: gravar a linha reprovada em prata mesmo com um aviso em log é exatamente o cenário que a quarentena existe para impedir — um aviso que ninguém lê não é controle, é decoração. A quarta trata violação de contrato como se fosse falha de infraestrutura; o job não quebrou, ele funcionou exatamente como desenhado, e cancelar a execução inteira por 37 linhas de 12.400 despriorizaria as 12.363 que estavam certas."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Quando a quarentena do dia é maior que zero, o job publica um evento ContratoDadoViolado via EventBridge. O L65 já mantém uma regra observando Glue Job State Change = FAILED. Por que esse alerta de falha genérica não é suficiente para avisar sobre a violação de contrato?",
+            "options": [
+              "Porque o EventBridge só permite uma regra por Event Bus, e a regra do L65 já ocupa esse limite",
+              "Porque o alerta de falha do L65 é entregue só para o console da AWS, sem opção de notificação externa via SNS",
+              "Porque o Glue Job State Change = FAILED só dispara quando o job levanta uma exceção não tratada, e o job deste módulo termina SUCCEEDED mesmo com linhas em quarentena — ele fez exatamente o que deveria",
+              "Porque o Glue Job State Change não existe para jobs que usam EvaluateDataQuality, só para jobs de transformação simples"
+            ],
+            "correctIndex": 2,
+            "explanation": "O job com o contrato embutido roda até o fim sem levantar exceção nenhuma — ele leu a partição, avaliou cada linha, gravou as boas em prata e as reprovadas em quarentena, exatamente como desenhado. Glue Job State Change = FAILED é um evento NATIVO do serviço que só existe quando a execução termina em erro, e esta não termina: JobRunState fica SUCCEEDED. Por isso o módulo precisa de um evento de DOMÍNIO, publicado pelo próprio script via put_events, que carrega informação que o evento nativo nunca teria — quantas linhas, qual regra, qual produtor. A segunda alternativa inventa um limite que o EventBridge não tem: um Event Bus aceita múltiplas regras sem problema, e é exatamente por isso que as regras do L65 e deste módulo coexistem. A terceira está factualmente errada sobre o L65, que já usa SNS como destino do alerta de falha — a limitação não é de canal de entrega. A quarta confunde uma transformação embutida no job (EvaluateDataQuality roda DENTRO do mesmo Glue Job) com um tipo de job diferente; Glue Job State Change continua existindo normalmente, só que não dispara porque não há falha para reportar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L65 (Glue Catalog, crawler, job idempotente) — prata/produtos/dt= já existe e é atualizada todo dia; tema do L68 (Redshift para painel de BI) consumindo a mesma tabela"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "diferença entre validar SCHEMA (L65) e validar VALOR (este módulo); sintaxe DQDL (IsComplete, ColumnValues, CustomSql, Uniqueness); quarentena por linha vs. rejeição de partição inteira; evento de domínio customizado vs. evento nativo de serviço"
+              ],
+              [
+                "Limitação que fica",
+                "o contrato pega violação de faixa explícita, não desvio estatístico gradual que ainda respeita a faixa — é o L77 quem trata disso"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L72 — Feature Store: o mesmo cálculo no treino e na inferência. Reutiliza prata_produtos, agora com contrato garantido, e resolve o próximo risco: skew entre o que o modelo vê no treino e o que vê em produção"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L77 (drift: descobrir antes do negócio reclamar) depende de um contrato de dado confiável — é o que este laboratório entrega — para que um alarme de drift signifique desvio estatístico real, não mistura com violação de contrato não tratada"
+              ],
+              [
+                "Data da última validação técnica",
+                "8 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: AWS Glue Data Quality e a linguagem DQDL — sintaxe de regras e o recurso de resultado por linha (row-level results); AWS Glue Data Quality resource type no provider Terraform da AWS — o resource aws_glue_data_quality_ruleset; Amazon EventBridge — publicação de eventos customizados via PutEvents e casamento de padrão por source/detail-type; AWS Glue events on Amazon EventBridge — o evento nativo Glue Job State Change, herdado do L65. Nenhum valor de preço aparece neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "Os nomes exatos das colunas de resultado por linha que EvaluateDataQuality anexa ao DataFrame (DataQualityEvaluationResult e equivalentes) podem variar entre versões do Glue — inspecione o schema resultante no seu ambiente antes de escrever lógica de produção em cima deles, como o comentário no código deste módulo já avisa. A sintaxe DQDL também evolui; confira a referência atual antes de copiar as regras de contrato.tf linha a linha. Os volumes da Cadência — 40 lojas, 310 SKUs, 12.400 pares produto-loja/dia — são os do cenário de exemplo; meça os seus antes de copiar um limiar de alarme."
+          }
+        }
+      ]
+    }
+  ]
+}

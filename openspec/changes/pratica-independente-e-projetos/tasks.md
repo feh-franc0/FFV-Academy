@@ -1,0 +1,17 @@
+## 1. Contrato antes do conteúdo
+
+- [x] 1.1 Contrato definido em `desafio_patcher.py`: `callout info` (o requisito, 1–3 frases), `callout warning` (critério de aceite executável), `list` não-ordenada com 3 dicas escalonadas ("Dica 1/2/3: ..."), `callout danger` opcional (custo estimado, só quando o desafio cria recurso novo), `callout success` (lembrete de limpeza — com texto padrão quando o lab não precisa de um específico)
+- [x] **Ajuste ao plano**: 1.2 e a série completa foram escritos juntos, não piloto-depois-série — o contrato (passo 1.3) já tinha sido resolvido por leitura direta de seeds reais antes de qualquer autoria, então o risco que o piloto mitigaria (molde errado em 20) já estava eliminado. Validado por leitura do JSON gerado (`children` aninhado em `section`, ids únicos, posições sequenciais) e pelos 7 gates de estrutura/conteúdo, não por captura de tela — ver nota em 2.4
+- [x] 1.3 Resolvida por grep num seed real (`lab-endpoint-vpc-privatelink-sem-nat.json`) antes de escrever o patcher: a seção é um bloco `section` com `children` array embutido (não uma lista de blocos-irmãos), e o bloco `list` usa `{ordered: bool, items: [string]}` — sem "dica" como primitive próprio; a lista faz o papel de dicas escalonadas
+
+## 2. Autoria nos ~20 labs-âncora
+
+- [x] 2.1 Lista-âncora = exatamente os 20 "essenciais para portfólio" do catálogo (`docs/aws/CATALOGO_100_LABS_ARQUITETURA_AWS.md`, seção "Os 20 essenciais para portfólio") — L01, L02, L04, L08, L11, L14, L22, L25, L31, L36, L41, L43, L51, L54, L58, L62, L74, L83, L87, L100
+- [x] 2.2 Os 20 desafios escritos, cada um derivado da arquitetura específica do lab (réplica de leitura no L01, VPC endpoint de S3 no L02, segundo consumidor de segredo no L04, terceiro serviço no traço do L08, segundo usage plan no L11, novo padrão de acesso no L14, mensagem envenenada no L22, novo `Choice` no L25, segundo bounded context no L31, circuito aberto forçado no L36, permissão derivada de uso real no L41, SCP contra admin local no L43, atributo customizado nos 3 pilares no L51, segunda conta via mesmo OIDC no L54, RTO medido de verdade no L58, nova fonte bronze→ouro no L62, 5º padrão de tráfego no L74, documento contraditório no L83, ferramenta destrutiva nova no L87, falha fora do catálogo já testado + postmortem no L100); banda 9–10 (L74, L83, L87, L100) inclui a dimensão de custo/token ou de decisão de arquitetura, não só "adicione mais um recurso"
+- [x] 2.3 Todo critério de aceite é uma medição ou observação concreta (latência sob carga, byte contado no CloudWatch, HTTP 429 vs 200, trace ID com N spans, cronômetro de RTO) — nenhum "verifique se funcionou"
+
+## 3. Travar e medir
+
+- [x] 3.1 Décima seção adicionada a `validate_cobertura_secoes.py` como `SECAO_DESAFIO`, cobrada apenas para `LABS_ANCORA` (os mesmos 20 slugs). Prova positiva: título de "Desafio — sem roteiro" sabotado em `lab-app-web-ecs-fargate-rds` → gate reprovou com `sem seção "Desafio"` → revertido → gate voltou a passar. Prova negativa: os 80 labs fora da lista nunca entram no laço da checagem — `slug in LABS_ANCORA` é a guarda
+- [x] 3.2 Registrado em `docs/aws/CATALOGO_100_LABS_ARQUITETURA_AWS.md`, logo após a lista dos 20 essenciais
+- [ ] 3.3 **Não feito nesta sessão** — medir conclusão via evento `track` só faz sentido depois do conteúdo estar em produção recebendo uso real; não há dado ainda para medir. Fica registrado como próximo passo, condicionado ao lançamento

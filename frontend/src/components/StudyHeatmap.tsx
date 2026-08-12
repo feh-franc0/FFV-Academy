@@ -94,7 +94,10 @@ export function StudyHeatmap({ studyDays, days = 91 }: Props) {
       </div>
 
       <div
-        className="rounded-xl p-4 overflow-x-auto"
+        tabIndex={0}
+        role="group"
+        aria-label="Heatmap de estudo dos últimos 91 dias, rolável na horizontal"
+        className="rounded-xl p-4 overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ffv-blue)]"
         style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
       >
         {/* Month labels */}

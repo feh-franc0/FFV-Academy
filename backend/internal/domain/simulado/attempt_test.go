@@ -18,6 +18,7 @@ func newAttemptFixture(now time.Time) *simulado.Attempt {
 		shared.UserID("user-1"),
 		shared.SimuladoID("sim-1"),
 		60,
+		[]shared.QuestionID{"q1", "q2", "q3"},
 		now,
 	)
 }
@@ -153,6 +154,7 @@ func Test_Attempt_Deadline_EqualsStartPlusTimeLimit(t *testing.T) {
 		shared.UserID("u-x"),
 		shared.SimuladoID("s-x"),
 		45,
+		[]shared.QuestionID{"q1"},
 		now,
 	)
 	assert.Equal(t, now.Add(45*time.Minute), a.Deadline())
@@ -187,6 +189,7 @@ func Test_Attempt_ReconstituteAttempt_PreservesAllFields(t *testing.T) {
 		map[shared.QuestionID]simulado.OptionID{"q1": simulado.OptionA},
 		[]shared.QuestionID{"q2"},
 		&score,
+		[]shared.QuestionID{"q1", "q2"},
 	)
 
 	assert.True(t, a.IsFinished())

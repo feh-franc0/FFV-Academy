@@ -5,21 +5,21 @@ const STEPS = [
     n: '01',
     icon: '🎯',
     title: 'Escolha sua trilha',
-    desc: 'IA, AWS, engenharia, comunicação, carreira ou empreendedorismo. Cada trilha tem ordem clara — começa do básico, vai ao avançado.',
+    desc: 'IA na AWS, arquitetura de soluções, fundamentos de IA ou produção. Cada trilha vai do básico ao avançado, em ordem clara — você sabe exatamente onde está e o que vem depois.',
     color: '#58a6ff',
   },
   {
     n: '02',
     icon: '⚡',
     title: 'Aprenda + ganhe XP',
-    desc: 'Cada artigo completo dá XP, badge, e move sua barra de progresso. Quiz no final reforça aprendizado e libera próximo módulo.',
+    desc: 'Cada artigo completo dá XP, badge e move sua barra de progresso. O quiz no final vira flashcard de revisão espaçada (SM-2) — você não só lê, memoriza de verdade.',
     color: '#a371f7',
   },
   {
     n: '03',
     icon: '🏆',
-    title: 'Conquiste e suba no ranking',
-    desc: 'Streak diário, badges raras, certificados ao completar trilha. Ranking semanal mostra quem está estudando mais.',
+    title: 'Volte todo dia e suba no ranking',
+    desc: 'Streak diário, badges raras, meta customizável e certificado ao completar a trilha. O ranking semanal mostra quem está no ritmo — e te puxa pra continuar.',
     color: 'var(--ffv-gold)',
   },
 ];
@@ -54,8 +54,9 @@ export function HowItWorks() {
             marginBottom: 48,
           }}
         >
-          Plataforma gamificada com XP, badges, streak e ranking. Você aprende e ainda compete consigo
-          mesmo (e com a comunidade).
+          Não é um blog que você lê e esquece. Cada módulo vira XP, quiz e card de revisão espaçada —
+          o conhecimento fica de verdade. E você faz isso junto com uma comunidade que está na mesma
+          jornada.
         </p>
 
         <div className="grid md:grid-cols-3 gap-6">
@@ -69,12 +70,14 @@ export function HowItWorks() {
                 transition: 'transform 0.2s ease, border-color 0.2s ease',
               }}
               onMouseOver={e => {
-                e.currentTarget.style.transform = 'translateY(-4px)';
+                e.currentTarget.style.transform = 'translateY(-6px)';
                 e.currentTarget.style.borderColor = `${s.color}80`;
+                e.currentTarget.style.boxShadow = `0 24px 50px -24px ${s.color}66`;
               }}
               onMouseOut={e => {
                 e.currentTarget.style.transform = '';
                 e.currentTarget.style.borderColor = `${s.color}25`;
+                e.currentTarget.style.boxShadow = '';
               }}
             >
               <div className="flex items-center justify-between mb-4">

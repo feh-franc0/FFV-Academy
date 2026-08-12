@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useGameState } from '@/hooks/useGameState';
+import { Breadcrumb } from '@/components/Breadcrumb';
 import {
   generateStudyPlan,
   GOAL_LABELS,
@@ -95,6 +96,7 @@ function SetupScreen({ onGenerate, hasSavedPlan, onResume }: SetupScreenProps) {
       className="max-w-3xl mx-auto px-4 py-12"
       style={{ color: 'var(--foreground)' }}
     >
+      <Breadcrumb items={[{ label: 'Início', href: '/' }, { label: 'Plano de estudos' }]} className="mb-6" />
       <div className="text-center mb-10">
         <h1
           className="text-3xl sm:text-4xl font-bold mb-3"
@@ -166,6 +168,7 @@ function SetupScreen({ onGenerate, hasSavedPlan, onResume }: SetupScreenProps) {
           </div>
           <input
             type="range"
+            aria-label="Horas disponíveis por semana"
             min={1}
             max={20}
             value={hours}
@@ -191,6 +194,7 @@ function SetupScreen({ onGenerate, hasSavedPlan, onResume }: SetupScreenProps) {
           </div>
           <input
             type="range"
+            aria-label="Semanas até o objetivo"
             min={4}
             max={52}
             value={weeks}
@@ -230,7 +234,7 @@ function MilestoneTimeline({ milestones }: { milestones: StudyPlan['keyMilestone
   if (milestones.length === 0) return null;
 
   return (
-    <div className="overflow-x-auto pb-2">
+    <div tabIndex={0} role="group" aria-label="Linha do tempo de marcos, rolável na horizontal" className="overflow-x-auto pb-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ffv-blue)]">
       <div className="flex gap-4 min-w-max px-1 py-2">
         {milestones.map((m, i) => (
           <div
@@ -239,7 +243,7 @@ function MilestoneTimeline({ milestones }: { milestones: StudyPlan['keyMilestone
           >
             <div
               className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold"
-              style={{ background: 'var(--ffv-blue)', color: '#fff' }}
+              style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
             >
               S{m.week}
             </div>
@@ -404,6 +408,7 @@ function PlanView({ plan, onRegenerate }: PlanViewProps) {
       className="max-w-3xl mx-auto px-4 py-10"
       style={{ color: 'var(--foreground)' }}
     >
+      <Breadcrumb items={[{ label: 'Início', href: '/' }, { label: 'Plano de estudos' }]} className="mb-6" />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
         <div>
@@ -574,7 +579,7 @@ export function PlanoClient() {
   }, []);
 
   return (
-    <main
+    <div
       className="min-h-screen"
       style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}
     >
@@ -589,6 +594,6 @@ export function PlanoClient() {
       {screen === 'plan' && plan && (
         <PlanView plan={plan} onRegenerate={handleRegenerate} />
       )}
-    </main>
+    </div>
   );
 }

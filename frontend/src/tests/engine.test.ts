@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 // engine.ts usa 'use client' — ok em Vitest, a diretiva é ignorada
 // Mas depende de localStorage (jsdom fornece) e de CURRICULUM/LEVELS
-import { completeModule, loadState, answerDailyQuestion } from '../lib/engine';
+import { completeModule, loadState, answerDailyQuestion, hasLocalState, restoreFromBackup, CURRENT_SCHEMA } from '../lib/engine';
 import { getLevelInfo } from '../lib/curriculum';
 
 // Módulo real do currículo (existe no CURRICULUM)
@@ -18,6 +18,37 @@ const TEST_MODULE = {
   quizScore: 1.0, // 100%
 };
 
+describe('hasLocalState / restoreFromBackup (fallback de IndexedDB)', () => {
+  it('hasLocalState é false quando não há nada salvo', () => {
+    localStorage.clear();
+    expect(hasLocalState()).toBe(false);
+  });
+
+  it('hasLocalState é true depois de completeModule salvar', () => {
+    localStorage.clear();
+    completeModule({ ...TEST_MODULE, slug: 'hls-teste' });
+    expect(hasLocalState()).toBe(true);
+  });
+
+  it('restoreFromBackup grava um estado (do IndexedDB) e loadState o lê de volta', () => {
+    localStorage.clear();
+    expect(hasLocalState()).toBe(false);
+
+    const backup = {
+      ...loadState(),
+      xp: 4242,
+      completedModules: ['recuperado-do-idb'],
+      schemaVersion: CURRENT_SCHEMA,
+    };
+    restoreFromBackup(backup);
+
+    expect(hasLocalState()).toBe(true);
+    const restored = loadState();
+    expect(restored.xp).toBe(4242);
+    expect(restored.completedModules).toContain('recuperado-do-idb');
+  });
+});
+
 describe('completeModule', () => {
   it('estado inicial começa zerado', () => {
     const state = loadState();
@@ -30,10 +61,29 @@ describe('completeModule', () => {
   it('completa um módulo e concede XP', () => {
     const result = completeModule(TEST_MODULE);
     expect(result.xpGained).toBeGreaterThan(0);
+    expect(result.persisted).toBe(true);
 
     const state = loadState();
     expect(state.xp).toBeGreaterThan(0);
     expect(state.completedModules).toContain(TEST_MODULE.slug);
+  });
+
+  it('persisted é false quando o localStorage falha (quota estourada) — não reporta sucesso falso', () => {
+    localStorage.clear();
+    const setItemSpy = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(() => {
+        throw new DOMException('exceeded quota', 'QuotaExceededError');
+      });
+
+    const result = completeModule({ ...TEST_MODULE, slug: 'quota-teste' });
+    expect(result.persisted).toBe(false);
+    // xp/badges continuam calculados em memória (usados só para decidir a
+    // mensagem de erro) — o que muda é que ConcluirModulo não pode afirmar
+    // "concluído" com base neles.
+    expect(result.xpGained).toBeGreaterThan(0);
+
+    setItemSpy.mockRestore();
   });
 
   it('concede badge first_step na primeira conclusão', () => {

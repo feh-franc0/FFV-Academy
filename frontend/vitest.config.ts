@@ -50,6 +50,14 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      /**
+       * `server-only` é fornecido pelo bundler do Next, não pelo node_modules —
+       * então módulos que o importam (seo-descriptions.ts, curriculum-local.ts)
+       * não resolvem sob Vitest. O stub abaixo permite testá-los mantendo a
+       * garantia real onde ela importa: no build, o Next continua falhando se um
+       * componente de cliente importar esses módulos.
+       */
+      'server-only': path.resolve(__dirname, './src/tests/stubs/server-only.ts'),
     },
   },
 });

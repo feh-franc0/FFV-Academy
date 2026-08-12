@@ -2,7 +2,11 @@
 # Build context = raiz do monorepo (configurado em .github/workflows/deploy.yml:
 # context: .). Permite COPY tanto de backend/ quanto de scripts/seeds/ pra
 # bundling do curriculum no binário sem precisar de SCP/upload manual em prod.
-FROM golang:1.26-alpine AS builder
+# Pinada por digest (achado P-12, auditoria de 11/ago/2026) — tag flutuante
+# como "1.26-alpine" pode apontar pra uma imagem diferente amanhã sem
+# nenhuma mudança neste arquivo. Dependabot mantém o digest atualizado
+# (ver .github/dependabot.yml, ecosystem docker).
+FROM golang:1.26-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
 
 WORKDIR /app
 
@@ -22,7 +26,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /api      ./cmd/api &&
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /importer ./cmd/importer
 
 # Stage 2: Runtime (distroless, non-root, sem shell)
-FROM gcr.io/distroless/static-debian12:nonroot
+# Pinada por digest (achado P-12) — mesma razão do stage de build acima.
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a
 
 COPY --from=builder /api      /api
 COPY --from=builder /importer /importer

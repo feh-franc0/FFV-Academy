@@ -58,12 +58,12 @@ export default function AdminPlaylistsPage() {
         <Link
           href="/admin/playlists/edit"
           className="px-4 py-2 rounded-md text-sm font-semibold"
-          style={{ background: 'var(--ffv-blue)', color: 'white' }}
+          style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
         >
           + Nova playlist
         </Link>
       </header>
-      <div className="rounded-xl overflow-x-auto" style={{ border: '1px solid var(--ffv-border)' }}>
+      <div tabIndex={0} role="group" aria-label="Tabela, rolável na horizontal" className="rounded-xl overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ffv-blue)]" style={{ border: '1px solid var(--ffv-border)' }}>
         <table className="w-full text-xs">
           <thead style={{ background: 'var(--ffv-bg2)' }}>
             <tr>

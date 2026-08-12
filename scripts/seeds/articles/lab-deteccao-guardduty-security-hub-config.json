@@ -1,0 +1,2391 @@
+{
+  "slug": "lab-deteccao-guardduty-security-hub-config",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência é a mesma equipe de duas pessoas dos laboratórios anteriores, e o "
+              },
+              {
+                "text": "L41",
+                "code": true
+              },
+              {
+                "text": " já resolveu a role da aplicação que rodava com "
+              },
+              {
+                "text": "AdministratorAccess",
+                "code": true
+              },
+              {
+                "text": ". Só que naquele processo, o Access Analyzer também apontou algo que ninguém tinha ido atrás: a conta tem GuardDuty habilitado desde a criação — vinha ligado por padrão numa landing zone que um consultor configurou — e ele já gerou achados de verdade. Todos foram parar num tópico SNS que manda e-mail para os dois."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Doze dias antes deste laboratório começar, chegou um achado do tipo \"CryptoCurrency:EC2/BitcoinTool.B!DNS\": uma instância da conta conversando com um domínio conhecido de mineração de criptomoeda. O e-mail chegou numa sexta-feira, no meio do sprint de fechamento de mês, e ficou sem leitura até a terça seguinte — quando alguém abriu por acaso, procurando outro e-mail no mesmo filtro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A instância não era crítica, e o achado acabou sendo um falso positivo — uma imagem de teste que alguém subiu com uma dependência desatualizada e removeu no mesmo dia. Mas o susto revelou o problema real: a Cadência não sabe dizer, para NENHUM achado passado, se ele foi tratado, ignorado por engano ou está simplesmente esquecido. GuardDuty estar ligado deu a aparência de proteção; não deu proteção nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Básico — depende do L41 e não pressupõe conta multi-organização"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L41 concluído (menor privilégio e Access Analyzer), CloudTrail habilitado, Terraform"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 40 min · implementação 1 h 30 a 2 h"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo: cobra por achado avaliado e item de configuração gravado, sem servidor dedicado"
+              },
+              {
+                "k": "Serviços",
+                "v": "GuardDuty, AWS Config, Security Hub, EventBridge, Lambda, DynamoDB, Step Functions"
+              },
+              {
+                "k": "Volume atual",
+                "v": "30 lojas, cerca de 3 a 5 achados por mês, a maioria de severidade baixa"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "achado CRITICAL reconhecido em até 15 minutos, com dono e prazo registrados"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "a equipe prefere aprovar manualmente toda contenção, mesmo a tecnicamente reversível — é uma escolha de processo, não uma limitação técnica"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "achado de teste virando ticket com prazo calculado, e um fluxo de aprovação que bloqueia contenção sem revisão humana"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é resposta a incidente nem análise de blast radius — descobrir o que uma credencial vazada alcançou é o L50, e ele consome o ticket que este laboratório cria como ponto de partida. Também não é identidade de workload (L42, já assumido pelo L41) nem agregação multiconta (L43) — Security Hub aqui roda numa única conta, e a agregação entre contas aparece só na seção de evolução em níveis, como o degrau seguinte, não como pré-requisito."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação, não com a sensação de ter entendido a diferença entre os três serviços."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Distinguir o papel de GuardDuty (detector de comportamento), Config (avaliador de conformidade) e Security Hub (agregador) sem confundir os três.",
+              "Habilitar os dois detectores e provar, com um achado de teste, que o caminho mínimo (SNS para e-mail) não produz nenhuma ação rastreável.",
+              "Agregar GuardDuty e Config no Security Hub e ler o mesmo achado normalizado em ASFF nos dois lugares.",
+              "Escrever uma regra do EventBridge que casa achado por Severity.Label, e explicar por que ela dispara tanto em achado novo quanto em achado atualizado.",
+              "Calcular o prazo de resposta a partir da severidade, com SLA diferente por nível — não um valor único para qualquer achado.",
+              "Distinguir remediação automatizável de ação irreversível, e implementar o freio de aprovação humana para a segunda.",
+              "Medir, num painel, quantos tickets cumpriram o prazo e quantos estouraram, por severidade.",
+              "Diagnosticar por que um achado que teve a severidade escalada não gerou ticket novo, e corrigir a causa na função.",
+              "Explicar por que uma regra do Config avaliada só por gatilho periódico deixa uma janela de até 24 horas sem detectar configuração fora de conformidade."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Detecção vs. conformidade vs. agregação",
+                "SOA-C02, SAP-C02",
+                "os três papéis distintos e como se conectam",
+                "por que Security Hub não detecta nada sozinho"
+              ],
+              [
+                "Formato ASFF",
+                "SOA-C02, SAP-C02",
+                "achado normalizado antes de virar evento",
+                "o que o formato padroniza entre GuardDuty, Config e terceiros"
+              ],
+              [
+                "Gatilho de regra do Config",
+                "SOA-C02",
+                "mudança de configuração vs. periódico, os dois juntos",
+                "por que usar só o periódico deixa janela de até 24 horas"
+              ],
+              [
+                "Padrão de evento do EventBridge",
+                "DOP-C02, SAA-C03",
+                "regra casada por Severity.Label e Workflow.Status",
+                "que achado atualizado dispara o MESMO detail-type que achado novo"
+              ],
+              [
+                "Detecção vs. prevenção",
+                "SOA-C02",
+                "GuardDuty e Config detectam; WAF e SCP previnem",
+                "por que este laboratório reage ao incidente, não o impede"
+              ],
+              [
+                "Severidade e priorização",
+                "SOA-C02, SAP-C02",
+                "SLA diferenciado por Severity.Label",
+                "por que achado LOW não deve virar ticket individual"
+              ],
+              [
+                "Automação com humano no laço",
+                "SAP-C02, DOP-C02",
+                "Step Functions pausando para aprovação",
+                "quando remediação automática é aceitável, e quando não é"
+              ],
+              [
+                "Menor privilégio na automação",
+                "SAA-C03, SOA-C02",
+                "policy do Lambda derivada do uso, herdada do L41",
+                "por que copiar uma policy ampla reabre o problema que o L41 fechou"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve um bucket S3 público sem nenhum tráfego malicioso registrado e pergunta por que o GuardDuty não achou nada. A resposta é de papel, não de configuração: GuardDuty detecta COMPORTAMENTO, e não houve comportamento anômalo — o bucket ficou público, ninguém o acessou de forma suspeita. É achado de CONFIGURAÇÃO, e quem enxerga isso é o Config, com uma regra avaliando aquele recurso."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito não funcional que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Achado CRITICAL reconhecido rapidamente",
+                "até 15 minutos",
+                "EventBridge aciona a função de ticket direto, sem fila intermediária que somaria latência de poll"
+              ],
+              [
+                "Conformidade avaliada continuamente",
+                "sem janela cega grande",
+                "regra do Config com gatilho de mudança de configuração como principal, periódico só como rede de segurança"
+              ],
+              [
+                "Sem SOC nem plantão 24 horas",
+                "equipe de 2 pessoas",
+                "nenhuma ação irreversível é automática — Step Functions sempre pausa para aprovação"
+              ],
+              [
+                "Sem orçamento para SIEM terceiro",
+                "ferramenta nativa da conta",
+                "Security Hub como agregador, não uma plataforma de terceiro com licença por usuário"
+              ],
+              [
+                "Achado de baixa severidade não pode virar ruído",
+                "triagem sustentável",
+                "LOW e INFORMATIONAL não geram ticket individual — entram em relatório agregado semanal"
+              ],
+              [
+                "Rastreabilidade de quem tratou o quê",
+                "auditável",
+                "ticket em DynamoDB com dono, status e histórico — não um e-mail que se perde na caixa"
+              ],
+              [
+                "Hipótese declarada: aprovar manualmente toda contenção",
+                "preferência explícita da equipe",
+                "toda automação de contenção passa pelo fluxo de aprovação, mesmo ações tecnicamente reversíveis"
+              ],
+              [
+                "Cobertura dos dois tipos de achado",
+                "comportamento e conformidade",
+                "GuardDuty E Config alimentando o mesmo agregador — um não substitui o outro"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b3_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que o EventBridge chama o Lambda direto, sem fila no meio",
+            "content": "Uma fila (SQS) entre o EventBridge e a função somaria o intervalo de poll ao tempo de reconhecimento — e o requisito declarado é 15 minutos para CRITICAL, não \"15 minutos mais o que a fila demorar para entregar\". Fila faz sentido quando se precisa amortecer rajada além da concorrência do Lambda; para o volume desta conta, a invocação direta é mais simples e não sacrifica o prazo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o achado que ninguém trata"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "arch_diagram",
+          "position": 0,
+          "data": {
+            "title": "GuardDuty ligado, achado no e-mail, e ninguém dono dele",
+            "caption": "Este desenho está tecnicamente \"protegido\": o detector existe e gera achado real. O defeito não é ausência de detecção — é que o único destino de qualquer achado, de qualquer severidade, é a mesma caixa de entrada, sem prazo e sem dono. Percorra os passos e repare que o achado de mineração de criptomoeda tem a mesma aparência do achado informativo do dia anterior.",
+            "groups": [
+              {
+                "label": "Detecção",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "gd",
+                    "service": "guardduty",
+                    "label": "GuardDuty habilitado",
+                    "note": "já analisa CloudTrail, VPC Flow Logs e DNS logs sozinho — a detecção nunca foi o problema deste caso"
+                  }
+                ]
+              },
+              {
+                "label": "Notificação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sns",
+                    "service": "sns",
+                    "label": "Tópico SNS",
+                    "note": "único caminho existente: todo achado, crítico ou informativo, entra na mesma fila de e-mail"
+                  }
+                ]
+              },
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "time",
+                    "service": "user",
+                    "label": "Caixa de entrada do time",
+                    "note": "não tem prazo, não tem dono e não distingue severidade — é onde a triagem para"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "gd",
+                "to": "sns",
+                "label": "achado publicado (finding)",
+                "style": "solid"
+              },
+              {
+                "from": "sns",
+                "to": "time",
+                "label": "e-mail de notificação",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A detecção nunca foi o problema",
+                "detail": "GuardDuty já correlaciona CloudTrail de gerenciamento, VPC Flow Logs e consultas de DNS por padrão, sem nenhuma configuração adicional. Uma instância conversando com um IP conhecido de mineração de criptomoeda gera achado real, no minuto em que o padrão é observado.",
+                "nodes": [
+                  "gd"
+                ],
+                "edges": [
+                  "gd>sns"
+                ]
+              },
+              {
+                "label": "Um caminho só, para toda severidade",
+                "detail": "O tópico SNS não discrimina: um achado CRITICAL e um achado INFORMATIONAL seguem exatamente pela mesma assinatura, com o mesmo formato de e-mail. Não existe, neste desenho, nenhum ponto onde a severidade decide algo.",
+                "nodes": [
+                  "gd",
+                  "sns"
+                ],
+                "edges": [
+                  "gd>sns"
+                ]
+              },
+              {
+                "label": "O e-mail chega, e é onde a triagem para",
+                "detail": "Não há sistema de ticket, prazo ou dono. \"Tratar o achado\" depende de uma pessoa abrir o e-mail, entender a gravidade sozinha e lembrar de agir — três passos que competem com o resto do trabalho do dia.",
+                "nodes": [
+                  "sns",
+                  "time"
+                ],
+                "edges": [
+                  "sns>time"
+                ]
+              },
+              {
+                "label": "A prova: um achado de teste também não produz ação rastreável",
+                "detail": "Gerar um achado de amostra (`create-sample-findings`) e observar o resultado é a prova deste laboratório: o e-mail chega, e nada além dele existe — nenhum registro, nenhum prazo, nenhuma consulta que responda \"isso foi tratado?\".",
+                "nodes": [
+                  "gd",
+                  "time"
+                ],
+                "edges": [
+                  "gd>sns"
+                ]
+              },
+              {
+                "label": "Por que alguém monta exatamente assim",
+                "detail": "Porque é o padrão: em muitas contas o GuardDuty já vem habilitado, e ligar a notificação por e-mail é a configuração de menor esforço. A conta \"parece\" protegida em qualquer checklist superficial — e é exatamente essa aparência que torna o defeito difícil de perceber sem medir.",
+                "nodes": [
+                  "gd",
+                  "sns"
+                ],
+                "edges": [
+                  "gd>sns"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção: prazo por severidade, com freio para o irreversível"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "arch_diagram",
+          "position": 0,
+          "data": {
+            "title": "Do achado ao ticket com prazo, e o freio para o irreversível",
+            "caption": "O que muda não é \"mais serviço\": é que o achado passa a ter prazo. Security Hub agrega os dois detectores num placar único; o EventBridge, não uma pessoa olhando console, decide que aquele achado vira ticket; e a ação que não se pode desfazer para numa aprovação humana, não numa função Lambda. Percorra os passos: cada peça nova rastreia a um requisito da seção anterior.",
+            "groups": [
+              {
+                "label": "Detecção",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "gd",
+                    "service": "guardduty",
+                    "label": "GuardDuty",
+                    "note": "detecta COMPORTAMENTO anômalo — o mesmo detector do desenho mínimo, sem nenhuma mudança nele"
+                  },
+                  {
+                    "id": "cfg",
+                    "service": "config",
+                    "label": "AWS Config",
+                    "note": "avalia CONFIGURAÇÃO contra regra, de forma contínua — é um tipo de achado diferente do GuardDuty, não um substituto"
+                  }
+                ]
+              },
+              {
+                "label": "Agregação e postura",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sh",
+                    "service": "securityhub",
+                    "label": "Security Hub",
+                    "note": "não detecta nada sozinho: normaliza os dois em ASFF e dá um placar único de postura"
+                  }
+                ]
+              },
+              {
+                "label": "Resposta automatizada",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "eb",
+                    "service": "eventbridge",
+                    "label": "Regra por severidade",
+                    "note": "casa o achado pelo campo Severity.Label — é o gatilho, e dispara tanto em achado novo quanto atualizado"
+                  },
+                  {
+                    "id": "fn",
+                    "service": "lambda",
+                    "label": "Função de ticket",
+                    "note": "calcula o prazo a partir da severidade — é aqui que o e-mail vira processo com dono"
+                  }
+                ]
+              },
+              {
+                "label": "Registro e prazo",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "tickets",
+                    "service": "dynamodb",
+                    "label": "Tabela de tickets",
+                    "note": "guarda o achado com o prazo calculado e o status — não só o conteúdo do achado"
+                  }
+                ]
+              },
+              {
+                "label": "Contenção com humano no laço",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sf",
+                    "service": "stepfunctions",
+                    "label": "Fluxo de aprovação",
+                    "note": "pausa e espera resposta antes de qualquer ação que não pode ser desfeita"
+                  },
+                  {
+                    "id": "analista",
+                    "service": "user",
+                    "label": "Analista de plantão",
+                    "note": "aprova ou rejeita — é o freio que a equipe de duas pessoas escolheu manter, mesmo sem SOC 24h"
+                  }
+                ]
+              },
+              {
+                "label": "Observação do SLA",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "painel",
+                    "service": "cloudwatch",
+                    "label": "Painel de SLA",
+                    "note": "mede prazo cumprido contra prazo estourado, por severidade — não a contagem de achados"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "gd",
+                "to": "sh",
+                "label": "achado normalizado em ASFF",
+                "style": "solid"
+              },
+              {
+                "from": "cfg",
+                "to": "sh",
+                "label": "resultado de conformidade normalizado em ASFF",
+                "style": "solid"
+              },
+              {
+                "from": "sh",
+                "to": "eb",
+                "label": "evento Security Hub Findings - Imported",
+                "style": "dashed"
+              },
+              {
+                "from": "eb",
+                "to": "fn",
+                "label": "regra casada por Severity.Label",
+                "style": "solid"
+              },
+              {
+                "from": "fn",
+                "to": "tickets",
+                "label": "ticket com prazo calculado pela severidade",
+                "style": "solid"
+              },
+              {
+                "from": "fn",
+                "to": "sf",
+                "label": "achado crítico automatizável aciona a contenção",
+                "style": "solid"
+              },
+              {
+                "from": "sf",
+                "to": "analista",
+                "label": "aprovação exigida antes da ação irreversível",
+                "style": "solid"
+              },
+              {
+                "from": "tickets",
+                "to": "painel",
+                "label": "prazo vs. resolução, agregado por severidade",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Dois detectores continuam sendo dois",
+                "detail": "GuardDuty entra sem nenhuma alteração em relação ao desenho mínimo. Config é o serviço novo, e ele não substitui o GuardDuty: avalia se um bucket S3 tem bloqueio de acesso público, o que não é comportamento anômalo nenhum — é desvio de configuração, e o GuardDuty não olha para isso.",
+                "nodes": [
+                  "gd",
+                  "cfg"
+                ],
+                "edges": [
+                  "gd>sh",
+                  "cfg>sh"
+                ]
+              },
+              {
+                "label": "Security Hub normaliza, não decide",
+                "detail": "Os achados de origens diferentes chegam com formatos diferentes; o Security Hub converte todos para ASFF (AWS Security Finding Format) e é isso que permite UMA regra do EventBridge, adiante, funcionar para achado de qualquer um dos dois detectores.",
+                "nodes": [
+                  "sh"
+                ],
+                "edges": [
+                  "gd>sh",
+                  "cfg>sh"
+                ]
+              },
+              {
+                "label": "O gatilho é o evento, não o console",
+                "detail": "O Security Hub publica \"Security Hub Findings - Imported\" no EventBridge, e esse mesmo tipo de evento dispara tanto quando um achado é importado pela primeira vez quanto quando ele é atualizado — inclusive quando a severidade muda. É o detalhe que a seção de falhas deste módulo explora.",
+                "nodes": [
+                  "sh",
+                  "eb"
+                ],
+                "edges": [
+                  "sh>eb"
+                ]
+              },
+              {
+                "label": "O prazo nasce da severidade, não de \"assim que der\"",
+                "detail": "A função de ticket lê o campo Severity.Label do achado e calcula um prazo diferente por nível — não existe UM prazo único no sistema. É a diferença entre processo e boa vontade.",
+                "nodes": [
+                  "eb",
+                  "fn",
+                  "tickets"
+                ],
+                "edges": [
+                  "eb>fn",
+                  "fn>tickets"
+                ]
+              },
+              {
+                "label": "Achado automatizável tem freio",
+                "detail": "A função de ticket NUNCA executa contenção sozinha: para achado CRITICAL de um tipo automatizável, ela apenas inicia um fluxo que para numa aprovação. Um diagnóstico errado nesse ponto ainda pode ser corrigido, porque nada irreversível aconteceu.",
+                "nodes": [
+                  "fn",
+                  "sf",
+                  "analista"
+                ],
+                "edges": [
+                  "fn>sf",
+                  "sf>analista"
+                ]
+              },
+              {
+                "label": "O painel mede prazo, não contagem",
+                "detail": "A pergunta que importa não é \"quantos achados tivemos\", é \"quantos \"cumpriram o prazo da própria severidade\". Um mês com 40 achados LOW e um CRITICAL vencido é pior do que um mês com 200 achados LOW e zero vencidos.",
+                "nodes": [
+                  "tickets",
+                  "painel"
+                ],
+                "edges": [
+                  "tickets>painel"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Como funciona ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "flow_diagram",
+          "position": 0,
+          "data": {
+            "title": "Do achado nascer ao prazo existir — e ao freio para o irreversível",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1 · O achado nasce em um dos dois detectores",
+                "desc": "GuardDuty publica um achado de comportamento, ou Config publica um resultado de conformidade. Os dois são eventos independentes; nenhum sabe da existência do outro."
+              },
+              {
+                "label": "2 · Security Hub importa e normaliza",
+                "desc": "O achado chega em ASFF, com campos comuns — Severity.Label, Workflow.Status, Types, Resources — independente de ter vindo do GuardDuty ou do Config."
+              },
+              {
+                "label": "3 · EventBridge casa a regra por severidade e status",
+                "desc": "O evento \"Security Hub Findings - Imported\" dispara. A regra só segue adiante para Severity.Label em CRITICAL ou HIGH, e Workflow.Status igual a NEW."
+              },
+              {
+                "label": "4 · A função de ticket calcula o prazo",
+                "desc": "Prazo = instante de importação + SLA da severidade daquele achado. A chave do registro inclui a severidade, não só o identificador do achado."
+              },
+              {
+                "label": "5 · DynamoDB grava o ticket, com status ABERTO",
+                "desc": "É o primeiro artefato rastreável deste fluxo inteiro — e o que o desenho mínimo nunca chegou a criar."
+              },
+              {
+                "label": "6 · Se o achado é CRITICAL e automatizável, o fluxo de aprovação inicia",
+                "desc": "Step Functions publica no tópico de aprovação e PARA, esperando resposta — nenhuma ação de contenção acontece antes da aprovação."
+              },
+              {
+                "label": "7 · O painel recalcula prazo cumprido contra estourado",
+                "desc": "A cada execução agendada, o painel lê a tabela de tickets e compara o campo prazo com o instante atual, agrupando por severidade."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Severidade (ASFF)",
+              "Reconhecimento",
+              "Contenção/resolução",
+              "Vira ticket individual?"
+            ],
+            "rows": [
+              [
+                "CRITICAL",
+                "15 minutos",
+                "1 hora",
+                "sim, imediato"
+              ],
+              [
+                "HIGH",
+                "1 hora",
+                "4 horas",
+                "sim, imediato"
+              ],
+              [
+                "MEDIUM",
+                "1 dia útil",
+                "3 dias úteis",
+                "sim, na fila do dia útil"
+              ],
+              [
+                "LOW",
+                "não se aplica",
+                "não se aplica",
+                "não — entra no relatório semanal agregado"
+              ],
+              [
+                "INFORMATIONAL",
+                "não se aplica",
+                "não se aplica",
+                "não — arquivado, consultável sob demanda"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que LOW e INFORMATIONAL não abrem ticket",
+            "content": "Tratar toda severidade com o mesmo processo é o que mais gera fadiga de alerta. Se um achado informativo compete pela mesma fila que um achado crítico, a equipe aprende — rapidamente e com razão — a tratar a fila inteira como ruído. O relatório semanal agregado existe para que o volume baixo continue visível sem competir por atenção imediata."
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "json",
+            "filename": "evento-achado-critico.json",
+            "code": "// O que o EventBridge entrega quando o Security Hub importa um achado.\n// E o payload que a funcao de ticket le para calcular o prazo.\n{\n  \"version\": \"0\",\n  \"id\": \"6a7e8f2c-...\",\n  \"detail-type\": \"Security Hub Findings - Imported\",\n  \"source\": \"aws.securityhub\",\n  \"account\": \"111122223333\",\n  \"time\": \"2026-08-07T14:03:11Z\",\n  \"region\": \"us-east-1\",\n  \"detail\": {\n    \"findings\": [\n      {\n        \"Id\": \"arn:aws:guardduty:us-east-1:111122223333:detector/abc/finding/xyz\",\n        \"ProductArn\": \"arn:aws:securityhub:us-east-1::product/aws/guardduty\",\n        \"GeneratorId\": \"arn:aws:guardduty:us-east-1:111122223333:detector/abc\",\n        // O tipo e o que a funcao usa para decidir se e AUTOMATIZAVEL.\n        \"Types\": [\"CryptoCurrency:EC2/BitcoinTool.B!DNS\"],\n        \"Severity\": { \"Label\": \"CRITICAL\", \"Normalized\": 90 },\n        // NEW e o unico status que a regra do EventBridge deixa passar.\n        \"Workflow\": { \"Status\": \"NEW\" },\n        \"Resources\": [\n          { \"Type\": \"AwsEc2Instance\", \"Id\": \"arn:aws:ec2:us-east-1:111122223333:instance/i-0abc\" }\n        ],\n        \"FirstObservedAt\": \"2026-08-07T14:02:40Z\",\n        \"UpdatedAt\": \"2026-08-07T14:02:40Z\"\n      }\n    ]\n  }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Uma equipe de duas pessoas, sem SOC e sem plantão formal, precisa que achado crítico de segurança vire ação com prazo — sem orçamento para uma ferramenta terceira de SIEM.",
+            "winner": "Security Hub nativo agregando GuardDuty e Config, com EventBridge acionando uma função que abre ticket com prazo por severidade, e aprovação humana para toda ação irreversível",
+            "why": "Os três serviços já existem na conta e não pedem infraestrutura nova: o custo é por achado avaliado e por item de configuração gravado, não por licença. A automação resolve exatamente o problema declarado — achado sem dono e sem prazo — sem tentar resolver um problema que a equipe não tem, que é correlação entre múltiplas fontes de terceiros ou investigação forense profunda. Isso é o L50.",
+            "alternatives": [
+              {
+                "name": "SIEM de terceiro (Splunk, Datadog Security)",
+                "downside": "Maior poder de correlação entre fontes, e cobra ingestão de dado e licença por usuário — dois custos que crescem com o volume e que o orçamento declarado não comporta. Faz sentido quando há múltiplas nuvens ou fontes on-premises para correlacionar, o que não é o caso aqui."
+              },
+              {
+                "name": "Alarme do CloudWatch direto sobre eventos do GuardDuty",
+                "downside": "Resolve a notificação, mas não a agregação: sem o Security Hub, um achado de conformidade do Config segue um caminho totalmente separado, com regra e formato próprios — dobra a manutenção para a metade da cobertura."
+              },
+              {
+                "name": "Amazon Detective",
+                "downside": "Serve para investigar a CAUSA de um achado já aberto — gráfico de comportamento ao longo do tempo — e não para decidir se o achado vira ticket. É complementar à automação deste laboratório, não substituto dela."
+              },
+              {
+                "name": "Triagem manual diária de um relatório consolidado",
+                "downside": "Não cobre o requisito de reconhecimento em 15 minutos para achado CRITICAL: uma rotina diária, por definição, tem janela de até 24 horas entre o achado nascer e alguém olhar para ele."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Agregador de achado",
+                "Security Hub nativo",
+                "SIEM terceiro; alarme direto por serviço",
+                "já existe na conta, cobra por achado e não por licença",
+                "correlação entre múltiplas nuvens ou fontes on-premises, que a Cadência não tem"
+              ],
+              [
+                "Gatilho do EventBridge",
+                "Severity.Label em CRITICAL/HIGH, Workflow.Status = NEW",
+                "casar todo achado sem filtro; casar só por tipo de recurso",
+                "evita reabrir ticket a cada reavaliação do mesmo achado sem mudança real",
+                "achado que muda de severidade precisa de chave própria — tratado na seção de falhas"
+              ],
+              [
+                "Gatilho do Config",
+                "mudança de configuração + periódico de 24h como rede de segurança",
+                "só periódico (padrão do console); só mudança",
+                "pega o desvio no instante em que acontece, sem depender só da notificação",
+                "mais eventos avaliados; o custo por item de configuração sobe com o volume de mudança"
+              ],
+              [
+                "Cálculo do prazo",
+                "SLA por severidade, calculado na função",
+                "prazo único para todo achado; prazo definido manualmente por quem abre o ticket",
+                "o processo não depende de alguém lembrar a política correta",
+                "mudar o SLA exige alterar código, não uma configuração de negócio separada"
+              ],
+              [
+                "Contenção automática",
+                "sempre passa por aprovação humana",
+                "contenção 100% automática para achado CRITICAL",
+                "a equipe de duas pessoas prefere errar para o lado de aprovar manualmente",
+                "tempo de resposta depende de alguém estar disponível para aprovar"
+              ],
+              [
+                "Armazenamento do ticket",
+                "DynamoDB sob demanda",
+                "RDS; planilha compartilhada",
+                "volume imprevisível e picos súbitos não pedem capacidade provisionada",
+                "consulta ad-hoc complexa é mais limitada que SQL"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este laboratório cria, e que não paga aqui",
+            "content": "Um achado CRITICAL cujo tipo não está na lista de \"automatizável\" vira ticket, mas nenhum fluxo de contenção inicia — alguém decide manualmente o próximo passo, sem runbook. Formalizar esse runbook, e medir o alcance real de uma credencial comprometida, é o L50: este módulo entrega o ticket com prazo; o que se faz com ele quando a resposta certa não é óbvia é o laboratório seguinte."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: GuardDuty e Config, dois detectores que não se substituem"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os dois entram no mesmo arquivo porque são o par que mais se confunde: parecem \"a mesma coisa de segurança\", e não são. GuardDuty observa tráfego e chamada de API. Config observa o ESTADO declarado de um recurso, comparado contra uma regra."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "detectores.tf",
+            "code": "# detectores.tf — dois detectores, dois papeis que nao se substituem\n\n# GuardDuty ja analisa CloudTrail de gerenciamento, VPC Flow Logs e logs de\n# DNS por padrao, sem nenhuma configuracao adicional — e essa parte este\n# laboratorio NAO precisa construir; ela ja existe no momento em que o\n# detector e criado.\nresource \"aws_guardduty_detector\" \"principal\" {\n  enable = true\n\n  # O minimo suportado. Isto controla so a cadencia de REEXPORTACAO de um\n  # achado JA EXISTENTE que foi atualizado (ex: nova evidencia no mesmo\n  # achado) — um achado NOVO publica no EventBridge perto de tempo real,\n  # independente deste valor. Ainda assim vale o minimo: quando o mesmo\n  # achado ganha evidencia nova, 15 min bate melhor no SLA do que o padrao\n  # de 6 horas do console.\n  finding_publishing_frequency = \"FIFTEEN_MINUTES\"\n}\n\n# AWS Config avalia CONFIGURACAO, nao comportamento. Precisa de um gravador\n# antes de qualquer regra ter o que avaliar contra.\nresource \"aws_config_configuration_recorder\" \"principal\" {\n  name     = \"${var.projeto}-config\"\n  role_arn = aws_iam_role.config.arn\n\n  recording_group {\n    # Gravar so os tipos que as regras deste laboratorio avaliam evita o\n    # custo oculto de gravar item de configuracao que ninguem audita — o\n    # Config cobra por item gravado, nao por regra.\n    all_supported   = false\n    resource_types  = [\"AWS::S3::Bucket\", \"AWS::IAM::Role\"]\n  }\n}\n\nresource \"aws_config_delivery_channel\" \"principal\" {\n  name           = \"${var.projeto}-config\"\n  s3_bucket_name = aws_s3_bucket.config.id\n  depends_on     = [aws_config_configuration_recorder.principal]\n}\n\nresource \"aws_config_configuration_recorder_status\" \"principal\" {\n  name       = aws_config_configuration_recorder.principal.name\n  is_enabled = true\n  depends_on = [aws_config_delivery_channel.principal]\n}\n\n# A regra gerenciada da AWS para bloqueio de acesso publico em bucket S3.\n# O ponto central deste laboratorio: DOIS gatilhos, nao um so.\nresource \"aws_config_config_rule\" \"bucket_sem_acesso_publico\" {\n  name = \"${var.projeto}-s3-bloqueio-publico\"\n\n  source {\n    owner             = \"AWS\"\n    source_identifier = \"S3_BUCKET_LEVEL_PUBLIC_ACCESS_PROHIBITED\"\n  }\n\n  scope {\n    compliance_resource_types = [\"AWS::S3::Bucket\"]\n  }\n\n  # Gatilho por MUDANCA: reavalia no instante em que a configuracao do\n  # bucket muda. E o que pega o bucket que ficou publico as 14h32.\n  #\n  # Gatilho PERIODICO (abaixo, via maximum_execution_frequency implicito de\n  # 24h no console; aqui explicito para nao depender do padrao) e a rede de\n  # seguranca — cobre o que a notificacao de mudanca eventualmente perder.\n  # Um so dos dois deixa janela: so periodico, ate 24h sem detectar; so\n  # mudanca, um evento perdido nunca e corrigido.\n  maximum_execution_frequency = \"TwentyFour_Hours\"\n\n  depends_on = [aws_config_configuration_recorder.principal]\n}\n\noutput \"detector_guardduty\" {\n  value       = aws_guardduty_detector.principal.id\n  description = \"ID do detector — usado para gerar achado de teste na secao de provas\"\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que gravar só dois tipos de recurso",
+            "content": "AWS Config cobra por item de configuração gravado. Gravar \"todos os tipos suportados\" antes de ter uma regra que os avalie é o custo oculto mais comum desta seção — dado pago que nenhuma regra jamais lê. Comece pelos tipos que uma regra real avalia, e amplie a lista quando escrever a próxima regra."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: Security Hub agregando os dois em ASFF"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Não há recurso para \"conectar\" GuardDuty e Config ao Security Hub: a integração é automática quando os três estão na mesma conta e região. O que se declara é o padrão de conformidade que roda por cima disso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "securityhub.tf",
+            "code": "# securityhub.tf — o agregador; nao detecta nada, normaliza e da o placar\n\nresource \"aws_securityhub_account\" \"principal\" {\n  # Habilita SO o padrao que decidimos avaliar (abaixo), nao os dois\n  # principais de uma vez. Cada padrao ligado multiplica o numero de\n  # verificacoes de conformidade rodadas — e e cobrado por verificacao.\n  enable_default_standards = false\n}\n\nresource \"aws_securityhub_standards_subscription\" \"fsbp\" {\n  standards_arn = \"arn:aws:securityhub:${var.regiao}::standards/aws-foundational-security-best-practices/v/1.0.0\"\n  depends_on    = [aws_securityhub_account.principal]\n}\n\n# GuardDuty e Config publicam para o Security Hub por integracao nativa: nao\n# existe um recurso Terraform de \"assinatura de produto\" para os dois porque\n# a assinatura e automatica quando ambos estao habilitados na mesma conta e\n# regiao que o Security Hub. Assinatura explicita de produto so existe para\n# integracao de terceiro.\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "Cada padrão ligado multiplica verificação, não só achado",
+            "content": "Security Hub cobra por verificação de conformidade rodada, e cada padrão habilitado (AWS Foundational Security Best Practices, CIS AWS Foundations, e outros) roda seu próprio conjunto de controles — muitos se sobrepõem entre padrões. Ligar dois padrões quando um cobre o essencial dobra o custo de verificação sem dobrar o discernimento sobre a postura real da conta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: a regra do EventBridge e a função que calcula o prazo"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "É aqui que o e-mail vira processo. A regra decide QUAIS achados chegam à função; a função decide QUANDO o prazo vence e SE existe um fluxo de contenção a iniciar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "resposta.tf",
+            "code": "# resposta.tf — o gatilho por severidade, o ticket e o freio de aprovacao\n\nresource \"aws_dynamodb_table\" \"tickets\" {\n  name         = \"${var.projeto}-tickets-seguranca\"\n  # Sob demanda: o volume de achado e picos imprevisiveis (uma varredura\n  # externa gera dezenas de achados no mesmo minuto). Capacidade provisionada\n  # aqui e estimar um numero que nao existe.\n  billing_mode = \"PAY_PER_REQUEST\"\n  hash_key     = \"achado_id\"\n\n  attribute {\n    name = \"achado_id\"\n    type = \"S\"\n  }\n}\n\nresource \"aws_cloudwatch_event_rule\" \"achado_critico_ou_alto\" {\n  name = \"${var.projeto}-achado-critico-alto\"\n\n  # O MESMO detail-type dispara para achado novo e para achado atualizado —\n  # e por isso o filtro de Workflow.Status = NEW e o que evita reabrir um\n  # ticket a cada reavaliacao do mesmo achado sem mudanca real.\n  event_pattern = jsonencode({\n    source        = [\"aws.securityhub\"]\n    \"detail-type\" = [\"Security Hub Findings - Imported\"]\n    detail = {\n      findings = {\n        Severity = { Label = [\"CRITICAL\", \"HIGH\"] }\n        Workflow = { Status = [\"NEW\"] }\n      }\n    }\n  })\n}\n\nresource \"aws_cloudwatch_event_target\" \"para_a_funcao_de_ticket\" {\n  rule      = aws_cloudwatch_event_rule.achado_critico_ou_alto.name\n  target_id = \"funcao-ticket\"\n  arn       = aws_lambda_function.ticket.arn\n}\n\nresource \"aws_lambda_permission\" \"eventbridge_invoca\" {\n  statement_id  = \"PermiteEventBridge\"\n  action        = \"lambda:InvokeFunction\"\n  function_name = aws_lambda_function.ticket.function_name\n  principal     = \"events.amazonaws.com\"\n  source_arn    = aws_cloudwatch_event_rule.achado_critico_ou_alto.arn\n}\n\nresource \"aws_lambda_function\" \"ticket\" {\n  function_name = \"${var.projeto}-ticket-seguranca\"\n  role          = aws_iam_role.ticket_lambda.arn\n  handler       = \"TicketSeguranca::TicketSeguranca.Function::FunctionHandler\"\n  runtime       = \"dotnet8\"\n  timeout       = 15\n  filename      = data.archive_file.ticket.output_path\n\n  environment {\n    variables = {\n      TABELA_TICKETS         = aws_dynamodb_table.tickets.name\n      ARN_MAQUINA_APROVACAO  = aws_sfn_state_machine.aprovacao.arn\n    }\n  }\n}\n\nresource \"aws_sfn_state_machine\" \"aprovacao\" {\n  name     = \"${var.projeto}-aprovacao-contencao\"\n  role_arn = aws_iam_role.step_functions.arn\n  # Definicao completa na secao seguinte — e o freio para o irreversivel.\n  definition = file(\"${path.module}/aprovacao.asl.json\")\n}\n\n# Menor privilegio: PutItem/GetItem/UpdateItem restritos a UMA tabela — nao\n# dynamodb:* e nao Resource \"*\". E o habito que o L41 existe para instalar,\n# e que copiar uma role generica reabriria.\ndata \"aws_iam_policy_document\" \"ticket_lambda\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"dynamodb:PutItem\", \"dynamodb:GetItem\", \"dynamodb:UpdateItem\"]\n    resources = [aws_dynamodb_table.tickets.arn]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"states:StartExecution\"]\n    resources = [aws_sfn_state_machine.aprovacao.arn]\n  }\n  statement {\n    effect = \"Allow\"\n    # PutMetricData nao aceita recurso especifico: e operacao de namespace de\n    # metrica, nao de recurso individual. E por isso que o \"*\" aparece aqui,\n    # e em nenhum outro lugar desta policy.\n    actions   = [\"cloudwatch:PutMetricData\"]\n    resources = [\"*\"]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"ticket_lambda\" {\n  role   = aws_iam_role.ticket_lambda.id\n  policy = data.aws_iam_policy_document.ticket_lambda.json\n}\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "O `*` que teria aparecido aqui, e por que não aparece",
+            "content": "A tentação mais comum ao escrever a policy deste Lambda é dar `dynamodb:*` \"para não precisar voltar depois\". Nesta conta isso significaria que uma função que só deveria abrir ticket teria permissão para apagar QUALQUER tabela DynamoDB da conta — inclusive as que nada têm a ver com segurança. É exatamente o hábito que o L41 existe para corrigir, e reaparece aqui porque toda automação nova é uma nova chance de copiar uma policy ampla em vez de derivar uma estreita."
+          }
+        },
+        {
+          "id": "b10_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "json",
+            "filename": "aprovacao.asl.json",
+            "code": "{\n  \"Comment\": \"Contencao de achado CRITICAL: para numa aprovacao antes de qualquer acao irreversivel\",\n  \"StartAt\": \"AguardaAprovacao\",\n  \"States\": {\n    \"AguardaAprovacao\": {\n      \"Type\": \"Task\",\n      \"Resource\": \"arn:aws:states:::sns:publish.waitForTaskToken\",\n      \"Parameters\": {\n        \"TopicArn\": \"${var.arn_topico_aprovacao}\",\n        \"Message.$\": \"$\",\n        \"MessageAttributes\": {\n          \"TaskToken\": { \"DataType\": \"String\", \"StringValue.$\": \"$$.Task.Token\" }\n        }\n      },\n      \"TimeoutSeconds\": 3600,\n      \"Next\": \"Decisao\",\n      \"Catch\": [\n        { \"ErrorEquals\": [\"States.Timeout\"], \"Next\": \"AprovacaoExpirou\" }\n      ]\n    },\n    \"Decisao\": {\n      \"Type\": \"Choice\",\n      \"Choices\": [\n        { \"Variable\": \"$.aprovado\", \"BooleanEquals\": true, \"Next\": \"ExecutaContencao\" }\n      ],\n      \"Default\": \"AprovacaoNegada\"\n    },\n    \"ExecutaContencao\": {\n      \"Type\": \"Succeed\"\n    },\n    \"AprovacaoNegada\": {\n      \"Type\": \"Fail\",\n      \"Error\": \"AnalistaRejeitou\",\n      \"Cause\": \"Analista revisou o achado e decidiu que a acao nao deve ser executada\"\n    },\n    \"AprovacaoExpirou\": {\n      \"Type\": \"Fail\",\n      \"Error\": \"SemRespostaEmUmaHora\",\n      \"Cause\": \"Ninguem aprovou nem rejeitou dentro do prazo — o achado continua ABERTO no ticket\"\n    }\n  }\n}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: o Lambda em C#, e por que ele não decide sozinho pela ação irreversível"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A função tem duas responsabilidades, e só duas: calcular o prazo e, para o caso automatizável, iniciar o fluxo de aprovação. Ela nunca executa uma contenção — isolar instância, revogar credencial — diretamente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Function.cs",
+            "code": "// Function.cs — o Lambda que transforma achado em ticket com prazo\n\nusing Amazon.Lambda.Core;\nusing Amazon.DynamoDBv2;\nusing Amazon.DynamoDBv2.Model;\nusing Amazon.StepFunctions;\nusing Amazon.StepFunctions.Model;\nusing System.Text.Json;\n\n[assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]\n\nnamespace TicketSeguranca;\n\npublic record Severidade(string Label);\npublic record Achado(string Id, Severidade Severity, List<string> Types, List<object> Resources);\npublic record Findings(List<Achado> Findings);\npublic record EventoEventBridge(Findings Detail);\n\npublic class Function\n{\n    // SLA por severidade — nao existe UM prazo, existe uma tabela. Achado\n    // LOW e INFORMATIONAL nem chegam aqui: o padrao do EventBridge ja os\n    // filtra antes de esta funcao ser invocada.\n    private static readonly Dictionary<string, TimeSpan> PrazoPorSeveridade = new()\n    {\n        [\"CRITICAL\"] = TimeSpan.FromMinutes(15),\n        [\"HIGH\"]     = TimeSpan.FromHours(1),\n    };\n\n    private readonly AmazonDynamoDBClient _dynamo = new();\n    private readonly AmazonStepFunctionsClient _stepFunctions = new();\n    private readonly string _tabela = Environment.GetEnvironmentVariable(\"TABELA_TICKETS\")!;\n    private readonly string _maquinaAprovacao = Environment.GetEnvironmentVariable(\"ARN_MAQUINA_APROVACAO\")!;\n\n    public async Task FunctionHandler(EventoEventBridge evento, ILambdaContext contexto)\n    {\n        foreach (var achado in evento.Detail.Findings)\n        {\n            var agora = DateTimeOffset.UtcNow;\n            var prazo = agora + PrazoPorSeveridade[achado.Severity.Label];\n\n            // Idempotencia CORRETA: a chave inclui a severidade atual, nao\n            // so o identificador do achado. Um achado que escala de MEDIUM\n            // para CRITICAL muda de chave e gera um SEGUNDO registro com\n            // prazo mais curto — em vez de esta funcao ignorar em silencio\n            // a atualizacao porque \"esse achado ja tem ticket\". E o defeito\n            // que a secao de falhas deste modulo provoca de proposito.\n            var chave = $\"{achado.Id}#{achado.Severity.Label}\";\n\n            await _dynamo.PutItemAsync(new PutItemRequest\n            {\n                TableName = _tabela,\n                Item = new Dictionary<string, AttributeValue>\n                {\n                    [\"achado_id\"]  = new AttributeValue { S = chave },\n                    [\"severidade\"] = new AttributeValue { S = achado.Severity.Label },\n                    [\"criado_em\"]  = new AttributeValue { S = agora.ToString(\"O\") },\n                    [\"prazo\"]      = new AttributeValue { S = prazo.ToString(\"O\") },\n                    [\"status\"]     = new AttributeValue { S = \"ABERTO\" },\n                    [\"tipo\"]       = new AttributeValue { S = achado.Types.FirstOrDefault() ?? \"desconhecido\" },\n                },\n                // Nao sobrescreve um ticket ja aberto para a MESMA chave —\n                // mas uma chave nova (severidade diferente) sempre grava.\n                ConditionExpression = \"attribute_not_exists(achado_id)\",\n            });\n\n            // So achado CRITICAL de um tipo conhecido como automatizavel\n            // entra no fluxo de aprovacao. Esta funcao NUNCA executa a\n            // contencao: ela apenas inicia a maquina de estados que vai\n            // parar numa aprovacao humana antes de qualquer acao.\n            if (achado.Severity.Label == \"CRITICAL\" && EhAutomatizavel(achado))\n            {\n                await _stepFunctions.StartExecutionAsync(new StartExecutionRequest\n                {\n                    StateMachineArn = _maquinaAprovacao,\n                    Input = JsonSerializer.Serialize(new { achado.Id, achado.Resources }),\n                });\n            }\n        }\n    }\n\n    // Lista curta e explicita, de proposito: contencao automatizada so se\n    // propoe para tipos de achado onde a acao (isolar instancia, revogar\n    // credencial) e conhecida e a equipe ja decidiu que quer o fluxo de\n    // aprovacao para eles. Tipo fora da lista vira ticket, sem fluxo de\n    // contencao — alguem decide manualmente o proximo passo.\n    private static bool EhAutomatizavel(Achado achado) =>\n        achado.Types.Any(t => t.StartsWith(\"CryptoCurrency\") || t.StartsWith(\"UnauthorizedAccess\"));\n}\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "A chave composta é o que corrige o defeito da seção de falhas",
+            "content": "Incluir a severidade na chave do registro (`achado_id#severidade`) parece redundante até o achado escalar: sem isso, uma reavaliação de MEDIUM para CRITICAL colide com a `ConditionExpression` de \"não sobrescreve\" e o Lambda descarta a atualização em silêncio. Com a severidade na chave, a escalada vira um SEGUNDO registro, com prazo mais curto — que é o comportamento correto."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar que o achado virou ação"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma aceita \"chegou o e-mail\" como resultado — cada uma tem um número, um estado ou uma ausência esperada, e a quarta é a que mais evidencia a diferença entre os dois desenhos."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medicoes; nenhuma conclusao vem de \"chegou o e-mail\"\n\nPROJETO=ffv-lab; REGIAO=us-east-1\nDETECTOR=$(aws guardduty list-detectors --query 'DetectorIds[0]' --output text)\n\n# ── Prova 1: o achado de teste realmente nasce no GuardDuty ──────────────────\naws guardduty create-sample-findings --detector-id \"$DETECTOR\" --region \"$REGIAO\"\nsleep 30\naws guardduty list-findings --detector-id \"$DETECTOR\" \\\n  --query 'length(FindingIds)' --output text\n# Esperado: numero maior que zero. Achados de amostra levam ate alguns\n# minutos para aparecer — se vier zero, aguarde e repita antes de concluir falha.\n\n# ── Prova 2: o mesmo achado aparece no Security Hub, normalizado ─────────────\naws securityhub get-findings \\\n  --filters '{\"ProductName\":[{\"Value\":\"GuardDuty\",\"Comparison\":\"EQUALS\"}]}' \\\n  --query 'Findings[0].{Id:Id,Severidade:Severity.Label,Status:Workflow.Status}' \\\n  --output table\n# Esperado: uma linha com Severidade preenchida. Vazio aqui significa que a\n# integracao GuardDuty->Security Hub nao esta ativa nesta conta/regiao.\n\n# ── Prova 3: o ticket nasce com prazo, nao so com conteudo ───────────────────\naws dynamodb scan --table-name \"${PROJETO}-tickets-seguranca\" \\\n  --query 'Items[0].{Severidade:severidade.S,Prazo:prazo.S,Status:status.S}' \\\n  --output table\n# Esperado: campo Prazo preenchido, e igual a Criado_em mais o SLA da\n# severidade — 15 min para CRITICAL, 1 h para HIGH. Prazo vazio e a\n# funcao de ticket nao concluiu, ou o achado nao casou a regra do EventBridge.\n\n# ── Prova 4: o caminho minimo (so e-mail) nao produz NENHUM registro ─────────\n# Rode com a stack de producao DESLIGADA (so GuardDuty + SNS do desenho\n# minimo) e repita a prova 1. Depois:\naws dynamodb scan --table-name \"${PROJETO}-tickets-seguranca\" \\\n  --query 'length(Items)' --output text 2>/dev/null || echo \"tabela nao existe\"\n# Esperado: \"tabela nao existe\", ou 0 itens. E a prova de que o e-mail,\n# sozinho, nunca produziu acao rastreavel nenhuma.\n\n# ── Prova 5: a aprovacao humana realmente bloqueia a contencao ───────────────\naws stepfunctions list-executions \\\n  --state-machine-arn \"$(terraform output -raw arn_maquina_aprovacao)\" \\\n  --status-filter RUNNING \\\n  --query 'executions[].{Iniciada:startDate,Status:status}' --output table\n# Esperado, para achado CRITICAL automatizavel: uma execucao em RUNNING,\n# parada no estado AguardaAprovacao, ate alguem responder ou o prazo de\n# 1 h expirar. Se o status for SUCCEEDED sem ninguem ter aprovado, o freio\n# nao esta funcionando.\n"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · O achado nasce de verdade",
+                "`create-sample-findings` + `list-findings`",
+                "contagem de achados maior que zero",
+                "zero após alguns minutos indica detector desabilitado ou região errada"
+              ],
+              [
+                "2 · Chega normalizado no Security Hub",
+                "`get-findings` filtrado por produto",
+                "linha com Severidade e Status preenchidos",
+                "lista vazia indica integração GuardDuty→Security Hub não habilitada nesta conta/região"
+              ],
+              [
+                "3 · O ticket nasce com prazo",
+                "`dynamodb scan` na tabela de tickets",
+                "campo Prazo = Criado_em + SLA da severidade",
+                "prazo vazio indica que a regra do EventBridge não casou o achado, ou a função falhou"
+              ],
+              [
+                "4 · O caminho mínimo não deixa rastro",
+                "repetir a prova 1 só com GuardDuty + SNS",
+                "tabela de tickets inexistente ou vazia",
+                "qualquer registro aqui significa que a stack de produção ainda está ativa"
+              ],
+              [
+                "5 · A aprovação bloqueia a contenção",
+                "`list-executions` da máquina de estados",
+                "execução em RUNNING, parada em AguardaAprovacao",
+                "SUCCEEDED sem aprovação humana registrada é o freio falhando"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três produzem o mesmo sintoma superficial — \"o achado não gerou a ação certa\" — e o que separa uma da outra é onde exatamente a cadeia quebra."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Dedupe esconde escalada de severidade",
+                "gere um achado MEDIUM, deixe criar o ticket, depois force a mesma chave sem a severidade (`achado_id` puro) e reenvie como CRITICAL",
+                "o achado crítico não gera ticket novo nem atualiza o prazo do antigo",
+                "log do Lambda mostra `ConditionalCheckFailedException` sendo engolido, ou a chave sem severidade",
+                "chave composta `achado_id#severidade`, como no código desta seção — nunca só o ID"
+              ],
+              [
+                "Config só com gatilho periódico",
+                "remova `maximum_execution_frequency` do gatilho de mudança e deixe só o periódico",
+                "um bucket fica público por horas antes de o achado aparecer",
+                "compare o horário em que o bucket mudou com `UpdatedAt` do achado no Config",
+                "mantenha os dois gatilhos: mudança como principal, periódico como rede de segurança"
+              ],
+              [
+                "Função de ticket com IAM amplo",
+                "anexe `dynamodb:*` e `states:*` em vez da policy restrita da seção anterior",
+                "nada quebra visivelmente — é esse o problema",
+                "Access Analyzer (L41) sobre a role do Lambda, depois de dias de uso real",
+                "derivar a policy do uso medido, com `Resource` restrito às duas ARNs que a função toca"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A falha que não aparece em nenhum log de erro",
+            "content": "Achado escalando de severidade sem gerar novo ticket não lança exceção, não falha health check e não aparece em painel de erro — o Lambda termina com sucesso, porque `ConditionExpression` falhar é o comportamento ESPERADO para um achado repetido. A única forma de flagrar isso é comparar a severidade do achado bruto no Security Hub com a do ticket aberto, o que é exatamente o que a seção de observabilidade mede."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Um bucket S3 da Cadência ficou público por 40 minutos. Ao revisar depois, ninguém encontra achado do GuardDuty sobre o episódio, embora o Security Hub esteja habilitado e agregando normalmente. Qual é a explicação mais provável?",
+        "options": [
+          "GuardDuty detecta comportamento anômalo, e não houve nenhum acesso malicioso ao bucket — quem enxerga configuração pública é o Config, com uma regra avaliando aquele recurso",
+          "O bucket precisaria estar dentro de uma VPC para o GuardDuty monitorá-lo",
+          "Security Hub só exibe achado de GuardDuty, e achado de Config precisa de um painel separado",
+          "O Security Hub não processou o achado a tempo, e ele expirou antes de ser exibido"
+        ],
+        "correctIndex": 0,
+        "explanation": "A causa é de papel, não de configuração: GuardDuty detecta COMPORTAMENTO — tráfego, chamada de API, padrão anômalo — e não houve nenhum comportamento suspeito registrado no episódio, só uma configuração exposta. Quem enxerga isso é o Config, avaliando o estado do bucket contra uma regra como \"bloqueio de acesso público prohibited\". Sem uma regra do Config cobrindo `AWS::S3::Bucket`, nem o Config teria gerado achado nenhum — o problema não é qual serviço \"não funcionou\", é qual serviço tinha o papel de olhar para aquele tipo de desvio.\n\nA primeira alternativa inventa um comportamento de expiração que não existe: achado não desaparece por decurso de tempo antes de ser mostrado. A terceira confunde S3, que é um serviço regional sem conceito de VPC, com um recurso que \"mora\" numa rede — S3 é alcançado por endpoint, nunca está dentro de uma VPC. A quarta inverte o papel do Security Hub: ele agrega achado de QUALQUER origem normalizada em ASFF no MESMO painel, e não segrega por serviço de origem — se não há achado do Config ali, é porque o Config não gerou nenhum, não porque o painel os separa."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o que muda quando a resposta fica automática"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Automatizar a abertura de ticket é seguro por natureza: só cria rastro. O risco real deste laboratório mora em três lugares específicos — a permissão da própria função de resposta, o freio de aprovação, e a hipótese de que a automação continua correta depois que ninguém mexe nela por meses."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Função de ticket com IAM mais amplo que o necessário",
+                "média",
+                "médio",
+                "policy derivada do uso real, herdada da disciplina do L41",
+                "Access Analyzer (unused access) sobre a role da função",
+                "restringir a policy e reimplantar; nenhuma ação retroativa necessária"
+              ],
+              [
+                "Aprovação de contenção contornada por pressa (\"aprovar tudo em lote\")",
+                "média",
+                "alto",
+                "o fluxo exige token de aprovação por execução — não existe atalho de \"aprovar todos\"",
+                "CloudTrail no papel de quem aprova, correlacionado ao volume de aprovações por minuto",
+                "revisar as decisões do período e reverter contenção aplicada sem análise real"
+              ],
+              [
+                "Dedupe por identificador esconde achado escalado",
+                "média",
+                "alto",
+                "chave composta por severidade, como implementado nesta seção",
+                "comparar severidade do achado bruto com a do ticket aberto para o mesmo `achado_id`",
+                "reabrir o ticket com o prazo recalculado pela severidade atual"
+              ],
+              [
+                "GuardDuty ou Config desligado silenciosamente para \"reduzir ruído\"",
+                "baixa",
+                "crítico",
+                "fora do escopo deste laboratório — impedir isso estruturalmente é controle de organização, do L43",
+                "alarme sobre o próprio estado do detector, não sobre os achados que ele gera",
+                "reabilitar e investigar o motivo pelo qual foi desligado"
+              ],
+              [
+                "Ticket CRITICAL aberto sem ninguém olhar dentro do prazo",
+                "média",
+                "alto",
+                "este laboratório garante o TICKET, não a página imediata — combinar com alarme que acorda alguém é o L52",
+                "painel de prazo estourado, revisado no início e no fim do expediente",
+                "escalonamento manual para o segundo membro do time"
+              ],
+              [
+                "Falso positivo recorrente consome a atenção do time",
+                "alta",
+                "baixo a médio",
+                "medir taxa de falso positivo por tipo de achado",
+                "campo \"não é achado real\" no fechamento do ticket, contado por tipo",
+                "suprimir o TIPO específico de achado — nunca o detector inteiro"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um painel de resposta a achado tem uma função estreita: dizer se o processo está cumprindo o que prometeu, por severidade. Contagem de achado sozinha não responde isso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "Quantos tickets CRITICAL estão com o prazo estourado agora?",
+                "consulta na tabela de tickets, prazo < agora, status ABERTO",
+                "contenção não está acontecendo no tempo prometido",
+                "qualquer valor > 0"
+              ],
+              [
+                "Qual % dos tickets fechou dentro do prazo, por severidade?",
+                "razão entre resolvido-a-tempo e total, agrupado por severidade",
+                "processo cumprindo o SLA declarado",
+                "≥ 95% para CRITICAL e HIGH"
+              ],
+              [
+                "Um achado escalou de severidade sem gerar ticket novo?",
+                "comparar Severity.Label do achado bruto com o do ticket aberto para o mesmo `achado_id`",
+                "a falha da seção anterior, em produção",
+                "qualquer divergência"
+              ],
+              [
+                "Quantas remediações automáticas dispararam vs. exigiram aprovação?",
+                "contagem de execuções do Step Functions por estado final",
+                "proporção de contenção automatizável na carga real",
+                "informativo — não é limiar de alarme"
+              ],
+              [
+                "Qual a taxa de falso positivo, por tipo de achado?",
+                "tickets fechados como \"não é achado real\" ÷ total, por Types",
+                "regra ruidosa demais para o ambiente real",
+                "> 30% num tipo específico"
+              ],
+              [
+                "O Config está avaliando por mudança, ou só no ciclo periódico?",
+                "comparar `UpdatedAt` do achado com o horário real da mudança de configuração",
+                "janela cega de conformidade",
+                "diferença > alguns minutos indica gatilho de mudança ausente"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana neste laboratório",
+            "content": "Contagem total de achados subindo não é degradação — pode ser só mais superfície monitorada (mais tipo de recurso gravado pelo Config, por exemplo). O sinal que importa é a PROPORÇÃO dentro do prazo, não o volume bruto."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão de avaliações"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "3 a 5 achados/mês, 2 tipos de recurso no Config",
+                "cada achado tratado individualmente",
+                "nada; é o cenário da Cadência",
+                "nada"
+              ],
+              [
+                "500 achados/mês, conta com mais serviços",
+                "o relatório semanal de LOW cresce",
+                "triagem em lote começa a exigir agrupamento por tipo, não item a item",
+                "agrupar achados do mesmo tipo/recurso no relatório em vez de listar um a um"
+              ],
+              [
+                "1 milhão de avaliações de Config/dia",
+                "muitos recursos gravados, muita avaliação de regra",
+                "o custo por item de configuração passa a ser linha visível na fatura",
+                "restringir `resource_types` aos que alguma regra realmente avalia"
+              ],
+              [
+                "Rajada: uma nova regra do Config avalia todo o histórico de uma vez",
+                "milhares de achados de conformidade no mesmo minuto",
+                "a função de ticket pode saturar limite de concorrência do Lambda ou de escrita do DynamoDB",
+                "processar em lote com backoff, não uma invocação por achado — é o assunto do L36"
+              ],
+              [
+                "Falha de um serviço regional (não de AZ)",
+                "GuardDuty, Config e Security Hub são serviços regionais e gerenciados — não há \"AZ\" que o consumidor escolha ou perca aqui",
+                "a unidade real de falha é a REGIÃO, não a zona de disponibilidade",
+                "para conta com requisito de continuidade entre regiões, replicar a agregação é decisão de arquitetura separada, fora deste laboratório"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Por que este laboratório não tem uma linha de \"falha de AZ\"",
+            "content": "GuardDuty, Config, Security Hub, EventBridge e DynamoDB são serviços gerenciados sem AZ exposta ao consumidor — a AWS já distribui a resiliência internamente. Forçar uma linha de \"falha de AZ\" aqui seria inventar um risco que este desenho não tem, só para preencher um formato. O risco real em escala é limite de concorrência e throughput, não topologia de rede."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: as dimensões, não o valor"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Nenhum serviço aqui cobra por hora ligada. Todos cobram por volume processado — o que significa que o desenho mínimo (só GuardDuty) e o de produção custam quase o mesmo em detecção, e a diferença de custo real está na agregação e na automação."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "Cadência, 3 a 5 achados/mês, 2 tipos de recurso no Config",
+                "GuardDuty e Config no piso de uso; Security Hub com um padrão",
+                "desprezível",
+                "nenhuma; otimizar aqui é gastar atenção onde não há dinheiro"
+              ],
+              [
+                "Produção pequena",
+                "~50 achados/mês, 5 tipos de recurso no Config",
+                "mais item de configuração gravado; mais verificação de padrão do Security Hub",
+                "baixa e previsível",
+                "revisar `resource_types` do Config a cada tipo novo de recurso adotado"
+              ],
+              [
+                "Alta escala",
+                "conta com centenas de recursos, múltiplas regras do Config",
+                "volume de item de configuração e de achado avaliado cresce com o número de recursos",
+                "passa a ser linha visível na fatura de Config e Security Hub",
+                "desligar padrão do Security Hub redundante; restringir escopo de regra do Config"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "GuardDuty",
+                "volume de CloudTrail, VPC Flow Logs e DNS analisado",
+                "proteções adicionais (malware, EKS, RDS) somam dimensões próprias — habilite só o que a conta usa"
+              ],
+              [
+                "AWS Config",
+                "item de configuração gravado + avaliação de regra",
+                "`all_supported = true` sem regra correspondente é o custo oculto mais comum"
+              ],
+              [
+                "Security Hub",
+                "achado ingerido + verificação de conformidade por padrão habilitado",
+                "dois padrões sobrepostos avaliam o mesmo controle duas vezes"
+              ],
+              [
+                "Lambda e DynamoDB",
+                "invocação e requisição, sob demanda",
+                "desprezível neste volume; vira relevante só em rajada de milhares de achados"
+              ],
+              [
+                "EventBridge",
+                "evento no barramento padrão é sem custo adicional para esta regra",
+                "barramento customizado, se adotado depois, tem cobrança própria por milhão de eventos"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho de custo que não está em nenhuma fatura da AWS",
+            "content": "O achado de mineração de criptomoeda ficou 12 dias sem leitura porque tratar e-mail de segurança competia com o resto do trabalho da semana. O custo que este laboratório ataca não é a fatura da AWS — é o tempo até alguém perceber, que nenhuma linha de cobrança mede."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "achado com prazo, dono e painel de SLA — não mais e-mail perdido",
+                "ninguém acorda para achado CRITICAL fora do expediente",
+                "alarme que acorda alguém, ligado ao ticket (L52)",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "dois detectores agregados, ação irreversível com aprovação humana",
+                "runbook de contenção ainda não formalizado para todo tipo de achado",
+                "resposta a incidente com blast radius medido (L50)",
+                "alta"
+              ],
+              [
+                "Confiabilidade",
+                "Config com gatilho de mudança e periódico, sem depender de um só",
+                "conta única — falha regional (não de AZ) tira a detecção inteira",
+                "avaliar necessidade de continuidade entre regiões, se o requisito surgir",
+                "média"
+              ],
+              [
+                "Eficiência de performance",
+                "resposta em minutos para achado crítico, sem fila intermediária",
+                "rajada grande de achados pode saturar concorrência do Lambda",
+                "processamento em lote com backoff para picos (L36)",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "Config grava só os tipos de recurso que uma regra avalia",
+                "um segundo padrão do Security Hub duplicaria verificação sem necessidade",
+                "revisar padrões habilitados a cada trimestre",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "nenhum recurso fica ocioso — tudo aqui é cobrado por uso",
+                "histórico de ticket cresce sem política de retenção declarada",
+                "definir TTL na tabela de tickets para achado fechado há mais de um ano",
+                "baixa"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Por que \"risco que fica\" aponta duas vezes para o mesmo laboratório",
+            "content": "Segurança e Confiabilidade citam o L50 como melhoria porque os dois riscos residuais — runbook de contenção não formalizado e conta única sem plano de continuidade regional — nascem do mesmo limite deste módulo: ele entrega o TICKET com prazo, não a investigação completa do alcance de um incidente. Não é acaso a mesma seta aparecer duas vezes; é o mesmo limite visto por dois pilares diferentes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do e-mail perdido à detecção como dado — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "GuardDuty habilitado, achado por SNS/e-mail, sem sistema de rastreio. É onde a Cadência estava, e o defeito é invisível até alguém medir.",
+                "note": "Risco resolvido: nenhum — a detecção existe, mas não vira ação. Novo risco: a aparência de proteção esconde a ausência de processo. Custo: o mais baixo, sem agregação nem automação."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Security Hub agregando GuardDuty e Config, EventBridge por severidade, ticket com prazo, aprovação humana para o irreversível.",
+                "note": "Risco resolvido: achado sem dono e sem prazo. Novo risco: a automação em si precisa de permissão correta — copiar policy ampla reabre o que o L41 fechou. Custo: por achado avaliado e item gravado; ainda baixo."
+              },
+              {
+                "label": "Nível 3 — Runbook de contenção formal",
+                "instruction": "Cada tipo automatizável de achado ganha um runbook testado, com o blast radius conhecido antes do incidente acontecer (L50).",
+                "note": "Risco resolvido: contenção decidida na pressa, sem procedimento. Novo risco: runbook desatualizado é pior que nenhum, porque passa confiança falsa. Custo: tempo de manutenção do runbook, não infraestrutura."
+              },
+              {
+                "label": "Nível 4 — Multiconta",
+                "instruction": "Security Hub com administração delegada agregando achados de várias contas da organização; SCP impedindo desligar detector (L43).",
+                "note": "Risco resolvido: cada conta nova precisando reconfigurar detecção do zero. Novo risco: um único painel de postura pode esconder a conta específica que está pior. Custo: multiplicado pelo número de contas agregadas."
+              },
+              {
+                "label": "Nível 5 — Plataforma e resposta orquestrada",
+                "instruction": "Integração com ferramenta de ticket externa (Jira, ServiceNow) via EventBridge; SOAR com playbook versionado.",
+                "note": "Risco resolvido: ticket de segurança vivendo fora do fluxo de trabalho que o time já usa para tudo mais. Novo risco: mais um sistema para manter íntegro com o de origem. Custo: licença da ferramenta externa, se houver."
+              },
+              {
+                "label": "Nível 6 — Dados e IA sobre o histórico de achado",
+                "instruction": "Achados históricos e decisões de triagem viram dado: um modelo resume achados relacionados numa narrativa única para quem aprova.",
+                "note": "Risco resolvido: analista lendo achado por achado quando vários descrevem o mesmo incidente. Novo risco: resumo automático que omite um achado relevante sem ninguém perceber — a decisão continua exigindo evidência bruta acessível. Custo: baixo; o dado já existe no Security Hub e no CloudTrail."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Runbook de contenção (nível 3) sem prazo e dono definidos (nível 2) não tem gatilho para ser acionado — ele fica documentado e não executado. E agregação multiconta (nível 4) sobre um processo que já falha numa conta só multiplica o mesmo defeito por N contas, em vez de corrigi-lo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "GuardDuty já usa aprendizado de máquina internamente para detectar comportamento anômalo — mas essa não é a \"IA\" de que esta seção trata; ela já está embutida no serviço e não é uma decisão de desenho deste laboratório. A pergunta real é outra: onde um modelo, adicionado por cima deste desenho, agregaria valor real?"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O cálculo de prazo, o roteamento por severidade e o freio de aprovação são deterministicos por decisão, não por limitação: um achado CRITICAL tem 15 minutos porque a equipe declarou isso, e nenhum modelo deveria \"decidir\" esse prazo com base em padrão histórico — seria trocar uma política de segurança por uma inferência estatística, exatamente onde a certeza importa mais."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar onde IA ajudaria de verdade, e ele é modesto: quando vários achados relacionados chegam juntos — por exemplo, cinco achados do Config sobre o mesmo bucket em minutos, mais um achado do GuardDuty sobre a mesma instância — um modelo poderia resumir isso numa narrativa única para quem vai aprovar a contenção, em vez da pessoa ler cinco tickets separados para reconstruir o mesmo incidente sozinha."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "reduzir o tempo que o analista gasta reconstruindo o contexto de um incidente espalhado em vários achados"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "agrupar por recurso ou janela de tempo já cobre boa parte; IA se justifica quando o volume de achados relacionados por incidente cresce além do que agrupamento simples consegue nomear"
+              ],
+              [
+                "De onde viriam os dados?",
+                "o próprio Security Hub (achados relacionados por recurso) e o histórico de tickets já resolvidos, como exemplo de bons resumos"
+              ],
+              [
+                "Qual o risco?",
+                "um resumo que omite um achado relevante, e o analista aprova a contenção sem ver a evidência bruta que faltou"
+              ],
+              [
+                "Por que não agora?",
+                "a Cadência trata de 3 a 5 achados por mês — volume insuficiente para o resumo automático valer o risco de omissão. Isso muda em escala de centenas de achados por semana"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"decidir se o achado é falso positivo e fechar o ticket sozinho\" troca um sinal que já é confiável — a classificação de tipo e severidade que GuardDuty e Config já calculam com método determinístico — por uma inferência que pode errar com confiança. Onde existe classificação direta do próprio serviço, IA por cima não aumenta precisão, só aumenta superfície de erro. Um agente que diagnostica incidente com ferramenta somente-leitura, sem decidir sozinho, é o L96."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Achado só por e-mail, sem sistema de ticket",
+                "é a configuração de menor esforço, e a conta \"parece\" protegida em qualquer checklist",
+                "nenhum achado tem prazo, dono ou histórico consultável",
+                "\"não sei se isso foi tratado\" sobre um achado de semanas atrás",
+                "Security Hub agregando, EventBridge roteando, ticket com prazo",
+                "ambiente de desenvolvimento sem dado real, onde achado não tem consequência"
+              ],
+              [
+                "Confiar só no GuardDuty e ignorar o Config",
+                "GuardDuty já parece cobrir \"segurança\" sozinho",
+                "confunde ausência de comportamento malicioso com conformidade de configuração",
+                "bucket público há meses, zero achado do GuardDuty sobre ele",
+                "os dois detectores juntos, alimentando o mesmo agregador",
+                "nunca — são complementares, não intercambiáveis"
+              ],
+              [
+                "Dedupe de ticket só pelo identificador do achado",
+                "parece o jeito óbvio de evitar duplicar ticket para o mesmo achado",
+                "esconde silenciosamente a escalada de severidade do mesmo achado",
+                "achado crítico com prazo de um achado médio, sem ninguém perceber",
+                "chave composta incluindo a severidade atual",
+                "nunca — o custo de corrigir é uma coluna a mais na chave"
+              ],
+              [
+                "Remediação automática sem aprovação para ação irreversível",
+                "parece \"mais seguro\" reagir na hora do que esperar alguém aprovar",
+                "um falso positivo vira dano real, sem chance de desfazer",
+                "instância de produção terminada por engano, por um achado que era falso positivo",
+                "Step Functions parando em aprovação antes de qualquer ação irreversível",
+                "ação genuinamente reversível (ex.: revogar uma sessão temporária) pode dispensar aprovação"
+              ],
+              [
+                "SLA igual para toda severidade",
+                "uma regra só é mais simples de escrever e de testar",
+                "achado informativo compete pela mesma fila que achado crítico, e a fila vira ruído",
+                "equipe aprendendo a ignorar a fila inteira de tickets de segurança",
+                "prazo por Severity.Label, com LOW/INFORMATIONAL fora da fila individual",
+                "conta pequena demais para ter mais de uma severidade relevante — raro"
+              ],
+              [
+                "Desligar o detector para \"reduzir ruído\"",
+                "silenciar é mais rápido do que investigar por que uma regra gera falso positivo",
+                "perde a detecção real junto com o ruído",
+                "um incidente real não gera achado nenhum, porque o detector estava desligado",
+                "suprimir por TIPO específico de achado, mantendo o detector ligado",
+                "nunca em produção; talvez em conta de sandbox isolada, sem dado real"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "Os dois antipadrões mais perigosos não avisam antes de doer",
+            "content": "SLA uniforme e dedupe por identificador puro têm uma característica em comum: os dois passam por qualquer teste superficial. O sistema \"funciona\" — achado vira ticket, ticket tem prazo — e só um achado real escalando de severidade, ou um mês inteiro de fila de baixa prioridade, revela o defeito. É por isso que a seção de observabilidade mede exatamente essas duas coisas, e não só \"o sistema está no ar\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Achado aparece no GuardDuty, mas não no Security Hub",
+                "integração entre os dois não está ativa nesta conta/região",
+                "confira se GuardDuty e Security Hub estão habilitados na MESMA conta e região",
+                "Security Hub → Integrations",
+                "habilitar os dois na mesma conta/região; a assinatura entre eles é automática"
+              ],
+              [
+                "Achado aparece no Security Hub, mas nenhum ticket é criado",
+                "o padrão do EventBridge não casa Severity.Label ou Workflow.Status do achado",
+                "teste o padrão da regra contra o evento real capturado",
+                "evento em `detail.findings[].Severity.Label` e `.Workflow.Status`",
+                "ajustar o event pattern; lembrar que Workflow.Status pode não ser NEW se o achado já foi tocado"
+              ],
+              [
+                "Ticket criado sem prazo (campo vazio)",
+                "severidade do achado fora do mapa conhecido pela função (ex.: valor inesperado)",
+                "leia o log de execução do Lambda para a invocação específica",
+                "CloudWatch Logs da função de ticket",
+                "mapa de SLA com valor padrão explícito para severidade desconhecida — nunca silencioso"
+              ],
+              [
+                "Bucket fica público por horas antes do achado aparecer",
+                "regra do Config só com gatilho periódico, sem gatilho de mudança",
+                "compare o horário real da mudança com `UpdatedAt` do achado",
+                "definição da regra do Config, campo de trigger",
+                "adicionar gatilho de mudança de configuração como principal"
+              ],
+              [
+                "Severidade escala e o ticket original não muda",
+                "dedupe por identificador puro, sem a severidade na chave",
+                "compare a severidade do achado bruto no Security Hub com a do ticket aberto",
+                "lógica de chave no Lambda de ticket",
+                "chave composta `achado_id#severidade`, como nesta seção"
+              ],
+              [
+                "Fluxo de aprovação nunca inicia para achado crítico",
+                "o tipo do achado não está na lista de tipos automatizáveis da função",
+                "confira `Types` do achado contra a lista em `EhAutomatizavel`",
+                "código da função de ticket",
+                "ou é decisão certa (esse tipo não deveria automatizar) ou falta incluir o tipo na lista"
+              ],
+              [
+                "Painel mostra 100% de SLA cumprido, e o time sabe que não é verdade",
+                "métrica calculada a partir da criação do TICKET, não do achado original",
+                "compare o timestamp usado na métrica com `FirstObservedAt` do achado",
+                "consulta que alimenta o painel",
+                "usar `FirstObservedAt` do achado, não `criado_em` do ticket, como início do prazo"
+              ],
+              [
+                "Mesmo tipo de achado gera ticket toda semana, sempre falso positivo",
+                "regra ruidosa para o ambiente específico, sem exceção configurada",
+                "conte tickets fechados como \"não é achado real\", agrupados por tipo",
+                "histórico de fechamento de ticket, agrupado por `tipo`",
+                "suprimir aquele tipo específico de achado — não desligar o detector inteiro"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em regra ou permissão, pergunte: o achado chegou até o Security Hub? Se sim, chegou ao EventBridge? Se sim, a função foi invocada? Cada \"sim\" isola uma etapa inteira da investigação — a maioria dos problemas mora numa etapa só, e testá-las em ordem é mais rápido que revisar o desenho inteiro de uma vez."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório não cria recurso que cobra parado por hora — nenhum NAT Gateway, nenhum balanceador. O que sobrevive ao destroy é DADO: achado retido e ticket aberto."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "#!/usr/bin/env bash\n# limpar.sh — a ordem importa; achado do GuardDuty sobrevive ao Terraform\nset -euo pipefail\n\nPROJETO=\"${PROJETO:?defina PROJETO}\"\n\n# 1. Derrube o que o Terraform administra.\nterraform destroy -auto-approve\n\n# 2. CONFORMIDADE DE ACHADOS: os 90 dias de retencao SO valem com o detector\n#    ATIVO ou SUSPENSO. Deletar o detector — que e o que este destroy faz —\n#    PERDE os achados existentes; a AWS e explicita que a configuracao e os\n#    achados \"sao perdidos e nao podem ser recuperados\". Se voce precisa do\n#    historico, exporte para S3 ANTES do destroy; depois dele, nao ha achado\n#    nenhum para consultar, retido ou nao.\necho \"ATENCAO: deletar o detector do GuardDuty PERDE os achados existentes\"\necho \"— a retencao de 90 dias so vale com o detector vivo. Exporte para S3\"\necho \"ANTES deste destroy se o historico importa; depois, nao ha mais o que buscar.\"\n\n# 3. BUCKET DO CONFIG: guarda snapshot de configuracao e nao esvazia sozinho.\naws s3 rm \"s3://${PROJETO}-config\" --recursive 2>/dev/null || true\naws s3api delete-bucket --bucket \"${PROJETO}-config\" 2>/dev/null || true\n\n# 4. PADRAO DO SECURITY HUB: a assinatura do padrao (FSBP) para de rodar\n#    verificacao com o destroy, mas confirme — verificacao ja em andamento\n#    no momento do destroy pode ser cobrada.\naws securityhub get-enabled-standards --query 'StandardsSubscriptions' --output table 2>/dev/null || \\\n  echo \"Security Hub ja desabilitado nesta conta/regiao.\"\n\n# 5. TABELA DE TICKETS: contem achado ABERTO sem resolucao. Exporte antes de\n#    apagar, ou a rastreabilidade que este laboratorio existe para criar\n#    desaparece junto com a tabela.\naws dynamodb scan --table-name \"${PROJETO}-tickets-seguranca\" \\\n  --query 'Items[?status.S==`ABERTO`]' --output json > tickets-abertos-backup.json 2>/dev/null || true\n\n# 6. Prova final: nada com o nome do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=${PROJETO} \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table\n"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Detector do GuardDuty",
+                "sim",
+                "não",
+                "achados já gerados são PERDIDOS junto — 90 dias só vale com o detector vivo; exporte para S3 antes do destroy se o histórico importa"
+              ],
+              [
+                "Recorder e regra do Config",
+                "sim",
+                "não",
+                "item de configuração já gravado permanece no bucket até ser removido"
+              ],
+              [
+                "Bucket de snapshot do Config",
+                "não",
+                "sim, GB-mês",
+                "buckets S3 não são removidos por padrão pelo destroy quando contêm objeto"
+              ],
+              [
+                "Assinatura de padrão do Security Hub",
+                "sim",
+                "não",
+                "para de rodar verificação; nenhuma cobrança após o destroy"
+              ],
+              [
+                "Tabela de tickets (DynamoDB)",
+                "sim",
+                "não",
+                "mas o CONTEÚDO — tickets abertos, histórico de tratamento — some com ela"
+              ],
+              [
+                "Máquina de estados e regra do EventBridge",
+                "sim",
+                "não",
+                "nada a destacar; sem estado persistente próprio"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "Exporte antes de apagar, não depois",
+            "content": "GuardDuty retém achado por até 90 dias, mas só ENQUANTO o detector existir — apagar o detector (o que este `destroy` faz) perde os achados junto, antes mesmo do prazo. A tabela de tickets some inteira com o `destroy` do mesmo jeito. Se este laboratório fica no ar por tempo suficiente para acumular achado real, exporte o histórico ANTES de destruir — não existe forma de recuperar depois."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Achado sem prazo nem dono",
+                "ticket em DynamoDB, prazo calculado pela severidade",
+                "processo, não boa vontade — o prazo nasce com o registro, não depende de alguém lembrar"
+              ],
+              [
+                "Dois tipos de achado em dois caminhos separados",
+                "Security Hub agregando GuardDuty e Config",
+                "uma regra do EventBridge serve para qualquer origem, porque ambos chegam normalizados em ASFF"
+              ],
+              [
+                "Toda severidade tratada igual",
+                "SLA por Severity.Label, LOW/INFORMATIONAL fora da fila individual",
+                "evita fadiga de alerta sem perder o achado de baixa severidade — ele vai para o relatório"
+              ],
+              [
+                "Ação irreversível decidida na pressa",
+                "Step Functions parando em aprovação humana",
+                "a equipe de duas pessoas decidiu explicitamente errar para o lado de aprovar manualmente"
+              ],
+              [
+                "Severidade escalada sem re-triagem",
+                "chave composta achado_id#severidade",
+                "o mesmo achado, mais grave, precisa de um registro novo — não pode colidir com o antigo"
+              ],
+              [
+                "Config só pega desvio até 24h depois",
+                "gatilho de mudança de configuração como principal",
+                "pega o desvio no instante em que acontece; periódico vira só a rede de segurança"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "GuardDuty detecta comportamento anômalo, ou Config avalia configuração contra regra.",
+              "O achado chega ao Security Hub e é normalizado em ASFF, com Severity.Label e Workflow.Status.",
+              "Security Hub publica \"Security Hub Findings - Imported\" no EventBridge.",
+              "A regra casa achado CRITICAL ou HIGH com Workflow.Status igual a NEW.",
+              "A função de ticket calcula o prazo a partir da severidade e grava o registro no DynamoDB.",
+              "Para achado CRITICAL de tipo automatizável, a função inicia o fluxo de aprovação.",
+              "Step Functions pausa, esperando um analista aprovar ou rejeitar a contenção.",
+              "O painel recalcula, por severidade, quantos tickets cumpriram o prazo e quantos não.",
+              "Se a mesma origem reavaliar o achado com severidade maior, um segundo ticket nasce, com prazo mais curto."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "GuardDuty, Security Hub e AWS Config fazem a mesma coisa?",
+            "answer": "Não — os três têm papéis diferentes que se complementam, e é comum confundi-los porque aparecem no mesmo console de segurança. GuardDuty detecta COMPORTAMENTO anômalo analisando CloudTrail, VPC Flow Logs e logs de DNS — por exemplo, uma instância conversando com um IP conhecido de mineração de criptomoeda. Config avalia CONFIGURAÇÃO contra uma regra, de forma contínua — por exemplo, se um bucket S3 tem bloqueio de acesso público ativo. Security Hub não detecta nada sozinho: recebe os achados dos outros dois, normaliza tudo no formato ASFF e dá um placar único de postura de segurança. Sem GuardDuty ou Config alimentando-o, o Security Hub fica vazio."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Por que um achado de segurança por e-mail é pior do que não ter detecção nenhuma?",
+            "answer": "Porque ele cria a ilusão de que existe um processo, quando na verdade existe apenas uma notificação. Uma conta sem nenhuma detecção pelo menos deixa claro, para quem audita, que não há cobertura — o que tende a gerar correção. Uma conta com GuardDuty habilitado mandando achado por e-mail parece protegida em qualquer checklist superficial, mas o achado crítico e o achado informativo chegam com a mesma aparência, sem prazo e sem dono, e o comportamento real medido neste laboratório é não tratar nenhum dos dois sistematicamente."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Todo achado do GuardDuty deveria virar um ticket individual?",
+            "answer": "Não — tratar toda severidade com o mesmo processo é o antipadrão que mais gera fadiga de alerta. Achados CRITICAL e HIGH justificam ticket individual com prazo curto, porque o custo de ignorá-los é alto. Achados LOW e INFORMATIONAL, se também virarem ticket individual, competem por atenção com os que realmente importam, e a equipe aprende a ignorar a fila inteira. A prática correta é os de baixa severidade entrarem num relatório agregado, revisado em ciclo mais longo, e não na fila de resposta imediata."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "AWS Config detecta um bucket S3 que ficou público assim que isso acontece?",
+            "answer": "Só se a regra estiver configurada com gatilho de mudança de configuração; com gatilho apenas periódico, o padrão é reavaliar a cada 24 horas, e um recurso pode ficar fora de conformidade por até esse tempo sem gerar achado. As duas formas de gatilho não são excludentes: o gatilho por mudança pega o desvio no momento em que ele acontece, e o periódico funciona como rede de segurança para o que a notificação de configuração eventualmente perder. Config avaliado só na criação do recurso, sem nenhum dos dois gatilhos contínuos, não é conformidade contínua — é uma checagem única que envelhece."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "O que é o formato ASFF, e por que o Security Hub o usa?",
+            "answer": "ASFF (AWS Security Finding Format) é o esquema comum para o qual o Security Hub normaliza todo achado que recebe, seja do GuardDuty, do Config, do Inspector ou de uma ferramenta de terceiro integrada. Sem essa normalização, cada fonte teria seu próprio formato de achado, e qualquer automação teria de tratar cada uma separadamente. Com ASFF, uma única regra do EventBridge — casando pelo campo `Severity.Label`, por exemplo — funciona para achado de qualquer origem, porque todas chegam com os mesmos campos."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Automatizar a criação do ticket também deveria automatizar a remediação?",
+            "answer": "Não necessariamente, e essa distinção é o requisito central deste laboratório. Automatizar o TICKET — abrir registro com prazo e dono — é seguro para qualquer achado, porque só cria rastreabilidade. Automatizar a REMEDIAÇÃO só é seguro quando a ação é reversível; para ação irreversível, como terminar uma instância ou revogar de vez uma credencial em uso, um diagnóstico errado — um falso positivo — vira dano real sem chance de desfazer. Por isso o desenho de produção usa aprovação humana como freio antes de qualquer contenção que não se pode reverter."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Por que a severidade de um achado do GuardDuty pode mudar depois de criado?",
+            "answer": "Porque GuardDuty reavalia o comportamento à medida que reúne mais evidência, e Security Hub reimporta o mesmo achado — mesmo identificador — com o campo de severidade atualizado; o evento \"Security Hub Findings - Imported\" dispara tanto para achado novo quanto para achado atualizado. O erro comum é a automação de ticket usar apenas o identificador do achado para evitar duplicata, ignorando por completo o evento de atualização; nesse caso, uma escalada de MEDIUM para CRITICAL nunca chega a reabrir ou apressar o ticket original, e o achado mais grave espera o prazo do achado mais leve."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Preciso de administração delegada multiconta para este laboratório funcionar?",
+            "answer": "Não para o que este laboratório entrega: ele funciona inteiro numa única conta, com GuardDuty, Config e Security Hub habilitados nela. A administração delegada — um Security Hub agregando achados de várias contas de uma organização — é o próximo nível de maturidade, depende de uma estrutura multiconta com Organizations que este laboratório não pressupõe, e é o assunto do L43. A agregação entre contas aparece na seção de evolução em níveis como o quarto degrau, não como pré-requisito."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Um achado nasce como MEDIUM e a função de ticket cria um registro com prazo de 1 dia útil. Duas horas depois, o GuardDuty reavalia o mesmo achado (mesmo identificador) com evidência nova, e o Security Hub o reimporta como CRITICAL. O ticket original continua com o prazo de 1 dia útil, sem nenhuma atualização. Qual é a causa mais provável?",
+            "options": [
+              "O EventBridge não dispara evento para achado atualizado, só para achado novo",
+              "Security Hub não permite que a severidade de um achado mude depois de importado",
+              "O Config, e não o GuardDuty, é quem controla escalonamento de severidade",
+              "A função de ticket usa apenas o identificador do achado como chave de idempotência, e ignora a atualização de severidade porque já existe um registro para aquele identificador"
+            ],
+            "correctIndex": 3,
+            "explanation": "O evento \"Security Hub Findings - Imported\" dispara tanto para achado novo (via BatchImportFindings) quanto para achado atualizado (via BatchUpdateFindings) — então a atualização de severidade CHEGA à função. O que falha é a lógica de idempotência: se a chave de gravação é só o identificador do achado, a `ConditionExpression` de \"não sobrescreve\" rejeita silenciosamente a segunda gravação, porque do ponto de vista da tabela aquele achado \"já tem ticket\". A correção é incluir a severidade na chave, para que uma escalada vire um registro novo, com prazo mais curto.\n\nA primeira alternativa contradiz o comportamento documentado do evento, que cobre explicitamente as duas operações. A terceira inverte causa e efeito: é justamente porque a severidade PODE mudar que existe o evento de atualização — se ela fosse imutável, não haveria o que reimportar. A quarta atribui ao Config um controle sobre achado do GuardDuty que ele não tem: cada detector reavalia e reclassifica os próprios achados, independente do outro."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "A equipe da Cadência considera automatizar totalmente a resposta a todo achado CRITICAL — incluindo terminar a instância comprometida sem aprovação — para reduzir o tempo de contenção. O desenho deste laboratório exige aprovação humana para toda ação irreversível. Qual é o risco mais direto de abandonar essa exigência?",
+            "options": [
+              "Nenhum — quanto mais rápida a contenção, menor o risco, sempre",
+              "Step Functions tecnicamente não consegue executar uma ação de terminar instância",
+              "A automação pode agir sobre um falso positivo, e terminar uma instância é irreversível — não existe forma de desfazer um diagnóstico errado depois do fato",
+              "Isso violaria um limite de taxa de chamadas do GuardDuty"
+            ],
+            "correctIndex": 2,
+            "explanation": "A distinção que este laboratório sustenta o tempo todo é entre automatizar o TICKET (sempre seguro, porque só cria rastro) e automatizar a REMEDIAÇÃO irreversível (perigoso quando o achado pode estar errado). Um achado CRITICAL nasce de uma regra ou de um modelo de detecção — nenhum dos dois tem taxa de acerto de 100%. Quando a ação é reversível, um erro custa reverter; quando não é, como terminar uma instância, o erro é permanente, e nenhuma velocidade de contenção compensa isso na conta de uma equipe sem SOC para investigar antes de agir.\n\nA primeira alternativa ignora completamente o custo do falso positivo, que é o ponto central da decisão. A terceira é factualmente falsa: Step Functions orquestra qualquer chamada de API, incluindo terminar instância — a limitação aqui é de desenho, não técnica. A quarta troca o assunto: limite de taxa é uma restrição operacional do GuardDuty sobre chamada de API, sem relação nenhuma com a decisão de automatizar ou não uma contenção."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L41 concluído (menor privilégio e Access Analyzer), CloudTrail habilitado, Terraform básico"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "o papel distinto de GuardDuty, Config e Security Hub; o formato ASFF como o que permite uma regra servir para qualquer origem; SLA derivado da severidade, não uniforme; o freio de aprovação humana para ação irreversível; e por que dedupe por identificador puro esconde escalada de severidade"
+              ],
+              [
+                "Limitação que fica",
+                "roda numa conta só, sem agregação multiconta; e nem todo tipo de achado CRITICAL tem runbook de contenção formal — os automatizáveis entram no fluxo de aprovação, os demais viram ticket sem próximo passo definido"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L50 — resposta a incidente e blast radius. Consome o ticket que este laboratório cria como ponto de partida da investigação, e formaliza a contenção com tempo cronometrado"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L43 (multiconta com SCP) pode reutilizar a mesma automação com administração delegada do Security Hub; L52 (alarme que acorda alguém) é o complemento natural para achado CRITICAL fora do expediente; L96 (agente de operação) é onde IA soma evidência de múltiplos achados sem decidir sozinha"
+              ],
+              [
+                "Data da última validação técnica",
+                "7 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Processing GuardDuty findings with Amazon EventBridge",
+                "code": true
+              },
+              {
+                "text": " e a documentação de retenção de achados do GuardDuty — a janela de até 90 dias contada da geração, válida só com o detector ativo ou suspenso — deletar o detector perde os achados junto; "
+              },
+              {
+                "text": "Adding, Updating, and Deleting AWS Config Rules",
+                "code": true
+              },
+              {
+                "text": " — os dois tipos de gatilho de regra (mudança de configuração e periódico) e a frequência padrão de 24 horas do gatilho periódico; e "
+              },
+              {
+                "text": "AWS Security Hub events — Amazon EventBridge",
+                "code": true
+              },
+              {
+                "text": " — o evento \"Security Hub Findings - Imported\", confirmado como disparado tanto por `BatchImportFindings` (achado novo) quanto por `BatchUpdateFindings` (achado atualizado). Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "O SLA por severidade (15 min para CRITICAL, 1h para HIGH, e os demais) é uma política de processo que a Cadência declarou para este laboratório, não um valor que a AWS define ou recomenda — derive o seu da capacidade real da sua equipe de responder, não copie o número. A lista de tipos de achado considerados \"automatizáveis\" no código do Lambda também é um exemplo didático: decidir quais tipos merecem fluxo de contenção automatizado (mesmo com aprovação) é uma decisão de segurança da sua organização, e deve ser revisada por quem responde por ela antes de qualquer uso real."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -26,7 +26,9 @@ type SimuladoHandler struct {
 	listAttempts   *appsim.ListAttemptsUseCase
 	cancelAttempt  *appsim.CancelAttemptUseCase
 	reportQuestion *appsim.ReportQuestionUseCase
+	claimXPCredit  *appsim.ClaimXPCreditUseCase
 	questionRepo   domsim.QuestionRepository
+	attemptRepo    domsim.AttemptRepository
 }
 
 // WithCancelAttempt injeta o use case de cancelamento.
@@ -35,9 +37,23 @@ func (h *SimuladoHandler) WithCancelAttempt(uc *appsim.CancelAttemptUseCase) *Si
 	return h
 }
 
+// WithClaimXPCredit injeta o use case de reivindicação idempotente de XP.
+func (h *SimuladoHandler) WithClaimXPCredit(uc *appsim.ClaimXPCreditUseCase) *SimuladoHandler {
+	h.claimXPCredit = uc
+	return h
+}
+
 // WithQuestionRepo injeta o repositório de questões.
 func (h *SimuladoHandler) WithQuestionRepo(repo domsim.QuestionRepository) *SimuladoHandler {
 	h.questionRepo = repo
+	return h
+}
+
+// WithAttemptRepoForQuestions injeta o repositório de tentativas usado só
+// para checar tentativa ativa em `ListSimuladoQuestions` (achado P-01) — nome
+// explícito pra não confundir com uma dependência de use case.
+func (h *SimuladoHandler) WithAttemptRepoForQuestions(repo domsim.AttemptRepository) *SimuladoHandler {
+	h.attemptRepo = repo
 	return h
 }
 
@@ -119,7 +135,7 @@ func (h *SimuladoHandler) StartAttempt(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusOK
 	}
 	WriteJSON(w, status, map[string]interface{}{
-		"attempt":  attemptToDTO(result.Attempt),
+		"attempt":  attemptToDTO(result.Attempt, h.loadAttemptQuestions(r, result.Attempt)),
 		"simulado": simuladoToDTO(result.Simulado),
 	})
 }
@@ -137,9 +153,29 @@ func (h *SimuladoHandler) ResumeAttempt(w http.ResponseWriter, r *http.Request) 
 	}
 
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"attempt":  attemptToDTO(result.Attempt),
+		"attempt":  attemptToDTO(result.Attempt, h.loadAttemptQuestions(r, result.Attempt)),
 		"simulado": simuladoToDTO(result.Simulado),
 	})
+}
+
+// loadAttemptQuestions busca as questões (sem gabarito) sorteadas para a
+// tentativa, para embutir na resposta de Start/Resume. Falha silenciosa
+// (retorna nil) se o attempt já terminou (não faz sentido reenviar questões
+// de uma prova finalizada aqui — o cliente já tem o resultado) ou se o
+// repositório de questões não está configurado.
+func (h *SimuladoHandler) loadAttemptQuestions(r *http.Request, a *domsim.Attempt) []*domsim.DBQuestion {
+	if h.questionRepo == nil || a.IsFinished() || len(a.QuestionIDs()) == 0 {
+		return nil
+	}
+	ids := make([]string, len(a.QuestionIDs()))
+	for i, id := range a.QuestionIDs() {
+		ids[i] = string(id)
+	}
+	questions, err := h.questionRepo.FindByIDs(r.Context(), a.SimuladoID().String(), ids)
+	if err != nil {
+		return nil
+	}
+	return questions
 }
 
 // AnswerQuestion registra a resposta do usuário para uma questão.
@@ -225,7 +261,7 @@ func (h *SimuladoHandler) FinishAttempt(w http.ResponseWriter, r *http.Request) 
 	}
 
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"attempt":    attemptToDTO(result.Attempt),
+		"attempt":    attemptToDTO(result.Attempt, nil),
 		"weakTopics": weakTopics,
 	})
 }
@@ -243,7 +279,7 @@ func (h *SimuladoHandler) ListAttempts(w http.ResponseWriter, r *http.Request) {
 
 	dtos := make([]AttemptDTO, len(result.Attempts))
 	for i, a := range result.Attempts {
-		dtos[i] = attemptToDTO(a)
+		dtos[i] = attemptToDTO(a, nil)
 	}
 
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
@@ -278,6 +314,36 @@ func (h *SimuladoHandler) CancelAttempt(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ClaimXPCredit reivindica o crédito de XP de uma tentativa finalizada.
+// POST /api/v1/attempts/{attemptId}/claim-xp
+//
+// Idempotente: só a primeira chamada para um attemptId retorna claimed=true.
+// O cliente só concede XP localmente (GameState) quando claimed=true — fecha
+// o caso de reabrir /resultado em outra aba/dispositivo/reload e ganhar XP
+// de novo, que uma chave em sessionStorage não cobria.
+func (h *SimuladoHandler) ClaimXPCredit(w http.ResponseWriter, r *http.Request) {
+	if h.claimXPCredit == nil {
+		WriteError(w, http.StatusNotImplemented, "claim-xp não configurado", "not-implemented")
+		return
+	}
+	userID := middleware.UserIDFromContext(r.Context())
+	attemptID, err := shared.ParseAttemptID(chi.URLParam(r, "attemptId"))
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "attemptId inválido", "bad-request")
+		return
+	}
+
+	result, err := h.claimXPCredit.Execute(r.Context(), appsim.ClaimXPCreditCommand{
+		UserID:    userID,
+		AttemptID: attemptID,
+	})
+	if err != nil {
+		HandleDomainError(w, err)
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]interface{}{"claimed": result.Claimed})
 }
 
 // ListSimuladoQuestions retorna questões ativas de um simulado (paginadas).
@@ -319,6 +385,21 @@ func (h *SimuladoHandler) ListSimuladoQuestions(w http.ResponseWriter, r *http.R
 	questions, total, err := h.questionRepo.List(r.Context(), filter)
 	if err != nil {
 		HandleDomainError(w, err)
+		return
+	}
+
+	// Achado P-01: com uma tentativa ativa do mesmo simulado, esta listagem
+	// não pode ser usada como caminho lateral pra ler o gabarito durante a
+	// prova — mesma regra de study/random e questions/batch.
+	if hasActiveAttempt(r, h.attemptRepo, simuladoID) {
+		dtos := make([]ExamQuestionDTO, len(questions))
+		for i, question := range questions {
+			dtos[i] = dbQuestionToExamDTO(question)
+		}
+		WriteJSON(w, http.StatusOK, map[string]interface{}{
+			"questions": dtos,
+			"total":     total,
+		})
 		return
 	}
 

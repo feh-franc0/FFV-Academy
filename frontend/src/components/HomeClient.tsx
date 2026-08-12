@@ -23,7 +23,10 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { CURRICULUM } from '@/lib/curriculum';
+// Índice leve, não o barril completo — só contamos módulos/trilhas aqui, e a
+// home é a rota de maior tráfego do site. `CURRICULUM` traria os ~92 KB gz de
+// `desc`/`keywords` de todo o currículo só para dois `.length`.
+import { CURRICULO_LEVE } from '@/lib/curriculum/indice-leve';
 import { useGameState } from '@/hooks/useGameState';
 import { useAuth } from '@/hooks/useAuth';
 import { usePreferences } from '@/hooks/usePreferences';
@@ -44,8 +47,11 @@ import { toast } from '@/lib/toast';
 import { playXPCoin } from '@/lib/sounds';
 
 import { Hero } from '@/components/home/Hero';
+import { Reveal } from '@/components/home/Reveal';
 import { SocialProofBar } from '@/components/home/SocialProofBar';
+import { TopicMarquee } from '@/components/home/TopicMarquee';
 import { HowItWorks } from '@/components/home/HowItWorks';
+import { BedrockDestaque } from '@/components/home/BedrockDestaque';
 import { LeadCaptureSection } from '@/components/home/LeadCaptureSection';
 import { ComecarAqui } from '@/components/home/ComecarAqui';
 import { Explorar } from '@/components/home/Explorar';
@@ -54,8 +60,8 @@ import { HomeRanking } from '@/components/home/HomeRanking';
 import { ComunidadeAutor } from '@/components/home/ComunidadeAutor';
 import { FinalCta } from '@/components/home/FinalCta';
 
-const TOTAL_ARTICLES = CURRICULUM.flatMap(t => t.modules).length;
-const TOTAL_TRAILS = CURRICULUM.length;
+const TOTAL_ARTICLES = CURRICULO_LEVE.flatMap(t => t.modules).length;
+const TOTAL_TRAILS = CURRICULO_LEVE.length;
 
 export function HomeClient() {
   const { state, refresh } = useGameState();
@@ -144,8 +150,10 @@ export function HomeClient() {
         </section>
       )}
       <SocialProofBar />
-      <HowItWorks />
-      <LeadCaptureSection />
+      <TopicMarquee />
+      <Reveal><HowItWorks /></Reveal>
+      <Reveal><BedrockDestaque /></Reveal>
+      <Reveal><LeadCaptureSection /></Reveal>
 
       {hasProgress && (
         <section
@@ -184,12 +192,12 @@ export function HomeClient() {
         </section>
       )}
 
-      <ComecarAqui hidden={hasProgress} />
-      <Explorar />
-      <Trending />
-      <HomeRanking />
-      <ComunidadeAutor />
-      <FinalCta />
+      <Reveal><ComecarAqui hidden={hasProgress} /></Reveal>
+      <Reveal><Explorar /></Reveal>
+      <Reveal><Trending /></Reveal>
+      <Reveal><HomeRanking /></Reveal>
+      <Reveal><ComunidadeAutor /></Reveal>
+      <Reveal><FinalCta /></Reveal>
 
       <StreakRepairModal
         open={repairModal.open}

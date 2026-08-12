@@ -1,0 +1,2093 @@
+{
+  "slug": "lab-operacional-analitico-extracao-incremental",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência é a mesma equipe dos laboratórios anteriores: dois engenheiros, API de pedidos em .NET 8 no ECS Fargate, banco em "
+              },
+              {
+                "text": "L07",
+                "code": true
+              },
+              {
+                "text": " — RDS PostgreSQL Multi-AZ com réplica de leitura, roteamento por tolerância a atraso já implementado. O sistema está saudável. O que muda aqui não é o banco: é quem passou a olhar para ele."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O time financeiro pediu um relatório de fechamento mensal: pedidos dos últimos dois anos, agregados por categoria e por loja. Seguindo a regra que o L07 ensinou — leitura que tolera atraso vai para a réplica —, alguém apontou a ferramenta de BI para lá, com a mesma credencial de leitura que o painel já usa. Funcionou no teste, com uma amostra pequena. Em produção, com a tabela "
+              },
+              {
+                "text": "pedido",
+                "code": true
+              },
+              {
+                "text": " inteira, o painel de gerente de loja começou a travar durante os quarenta segundos em que o relatório roda."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A hipótese inicial da equipe era razoável e estava incompleta: \"a réplica está isolada do primário, então nada que rodar nela afeta ninguém\". A primeira parte é verdadeira — o primário realmente não vê o relatório. A segunda não é: a réplica isola o primário DOS workloads que manda para si mesma; ela não isola esses workloads ENTRE SI. O painel e o relatório dividem a mesma memória e o mesmo disco daquela instância, e são perfis de acesso opostos — um busca pouquíssima linha por índice, o outro varre milhões de linhas por completo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Intermediário — depende do L07 no ar, com réplica e roteamento já funcionando"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L07 concluído, `psql`, Terraform, .NET 8 SDK, noção de WAL do PostgreSQL"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 50 min · implementação 2 h 30 a 3 h"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo a médio: instância de replicação DMS pequena, S3 por GB e Athena por byte varrido — contra dobrar a classe do RDS ou criar segunda réplica"
+              },
+              {
+                "k": "Serviços",
+                "v": "RDS PostgreSQL (fonte com CDC lógico), AWS DMS, S3, Athena, CloudWatch, Secrets Manager"
+              },
+              {
+                "k": "Volume atual",
+                "v": "Tabela `pedido` com cerca de 15,8 milhões de linhas, crescendo ~45 mil/dia; o relatório varre 2 anos (~24 milhões de linhas até o fim deste laboratório)"
+              },
+              {
+                "k": "Sintoma medido",
+                "v": "p95 do painel sobe de ~180 ms para acima de 1 s durante os ~40 s do relatório, mesmo rodando só na réplica"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "o relatório tolera até 24 h de atraso de dado — é fechamento mensal, não tempo real, e é o que autoriza um pipeline assíncrono"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "captura de mudança do RDS para S3 com histórico consultável, e o mesmo relatório medido com zero impacto no RDS durante a execução"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é como organizar o dado depois de extraído. Estruturar o acervo em camadas bronze/prata/ouro, catalogar schema e particionar para consulta eficiente é o L62, e ele depende deste. Aqui o dado chega ao S3 em formato bruto, e fica bruto de propósito: o objetivo é provar que a extração remove a contenção, não organizar o acervo. Também não é escolha de ferramenta de BI — nenhuma marca específica importa; qualquer ferramenta que fale SQL ao Athena serve."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada objetivo se prova com um comando na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Medir contenção de recurso numa réplica de leitura durante consulta analítica pesada, com número.",
+              "Explicar por que \"não afeta o primário\" não é o mesmo que \"não afeta ninguém\".",
+              "Diferenciar full extract, incremental por timestamp e CDC via WAL, e nomear o que cada um perde.",
+              "Justificar por que um DELETE físico desaparece na extração incremental por `updated_at`.",
+              "Habilitar réplica lógica num RDS PostgreSQL e explicar o que o parâmetro muda no banco.",
+              "Construir uma tarefa DMS de full load + CDC do RDS para o S3.",
+              "Consultar o histórico extraído sem gerar carga mensurável no RDS transacional.",
+              "Nomear o risco operacional de um slot de replicação esquecido, e monitorá-lo."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Carga OLTP vs OLAP",
+                "SAA-C03, DEA-C01",
+                "os dois perfis de acesso competindo na mesma réplica",
+                "por que o mesmo hardware atende mal os dois ao mesmo tempo"
+              ],
+              [
+                "Réplica de leitura não é isolamento total",
+                "SAA-C03",
+                "contenção medida na réplica do L07",
+                "que ela reduz carga do primário; não remove contenção entre leituras"
+              ],
+              [
+                "Extração incremental por timestamp",
+                "DEA-C01",
+                "comparada lado a lado com CDC",
+                "que ela perde DELETE físico, que não toca coluna de auditoria"
+              ],
+              [
+                "Change Data Capture (CDC)",
+                "DEA-C01, SAA-C03",
+                "DMS lendo o WAL via slot de replicação lógica",
+                "que CDC captura INSERT/UPDATE/DELETE; incremental por timestamp não"
+              ],
+              [
+                "Replicação lógica no PostgreSQL",
+                "DEA-C01",
+                "`rds.logical_replication`, slot, plugin `test_decoding`",
+                "que a mudança do parâmetro é estática e exige reboot"
+              ],
+              [
+                "AWS DMS como serviço gerenciado",
+                "DEA-C01, SAA-C03",
+                "instância de replicação, endpoints de origem e destino",
+                "diferença entre tarefa de full load, CDC e full-load-and-cdc"
+              ],
+              [
+                "Formato de arquivo no S3",
+                "DEA-C01",
+                "CSV bruto por padrão, com opção Parquet",
+                "por que o bruto ainda não é o formato de consulta eficiente (L62)"
+              ],
+              [
+                "Risco de slot esquecido",
+                "DEA-C01, SAA-C03",
+                "`OldestReplicationSlotLag` e `TransactionLogsDiskUsage`",
+                "que um slot não consumido cresce o WAL do PRIMÁRIO sem limite"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve um banco de produção lento por causa de um relatório, e dá como alternativas aumentar a classe, criar uma réplica ou usar um serviço de captura de mudança. Aumentar classe e criar réplica atacam CAPACIDADE; DMS ataca CONTENÇÃO DE PERFIL DE ACESSO. A resposta certa depende de uma distinção que o enunciado esconde: se o gargalo é falta de capacidade, mais hardware resolve; se são dois perfis de acesso opostos competindo pela MESMA capacidade, mais hardware só adia o problema — a resposta estrutural é separar o caminho."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A coluna da direita é a rastreabilidade. Toda peça da arquitetura de produção aparece nela; peça que não aparecesse teria sido retirada do desenho antes de este texto existir."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "p95 do painel não pode degradar quando o relatório roda",
+                "degradação abaixo de 10% medida",
+                "obriga tirar o relatório da réplica; a réplica sozinha não garante isso"
+              ],
+              [
+                "Histórico consultável",
+                "2 anos, crescendo ~45 mil pedidos/dia",
+                "obriga armazenamento fora do RDS — a retenção operacional é bem menor que dois anos"
+              ],
+              [
+                "Zero DELETE físico perdido",
+                "obrigatório, uso em auditoria financeira",
+                "descarta extração incremental por timestamp; obriga CDC via WAL"
+              ],
+              [
+                "Atraso aceitável do dado analítico",
+                "até 24 h (fechamento mensal)",
+                "autoriza pipeline assíncrono; não exige streaming em tempo real"
+              ],
+              [
+                "Não tocar o RDS durante a consulta pesada",
+                "zero impacto medido, primário e réplica",
+                "obriga a consulta final rodar fora do RDS — em S3, via Athena"
+              ],
+              [
+                "Não duplicar a fatura de banco",
+                "orçamento do trimestre não dobra",
+                "descarta subir a classe do RDS ou criar segunda réplica dedicada a analytics"
+              ],
+              [
+                "Réplica existente do L07 preservada",
+                "sem mudança de uso",
+                "a fonte do CDC é o PRIMÁRIO, não a réplica — evita reconfigurar o que já funciona"
+              ],
+              [
+                "Rastreabilidade de mudança",
+                "toda alteração auditável, inclusive exclusão",
+                "CDC grava I/U/D por linha, com timestamp de captura"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o relatório na réplica que já existia"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência montou seguindo a própria lição do L07 até o fim. Ele não tem erro de configuração — é exatamente o que a regra \"leitura tolerante a atraso vai para a réplica\" recomenda. O laboratório começa medindo o custo real dessa extensão, porque um número torna o defeito discutível, e \"a réplica ficou lenta\" não."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O relatório que a réplica do L07 não deveria receber sozinha",
+            "caption": "Este desenho está tecnicamente correto — é a réplica que o L07 recomenda para leitura tolerante a atraso — e ainda assim degrada o painel. Percorra os passos: a réplica isola o PRIMÁRIO da consulta pesada, mas não isola as duas consultas ENTRE SI, porque as duas dividem a mesma memória e o mesmo disco daquela instância.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "analista",
+                    "service": "user",
+                    "label": "Analista financeiro",
+                    "note": "roda o fechamento mensal uma vez por mês, sem saber que compete com o painel de loja"
+                  },
+                  {
+                    "id": "bi",
+                    "service": "quicksight",
+                    "label": "Ferramenta de BI",
+                    "note": "conecta por JDBC direto na réplica, com a mesma credencial de leitura do L07"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada: o banco do L07",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "primary",
+                    "service": "rds",
+                    "label": "RDS PostgreSQL primário",
+                    "note": "segue vendo só escrita e leitura urgente; o defeito deste desenho não aparece aqui"
+                  },
+                  {
+                    "id": "replica",
+                    "service": "replica",
+                    "label": "Réplica de leitura (L07)",
+                    "note": "já atende o painel tolerante a atraso; agora também recebe a varredura de 2 anos do relatório"
+                  },
+                  {
+                    "id": "tasks",
+                    "service": "fargate",
+                    "label": "Tasks do painel (L07)",
+                    "note": "consultas curtas por loja e data, já roteadas para a réplica por tolerarem atraso"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "p95 do painel",
+                    "note": "é a régua que o L07 já media; ela é quem acusa a degradação, e não um alarme novo"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "tasks",
+                "to": "replica",
+                "label": "consultas curtas, roteadas por tolerância a atraso (L07)",
+                "style": "solid"
+              },
+              {
+                "from": "bi",
+                "to": "replica",
+                "label": "SQL direto: agregação de 2 anos por categoria",
+                "style": "solid"
+              },
+              {
+                "from": "primary",
+                "to": "replica",
+                "label": "replicação assíncrona herdada do L07",
+                "style": "dashed"
+              },
+              {
+                "from": "analista",
+                "to": "bi",
+                "label": "abre o relatório de fechamento",
+                "style": "solid"
+              },
+              {
+                "from": "replica",
+                "to": "cw",
+                "label": "p95 do painel amostrado a cada minuto",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A réplica já está ocupada antes do relatório existir",
+                "detail": "O L07 já roteia para cá toda consulta que tolera atraso de replicação — é exatamente o que ela foi desenhada para fazer. O painel de loja é um perfil de acesso: poucas linhas, por índice, muitas vezes por minuto.",
+                "nodes": [
+                  "tasks",
+                  "replica"
+                ],
+                "edges": [
+                  "tasks>replica"
+                ]
+              },
+              {
+                "label": "O relatório entra pela mesma porta, com o mesmo motor",
+                "detail": "Não existe uma segunda réplica \"só para analytics\" neste desenho, nem uma fila separada dentro da instância. A consulta de 2 anos usa o mesmo buffer cache e os mesmos IOPS do volume que o painel usa — é outro perfil de acesso, na mesma capacidade física.",
+                "nodes": [
+                  "bi",
+                  "replica"
+                ],
+                "edges": [
+                  "bi>replica"
+                ]
+              },
+              {
+                "label": "A varredura evict a memória que o painel usava",
+                "detail": "A consulta do painel busca por índice e cabe quase inteira em cache; a do relatório varre meses de linhas que não estavam em memória, e cada página lida empurra para fora uma página que o painel usaria na próxima consulta. Chama-se isso de contenção de recurso, e ela não aparece em nenhum log de erro.",
+                "nodes": [
+                  "replica"
+                ],
+                "edges": [
+                  "bi>replica"
+                ]
+              },
+              {
+                "label": "O p95 do painel sobe mesmo sem o primário ser tocado",
+                "detail": "A métrica que prova o defeito não é do primário — é do painel, medida na própria réplica. É por isso que a equipe demora a ligar as duas coisas: o painel de \"saúde do primário\" continua verde o tempo todo.",
+                "nodes": [
+                  "replica",
+                  "cw"
+                ],
+                "edges": [
+                  "replica>cw"
+                ]
+              },
+              {
+                "label": "Por que a réplica não resolve isso: ela reduz CARGA, não CONTENÇÃO",
+                "detail": "Réplica de leitura existe para tirar leitura do caminho do PRIMÁRIO, e faz isso bem — o primário nunca vê o relatório. Mas ela não separa os workloads que manda para si mesma: dois perfis de acesso opostos na mesma instância continuam competindo pela mesma memória e pelo mesmo disco, só que agora numa segunda máquina.",
+                "nodes": [
+                  "primary",
+                  "replica"
+                ],
+                "edges": [
+                  "primary>replica"
+                ]
+              },
+              {
+                "label": "Por que um time competente chega até aqui",
+                "detail": "Porque é a extensão natural da própria regra que o L07 ensinou: \"leitura que tolera atraso vai para a réplica\". A regra está certa para consultas OLTP tolerantes a atraso; ela não diz nada sobre o TAMANHO da varredura, e é aí que ela para de servir sem que ninguém a tenha quebrado.",
+                "nodes": [
+                  "analista",
+                  "bi"
+                ],
+                "edges": [
+                  "analista>bi"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Antes de propor qualquer arquitetura nova, meça a contenção que já existe. Este roteiro compara o p95 de uma consulta curta — no perfil do painel — antes, durante e depois do relatório pesado, na mesma réplica, sem mudar nenhuma configuração."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "filename": "medir-contencao.sh",
+            "code": "#!/usr/bin/env bash\n# medir-contencao.sh — prova 1: a réplica sozinha NÃO isola os dois perfis\nset -euo pipefail\n\nREPLICA_ENDPOINT=\"$(terraform output -raw endpoint_replica)\"\n\n# Laço de consultas curtas, no MESMO perfil do painel de loja: busca por id,\n# por índice. Roda ANTES, DURANTE e DEPOIS do relatório pesado.\nmedir_p95() {\n  local rotulo=$1\n  psql \"host=$REPLICA_ENDPOINT dbname=cadencia\" -Atc \"\n    select percentile_cont(0.95) within group (order by ms)\n    from (select extract(epoch from clock_timestamp() - t0) * 1000 as ms\n          from generate_series(1,200) i,\n               lateral (select clock_timestamp() as t0) x,\n               lateral (select * from pedido where id = (\n                 select id from pedido order by random() limit 1)) y) z;\"\n  echo \" <- p95 (ms) $rotulo\"\n}\n\nmedir_p95 \"ANTES do relatório\"\n# Esperado na Cadência: ~180 ms — a linha de base que o L07 já media.\n\npsql \"host=$REPLICA_ENDPOINT dbname=cadencia\" -c \"\n  select categoria, date_trunc('month', criado_em), sum(valor)\n  from pedido\n  where criado_em > now() - interval '2 years'\n  group by 1, 2;\" > /dev/null &\nRELATORIO=$!\n\nsleep 2   # dá tempo do relatório começar a varrer antes de medir \"durante\"\nmedir_p95 \"DURANTE o relatório\"\n# Esperado: acima de 1.000 ms — a mesma consulta, mesma réplica, sem mudar\n# nenhuma configuração. É a prova de que \"réplica\" não é sinônimo de \"isolado\".\n\nwait $RELATORIO\nmedir_p95 \"DEPOIS do relatório\"\n# Esperado: volta perto de 180 ms — confirma que não é falta de capacidade\n# permanente, é contenção temporária pelo mesmo recurso.\n"
+          }
+        },
+        {
+          "id": "b4_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "As duas suposições que não são a mesma coisa",
+            "content": "\"A réplica não afeta o primário\" é verdadeira: nenhuma consulta do relatório chega ao primário, e o painel de saúde dele permanece verde o tempo todo. \"A réplica não afeta ninguém\" é falsa: o painel de loja, que já rodava ali por decisão do L07, degrada de verdade. Tratar as duas frases como sinônimas é o que faz uma equipe medir a métrica errada — CPU do primário — enquanto o usuário real sofre a consequência numa instância que o painel de monitoramento nem olha."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A mudança estrutural não é \"réplica maior\" nem \"segunda réplica\": é o relatório passar a ler de um armazenamento que nunca foi o RDS."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Captura de mudança fora do caminho de consulta",
+            "caption": "Este desenho não acelera o relatório: ele o TIRA do caminho do RDS. O primário nunca vê uma consulta de leitura nova — só um leitor a mais no fluxo de replicação, que é um mecanismo diferente de uma consulta (leitura sequencial de um fluxo, não varredura de páginas em memória). Percorra os passos: cada peça rastreia um requisito da seção anterior.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "analista",
+                    "service": "user",
+                    "label": "Analista financeiro",
+                    "note": "abre o mesmo relatório de sempre; o que mudou é para onde ele aponta, não a experiência dele"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada: o banco do L07, intocado",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "primary",
+                    "service": "rds",
+                    "label": "RDS PostgreSQL primário",
+                    "note": "ganha um slot de replicação lógica; continua sem receber nenhuma consulta analítica"
+                  },
+                  {
+                    "id": "replica",
+                    "service": "replica",
+                    "label": "Réplica de leitura (L07)",
+                    "note": "segue com o mesmo papel de sempre: só leitura OLTP tolerante a atraso, do painel"
+                  }
+                ]
+              },
+              {
+                "label": "Captura e armazenamento bruto",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "dms",
+                    "service": "cdc",
+                    "label": "AWS DMS — full load + CDC",
+                    "note": "lê o WAL via slot lógico com o plugin test_decoding; não executa nenhuma consulta SQL de agregação"
+                  },
+                  {
+                    "id": "s3",
+                    "service": "s3",
+                    "label": "S3 — dados brutos",
+                    "note": "recebe LOAD00000001.csv do snapshot inicial e arquivos CDC com coluna I/U/D depois disso"
+                  }
+                ]
+              },
+              {
+                "label": "Consulta analítica, fora do RDS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "athena",
+                    "service": "athena",
+                    "label": "Athena",
+                    "note": "motor de SQL ad hoc sobre o bucket bruto; é o mínimo para provar o desenho, não a forma final (L62)"
+                  },
+                  {
+                    "id": "bi",
+                    "service": "quicksight",
+                    "label": "Ferramenta de BI",
+                    "note": "aponta agora para o Athena, não mais para a réplica — a credencial antiga é revogada"
+                  }
+                ]
+              },
+              {
+                "label": "Credencial da captura",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sm",
+                    "service": "secretsmanager",
+                    "label": "Usuário master do endpoint",
+                    "note": "a documentação exige o usuário master para configurar CDC; ele é lido em execução, nunca embutido"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "Slot e atraso",
+                    "note": "vigia se o slot está sendo consumido e se a captura está atrasada — é a proteção que este desenho cria"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "analista",
+                "to": "bi",
+                "label": "abre o relatório de fechamento",
+                "style": "solid"
+              },
+              {
+                "from": "bi",
+                "to": "athena",
+                "label": "consulta SQL sobre o histórico extraído",
+                "style": "solid"
+              },
+              {
+                "from": "athena",
+                "to": "s3",
+                "label": "varre os objetos CSV do bucket bruto",
+                "style": "solid"
+              },
+              {
+                "from": "primary",
+                "to": "dms",
+                "label": "replicação lógica: INSERT/UPDATE/DELETE decodificados do WAL",
+                "style": "dashed"
+              },
+              {
+                "from": "dms",
+                "to": "s3",
+                "label": "full load inicial + arquivos CDC contínuos",
+                "style": "solid"
+              },
+              {
+                "from": "sm",
+                "to": "dms",
+                "label": "credencial do usuário master do endpoint de origem",
+                "style": "dashed"
+              },
+              {
+                "from": "primary",
+                "to": "cw",
+                "label": "OldestReplicationSlotLag e TransactionLogsDiskUsage",
+                "style": "dashed"
+              },
+              {
+                "from": "dms",
+                "to": "cw",
+                "label": "CDCLatencySource e CDCLatencyTarget da tarefa",
+                "style": "dashed"
+              },
+              {
+                "from": "primary",
+                "to": "replica",
+                "label": "replicação física, herdada do L07 e sem mudança",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A réplica do L07 não muda de função",
+                "detail": "Nada neste desenho reconfigura a réplica. Ela continua recebendo só o que já recebia: leitura OLTP que tolera atraso, roteada pela aplicação. É o requisito \"réplica existente preservada\" escrito na tabela anterior, e ele aparece aqui como uma ausência de mudança.",
+                "nodes": [
+                  "primary",
+                  "replica"
+                ],
+                "edges": [
+                  "primary>replica"
+                ]
+              },
+              {
+                "label": "O primário ganha um slot de replicação lógica, não uma consulta",
+                "detail": "Com `rds.logical_replication = 1` no parameter group (parâmetro estático, exige reboot), a AWS ajusta `wal_level`, `max_wal_senders`, `max_replication_slots` e `max_connections`. O DMS cria um slot lógico e usa o plugin `test_decoding` para ler o WAL — um fluxo sequencial de bytes já gerado pela escrita normal, não uma consulta que varre páginas de tabela pelo planejador.",
+                "nodes": [
+                  "primary",
+                  "dms"
+                ],
+                "edges": [
+                  "primary>dms"
+                ]
+              },
+              {
+                "label": "A credencial do endpoint de origem é o usuário master, por referência",
+                "detail": "A documentação da AWS pede explicitamente o usuário master do RDS para o endpoint de origem, porque é ele que tem os papéis necessários para configurar CDC. O secret é lido em tempo de execução pelo DMS; ele nunca aparece em texto na definição do endpoint.",
+                "nodes": [
+                  "sm",
+                  "dms"
+                ],
+                "edges": [
+                  "sm>dms"
+                ]
+              },
+              {
+                "label": "Full load e CDC chegam ao S3 em arquivos com nomes diferentes",
+                "detail": "O snapshot inicial vira `LOAD00000001.csv`, `LOAD00000002.csv` e assim por diante. Depois disso, cada mudança capturada vira um arquivo nomeado por timestamp, com a primeira coluna marcando `I`, `U` ou `D` — é essa coluna que preserva o DELETE físico que a extração por timestamp perderia.",
+                "nodes": [
+                  "dms",
+                  "s3"
+                ],
+                "edges": [
+                  "dms>s3"
+                ]
+              },
+              {
+                "label": "O relatório passa a consultar o S3, não o RDS",
+                "detail": "O Athena varre os objetos do bucket por SQL, sem abrir nenhuma sessão no PostgreSQL. O formato ainda é bruto de propósito: catalogar com Glue e particionar por data para baratear a consulta é o trabalho do L62, e forçar isso aqui misturaria dois problemas.",
+                "nodes": [
+                  "athena",
+                  "s3"
+                ],
+                "edges": [
+                  "athena>s3"
+                ]
+              },
+              {
+                "label": "Zero impacto medido no RDS durante a MESMA consulta",
+                "detail": "É o critério de aceite deste laboratório: rodar o relatório de fechamento e observar CPUUtilization e ReadIOPS do primário e da réplica sem variação atribuível a ele — a prova está na seção de implantação.",
+                "nodes": [
+                  "bi",
+                  "athena"
+                ],
+                "edges": [
+                  "bi>athena"
+                ]
+              },
+              {
+                "label": "O risco que este desenho cria: um slot esquecido cresce o WAL para sempre",
+                "detail": "Um slot de replicação lógica que ninguém consome não é descartado sozinho — o PostgreSQL retém o WAL indefinidamente esperando um leitor que não vai voltar. `OldestReplicationSlotLag` e `TransactionLogsDiskUsage` existem para pegar isso antes de o disco do primário encher.",
+                "nodes": [
+                  "primary",
+                  "cw"
+                ],
+                "edges": [
+                  "primary>cw"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Repare no que NÃO mudou: a réplica do L07 continua com o mesmo papel de sempre. A diferença estrutural em relação ao desenho anterior é a existência de um caminho de leitura que não é nem o primário, nem a réplica — e que por isso não compete com nenhum dos dois pelo mesmo buffer cache."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "flow_diagram",
+          "position": 3,
+          "data": {
+            "title": "De um parâmetro no banco até o relatório sem tocar o RDS",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1. `rds.logical_replication = 1` aplicado e o primário reiniciado",
+                "desc": "Parâmetro estático: só entra em vigor depois de um reboot, e a AWS ajusta `wal_level`, `max_wal_senders`, `max_replication_slots` e `max_connections` como parte dele."
+              },
+              {
+                "label": "2. DMS cria o slot lógico e o `test_decoding` começa a decodificar o WAL",
+                "desc": "A partir daqui, toda transação confirmada no primário passa a ser lida como um evento de mudança — antes mesmo de qualquer linha ser copiada para o destino."
+              },
+              {
+                "label": "3. Full load: o snapshot atual de `pedido` vira arquivos LOAD no S3",
+                "desc": "Uma leitura única e pesada, feita uma vez. É o único momento em que a extração se parece com a consulta que ela veio substituir — e por isso roda fora do horário de pico."
+              },
+              {
+                "label": "4. CDC contínuo: toda mudança depois do snapshot vira arquivo com coluna I/U/D",
+                "desc": "A partir do ponto exato em que o full load terminou, sem lacuna e sem duplicata — é o slot que garante essa continuidade."
+              },
+              {
+                "label": "5. Athena aponta para o prefixo do bucket e varre por SQL",
+                "desc": "Nenhuma sessão nova no PostgreSQL. O relatório de fechamento roda inteiramente contra objetos no S3."
+              },
+              {
+                "label": "6. O slot segue consumido enquanto o DMS estiver rodando",
+                "desc": "Consumo contínuo é o que impede o WAL de se acumular no primário — é a condição normal, e é o que o passo seguinte monitora."
+              },
+              {
+                "label": "7. Se o DMS parar sem o slot ser removido, o WAL cresce até o alarme disparar",
+                "desc": "`TransactionLogsDiskUsage` sobe e `OldestReplicationSlotLag` também — são as duas métricas que transformam um esquecimento silencioso em um alarme antes do incidente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_4",
+          "type": "paragraph",
+          "position": 4,
+          "data": {
+            "content": [
+              {
+                "text": "O trecho abaixo é a configuração que decide o formato do dado bruto no S3 — a diferença entre uma coluna que preserva o DELETE físico e uma que não."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_5",
+          "type": "code_block",
+          "position": 5,
+          "data": {
+            "language": "json",
+            "filename": "s3-settings-da-tarefa-dms.json",
+            "code": "// Trecho de S3Settings de uma tarefa DMS full-load-and-cdc. E o \"payload\" que\n// decide como o bruto chega ao bucket — csv por padrao, parquet e mais\n// compacto e mais rapido para o Athena consultar (fica mais barato ja no L61,\n// mas o particionamento so vem no L62).\n{\n  \"S3Settings\": {\n    \"BucketName\": \"cadencia-pedidos-bruto\",\n    \"BucketFolder\": \"rds/public/pedido\",\n    // csv e o padrao do DMS para S3; parquet reduz bytes varridos por\n    // consulta do Athena, ao custo de mais CPU na tarefa de replicacao.\n    \"DataFormat\": \"csv\",\n    \"CsvDelimiter\": \",\",\n    \"CsvRowDelimiter\": \"\\n\",\n    // cddColumn: acrescenta a coluna com I (insert), U (update) ou D (delete)\n    // nos arquivos de CDC. E o que preserva o DELETE fisico.\n    \"CdcInsertsAndUpdates\": true,\n    \"IncludeOpForFullLoad\": false,\n    \"TimestampColumnName\": \"dms_timestamp_captura\"\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b5_6",
+          "type": "callout",
+          "position": 6,
+          "data": {
+            "variant": "info",
+            "title": "Por que ler o WAL custa menos do que repetir a consulta",
+            "content": "A consulta pesada do relatório pede ao planejador para varrer páginas de tabela, decidir um plano de execução e trazer resultado agregado — trabalho proporcional ao tamanho do dado lido. Ler o WAL via slot lógico é consumir um fluxo sequencial de bytes que a escrita normal já produziu, sem planejador e sem varredura de página em buffer cache. São mecanismos diferentes, e é por isso que o segundo tem overhead ordens de grandeza menor no primário — não porque o DMS seja \"mais rápido\", mas porque ele faz um trabalho estruturalmente mais barato."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Consultar dois anos de pedidos para um relatório mensal de fechamento, sem impacto medido no RDS transacional (nem primário, nem réplica), com atraso de dado aceitável de até 24 horas e sem duplicar a linha de banco no orçamento do trimestre.",
+            "winner": "AWS DMS com CDC via replicação lógica (full load inicial + captura contínua) escrevendo em S3 no formato bruto",
+            "why": "CDC lê o WAL do primário como um fluxo sequencial já gerado pela escrita normal — um mecanismo estruturalmente diferente de uma consulta que varre páginas via planejador, e por isso o overhead no primário é ordens de grandeza menor do que repetir a consulta pesada ali. Ele também captura INSERT, UPDATE e DELETE sem depender de nenhuma coluna de auditoria. O destino em S3 com Athena ad hoc não pede uma segunda instância de banco: paga-se por byte armazenado e por byte varrido, o que cabe no requisito de orçamento sem dobrar linha nenhuma.",
+            "alternatives": [
+              {
+                "name": "Full extract periódico (dump completo todo dia)",
+                "downside": "Reprocessa a tabela inteira a cada execução, e o próprio dump é uma varredura pesada — gera no RDS exatamente o tipo de contenção que a extração existe para evitar, só que agora todo dia em vez de uma vez por mês."
+              },
+              {
+                "name": "Incremental por `updated_at`",
+                "downside": "Mais simples de implementar que CDC, e é a armadilha: um pedido excluído fisicamente não toca a coluna de auditoria de nenhuma outra linha, então ele nunca aparece na extração seguinte. O relatório financeiro passaria a superestimar pedidos ativos sem nenhum erro visível."
+              },
+              {
+                "name": "Agendar o relatório fora do pico, direto na réplica",
+                "downside": "Não resolve a contenção estrutural, só a esconde atrás de um horário. No primeiro mês em que o fechamento atrasa ou o pico do painel muda, o problema volta — é a gambiarra que funciona até deixar de funcionar, e ninguém percebe o motivo real."
+              },
+              {
+                "name": "Segunda réplica de leitura dedicada a analytics",
+                "downside": "Dobra a linha de RDS no orçamento — o requisito que este cenário proíbe — e ainda roda o mesmo motor transacional (linha por linha, sem compressão colunar) para uma carga que ele não foi desenhado para servir bem."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Mecanismo de extração",
+                "CDC via DMS (slot lógico)",
+                "full extract; incremental por timestamp",
+                "captura INSERT/UPDATE/DELETE sem depender de coluna de auditoria",
+                "complexidade operacional adicional: o slot precisa de monitoramento contínuo"
+              ],
+              [
+                "Fonte do CDC",
+                "primário (RDS writer)",
+                "réplica de leitura do L07",
+                "slot de replicação lógica direto numa réplica padrão não é o caminho suportado por padrão",
+                "não reaproveita a réplica já paga; em troca, evita reconfigurar o que já funciona"
+              ],
+              [
+                "Formato no S3",
+                "CSV bruto (padrão do DMS)",
+                "Parquet",
+                "menor esforço nesta fase; consulta ad hoc via Athena ainda funciona sem ele",
+                "Parquet compacta e acelera consulta — essa otimização fica para o L62"
+              ],
+              [
+                "Onde a consulta final roda",
+                "Athena ad hoc sobre S3",
+                "segunda réplica RDS dedicada",
+                "não duplica a fatura de banco e desacopla do motor transacional",
+                "Athena cobra por byte varrido; sem particionamento, cada consulta varre tudo (o L62 resolve)"
+              ],
+              [
+                "Retenção do slot",
+                "monitorada por CloudWatch, removida se a tarefa for descontinuada",
+                "confiar que \"o Terraform cuida disso\"",
+                "o slot vive dentro do PostgreSQL, não no estado do Terraform",
+                "disciplina operacional extra: ninguém automatiza remoção de slot só de lembrar de destruir a tarefa"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este desenho cria, e que o L62 paga",
+            "content": "CSV bruto sem partição nem catálogo significa que toda consulta do Athena varre o prefixo inteiro do bucket, mesmo perguntando só por um mês. Isso é aceitável agora — o objetivo deste laboratório é provar que a extração remove a contenção do RDS, não otimizar o custo de consulta — mas não é uma forma final. Particionar por data e catalogar com Glue é o L62, e ele existe justamente porque esta dívida cresce junto com o histórico acumulado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Construir: o RDS do L07 vira fonte de captura"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O parâmetro central deste laboratório muda o comportamento do banco inteiro, não só do DMS — e por ser estático, ele custa um reboot planejado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "parametro-cdc.tf",
+            "code": "# parametro-cdc.tf — o RDS do L07 vira fonte de replicacao logica\n\n# Parametro ESTATICO: so entra em vigor depois de um reboot da instancia. Como\n# o primario ja e Multi-AZ (L07), aplicar em janela de manutencao faz o\n# failover para o standby absorver a interrupcao — nao existe forma de aplicar\n# este parametro sem reiniciar o motor em algum momento.\nresource \"aws_db_parameter_group\" \"com_cdc\" {\n  name   = \"${var.projeto}-pg16-cdc\"\n  family = \"postgres16\"\n\n  parameter {\n    name  = \"rds.logical_replication\"\n    value = \"1\"\n    # apply_method = \"pending-reboot\": nao tentar aplicar a quente. A AWS\n    # ajusta wal_level, max_wal_senders, max_replication_slots e\n    # max_connections como parte deste parametro — sao os que autorizam o\n    # slot que o DMS vai criar.\n    apply_method = \"pending-reboot\"\n  }\n}\n\nresource \"aws_db_instance\" \"primario\" {\n  # ... demais atributos herdados do L07 (classe, Multi-AZ, sub-rede) ...\n  parameter_group_name = aws_db_parameter_group.com_cdc.name\n\n  # apply_immediately = false: o reboot so acontece na proxima janela de\n  # manutencao, e nao no proximo terraform apply. Forcar imediato aqui\n  # trocaria uma interrupcao planejada por uma surpresa em producao.\n  apply_immediately = false\n}\n"
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O reboot é real, e o Multi-AZ do L07 é quem absorve",
+            "content": "Aplicar `rds.logical_replication` exige reiniciar o motor. Como o primário já é Multi-AZ desde o L07, aplicar na janela de manutenção faz a instância fazer failover para o standby durante a troca — a interrupção medida é a mesma janela de failover que o L07 já ensaiou, não uma nova. Sem Multi-AZ, este passo seria uma indisponibilidade sem rede de segurança."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: a instância de replicação, os endpoints e a tarefa"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A instância de replicação, os dois endpoints e a tarefa de captura — com as duas roles que o DMS exige por nome fixo, não por configuração."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "dms.tf",
+            "code": "# dms.tf — instancia de replicacao, os dois endpoints, e a tarefa\n\n# As duas roles abaixo tem NOME FIXO: o DMS as procura pelo nome, nao por\n# parametro de configuracao. Criar com outro nome faz o servico simplesmente\n# nao encontrar a role — mesmo com a permissao certa anexada.\nresource \"aws_iam_role\" \"dms_vpc\" {\n  name               = \"dms-vpc-role\"\n  assume_role_policy = data.aws_iam_policy_document.confianca_dms.json\n}\n\nresource \"aws_iam_role_policy_attachment\" \"dms_vpc\" {\n  role       = aws_iam_role.dms_vpc.name\n  policy_arn = \"arn:aws:iam::aws:policy/service-role/AmazonDMSVPCManagementRole\"\n}\n\nresource \"aws_iam_role\" \"dms_logs\" {\n  name               = \"dms-cloudwatch-logs-role\"\n  assume_role_policy = data.aws_iam_policy_document.confianca_dms.json\n}\n\nresource \"aws_iam_role_policy_attachment\" \"dms_logs\" {\n  role       = aws_iam_role.dms_logs.name\n  policy_arn = \"arn:aws:iam::aws:policy/service-role/AmazonDMSCloudWatchLogsRole\"\n}\n\ndata \"aws_iam_policy_document\" \"confianca_dms\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sts:AssumeRole\"]\n    principals {\n      type        = \"Service\"\n      identifiers = [\"dms.amazonaws.com\"]\n    }\n  }\n}\n\n# Instancia pequena de proposito: ela le um FLUXO (o WAL decodificado), nao\n# executa consulta de agregacao — o dimensionamento certo aqui e sobre volume\n# de mudanca por segundo, nao sobre tamanho da tabela de origem.\nresource \"aws_dms_replication_instance\" \"captura\" {\n  replication_instance_id   = \"${var.projeto}-captura-cdc\"\n  replication_instance_class = \"dms.t3.medium\"\n  allocated_storage          = 50\n  vpc_security_group_ids     = [aws_security_group.dms.id]\n  replication_subnet_group_id = aws_dms_replication_subnet_group.privada.id\n  publicly_accessible         = false\n\n  depends_on = [aws_iam_role_policy_attachment.dms_vpc, aws_iam_role_policy_attachment.dms_logs]\n}\n\n# Endpoint de ORIGEM: o PRIMARIO, nao a replica do L07. Um slot de replicacao\n# logica direto numa replica padrao do RDS PostgreSQL nao e o caminho\n# suportado por padrao — usar o primario evita depurar isso, e preserva a\n# replica exatamente como o L07 a deixou.\nresource \"aws_dms_endpoint\" \"origem\" {\n  endpoint_id   = \"${var.projeto}-origem-rds\"\n  endpoint_type = \"source\"\n  engine_name   = \"postgres\"\n\n  server_name = aws_db_instance.primario.address\n  port        = 5432\n  database_name = \"cadencia\"\n\n  # A documentacao pede o usuario MASTER para o endpoint de origem: e ele\n  # quem tem os papeis necessarios para configurar CDC. Lido do Secrets\n  # Manager em execucao — nunca em texto aqui.\n  username = jsondecode(data.aws_secretsmanager_secret_version.master.secret_string)[\"username\"]\n  password = jsondecode(data.aws_secretsmanager_secret_version.master.secret_string)[\"password\"]\n}\n\n# Endpoint de DESTINO: S3, formato bruto.\nresource \"aws_dms_endpoint\" \"destino\" {\n  endpoint_id   = \"${var.projeto}-destino-s3\"\n  endpoint_type = \"target\"\n  engine_name   = \"s3\"\n\n  s3_settings {\n    bucket_name             = aws_s3_bucket.bruto.bucket\n    bucket_folder            = \"rds/public/pedido\"\n    service_access_role_arn  = aws_iam_role.dms_s3.arn\n    data_format               = \"csv\"\n    cdc_inserts_and_updates   = true\n    # A coluna que carrega I/U/D. Sem ela, o arquivo de CDC vira so uma linha\n    # nova por mudanca, sem dizer QUAL mudanca — e o DELETE some de novo,\n    # pelo motivo inverso do incremental por timestamp.\n    include_op_for_full_load = false\n  }\n}\n\nresource \"aws_dms_replication_task\" \"captura\" {\n  replication_task_id       = \"${var.projeto}-captura-pedidos\"\n  replication_instance_arn  = aws_dms_replication_instance.captura.replication_instance_arn\n  source_endpoint_arn       = aws_dms_endpoint.origem.endpoint_arn\n  target_endpoint_arn       = aws_dms_endpoint.destino.endpoint_arn\n\n  # full-load-and-cdc: copia o snapshot atual UMA vez, depois muda para\n  # captura continua a partir do ponto exato em que o snapshot foi tirado.\n  migration_type = \"full-load-and-cdc\"\n\n  table_mappings = jsonencode({\n    rules = [{\n      \"rule-type\"   = \"selection\"\n      \"rule-id\"     = \"1\"\n      \"rule-name\"   = \"1\"\n      \"object-locator\" = { \"schema-name\" = \"public\", \"table-name\" = \"pedido\" }\n      \"rule-action\" = \"include\"\n    }]\n  })\n}\n\n# Menor privilegio: a tarefa so precisa escrever no PREFIXO do bucket que ela\n# usa. ListBucket exige o recurso do bucket (nao do objeto); e por isso as\n# duas actions abaixo apontam para ARNs diferentes.\ndata \"aws_iam_policy_document\" \"dms_para_s3\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"s3:PutObject\", \"s3:GetObject\", \"s3:DeleteObject\"]\n    resources = [\"${aws_s3_bucket.bruto.arn}/rds/public/pedido/*\"]\n  }\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"s3:ListBucket\"]\n    resources = [aws_s3_bucket.bruto.arn]\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que as roles têm nome fixo",
+            "content": "O DMS procura `dms-vpc-role` e `dms-cloudwatch-logs-role` pelo NOME, não por uma referência configurável em nenhum lugar da tarefa. Criar as mesmas permissões com outro nome faz o serviço simplesmente não encontrar a role — o erro que aparece não menciona nome de role nenhum, e é por isso que esta armadilha custa tempo de diagnóstico na primeira vez."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: a prova de que o DELETE sobrevive, em código"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este console .NET 8 faz uma única escrita no primário — inserir e excluir um pedido de teste — e depois só lê do Athena. Nenhuma linha dele abre uma segunda conexão com o RDS depois da escrita inicial."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "ProvarCaptura.cs",
+            "code": "// ProvarCaptura.cs — console .NET 8: confirma um DELETE fisico chegando ao S3\n// via CDC, sem NENHUMA consulta ao RDS. E a prova executavel da secao seguinte.\n\nusing Amazon.Athena;\nusing Amazon.Athena.Model;\nusing Npgsql;\n\nvar athena = new AmazonAthenaClient();\nconst string banco = \"cadencia_bruto\";           // banco logico do Athena (Glue-lite, sem crawler ainda)\nconst string bucketSaida = \"s3://cadencia-athena-resultados/\";\n\n// 1) Marca um pedido para exclusao fisica no PRIMARIO — a unica escrita deste\n//    script, e o unico contato dele com o RDS transacional.\nvar pedidoId = Guid.NewGuid();\nawait using (var conexao = new NpgsqlConnection(Environment.GetEnvironmentVariable(\"CONN_PRIMARIO\")))\n{\n    await conexao.OpenAsync();\n    await new NpgsqlCommand(\n        \"insert into pedido (id, loja_id, categoria, valor, criado_em) \" +\n        \"values (@id, 1, 'teste-cdc', 10.00, now())\", conexao)\n    { Parameters = { new(\"id\", pedidoId) } }.ExecuteNonQueryAsync();\n\n    await new NpgsqlCommand(\"delete from pedido where id = @id\", conexao)\n    { Parameters = { new(\"id\", pedidoId) } }.ExecuteNonQueryAsync();\n}\n\n// 2) Espera a janela de atraso aceitavel (o requisito declarado: ate 24h; no\n//    ambiente de laboratorio a captura costuma aparecer em minutos) e consulta\n//    o S3 via Athena — NENHUMA linha abaixo abre conexao com o RDS.\nvar query = $\"SELECT op FROM {banco}.pedido WHERE id = '{pedidoId}' ORDER BY dms_timestamp_captura DESC LIMIT 1\";\n\nvar inicio = await athena.StartQueryExecutionAsync(new StartQueryExecutionRequest\n{\n    QueryString = query,\n    QueryExecutionContext = new QueryExecutionContext { Database = banco },\n    ResultConfiguration = new ResultConfiguration { OutputLocation = bucketSaida }\n});\n\nstring estado;\ndo\n{\n    await Task.Delay(TimeSpan.FromSeconds(3));\n    var status = await athena.GetQueryExecutionAsync(new GetQueryExecutionRequest\n    { QueryExecutionId = inicio.QueryExecutionId });\n    estado = status.QueryExecution.Status.State;\n} while (estado is \"QUEUED\" or \"RUNNING\");\n\nif (estado != \"SUCCEEDED\")\n    throw new InvalidOperationException($\"consulta ao Athena terminou em {estado}\");\n\nvar resultado = await athena.GetQueryResultsAsync(new GetQueryResultsRequest { QueryExecutionId = inicio.QueryExecutionId });\nvar linha = resultado.ResultSet.Rows.Skip(1).FirstOrDefault(); // pula o cabecalho\n\n// Esperado: \"D\". Se vier null, o CDC ainda nao capturou — espere mais um\n// pouco ou confira CDCLatencySource/Target antes de declarar falha.\nConsole.WriteLine(linha is null\n    ? \"AINDA NAO CAPTURADO: repita em alguns minutos\"\n    : $\"operacao capturada: {linha.Data[0].VarCharValue}\");\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que a prova espera em vez de falhar rápido",
+            "content": "O laço de `GetQueryExecutionAsync` espera o Athena terminar, e o programa aceita não encontrar a linha na primeira tentativa. O requisito declarado é atraso aceitável de até 24 h; tratar a ausência imediata como falha definitiva testaria um SLA que este desenho nunca prometeu."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Implantar e provar"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco medições. Nenhuma conclusão vem de \"o painel voltou ao normal, parece que funcionou\" — cada prova tem um comando e um número que aprova ou reprova."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — quatro medições depois da extração; nenhuma conclusão de \"parece que zerou\"\n\nPROJETO=ffv-lab; REGIAO=us-east-1\n\n# ── Prova 2: o parâmetro pegou, e o slot existe ───────────────────────────────\npsql \"$CONN_PRIMARIO\" -c \"SHOW wal_level;\"                       # esperado: logical\npsql \"$CONN_PRIMARIO\" -c \"SELECT slot_name, active FROM pg_replication_slots;\"\n# esperado: uma linha com o nome do slot do DMS e active = t (consumido)\n\n# ── Prova 3: full load e CDC chegaram ao S3, com nomes diferentes ────────────\naws s3 ls \"s3://cadencia-pedidos-bruto/rds/public/pedido/\" | head\n# esperado: LOAD00000001.csv ... (snapshot) e, depois de uma mudança de teste,\n# um arquivo nomeado por timestamp com a coluna I/U/D na primeira posição\n\n# ── Prova 4: zero variação mensurável no RDS durante o MESMO relatório ───────\n# Rode em paralelo ao relatório via Athena (não mais via psql na réplica).\naws cloudwatch get-metric-statistics --namespace AWS/RDS \\\n  --metric-name ReadIOPS --dimensions Name=DBInstanceIdentifier,Value=cadencia-replica \\\n  --start-time \"$(date -u -d '10 min ago' +%FT%TZ)\" --end-time \"$(date -u +%FT%TZ)\" \\\n  --period 60 --statistics Average --region \"$REGIAO\"\n# esperado: a série plana no mesmo patamar de antes do relatório — nenhum pico\n# atribuível a ele, porque ele não toca mais o RDS\n\n# ── Prova 5: o DELETE físico sobrevive na extração (o que o timestamp perderia) ──\naws athena start-query-execution \\\n  --query-string \"SELECT op, count(*) FROM cadencia_bruto.pedido WHERE op = 'D' GROUP BY op\" \\\n  --query-execution-context Database=cadencia_bruto \\\n  --result-configuration OutputLocation=s3://cadencia-athena-resultados/ --region \"$REGIAO\"\n# esperado: contagem > 0. Repita a mesma pergunta contra uma extração\n# hipotética por `updated_at` e ela não teria nenhuma linha D para contar —\n# porque a linha excluída não deixa rastro em nenhuma coluna de auditoria.\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A extração por timestamp passaria nesta prova de forma enganosa",
+            "content": "Se você tivesse implementado incremental por `updated_at` em vez de CDC, a Prova 5 não apresentaria erro nenhum — ela simplesmente contaria zero linhas com `op = 'D'`, porque essa coluna não existiria. O silêncio de um DELETE que devia estar lá e não está é o defeito mais perigoso deste laboratório: ele não gera exceção, gera um relatório financeiro sutilmente errado que ninguém audita linha por linha."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Quebrar de propósito"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Três falhas provocadas de propósito, com o sintoma que você veria em produção, onde olhar, e a correção."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha provocada",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Pausar a tarefa DMS sem remover o slot",
+                "nada quebra na hora; dias depois, o storage do primário cresce sem explicação óbvia",
+                "`pg_replication_slots` (campo `active`) e `TransactionLogsDiskUsage`",
+                "remover a tarefa por completo, ou `SELECT pg_drop_replication_slot(...)` manualmente"
+              ],
+              [
+                "Instância de replicação pequena demais para o full load",
+                "a tarefa fica em \"Running\" com o progresso avançando muito devagar, sem erro",
+                "métricas `FullLoadThroughputRowsSource/Target` e CPU da instância de replicação",
+                "aumentar a classe da instância de replicação, ou filtrar o full load por período"
+              ],
+              [
+                "Table mapping exclui a tabela por engano",
+                "full load termina vazio, ou CDC conectado sem nenhum arquivo novo no S3 depois de uma mudança de teste",
+                "regra de `selection` no `table_mappings` e os logs da tarefa no CloudWatch",
+                "corrigir o `object-locator` e reiniciar a tarefa com \"resume processing\""
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Segurança"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Credencial master do RDS exposta no endpoint DMS",
+                "Baixa",
+                "Alta — acesso total ao banco",
+                "secret no Secrets Manager referenciado, nunca em texto na definição do endpoint",
+                "CloudTrail em `GetSecretValue`",
+                "rotacionar a credencial e revogar acesso"
+              ],
+              [
+                "Bucket S3 com dado bruto de pedido acessível publicamente",
+                "Baixa",
+                "Alta — dado de pedido e cliente exposto",
+                "bloqueio de acesso público padrão do bucket + política restrita às roles do DMS e do Athena",
+                "AWS Config rule de bucket público",
+                "corrigir a política e revisar CloudTrail por acesso indevido"
+              ],
+              [
+                "Ferramenta de BI ainda usando a credencial antiga da réplica",
+                "Média",
+                "Média — reintroduz a contenção",
+                "credencial dedicada de leitura revogada após a migração para o Athena",
+                "CloudTrail de conexões na réplica",
+                "revogar a credencial antiga do BI direto"
+              ],
+              [
+                "Slot de replicação esquecido",
+                "Média",
+                "Alta — disco do primário pode encher",
+                "alarme de `OldestReplicationSlotLag` e `TransactionLogsDiskUsage`",
+                "alarme do CloudWatch",
+                "dropar o slot ou remover a tarefa"
+              ],
+              [
+                "Dado bruto sem criptografia em repouso",
+                "Baixa",
+                "Média — exposição em caso de acesso indevido",
+                "SSE-S3 ou SSE-KMS habilitado no bucket de destino do DMS",
+                "AWS Config rule de bucket sem criptografia",
+                "habilitar criptografia e reprocessar o full load"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24_0",
+      "type": "quiz",
+      "position": 13,
+      "data": {
+        "question": "Uma equipe move um relatório pesado do primário para a réplica de leitura, seguindo a regra do L07 de que leitura tolerante a atraso vai para lá. Depois disso, o painel de loja — que já era atendido pela mesma réplica — começa a degradar quando o relatório roda. O que isso prova?",
+        "options": [
+          "Que a réplica reduz carga sobre o primário, mas não elimina contenção entre workloads que ela própria atende",
+          "Que a réplica precisa de Multi-AZ para atender dois workloads ao mesmo tempo",
+          "Que o relatório deveria ter sido movido de volta para o primário",
+          "Que a réplica não está replicando corretamente os dados do primário"
+        ],
+        "correctIndex": 0,
+        "explanation": "A réplica cumpriu exatamente o papel para o qual foi desenhada: isolar o primário do relatório. O que ela não fez — porque isolamento de instância nunca prometeu isso — foi separar os dois perfis de acesso que passaram a competir pelo mesmo buffer cache e pelos mesmos IOPS dentro DELA. Reduzir carga do primário e eliminar contenção entre leituras são coisas diferentes, e confundi-las é o erro de raciocínio central deste laboratório.\\n\\nA primeira alternativa está fora do cenário: nada no enunciado indica atraso ou inconsistência de dado replicado, e sim degradação de desempenho sob concorrência. A terceira inverte a lição toda — voltar para o primário reintroduziria exatamente o impacto que a réplica existe para evitar, e ignora que o problema é de perfil de acesso, não de instância errada. A quarta confunde Multi-AZ, que resolve disponibilidade via failover para um standby que não atende leitura nenhuma, com capacidade de leitura — são conceitos que o próprio L07 já separa."
+      }
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 14,
+      "data": {
+        "title": "Observabilidade"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "list",
+          "position": 0,
+          "data": {
+            "ordered": false,
+            "items": [
+              "O slot está sendo consumido, ou está acumulando WAL sem leitor?",
+              "A captura de mudança está atrasada em relação à origem, e por quanto?",
+              "O relatório está varrendo mais bytes do que deveria, mês após mês?",
+              "O painel voltou a degradar quando algum relatório roda — alguém apontou o BI de volta para a réplica?"
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Alarme",
+              "Métrica",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "Slot acumulando WAL",
+                "`OldestReplicationSlotLag`",
+                "acima de 500 MB por 15 minutos seguidos"
+              ],
+              [
+                "Disco do primário crescendo por WAL retido",
+                "`TransactionLogsDiskUsage`",
+                "acima de 20% do storage alocado"
+              ],
+              [
+                "Captura atrasada",
+                "`CDCLatencySource` + `CDCLatencyTarget`",
+                "soma acima de 300 s por 10 minutos"
+              ],
+              [
+                "Painel degradado durante consulta pesada",
+                "p95 da rota do painel",
+                "acima de 400 ms por 5 minutos"
+              ],
+              [
+                "Consulta cara no Athena",
+                "bytes varridos por execução",
+                "acima de 5 GB — sinal para particionar (L62)"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Escala"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Ordem de grandeza",
+              "O que muda"
+            ],
+            "rows": [
+              [
+                "10 pedidos/dia",
+                "extração via DMS é overkill nesta escala; a própria réplica do L07 bastaria para um relatório deste tamanho — a decisão volta a ser \"consulte a réplica direto\""
+              ],
+              [
+                "~45 mil pedidos/dia (Cadência hoje)",
+                "CDC captura com folga; o slot nunca chega perto de acumular, e o full load inicial é o único momento pesado"
+              ],
+              [
+                "1 milhão de pedidos/dia",
+                "a instância de replicação precisa de classe maior; considerar Kinesis Data Streams como destino intermediário do DMS, em vez de S3 direto, para desacoplar picos de escrita da velocidade de consumo — é o assunto do L63"
+              ],
+              [
+                "Falha de AZ do primário (Multi-AZ do L07)",
+                "o endpoint DNS não muda, então a tarefa DMS reconecta sem reconfiguração; se o slot sobrevive à promoção do standby depende da versão do mecanismo — confirme na sua, é uma das incertezas declaradas no fechamento deste módulo"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Custo"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As dimensões que geram custo aqui, não valores: hora ligada da instância de replicação DMS, armazenamento em GB-mês no S3, bytes varridos por consulta no Athena, e o WAL extra retido no primário enquanto o slot está ativo. Calcule no AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que este texto."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "O que domina o custo"
+            ],
+            "rows": [
+              [
+                "Protótipo (este laboratório)",
+                "instância de replicação pequena, poucos GB no S3, consultas esporádicas no Athena — a linha mais visível é a hora ligada da instância DMS"
+              ],
+              [
+                "Produção pequena (Cadência hoje)",
+                "armazenamento S3 crescendo com o histórico acumulado, e bytes varridos pelo Athena crescendo junto — cada mês que passa, a MESMA consulta fica mais cara"
+              ],
+              [
+                "Alta escala",
+                "instância de replicação de classe maior para acompanhar o volume de mudança, e o custo por byte varrido do Athena se torna a linha dominante sem particionamento — é o motivo financeiro, não só técnico, para o L62 existir"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O custo oculto",
+            "content": "Sem particionamento, o Athena varre o prefixo inteiro do bucket em toda consulta — mesmo uma pergunta sobre um único mês lê dois anos de arquivo. O custo por consulta cresce com o TAMANHO DO HISTÓRICO ACUMULADO, não com o tamanho da pergunta feita. É uma curva que sobe sozinha, mês após mês, sem nenhuma mudança de comportamento por parte de quem consulta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação",
+              "Risco",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "pipeline de CDC roda sem runbook de slot esquecido",
+                "acumulação de WAL não detectada até o disco quase encher",
+                "alarme de `OldestReplicationSlotLag` + runbook de remoção de slot",
+                "Alta"
+              ],
+              [
+                "Segurança",
+                "o endpoint de origem usa o usuário master do RDS",
+                "escopo de acesso amplo se a credencial vazar",
+                "avaliar o papel `rds_replication` (quando suportado pela versão) para um usuário dedicado, em vez do master",
+                "Média"
+              ],
+              [
+                "Confiabilidade",
+                "full load é um ponto único de trabalho pesado, sem retomada testada",
+                "reinício do zero se a tarefa falhar no meio do snapshot",
+                "monitorar o progresso do full load e testar a recuperação nativa da tarefa DMS",
+                "Média"
+              ],
+              [
+                "Eficiência de performance",
+                "Athena varre o CSV bruto inteiro a cada consulta",
+                "consulta cada vez mais lenta e cara conforme o histórico cresce",
+                "Parquet e particionamento por data — é o L62",
+                "Média"
+              ],
+              [
+                "Otimização de custo",
+                "o slot fica ativo mesmo em período sem consulta nova ao relatório",
+                "WAL retido sem uso claro do dado capturado",
+                "revisar a tarefa se o relatório for descontinuado, e dropar o slot explicitamente",
+                "Baixa"
+              ],
+              [
+                "Sustentabilidade",
+                "nenhum full load repetido depois do inicial — o pipeline já evita isso",
+                "reprocessar o histórico inteiro desperdiçaria I/O e computação repetidos",
+                "manter CDC contínuo como a via padrão; full load é evento único",
+                "Baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Evolução em níveis"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Não é um desenho novo: é a mesma pergunta — \"como o dado operacional vira dado analítico sem incomodar a produção\" — respondida com peças cada vez mais adequadas ao volume e ao uso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "De um export manual até o dado alimentando um modelo",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Alguém roda `pg_dump` ou exporta um CSV manualmente, uma vez por mês, para gerar o relatório de fechamento.",
+                "note": "Risco novo: erro humano e ausência de repetibilidade — o processo mora na cabeça de uma pessoa. Impacto de custo: zero infraestrutura nova; o custo é tempo de engenheiro repetido todo mês."
+              },
+              {
+                "label": "Nível 2 — Aplicação básica",
+                "instruction": "Um job agendado (EventBridge Scheduler) roda a mesma consulta pesada fora do horário de pico, direto no RDS.",
+                "note": "Risco novo: ainda toca o RDS diretamente — a mesma contenção deste laboratório, só que fora do pico. Impacto de custo: baixo, apenas o agendador, sem novo serviço de dados."
+              },
+              {
+                "label": "Nível 3 — Produção (este laboratório)",
+                "instruction": "DMS com full load + CDC para S3 bruto; consulta ad hoc via Athena, zero impacto medido no RDS.",
+                "note": "Risco novo: slot de replicação esquecido; formato bruto caro de consultar em escala. Impacto de custo: instância DMS + armazenamento S3 + bytes varridos pelo Athena."
+              },
+              {
+                "label": "Nível 4 — Alta escala",
+                "instruction": "Lake em camadas (L62): bronze/prata/ouro, catálogo Glue, particionamento e compactação em Parquet ou Iceberg.",
+                "note": "Risco novo: complexidade de pipeline — job de ETL falhando, schema evoluindo sem aviso. Impacto de custo: jobs de ETL e catálogo custam, mas cada consulta fica ordens de grandeza mais barata."
+              },
+              {
+                "label": "Nível 5 — Plataforma",
+                "instruction": "Streaming quase em tempo real: Kinesis Data Streams como destino do DMS, múltiplos consumidores, lakehouse com upsert (Iceberg, L67).",
+                "note": "Risco novo: ordenação e exactly-once aparente entre consumidores diferentes do mesmo fluxo. Impacto de custo: streaming ligado 24/7 custa mais do que lote, mesmo em volume ocioso."
+              },
+              {
+                "label": "Nível 6 — Dados e IA",
+                "instruction": "O histórico de pedidos já extraído e catalogado vira a base de FEATURES de um MODELO preditivo de demanda por loja e categoria, e também alimenta busca semântica sobre pedidos com embeddings — o mesmo DADO capturado aqui serve ao relatório e ao pipeline de IA.",
+                "note": "Risco novo: erro de captura ou deriva (drift) no dado agora contamina uma decisão automatizada, não só um relatório que um humano revisa antes de agir. Impacto de custo: adiciona treino e inferência (SageMaker ou Bedrock) sobre a mesma base já paga."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Onde IA entra, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "Aqui, IA não agrega",
+            "content": "O problema deste laboratório é mecânico: capturar mudança e isolar recurso físico. Nenhum modelo decide isso melhor do que ler o WAL corretamente. \"Usar IA para prever quando o relatório vai rodar e pré-aquecer cache\" seria hype sem necessidade real, porque o pipeline já elimina completamente o contato do relatório com o RDS — não sobra contenção nenhuma para um modelo prever ou evitar."
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "IA entra de verdade mais adiante, com o MESMO dado que este laboratório extrai — não em vez dele. Quando o histórico de pedidos vira base de features para um modelo preditivo, ou quando alguém precisa perguntar em linguagem natural sobre o acervo em vez de escrever SQL, o requisito deixou de ser \"mover o dado\" e passou a ser \"interpretar o dado\". Aponte para o nível 6 da evolução acima, e para o L83 (RAG mínimo) quando o requisito for busca semântica sobre o mesmo histórico."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Anti-padrões"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Erro",
+              "Por que alguém faz",
+              "Sintoma em produção",
+              "Forma correta"
+            ],
+            "rows": [
+              [
+                "Consultar a réplica de leitura diretamente para relatório pesado",
+                "é a menor mudança possível: o endpoint e a credencial já existem do L07",
+                "o painel degrada nos horários em que o relatório roda, sem nenhum erro no log",
+                "extrair via CDC para um armazenamento separado, otimizado para varredura"
+              ],
+              [
+                "Extração incremental por `updated_at` para \"economizar\" o CDC",
+                "parece mais simples e não exige mexer em parâmetro nenhum do banco",
+                "pedidos excluídos fisicamente desaparecem da análise sem deixar rastro",
+                "CDC via WAL, que registra DELETE explicitamente com a coluna de operação"
+              ],
+              [
+                "Usar a réplica de leitura como fonte do DMS \"porque já existe\"",
+                "evita tocar no primário, parece a opção mais segura à primeira vista",
+                "slot lógico direto numa réplica padrão não é o caminho suportado por padrão; a tarefa falha ao configurar, ou exige requisito extra não avaliado",
+                "usar o primário como fonte, e deixar a réplica exatamente como o L07 a deixou"
+              ],
+              [
+                "Deixar a tarefa DMS \"pausada\" achando que é reversível sem custo",
+                "pausar parece mais seguro que deletar, \"para não perder configuração\"",
+                "o slot de replicação continua reservado e o WAL do primário cresce sem limite",
+                "dropar o slot explicitamente, ou remover a tarefa por completo"
+              ],
+              [
+                "Rodar full load de novo a cada mês em vez de manter CDC contínuo",
+                "\"recarregar tudo\" parece mais simples do que confiar num processo contínuo rodando sozinho",
+                "reprocessa milhões de linhas repetidamente, recriando a mesma varredura pesada que o CDC existe para evitar",
+                "full load uma única vez; CDC contínuo depois, sem reprocessar o que já foi capturado"
+              ],
+              [
+                "Tratar o CSV bruto do Athena como pronto para produção",
+                "funciona no laboratório, e \"funciona\" parece suficiente para seguir em frente",
+                "consulta cada vez mais cara e lenta conforme o histórico cresce, sem tolerância a evolução de schema",
+                "tratar o bruto como estágio intermediário; catalogar e particionar é o L62"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Log/métrica",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Tarefa DMS falha ao iniciar CDC",
+                "`rds.logical_replication` não está em 1, ou a instância ainda não reiniciou depois da mudança",
+                "conferir o parameter group aplicado e o status \"pending reboot\" da instância",
+                "eventos do RDS e `describe-db-parameters`",
+                "aplicar o parâmetro e reiniciar em janela de manutenção"
+              ],
+              [
+                "Full load nunca progride",
+                "credencial do endpoint sem permissão de leitura nas tabelas de origem",
+                "testar a conexão manualmente com a mesma credencial do endpoint",
+                "logs da tarefa DMS no CloudWatch",
+                "conceder SELECT nas tabelas e no schema necessários"
+              ],
+              [
+                "CDC conectado, mas sem arquivo novo no S3",
+                "não houve mudança nas tabelas mapeadas desde o load, ou o table mapping exclui a tabela",
+                "gerar uma mudança de teste (UPDATE trivial) e observar se um arquivo aparece",
+                "`CDCLatencySource`/`CDCLatencyTarget`",
+                "revisar a regra de `selection` do table mapping"
+              ],
+              [
+                "Storage do primário cresce sem explicação óbvia",
+                "slot de replicação lógica inativo, acumulando WAL sem leitor",
+                "listar `pg_replication_slots` e checar o campo `active`",
+                "`TransactionLogsDiskUsage`, `OldestReplicationSlotLag`",
+                "dropar o slot órfão"
+              ],
+              [
+                "Consulta no Athena não retorna os dados mais recentes",
+                "atraso normal do CDC dentro da janela aceitável, ou a tarefa está pausada",
+                "checar `CDCLatencyTarget` e o status da tarefa no console do DMS",
+                "métricas da tarefa DMS",
+                "esperar a janela de atraso aceitável, ou retomar a tarefa pausada"
+              ],
+              [
+                "p95 do painel ainda degrada mesmo depois da extração",
+                "a ferramenta de BI continua apontando para a réplica em vez do Athena",
+                "revisar a string de conexão configurada na ferramenta de BI",
+                "CloudTrail / logs de conexão do RDS",
+                "repontar o BI para o Athena e revogar a credencial antiga"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Limpeza"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "limpeza.sh",
+            "code": "#!/usr/bin/env bash\n# limpeza.sh — a ordem importa: o slot vive no PostgreSQL, nao no Terraform\nset -euo pipefail\n\n# 1) Parar a tarefa e confirmar que o slot associado sera removido com ela.\naws dms stop-replication-task --replication-task-arn \"$TASK_ARN\"\naws dms wait replication-task-stopped --replication-task-arn \"$TASK_ARN\"\n\n# 2) SEMPRE confirme manualmente — a remocao automatica do slot depende de a\n#    tarefa ter sido criada e destruida pelo mesmo caminho.\npsql \"$CONN_PRIMARIO\" -c \"SELECT slot_name FROM pg_replication_slots;\"\n# se ainda existir, remova explicitamente:\npsql \"$CONN_PRIMARIO\" -c \"SELECT pg_drop_replication_slot('nome_do_slot');\"\n\n# 3) Remover a tarefa, os dois endpoints e a instancia de replicacao.\nterraform destroy -target=aws_dms_replication_task.captura \\\n                   -target=aws_dms_endpoint.origem \\\n                   -target=aws_dms_endpoint.destino \\\n                   -target=aws_dms_replication_instance.captura\n\n# 4) Esvaziar e remover o bucket (versionamento, se ligado, exige remover\n#    todas as versoes, nao so a mais recente).\naws s3 rm \"s3://cadencia-pedidos-bruto\" --recursive\nterraform destroy -target=aws_s3_bucket.bruto\n\n# 5) Reverter rds.logical_replication so se voce nao for mais usar CDC — isto\n#    tambem exige reboot, na proxima janela de manutencao.\nterraform destroy -target=aws_db_parameter_group.com_cdc\n\n# 6) Remover o secret (fica em janela de recuperacao, nao some na hora).\naws secretsmanager delete-secret --secret-id \"$SECRET_ARN\" --recovery-window-in-days 7\n"
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "danger",
+            "title": "O que o `terraform destroy` NÃO leva embora",
+            "content": "Um slot de replicação lógica vive dentro do PostgreSQL, não no state do Terraform — ele nunca aparece como recurso gerenciado. Destruir a tarefa DMS pela via normal costuma removê-lo junto, mas se o slot foi criado fora desse fluxo (manualmente, ou por uma tarefa recriada com nome diferente), ele fica órfão, retendo WAL, e o primário segue crescendo de armazenamento depois de toda a infraestrutura \"destruída\" ter sumido do console."
+          }
+        },
+        {
+          "id": "b21_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "O `destroy` leva?",
+              "Detalhe"
+            ],
+            "rows": [
+              [
+                "Slot de replicação órfão",
+                "Não, se criado fora do Terraform",
+                "confirme com `pg_replication_slots` antes de encerrar"
+              ],
+              [
+                "Objetos já gravados no S3",
+                "Só com `s3 rm` explícito antes",
+                "bucket com versionamento exige remover todas as versões"
+              ],
+              [
+                "Secret no Secrets Manager",
+                "Fica em janela de recuperação",
+                "não some imediatamente; cobra até o fim da janela"
+              ],
+              [
+                "`rds.logical_replication` revertido",
+                "Exige novo reboot",
+                "reverter não é instantâneo — é outra janela de manutenção"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Resumo"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Motivo"
+            ],
+            "rows": [
+              [
+                "Relatório de 2 anos degrada o painel na réplica",
+                "Extração via CDC para S3",
+                "tira a consulta pesada do MESMO recurso físico que o painel usa"
+              ],
+              [
+                "Extração incremental perderia DELETE físico",
+                "AWS DMS lendo o WAL via slot lógico",
+                "captura INSERT/UPDATE/DELETE sem depender de coluna de auditoria"
+              ],
+              [
+                "Orçamento não pode dobrar",
+                "Athena ad hoc sobre S3 bruto",
+                "consulta serverless por byte varrido, sem segunda instância de banco"
+              ],
+              [
+                "Réplica do L07 precisa continuar servindo o painel",
+                "fonte do CDC é o primário, não a réplica",
+                "preserva o uso já decidido, sem reconfigurar o que funciona"
+              ],
+              [
+                "Slot esquecido pode encher o disco do primário",
+                "alarme de `OldestReplicationSlotLag`/`TransactionLogsDiskUsage`",
+                "detecta antes de virar incidente"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "O parâmetro `rds.logical_replication` é aplicado e o primário reinicia (via Multi-AZ do L07).",
+              "O DMS cria um slot de replicação lógica e começa a decodificar o WAL com `test_decoding`.",
+              "O full load copia o snapshot atual de `pedido` para arquivos LOAD no S3.",
+              "A partir do ponto exato em que o snapshot terminou, o CDC captura toda mudança em arquivos com coluna I/U/D.",
+              "A ferramenta de BI passa a apontar para o Athena, não mais para a réplica.",
+              "O relatório de fechamento roda inteiramente contra objetos no S3, sem sessão nova no RDS.",
+              "CloudWatch monitora se o slot está sendo consumido e se a captura está atrasada.",
+              "CPUUtilization e ReadIOPS do primário e da réplica ficam sem variação atribuível ao relatório."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que a réplica de leitura do RDS fica lenta se o relatório nunca toca o primário?",
+            "answer": "Porque a réplica isola o PRIMÁRIO dos workloads que você manda para ela, mas não isola esses workloads ENTRE SI. Consulta transacional (poucas linhas, por índice) e consulta analítica (varredura de milhões de linhas) competem pelo mesmo buffer cache e pelos mesmos IOPS sempre que rodam na mesma instância — e a réplica é só uma segunda instância, não uma segunda categoria de hardware. O primário fica intacto porque a consulta nunca chega até ele; quem sofre é o outro workload que já morava na réplica."
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Qual a diferença prática entre extração incremental por timestamp e CDC?",
+            "answer": "A extração incremental por timestamp só enxerga o que mudou uma coluna de auditoria como `updated_at`; um DELETE físico não toca essa coluna em nenhuma outra linha, então ele nunca aparece na extração seguinte. CDC lê o WAL — o registro de toda transação confirmada — e por isso captura INSERT, UPDATE e DELETE de forma explícita, cada um marcado com sua própria operação. A diferença não é velocidade, é completude: um dos dois mecanismos vê exclusão física, o outro simplesmente não tem como."
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Por que o AWS DMS lê o WAL do RDS primário, e não da réplica de leitura?",
+            "answer": "Porque um slot de replicação lógica direto numa réplica de leitura padrão do RDS PostgreSQL não é o caminho suportado por padrão — logical decoding tem requisitos próprios que a réplica física do L07 não atende sem reconfiguração adicional. Usar o primário como fonte evita essa complexidade e, como efeito colateral bom, preserva a réplica exatamente com o papel que o L07 já definiu para ela: só leitura operacional tolerante a atraso."
+          }
+        },
+        {
+          "id": "b23_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "O que é o parâmetro `rds.logical_replication`, e por que ele exige reboot?",
+            "answer": "É o parâmetro que habilita replicação lógica no RDS PostgreSQL, e ele é estático — muda o comportamento interno do motor (`wal_level`, `max_wal_senders`, `max_replication_slots` e `max_connections`), então só entra em vigor depois de o banco reiniciar. Não existe forma de aplicá-lo a quente. Numa instância Multi-AZ, aplicar na janela de manutenção faz a troca acontecer via failover para o standby, o que limita a interrupção à mesma janela que o Multi-AZ já existe para absorver."
+          }
+        },
+        {
+          "id": "b23_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "O que acontece se eu esquecer de remover o slot de replicação depois de desligar o DMS?",
+            "answer": "O PostgreSQL retém o WAL indefinidamente esperando um leitor que não vai voltar, e o storage do primário cresce sem limite até um alarme disparar ou o disco encher. Esse comportamento não gera erro imediato — é silencioso por dias ou semanas, e é exatamente por isso que `OldestReplicationSlotLag` e `TransactionLogsDiskUsage` existem como alarmes: eles pegam o crescimento antes de ele virar uma indisponibilidade do banco transacional por falta de espaço."
+          }
+        },
+        {
+          "id": "b23_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Preciso reorganizar o dado em camadas antes de consultar no Athena?",
+            "answer": "Não para provar este laboratório — o Athena consulta o CSV bruto que o DMS grava, sem catálogo nem partição, e isso já é suficiente para tirar a consulta pesada do RDS. O custo dessa escolha é que toda consulta varre o histórico inteiro, e ele cresce todo dia; catalogar com Glue e particionar por data para baratear e acelerar a consulta é o trabalho do L62, que depende deste laboratório estar funcionando primeiro."
+          }
+        },
+        {
+          "id": "b23_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Por que usar Athena em vez de uma segunda réplica dedicada a analytics?",
+            "answer": "Porque o requisito de orçamento proíbe dobrar a linha de banco, e uma segunda réplica dedicada ainda seria o mesmo motor transacional — linha por linha, sem compressão colunar — tentando servir uma carga que ele não foi desenhado para atender bem. O Athena cobra por byte armazenado e por byte varrido, sem exigir nenhuma instância de banco nova, e isso cabe no requisito sem comprometer a arquitetura existente."
+          }
+        },
+        {
+          "id": "b23_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "CDC via DMS garante atraso zero entre a mudança no banco e o dado aparecer no S3?",
+            "answer": "Não, e tratar CDC como tempo real sem medir é um erro comum. Existe latência real, monitorada por `CDCLatencySource` (atraso entre a origem e a instância de replicação) e `CDCLatencyTarget` (atraso até o dado chegar ao destino), e a soma das duas é o atraso total. O requisito deste laboratório tolera até 24 horas porque o relatório é de fechamento mensal; um caso que exigisse dado em segundos precisaria medir essas métricas contra um SLA bem mais apertado antes de confiar no desenho."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b24_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Uma equipe implementa extração incremental do RDS para S3 usando a coluna `updated_at`: toda linha com `updated_at` mais recente que a última execução é copiada. Um pedido é excluído fisicamente (`DELETE`) da tabela de origem. O que acontece na próxima extração?",
+            "options": [
+              "O DMS detecta a exclusão automaticamente, mesmo sem usar CDC",
+              "A extração falha, porque a linha referenciada pela consulta não existe mais",
+              "O pedido excluído simplesmente não aparece em lugar nenhum, sem nenhum erro registrado",
+              "O pedido excluído aparece marcado como removido no S3"
+            ],
+            "correctIndex": 2,
+            "explanation": "A extração incremental por `updated_at` só enxerga linhas cuja coluna de auditoria mudou depois da última execução. Um `DELETE` físico remove a linha inteira — não existe mais linha nenhuma cujo `updated_at` possa ser comparado — então não há nada para a consulta encontrar e copiar. O pedido simplesmente deixa de existir no extrato, como se nunca tivesse sido excluído nem estivesse mais lá: é um silêncio, não um erro.\\n\\nA primeira alternativa descreve o comportamento do CDC via coluna de operação (I/U/D), não da extração incremental — é justamente o mecanismo que este cenário NÃO usa. A terceira erra o modelo mental: a extração é uma consulta nova a cada execução, filtrando por timestamp; ela não referencia uma linha específica que \"não existe mais\", então não há erro de referência para lançar. A quarta confunde as duas ferramentas do laboratório: o DMS só detecta a exclusão quando configurado para CDC via WAL — usá-lo em modo incremental por timestamp teria o mesmo defeito descrito aqui."
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Um slot de replicação lógica no RDS PostgreSQL fica sem nenhum consumidor ativo por semanas, porque a tarefa DMS que o usava foi pausada sem ser removida corretamente. Qual é a consequência mais provável, e qual métrica do CloudWatch a revela primeiro?",
+            "options": [
+              "O primário para de aceitar novas escritas até o slot ser removido manualmente",
+              "O WAL retido pelo slot cresce sem limite, e `OldestReplicationSlotLag` (ou `TransactionLogsDiskUsage`) sobe antes de qualquer erro visível",
+              "Nenhuma: um slot sem consumidor simplesmente para de existir sozinho depois de um tempo",
+              "A réplica de leitura do L07 perde sincronização, porque ela compartilha o mesmo mecanismo do slot lógico"
+            ],
+            "correctIndex": 1,
+            "explanation": "Um slot de replicação lógica é uma promessa que o PostgreSQL faz de reter todo o WAL desde o último ponto lido pelo consumidor — e ele cumpre essa promessa mesmo que o consumidor nunca mais volte. O resultado é acúmulo silencioso de WAL no primário, visível primeiro em `OldestReplicationSlotLag` (o quanto o slot mais atrasado está atrás) e em `TransactionLogsDiskUsage` (o espaço em disco que esse WAL retido está ocupando) — as duas métricas que este laboratório monitora exatamente por causa desse risco.\\n\\nA primeira alternativa inverte o comportamento real: o PostgreSQL não descarta slot sozinho, isso exige ação explícita, e é exatamente essa ausência de limpeza automática que torna o risco real. A segunda superestima o efeito: o primário continua aceitando escrita normalmente; o que sofre é o ESPAÇO em disco, não a capacidade de escrever, até o disco genuinamente faltar. A quarta confunde dois mecanismos de replicação diferentes: a réplica física do L07 usa replicação em nível de bloco, sem relação com o slot lógico que o DMS criou — um pode falhar sem afetar o outro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L07 no ar (RDS Multi-AZ, réplica de leitura, roteamento por tolerância a atraso), noção de WAL do PostgreSQL"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "contenção de recurso físico entre perfis OLTP e OLAP na mesma instância; full extract vs incremental por timestamp vs CDC via WAL, e o que cada um perde; réplica lógica e slot no PostgreSQL; DMS full-load-and-cdc; S3 como destino bruto; os riscos de um slot esquecido"
+              ],
+              [
+                "Limitação que fica",
+                "o dado chega ao S3 em formato bruto (CSV), sem catálogo nem partição — cada consulta do Athena varre o histórico inteiro, e o custo por consulta cresce mês após mês"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L62 — data lake em camadas (bronze/prata/ouro). Reutiliza o bucket e a captura deste laboratório, e é onde o formato bruto vira catálogo Glue com schema e partição"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L63 (ingestão em streaming) troca S3 direto por Kinesis quando o volume de mudança justificar; o nível 6 da evolução (dados e IA) depende deste histórico extraído estar consultável"
+              ],
+              [
+                "Data da última validação técnica",
+                "8 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Using a PostgreSQL database as an AWS DMS source",
+                "code": true
+              },
+              {
+                "text": " — requisito de `rds.logical_replication`, do plugin `test_decoding` e do usuário master no endpoint de origem; "
+              },
+              {
+                "text": "Using Amazon S3 as a target for AWS DMS",
+                "code": true
+              },
+              {
+                "text": " — nomeação de arquivo de full load e de CDC, e a coluna de operação I/U/D; "
+              },
+              {
+                "text": "Monitoring and tuning the replication process",
+                "code": true
+              },
+              {
+                "text": " — as métricas `OldestReplicationSlotLag` e `TransactionLogsDiskUsage`; "
+              },
+              {
+                "text": "Troubleshooting latency issues in AWS DMS",
+                "code": true
+              },
+              {
+                "text": " — `CDCLatencySource` e `CDCLatencyTarget`; e "
+              },
+              {
+                "text": "Identity and access management for AWS DMS",
+                "code": true
+              },
+              {
+                "text": " — as roles `dms-vpc-role` e `dms-cloudwatch-logs-role` com nome fixo. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "Os números de latência e de degradação de p95 citados são os medidos na aplicação de exemplo da Cadência, e servem como ordem de grandeza, não como referência para o seu volume. O comportamento de um slot de replicação lógica durante a promoção de um standby Multi-AZ varia por versão do mecanismo PostgreSQL — a documentação descreve sincronização automática de slot a partir da versão 17 (`sync_replication_slots`); em versões anteriores, confirme se o slot sobrevive ao failover antes de depender disso em produção, e não assuma continuidade sem testar."
+          }
+        }
+      ]
+    }
+  ]
+}

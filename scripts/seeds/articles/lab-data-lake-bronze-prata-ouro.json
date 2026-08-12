@@ -1,0 +1,2624 @@
+{
+  "slug": "lab-data-lake-bronze-prata-ouro",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência é um marketplace de material de construção com 40 lojistas parceiros. O ERP roda sobre RDS PostgreSQL, e desde o "
+              },
+              {
+                "text": "L61",
+                "code": true
+              },
+              {
+                "text": " uma replicação contínua extrai o banco operacional inteiro para o S3: carga completa mais captura de mudança, gravando um arquivo Parquet por execução. Isso resolveu o problema do L61 — o relatório de BI parou de travar o banco de produção."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O que ninguém previu foi o que acontece depois de oito meses disso. Três outros times — marketing, financeiro e suporte — perceberam que também podiam exportar seus próprios recortes para o mesmo bucket, e passaram a fazer isso quando precisavam, cada um com sua própria convenção de nome, ou sem nenhuma. Hoje o bucket tem 41.312 objetos, e a pergunta \"qual arquivo tem os pedidos de julho\" não tem resposta sem abrir arquivo por arquivo e olhar o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O sintoma que chegou à equipe de dados não foi \"estamos sem espaço\" — é armazenamento, e armazenamento é barato. Foi um analista de BI relatando que gasta em média 40 minutos por dia só localizando o arquivo certo antes de sequer começar a análise. O volume de arquivos não é o problema: é a ausência de um contrato que diga, para cada um, se é dado bruto, dado limpo ou dado pronto para consumo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado — depende do L61 e pressupõe dado chegando continuamente ao S3"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L61 concluído (extração incremental no ar), SQL básico, noções de Spark/PySpark"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 45 min · implementação 2 h a 2 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo: o volume é pequeno para os padrões de lake; o custo real está em decisão de formato e ciclo de vida, não em recurso caro"
+              },
+              {
+                "k": "Serviços",
+                "v": "S3, Glue (Data Catalog + jobs), Lake Formation, KMS, Lambda (.NET 8)"
+              },
+              {
+                "k": "Volume atual",
+                "v": "41.312 objetos, cerca de 2,3 TB, crescendo ~1.800 objetos por dia"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "analista de BI encontra o dado certo sem abrir arquivo por arquivo"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "a maioria das consultas de BI usa o estado consolidado por dia, não o histórico intra-dia — é o que justifica agregar em ouro"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "três camadas com contrato escrito, catálogo alimentado pelos próprios jobs, e permissão por tabela/coluna provada com teste de negativa"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é qualidade de dado automatizada, nem tabela transacional com UPDATE/DELETE. O contrato de qualidade — schema esperado, faixa de valor, quarentena por regra de negócio — é o L70. Corrigir um registro histórico sem reescrever a partição inteira é o L67, que troca Parquet simples por Iceberg. Este módulo entrega a estrutura sobre a qual os dois seguintes se apoiam."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando na seção de implantação, não com a sensação de ter entendido as três camadas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que \"mais armazenamento organizado em pastas\" não é a mesma coisa que um contrato de camada.",
+              "Nomear o que bronze, prata e ouro garantem cada uma, e o que cada uma explicitamente não garante.",
+              "Escrever o contrato de uma camada — schema, formato, frequência, dono — e apontar onde ele vive no desenho.",
+              "Configurar um job do Glue que atualiza o próprio schema no catálogo, sem crawler agendado sobre tudo.",
+              "Escrever uma transformação idempotente: reexecutar o mesmo dia não duplica linha nenhuma.",
+              "Conceder permissão no Lake Formation por tabela e por coluna, e provar a negativa com um teste real.",
+              "Medir quantos bytes uma consulta varre em cada camada, e explicar a diferença de duas ordens de grandeza.",
+              "Diagnosticar um caso em que a permissão de bucket contorna a permissão do Lake Formation."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Zonas do lake (raw/staging/curated)",
+                "MLA-C01, SAA-C03",
+                "bronze/prata/ouro como as três zonas, com prefixo e contrato próprios",
+                "por que bronze nunca é sobrescrito, e o que cada zona seguinte resolve"
+              ],
+              [
+                "Formato de arquivo",
+                "MLA-C01",
+                "prata e ouro em Parquet; bronze recebe o formato que a fonte entrega",
+                "por que formato colunar reduz bytes varridos, e quando isso importa"
+              ],
+              [
+                "Particionamento",
+                "MLA-C01, SAA-C03",
+                "partição por data em todas as camadas, por loja também em ouro",
+                "poda de partição vs. varredura completa, e o efeito no custo por consulta"
+              ],
+              [
+                "Glue Data Catalog e crawler",
+                "MLA-C01",
+                "catálogo alimentado pelo job em prata/ouro; crawler só em bronze",
+                "diferença entre \"descobrir schema\" e \"manter schema conhecido\""
+              ],
+              [
+                "Job bookmarks e processamento incremental",
+                "MLA-C01",
+                "cada execução processa só a partição nova, não o histórico inteiro",
+                "a diferença entre reprocessar tudo e reprocessar o que mudou"
+              ],
+              [
+                "Lake Formation: permissão por tabela e coluna",
+                "SAP-C02, MLA-C01",
+                "SELECT concedido por banco/tabela, e coluna excluída por nome",
+                "a diferença estrutural entre permissão de bucket e permissão de catálogo"
+              ],
+              [
+                "Lake Formation: método nomeado vs. LF-TBAC",
+                "SAP-C02",
+                "este módulo usa o método nomeado (tabela por tabela)",
+                "quando migrar para tag-based faz sentido: muitos times, muitas tabelas"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve um papel do IAM com `s3:GetObject` no bucket do lake E uma permissão do Lake Formation negando acesso a uma tabela — e pede o resultado. A resposta depende de como o recurso foi registrado: se o bucket está registrado no Lake Formation e o acesso passa pelo Data Catalog (Athena, Glue), o LF decide, e a negativa vale. Se alguém usa `s3 cp` direto no objeto, a permissão de bucket do IAM ainda se aplica, porque aquele caminho nunca passou pelo LF. É exatamente o antipadrão da seção de segurança adiante."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito não funcional que não vira uma linha de contrato ou de permissão é intenção. A coluna da direita é onde cada um deixou marca no Terraform ou no job."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Dado bruto nunca é alterado",
+                "imutável por convenção de escrita",
+                "bronze é write-once por partição; correção é reprocessar, nunca editar"
+              ],
+              [
+                "Analista de negócio só acessa dado agregado",
+                "obrigatório",
+                "Lake Formation concede SELECT ao papel do analista só no banco `cadencia_ouro`"
+              ],
+              [
+                "Reprocessar um dia sem afetar os demais",
+                "obrigatório",
+                "partição por data em todas as camadas + `partitionOverwriteMode=dynamic`"
+              ],
+              [
+                "Tempo entre chegada em bronze e disponível em ouro",
+                "abaixo de 2 h",
+                "jobs agendados por EventBridge em cadeia, não crawler indefinido nem processo manual"
+              ],
+              [
+                "Custo de armazenamento sob controle",
+                "orçamento fixo, equipe de 2 pessoas",
+                "ciclo de vida por prefixo: bronze esfria em 30 dias, ouro permanece quente"
+              ],
+              [
+                "Dado sensível não chega à camada de consumo amplo",
+                "CPF do cliente",
+                "a transformação bronze→prata já remove a coluna antes de gravar; ouro nunca a teve"
+              ],
+              [
+                "Auditoria de quem acessou o quê",
+                "obrigatório",
+                "permissão via Lake Formation, que registra concessão e uso no CloudTrail"
+              ],
+              [
+                "Times diferentes, acessos diferentes",
+                "4 times, no mínimo 2 níveis de acesso",
+                "papéis distintos com permissão nomeada por banco/tabela, não por política de bucket"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o lake sem camada"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem hoje. É implantável de verdade — é literalmente o resultado do L61 mais oito meses de uso real — e o defeito é visível assim que se tenta responder uma pergunta específica sobre o dado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Um bucket, dois produtores, zero contrato",
+            "caption": "Isto é o que a Cadência tem hoje, e não é preguiça — é o caminho mais curto para tirar dado do banco operacional. O defeito não é o volume de arquivos: é que nenhum deles diz se é bruto, limpo ou pronto. Percorra os passos e repare que a pergunta do analista não tem resposta porque o esquema não tem a resposta.",
+            "groups": [
+              {
+                "label": "VPC — banco operacional",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "rds",
+                    "service": "rds",
+                    "label": "RDS PostgreSQL — pedidos",
+                    "note": "é a fonte de verdade transacional; nada aqui muda neste laboratório"
+                  }
+                ]
+              },
+              {
+                "label": "Outros produtores",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "outros",
+                    "service": "user",
+                    "label": "Marketing, financeiro, suporte",
+                    "note": "cada time exporta seu próprio recorte quando precisa, sem combinar formato com ninguém"
+                  }
+                ]
+              },
+              {
+                "label": "Data no S3, sem camada",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "lake",
+                    "service": "s3",
+                    "label": "Bucket único — 41.312 objetos",
+                    "note": "mistura carga completa, captura contínua e exportação manual no mesmo prefixo, sem convenção de nome"
+                  }
+                ]
+              },
+              {
+                "label": "Descoberta",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "crawler",
+                    "service": "glue",
+                    "label": "Crawler sobre o bucket inteiro",
+                    "note": "infere UMA tabela a partir de arquivos com formato e schema diferentes entre si"
+                  },
+                  {
+                    "id": "athena",
+                    "service": "athena",
+                    "label": "Athena",
+                    "note": "consulta a tabela que o crawler inferiu — que não distingue bruto de recorte"
+                  }
+                ]
+              },
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "analista",
+                    "service": "user",
+                    "label": "Analista de BI",
+                    "note": "é quem paga o custo deste desenho: cerca de 40 min por dia procurando o arquivo certo"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "rds",
+                "to": "lake",
+                "label": "DMS: carga completa + captura contínua, um arquivo por execução",
+                "style": "solid"
+              },
+              {
+                "from": "outros",
+                "to": "lake",
+                "label": "exportação ad hoc, sem prefixo nem formato combinado",
+                "style": "solid"
+              },
+              {
+                "from": "lake",
+                "to": "crawler",
+                "label": "varre o bucket inteiro numa passada só",
+                "style": "solid"
+              },
+              {
+                "from": "crawler",
+                "to": "athena",
+                "label": "tabela única, schema inferido de arquivos incompatíveis",
+                "style": "solid"
+              },
+              {
+                "from": "analista",
+                "to": "athena",
+                "label": "\"quero os pedidos de julho\" — pergunta sem coluna que a responda",
+                "style": "solid"
+              },
+              {
+                "from": "athena",
+                "to": "lake",
+                "label": "varredura completa: sem partição, sem prefixo por data",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Dois produtores, uma pasta",
+                "detail": "A replicação do banco operacional grava um arquivo por execução direto no bucket. Não há prefixo que diga \"isto é carga de hoje\" nem \"isto veio do pedidos\" — é só mais um objeto entre 41 mil.",
+                "nodes": [
+                  "rds",
+                  "lake"
+                ],
+                "edges": [
+                  "rds>lake"
+                ]
+              },
+              {
+                "label": "Uma convenção que ninguém combinou",
+                "detail": "Marketing, financeiro e suporte também escrevem no mesmo bucket quando precisam de um recorte. Cada time usa o nome de arquivo que faz sentido para ele — e nenhum dos quatro sabe o que os outros três estão fazendo.",
+                "nodes": [
+                  "outros",
+                  "lake"
+                ],
+                "edges": [
+                  "outros>lake"
+                ]
+              },
+              {
+                "label": "O crawler não separa bruto de recorte",
+                "detail": "Sem prefixo por camada, o crawler vê uma pasta só e tenta inferir UM schema para tudo dentro dela. O resultado é uma tabela que mistura coluna de um formato com coluna de outro — quando não falha silenciosamente em parte dos arquivos.",
+                "nodes": [
+                  "lake",
+                  "crawler"
+                ],
+                "edges": [
+                  "lake>crawler"
+                ]
+              },
+              {
+                "label": "Uma tabela, schemas incompatíveis",
+                "detail": "O Athena consulta a tabela que existe no Data Catalog, e essa tabela é o produto do passo anterior: uma tentativa de generalizar arquivos que nunca deveriam estar juntos.",
+                "nodes": [
+                  "crawler",
+                  "athena"
+                ],
+                "edges": [
+                  "crawler>athena"
+                ]
+              },
+              {
+                "label": "\"Pedidos de julho\" não é uma coluna",
+                "detail": "Sem partição por data e sem separação por domínio, a pergunta de negócio mais comum não tem tradução direta para SQL. O analista acaba abrindo arquivo por arquivo pelo nome, torcendo para reconhecer o conteúdo pelo timestamp da execução.",
+                "nodes": [
+                  "analista",
+                  "athena"
+                ],
+                "edges": [
+                  "analista>athena"
+                ]
+              },
+              {
+                "label": "Cada consulta paga o bucket inteiro",
+                "detail": "Mesmo quando alguém escreve a consulta certa, o Athena varre o bucket inteiro porque não existe partição para podar nem formato colunar para ler só a coluna pedida. O custo por consulta cresce junto com o volume, sem ninguém decidir isso.",
+                "nodes": [
+                  "athena",
+                  "lake"
+                ],
+                "edges": [
+                  "athena>lake"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Antes de estruturar qualquer coisa, meça o tamanho real do problema. Contar objetos por \"tipo aparente\" (pelo nome) é o primeiro número que torna o caos discutível."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "filename": "medir-o-caos.sh",
+            "code": "# Quantos objetos existem, e quantos \"tipos\" de nome de arquivo aparecem?\naws s3api list-objects-v2 --bucket cadencia-lake \\\n  --query \"length(Contents)\" --output text\n# 41312\n\naws s3api list-objects-v2 --bucket cadencia-lake \\\n  --query \"Contents[].Key\" --output text \\\n  | tr \"\\t\" \"\\n\" | sed -E \"s/[0-9]+/#/g\" | sort -u | wc -l\n# 187 padroes de nome distintos, nenhum deles documentado"
+          }
+        },
+        {
+          "id": "b4_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "A pergunta que ninguém consegue responder sem abrir arquivo",
+            "content": "\"Qual arquivo tem os pedidos de julho?\" não é uma pergunta difícil — é uma pergunta sem informação suficiente para responder. Sem prefixo por domínio e por data, o nome do arquivo é o timestamp da execução que o gerou, não o conteúdo que ele carrega. Um analista que abre o arquivo errado perde tempo; um que confia no nome errado publica um número errado — e isso é mais caro do que a demora."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção: três camadas com contrato"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. Se você não conseguir apontar o requisito, a peça é adorno — e este desenho não tem nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Três camadas, cada uma com um contrato, e permissão por tabela",
+            "caption": "A diferença estrutural não é \"mais uma pasta\": é que cada camada agora tem um dono, um formato e um job que a alimenta — e quem pode ler cada tabela é decisão do Lake Formation, não do bucket. Percorra os passos: cada peça nova rastreia a um requisito da seção anterior.",
+            "groups": [
+              {
+                "label": "Bronze — bruto, imutável",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "bronze",
+                    "service": "bronze",
+                    "label": "Bronze: exatamente como chegou",
+                    "note": "write-once por partição; é a fonte de reprocessamento se prata ou ouro saírem errados"
+                  }
+                ]
+              },
+              {
+                "label": "Transformação bronze → prata",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "glue_bp",
+                    "service": "glue",
+                    "label": "Job: limpa, deduplica, tipa",
+                    "note": "lê só a partição do dia processado, nunca o histórico inteiro de bronze"
+                  }
+                ]
+              },
+              {
+                "label": "Prata — limpa, granular",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "prata",
+                    "service": "prata",
+                    "label": "Prata: uma linha por pedido",
+                    "note": "tipos corrigidos e sem duplicata, mas ainda no grão do evento — não é resumo"
+                  }
+                ]
+              },
+              {
+                "label": "Transformação prata → ouro",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "glue_po",
+                    "service": "glue",
+                    "label": "Job: agrega por loja e dia",
+                    "note": "faz o trabalho pesado uma vez, para não repeti-lo em cada consulta de BI"
+                  }
+                ]
+              },
+              {
+                "label": "Ouro — agregada, pronta para consumo",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ouro",
+                    "service": "ouro",
+                    "label": "Ouro: total diário por loja",
+                    "note": "é a tabela que a maioria das consultas deveria usar, porque já resolveu o agregado"
+                  }
+                ]
+              },
+              {
+                "label": "Catálogo e governança",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "catalogo",
+                    "service": "glue",
+                    "label": "Data Catalog",
+                    "note": "cada job registra o schema da SUA tabela; o catálogo nunca mistura camada"
+                  },
+                  {
+                    "id": "lf",
+                    "service": "lakeformation",
+                    "label": "Lake Formation",
+                    "note": "concede SELECT por tabela e por coluna sobre o catálogo, não sobre o bucket"
+                  }
+                ]
+              },
+              {
+                "label": "Consumo",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "athena",
+                    "service": "athena",
+                    "label": "Athena",
+                    "note": "executa a consulta com a identidade de quem pediu — a permissão é checada aqui, não no bucket"
+                  },
+                  {
+                    "id": "eng_dados",
+                    "service": "user",
+                    "label": "Engenheiro de dados",
+                    "note": "investiga incidente de qualidade; por isso alcança prata além de ouro"
+                  },
+                  {
+                    "id": "analista_negocio",
+                    "service": "user",
+                    "label": "Analista de negócio",
+                    "note": "só precisa do agregado; ver prata exporia pedido individual sem necessidade"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "bronze",
+                "to": "glue_bp",
+                "label": "lê a partição do dia, sem filtrar nem limpar nada",
+                "style": "solid"
+              },
+              {
+                "from": "glue_bp",
+                "to": "prata",
+                "label": "grava limpo, deduplicado, tipado — ainda uma linha por pedido",
+                "style": "solid"
+              },
+              {
+                "from": "glue_bp",
+                "to": "catalogo",
+                "label": "registra o schema da tabela prata",
+                "style": "dashed"
+              },
+              {
+                "from": "prata",
+                "to": "glue_po",
+                "label": "lê prata da partição processada, nunca bronze de novo",
+                "style": "solid"
+              },
+              {
+                "from": "glue_po",
+                "to": "ouro",
+                "label": "grava total diário por loja",
+                "style": "solid"
+              },
+              {
+                "from": "glue_po",
+                "to": "catalogo",
+                "label": "registra o schema da tabela ouro",
+                "style": "dashed"
+              },
+              {
+                "from": "lf",
+                "to": "catalogo",
+                "label": "aplica permissão por tabela e coluna sobre o catálogo",
+                "style": "dashed"
+              },
+              {
+                "from": "lf",
+                "to": "eng_dados",
+                "label": "concede SELECT em bronze e prata",
+                "style": "dashed"
+              },
+              {
+                "from": "lf",
+                "to": "analista_negocio",
+                "label": "concede SELECT só em ouro",
+                "style": "dashed"
+              },
+              {
+                "from": "eng_dados",
+                "to": "athena",
+                "label": "consulta de investigação, alcança prata",
+                "style": "solid"
+              },
+              {
+                "from": "analista_negocio",
+                "to": "athena",
+                "label": "consulta de relatório, só ouro",
+                "style": "solid"
+              },
+              {
+                "from": "athena",
+                "to": "ouro",
+                "label": "poucos GB varridos: agregado e particionado",
+                "style": "solid"
+              },
+              {
+                "from": "athena",
+                "to": "prata",
+                "label": "varredura maior: grão de evento, só quando autorizada",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Bronze não filtra nada",
+                "detail": "O primeiro job lê a partição do dia exatamente como a captura gravou — sem limpar, sem deduplicar. Essa fidelidade é o que torna bronze confiável como fonte de reprocessamento: se prata sair errada, o problema é do job, não do dado.",
+                "nodes": [
+                  "bronze",
+                  "glue_bp"
+                ],
+                "edges": [
+                  "bronze>glue_bp"
+                ]
+              },
+              {
+                "label": "Prata é a primeira vez que alguém decide o que é verdade",
+                "detail": "Deduplicação por chave e timestamp de captura, tipos corrigidos, registro inválido descartado. Prata ainda é granular — uma linha por pedido — porque nem toda pergunta futura é sobre agregado.",
+                "nodes": [
+                  "glue_bp",
+                  "prata"
+                ],
+                "edges": [
+                  "glue_bp>prata"
+                ]
+              },
+              {
+                "label": "Cada job registra a própria tabela",
+                "detail": "O job de bronze→prata atualiza só a entrada de prata no catálogo, com o schema daquela camada. Não existe um crawler genérico varrendo tudo: o schema de cada camada é responsabilidade de quem a escreve.",
+                "nodes": [
+                  "glue_bp",
+                  "catalogo"
+                ],
+                "edges": [
+                  "glue_bp>catalogo"
+                ]
+              },
+              {
+                "label": "Ouro é a única camada que resume",
+                "detail": "O segundo job lê prata — nunca bronze de novo — e agrega por loja e dia. É o trabalho pesado feito uma vez, para não ser repetido a cada consulta de BI.",
+                "nodes": [
+                  "prata",
+                  "glue_po",
+                  "ouro"
+                ],
+                "edges": [
+                  "prata>glue_po",
+                  "glue_po>ouro"
+                ]
+              },
+              {
+                "label": "Lake Formation decide quem vê qual tabela, não o bucket",
+                "detail": "A permissão vive no catálogo, por tabela e coluna. O engenheiro de dados recebe SELECT em bronze e prata porque investiga incidente; o analista de negócio recebe SELECT só em ouro, porque prata exporia pedido individual sem necessidade.",
+                "nodes": [
+                  "lf",
+                  "eng_dados",
+                  "analista_negocio"
+                ],
+                "edges": [
+                  "lf>eng_dados",
+                  "lf>analista_negocio"
+                ]
+              },
+              {
+                "label": "A pergunta de negócio quase nunca varre bronze",
+                "detail": "O analista consulta ouro e varre poucos gigabytes, porque a tabela já é o agregado particionado. O engenheiro de dados eventualmente consulta prata para investigar — e é uma exceção autorizada, não a rota padrão.",
+                "nodes": [
+                  "athena",
+                  "ouro",
+                  "prata"
+                ],
+                "edges": [
+                  "athena>ouro",
+                  "athena>prata"
+                ]
+              },
+              {
+                "label": "A permissão fica registrada, e é auditável",
+                "detail": "Toda concessão do Lake Formation grava evento no CloudTrail. Não é preciso confiar de memória em quem tem acesso a quê — a pergunta \"quem pode ler a coluna de CPF\" tem resposta consultável, não uma lista mantida à parte.",
+                "nodes": [
+                  "lf",
+                  "catalogo"
+                ],
+                "edges": [
+                  "lf>catalogo"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação ao desenho mínimo não é \"mais uma pasta\": é que cada camada passa a ter um DONO — um job que a escreve e que é responsável pelo schema dela no catálogo — e um CONSUMIDOR autorizado por permissão explícita, não por conhecer o caminho do S3."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "annotated_formula",
+          "position": 3,
+          "data": {
+            "title": "Por que a mesma pergunta custa quase cem vezes mais em bronze do que em ouro",
+            "formula": "custo_da_consulta ≈ bytes_varridos × preço_por_TB_varrido",
+            "parts": [
+              {
+                "symbol": "bytes_varridos",
+                "name": "O que a consulta precisa ler para responder",
+                "description": "Em bronze, sem partição por data e em formato de linha, uma pergunta sobre \"julho\" varre o histórico inteiro. Em ouro, particionado por dia e já agregado, a mesma pergunta lê só os dias e as colunas necessárias.",
+                "highlight": true
+              },
+              {
+                "symbol": "formato colunar",
+                "name": "Parquet em vez de JSON/CSV",
+                "description": "Formato colunar permite ler só as colunas pedidas pela consulta, não a linha inteira. É o segundo maior fator depois da partição, e não depende de disciplina humana — é escolha de formato no job."
+              },
+              {
+                "symbol": "poda de partição",
+                "name": "A cláusula WHERE elimina partições inteiras",
+                "description": "Uma tabela particionada por ano/mês/dia permite ao mecanismo de consulta ignorar diretórios inteiros antes de abrir um arquivo. Sem partição, o mecanismo não tem escolha além de abrir tudo."
+              },
+              {
+                "symbol": "preço_por_TB_varrido",
+                "name": "O modelo de cobrança, não o valor",
+                "description": "O Athena cobra pelo volume de dado varrido, não pelo tempo de execução. O valor exato muda por região e no tempo — calcule no AWS Pricing Calculator; o que não muda é que reduzir bytes varridos é a alavanca real."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "success",
+            "title": "O ganho que mais se sente no dia a dia",
+            "content": "Não é o armazenamento — é que a pergunta \"onde está o dado de pedidos de julho, consolidado por loja\" passa a ter uma resposta de uma linha: `SELECT * FROM cadencia_ouro.vendas_diarias_por_loja WHERE data_particao LIKE '2026-07%'`. Isso não existia na versão mínima; e o motivo não é o SQL, é que a tabela certa agora existe."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de um arquivo, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O que separa bronze de prata de ouro não é só nome de pasta — é o que acontece com um arquivo entre a chegada e o momento em que alguém consulta o dado que ele carrega."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Do arquivo bruto à tabela que o BI consulta",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1. Arquivo chega em bronze",
+                "desc": "A captura contínua ou a exportação grava em `bronze/pedidos/ano=2026/mes=08/dia=07/`. O evento de criação do objeto dispara a validação — nada é lido pelo crawler antes disso."
+              },
+              {
+                "label": "2. Validador confere o contrato",
+                "desc": "A função valida caminho, extensão e um schema mínimo esperado. Contrato quebrado não é bloqueado silenciosamente: o arquivo vai para quarentena, e um evento avisa quem gerou aquele dado."
+              },
+              {
+                "label": "3a. Contrato inválido → quarentena",
+                "desc": "Move para `quarentena/` com o motivo anexado como metadado do objeto. Não entra no catálogo, não é lido por job nenhum, e não conta como \"dado disponível\"."
+              },
+              {
+                "label": "3b. Contrato válido → aguarda a janela do job",
+                "desc": "O arquivo fica em bronze até a próxima execução agendada do job bronze→prata. Não há processamento arquivo a arquivo: o job lê a partição do dia inteira."
+              },
+              {
+                "label": "4. Job bronze→prata roda com bookmark",
+                "desc": "Processa só o que ainda não processou naquela partição. Escreve prata com `partitionOverwriteMode=dynamic`: reexecutar o mesmo dia substitui só aquele dia, sem duplicar nem tocar nos demais."
+              },
+              {
+                "label": "5. Job prata→ouro agrega",
+                "desc": "Lê a partição de prata recém-escrita e grava o total diário por loja em ouro. É o único ponto do pipeline em que a granularidade muda de evento para resumo."
+              },
+              {
+                "label": "6. Catálogo e permissão já existiam",
+                "desc": "Cada job atualiza a própria tabela no Data Catalog. A permissão do Lake Formation não muda a cada execução — ela foi concedida uma vez, por tabela, e vale para toda partição nova que a tabela receber."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que a validação acontece ANTES do catálogo, não depois",
+            "content": "Se o crawler ou o job visse o arquivo antes da validação, um Parquet corrompido ou fora do contrato entraria no catálogo e quebraria a consulta de quem já confia na tabela — silenciosamente, até alguém notar um número estranho. Validar na entrada custa uma função pequena; validar depois custa a confiança na tabela inteira."
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O que a funcao registra quando move um arquivo para quarentena. E o payload que vale assinar em EventBridge para alertar o time produtor daquele dado."
+              }
+            ]
+          },
+          "position": 3
+        },
+        {
+          "id": "b6_3",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "json",
+            "filename": "evento-quarentena.json",
+            "code": "{\n  \"source\": \"cadencia.lake.validador\",\n  \"detail-type\": \"Arquivo movido para quarentena\",\n  \"detail\": {\n    \"bucket\": \"cadencia-lake\",\n    \"chaveOriginal\": \"bronze/pedidos/ano=2026/mes=08/arquivo-sem-particao-de-dia.parquet\",\n    \"chaveQuarentena\": \"quarentena/pedidos/ano=2026/mes=08/arquivo-sem-particao-de-dia.parquet\",\n    \"motivo\": \"caminho fora do contrato de bronze\",\n    \"detectadoEm\": \"2026-08-07T09:14:02.118Z\"\n  }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Uma equipe de dados de duas pessoas, quatro times produzindo dado para o mesmo lake, e a exigência de que dado sensível (CPF do cliente) não chegue à camada que o analista de negócio consulta.",
+            "winner": "Três camadas com contrato explícito (bronze/prata/ouro), catálogo atualizado pelo próprio job de transformação, e Lake Formation concedendo SELECT por tabela e coluna",
+            "why": "O contrato por camada resolve o problema declarado — \"qual arquivo serve\" — sem exigir ferramenta nova: é convenção de prefixo, formato e job, e a equipe de duas pessoas consegue operar isso. Lake Formation resolve a exigência de dado sensível sem duplicar a lógica de permissão em cada consumidor: a coluna de CPF simplesmente não existe em ouro, e mesmo que existisse, LF poderia escondê-la por coluna sem mexer no S3.",
+            "alternatives": [
+              {
+                "name": "Só convenção de nome, sem separação física de camada",
+                "downside": "Depende de disciplina humana sustentada por quatro times ao longo de anos — exatamente o que já falhou uma vez. Sem prefixo físico, o crawler continua sem como inferir schema por camada, e a permissão por tabela do LF não tem onde se apoiar, porque tabela e prefixo andam juntos."
+              },
+              {
+                "name": "Crawler agendado sobre o lake inteiro, em vez de o job atualizar o catálogo",
+                "downside": "Funciona, mas cobra por LIST e GET a cada execução mesmo quando nada mudou, e o schema fica desatualizado entre execuções. Vale para descoberta inicial de bronze; não para manter prata e ouro, que já sabem o próprio schema."
+              },
+              {
+                "name": "IAM em bucket em vez de Lake Formation",
+                "downside": "Restringe por prefixo, não por tabela nem coluna — não há como dar acesso a prata sem CPF e negar a coluna isoladamente. Também acopla a permissão à estrutura de pastas: mudar o layout do S3 quebra a política."
+              },
+              {
+                "name": "Um bucket por camada, em vez de um bucket com três prefixos",
+                "downside": "Isola mais, e é defensável em conta com múltiplos times donos de bucket. Para uma equipe de dois, triplica a superfície de política de bucket e de replicação sem resolver nenhum requisito que o prefixo não resolvesse."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Estrutura física da camada",
+                "três prefixos num bucket",
+                "três buckets separados; separação só por convenção de nome",
+                "menos superfície de política para uma equipe de duas pessoas",
+                "times com necessidade de bucket isolado por conta precisariam migrar depois"
+              ],
+              [
+                "Quem alimenta o catálogo",
+                "o próprio job, em prata e ouro",
+                "crawler agendado sobre todas as camadas",
+                "schema sempre atual, sem custo de varredura sobre dado que não mudou",
+                "exige que o job seja escrito com o schema explícito, não \"o que aparecer\""
+              ],
+              [
+                "Modelo de permissão",
+                "Lake Formation, método nomeado por tabela",
+                "IAM em bucket; Lake Formation com LF-TBAC",
+                "granularidade de tabela/coluna sem a complexidade adicional de tags",
+                "com muitos times e tabelas, o método nomeado vira operação manual repetitiva — é quando migrar para LF-TBAC"
+              ],
+              [
+                "Onde a coluna sensível é removida",
+                "na transformação bronze→prata",
+                "manter em prata e restringir só por permissão",
+                "quem tem SELECT em prata inteira nunca vê a coluna, mesmo por engano de permissão",
+                "se um dia a coluna for necessária a alguém com acesso a prata, exige reprocessar desde bronze"
+              ],
+              [
+                "Formato de prata e ouro",
+                "Parquet, particionado",
+                "manter o formato de origem (JSON/CSV)",
+                "leitura colunar reduz bytes varridos em até duas ordens de grandeza",
+                "exige um job de conversão — que já existe, porque é o mesmo job que limpa e agrega"
+              ],
+              [
+                "Reprocessamento",
+                "escrita com `partitionOverwriteMode=dynamic`",
+                "apagar e reprocessar a tabela inteira a cada execução",
+                "corrigir um dia não exige reler nem regravar os outros 240 dias de histórico",
+                "exige disciplina de sempre passar a partição certa como parâmetro do job"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este desenho cria, e que este módulo não paga",
+            "content": "Corrigir um registro histórico específico dentro de uma partição já gravada — sem reescrever a partição inteira — não é possível com Parquet simples. É exatamente o que o formato de tabela transacional resolve, com `UPDATE`/`DELETE` reais e histórico de versão. Enquanto você não tiver isso, uma correção pontual custa reprocessar o dia inteiro — aceitável aqui, e é o L67 que resolve de vez."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: o bucket, e o ciclo de vida por camada"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O contrato de cada camada não é só documentação — parte dele vira configuração de ciclo de vida, porque bronze, prata e ouro têm padrão de acesso diferente e não deveriam pagar o mesmo preço de armazenamento."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "lake.tf",
+            "code": "# lake.tf — um bucket, tres prefixos, cada um com o ciclo de vida da sua camada\n\nresource \"aws_s3_bucket\" \"lake\" {\n  bucket = \"${var.projeto}-lake\"\n}\n\n# Bronze e imutavel por convencao de aplicacao (o job nunca sobrescreve uma\n# partição existente), reforcada aqui por versionamento: se algo sobrescrever\n# por engano, a versao anterior continua recuperavel. Nao e Object Lock —\n# Object Lock impediria ate o dono apagar em caso de erro operacional legitimo,\n# e a equipe de duas pessoas preferiu o botao de emergencia a rigidez total.\nresource \"aws_s3_bucket_versioning\" \"lake\" {\n  bucket = aws_s3_bucket.lake.id\n  versioning_configuration {\n    status = \"Enabled\"\n  }\n}\n\nresource \"aws_s3_bucket_server_side_encryption_configuration\" \"lake\" {\n  bucket = aws_s3_bucket.lake.id\n  rule {\n    apply_server_side_encryption_by_default {\n      sse_algorithm     = \"aws:kms\"\n      kms_master_key_id = aws_kms_key.lake.arn\n    }\n    bucket_key_enabled = true\n  }\n}\n\n# Bloqueia acesso publico nas quatro dimensoes. Lake com dado de pedido de\n# cliente nao tem cenario legitimo de leitura publica.\nresource \"aws_s3_bucket_public_access_block\" \"lake\" {\n  bucket                  = aws_s3_bucket.lake.id\n  block_public_acls       = true\n  block_public_policy     = true\n  ignore_public_acls      = true\n  restrict_public_buckets = true\n}\n\n# Cada camada tem um ciclo de vida DIFERENTE, porque cada uma serve a um uso\n# diferente. E aqui que o contrato de camada vira configuracao, nao so convencao.\nresource \"aws_s3_bucket_lifecycle_configuration\" \"lake\" {\n  bucket = aws_s3_bucket.lake.id\n\n  # BRONZE: existe para reprocessar, nao para consulta do dia a dia. Fica\n  # barato rapido, porque quase nunca e lido depois que prata foi gerada.\n  rule {\n    id     = \"bronze-esfria-rapido\"\n    status = \"Enabled\"\n    filter { prefix = \"bronze/\" }\n    transition {\n      days          = 30\n      storage_class = \"STANDARD_IA\"\n    }\n    transition {\n      days          = 90\n      storage_class = \"GLACIER\"\n    }\n  }\n\n  # PRATA: consultada por investigacao, com menos frequencia que ouro mas mais\n  # que bronze. Esfria, mas mais devagar.\n  rule {\n    id     = \"prata-esfria-devagar\"\n    status = \"Enabled\"\n    filter { prefix = \"prata/\" }\n    transition {\n      days          = 90\n      storage_class = \"STANDARD_IA\"\n    }\n  }\n\n  # OURO: e o que o BI consulta todo dia. Fica em Standard indefinidamente —\n  # o volume e pequeno porque ja e agregado, entao o custo de nao esfriar e baixo.\n  rule {\n    id     = \"ouro-permanece-quente\"\n    status = \"Enabled\"\n    filter { prefix = \"ouro/\" }\n    abort_incomplete_multipart_upload {\n      days_after_initiation = 7\n    }\n  }\n\n  # QUARENTENA: arquivo que quebrou o contrato. Ninguem investiga depois de\n  # 60 dias — se ninguem olhou, nao vai olhar, e expirar evita acumulo silencioso.\n  rule {\n    id     = \"quarentena-expira\"\n    status = \"Enabled\"\n    filter { prefix = \"quarentena/\" }\n    expiration {\n      days = 60\n    }\n  }\n}\n\nresource \"aws_kms_key\" \"lake\" {\n  description         = \"Chave do data lake da Cadência\"\n  enable_key_rotation = true\n}\n\noutput \"bucket_lake\" {\n  value       = aws_s3_bucket.lake.id\n  description = \"Bucket unico com prefixos bronze/, prata/, ouro/ e quarentena/\"\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que versionamento, e não Object Lock",
+            "content": "Object Lock impediria até o dono apagar um objeto por engano de verdade — e numa equipe de duas pessoas sem processo de exceção formal, isso vira bloqueio operacional em vez de proteção. Versionamento dá o mesmo resultado prático contra sobrescrita acidental, com o botão de emergência de restaurar a versão anterior sem precisar de um processo de destravamento."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: catálogo e permissão por tabela e coluna"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A decisão central desta seção: os papéis do engenheiro de dados e do analista de negócio NÃO têm `s3:GetObject` no bucket do lake. O acesso ao dado vem do Lake Formation, e é isso que torna a permissão auditável e granular por coluna."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "catalogo-e-permissao.tf",
+            "code": "# catalogo-e-permissao.tf — tres bancos no Data Catalog, permissao por tabela/coluna\n\nresource \"aws_glue_catalog_database\" \"bronze\" {\n  name = \"cadencia_bronze\"\n}\n\nresource \"aws_glue_catalog_database\" \"prata\" {\n  name = \"cadencia_prata\"\n}\n\nresource \"aws_glue_catalog_database\" \"ouro\" {\n  name = \"cadencia_ouro\"\n}\n\n# Registra o bucket no Lake Formation. A partir daqui, acesso a qualquer\n# recurso registrado passa pelo LF — mesmo que o papel IAM tenha permissao de\n# S3, o LF e quem decide se a consulta do Athena enxerga a tabela.\nresource \"aws_lakeformation_resource\" \"lake\" {\n  arn = aws_s3_bucket.lake.arn\n}\n\n# Papel do engenheiro de dados: pode investigar, entao alcanca bronze e prata.\nresource \"aws_iam_role\" \"engenheiro_dados\" {\n  name               = \"${var.projeto}-engenheiro-dados\"\n  assume_role_policy = data.aws_iam_policy_document.assume_por_identity_center.json\n}\n\n# Papel do analista de negocio: so precisa do agregado.\nresource \"aws_iam_role\" \"analista_negocio\" {\n  name               = \"${var.projeto}-analista-negocio\"\n  assume_role_policy = data.aws_iam_policy_document.assume_por_identity_center.json\n}\n\n# NAO ha \"s3:GetObject\" nestes papeis para o bucket do lake. Essa e a decisao\n# central: o acesso ao DADO vem do Lake Formation (credential vending), nao de\n# uma policy de S3. Um papel com s3:GetObject direto no bucket contornaria o\n# LF por completo — e essa e a falha da secao \"quebrar de proposito\".\n\n# Engenheiro de dados: SELECT em bronze inteiro e em prata inteiro.\nresource \"aws_lakeformation_permissions\" \"eng_bronze\" {\n  principal   = aws_iam_role.engenheiro_dados.arn\n  permissions = [\"SELECT\", \"DESCRIBE\"]\n\n  table {\n    database_name = aws_glue_catalog_database.bronze.name\n    wildcard       = true\n  }\n}\n\nresource \"aws_lakeformation_permissions\" \"eng_prata\" {\n  principal   = aws_iam_role.engenheiro_dados.arn\n  permissions = [\"SELECT\", \"DESCRIBE\"]\n\n  table {\n    database_name = aws_glue_catalog_database.prata.name\n    wildcard       = true\n  }\n}\n\n# Analista de negocio: SELECT so em ouro. Sem acesso a prata nem bronze — nem\n# por wildcard, nem por tabela nomeada.\nresource \"aws_lakeformation_permissions\" \"analista_ouro\" {\n  principal   = aws_iam_role.analista_negocio.arn\n  permissions = [\"SELECT\", \"DESCRIBE\"]\n\n  table {\n    database_name = aws_glue_catalog_database.ouro.name\n    wildcard       = true\n  }\n}\n\n# Restricao por COLUNA: mesmo dentro de prata, o papel de auditoria externa\n# (existe so para este exemplo) nao ve a coluna de CPF. E a prova de que a\n# granularidade e de coluna, nao so de tabela.\nresource \"aws_lakeformation_permissions\" \"auditoria_prata_sem_cpf\" {\n  principal   = aws_iam_role.auditoria_externa.arn\n  permissions = [\"SELECT\"]\n\n  table_with_columns {\n    database_name    = aws_glue_catalog_database.prata.name\n    name              = \"pedidos\"\n    excluded_column_names = [\"cpf_cliente\"]\n  }\n}\n\n# Papel de execucao dos jobs Glue: PRECISA de s3:GetObject/PutObject no bucket,\n# porque quem grava a partir do dado bruto e o job, nao uma consulta do Athena.\n# Este e o unico lugar em que acesso direto ao S3 e correto.\ndata \"aws_iam_policy_document\" \"execucao_job\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"s3:GetObject\", \"s3:PutObject\", \"s3:ListBucket\"]\n    resources = [\n      aws_s3_bucket.lake.arn,\n      \"${aws_s3_bucket.lake.arn}/*\",\n    ]\n  }\n  statement {\n    effect  = \"Allow\"\n    actions = [\"glue:GetTable\", \"glue:UpdateTable\", \"glue:GetDatabase\", \"glue:CreateTable\"]\n    resources = [\"*\"]\n    # As quatro acoes de catalogo do Glue nao aceitam ARN de tabela individual\n    # neste conjunto — sao operacoes de metadado da conta/regiao. O acesso\n    # granular ao DADO continua sendo o do Lake Formation, acima.\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "O `*` que aparece na policy de execução do job, e por que ele se justifica",
+            "content": "`glue:GetTable`, `glue:UpdateTable`, `glue:GetDatabase` e `glue:CreateTable` não aceitam ARN de tabela individual neste conjunto de ações — são operações de metadado da conta/região, e escrevê-las com ARN específico simplesmente não restringe nada. O acesso granular ao DADO em si continua sendo decidido pelo Lake Formation, na seção anterior. Sem esta frase, o `*` seria preguiça; com ela, é decisão registrada."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: o job que limpa e o job que agrega"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Dois jobs, duas perguntas diferentes. O primeiro decide o que é verdade — deduplica, tipa, descarta o inválido. O segundo só resume: nunca lê bronze, porque tudo que ele precisa já passou pela limpeza."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "filename": "bronze_para_prata.py",
+            "code": "# bronze_para_prata.py — job do Glue (PySpark). Le uma particao, escreve outra.\n#\n# Roda com job bookmark ligado: cada execucao processa so os arquivos novos\n# daquela particao desde a ultima vez. Reexecutar o MESMO dia nao duplica,\n# porque a escrita usa partitionOverwriteMode=dynamic: substitui so a\n# particao gravada, nunca o restante da tabela.\n\nimport sys\nfrom awsglue.transforms import *\nfrom awsglue.utils import getResolvedOptions\nfrom awsglue.context import GlueContext\nfrom awsglue.job import Job\nfrom pyspark.context import SparkContext\nfrom pyspark.sql import functions as F\nfrom pyspark.sql.window import Window\n\nargs = getResolvedOptions(sys.argv, ['JOB_NAME', 'data_particao'])\nsc = SparkContext()\nglueContext = GlueContext(sc)\nspark = glueContext.spark_session\njob = Job(glueContext)\njob.init(args['JOB_NAME'], args)\n\n# Necessario para o INSERT OVERWRITE atingir so a particao escrita.\nspark.conf.set(\"spark.sql.sources.partitionOverwriteMode\", \"dynamic\")\n\nparticao = args['data_particao']  # ex.: '2026-08-07'\n\nbruto = glueContext.create_dynamic_frame.from_catalog(\n    database=\"cadencia_bronze\",\n    table_name=\"pedidos\",\n    push_down_predicate=f\"data_particao = '{particao}'\",\n    transformation_ctx=\"bruto_bookmark\",  # ancora do job bookmark\n).toDF()\n\n# Deduplicacao: a captura continua pode entregar o MESMO pedido mais de uma\n# vez (reenvio apos falha de rede). Mantem a versao mais recente por chave.\njanela = Window.partitionBy(\"pedido_id\").orderBy(F.col(\"capturado_em\").desc())\nlimpo = (\n    bruto\n    .withColumn(\"linha\", F.row_number().over(janela))\n    .filter(F.col(\"linha\") == 1)\n    .drop(\"linha\")\n    # Tipagem explicita: bronze guarda como chegou (string), prata corrige.\n    .withColumn(\"valor_total\", F.col(\"valor_total\").cast(\"decimal(12,2)\"))\n    .withColumn(\"criado_em\", F.to_timestamp(\"criado_em\"))\n    # Registro sem chave primaria nao entra em prata — vai para quarentena\n    # por um segundo job, fora do escopo deste laboratorio.\n    .filter(F.col(\"pedido_id\").isNotNull())\n    .withColumn(\"data_particao\", F.lit(particao))\n)\n\nsaida = glueContext.create_dynamic_frame.from_dataframe(limpo, glueContext, \"saida\")\n\n# updateBehavior=UPDATE_IN_DATABASE: o proprio job mantem o catalogo de prata\n# atualizado. Nao existe crawler agendado sobre prata neste desenho.\nglueContext.write_dynamic_frame.from_catalog(\n    frame=saida,\n    database=\"cadencia_prata\",\n    table_name=\"pedidos\",\n    additional_options={\n        \"partitionKeys\": [\"data_particao\"],\n        \"updateBehavior\": \"UPDATE_IN_DATABASE\",\n    },\n)\n\njob.commit()\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "filename": "prata_para_ouro.py",
+            "code": "# prata_para_ouro.py — job do Glue (PySpark). So agrega; nunca le bronze.\n\nimport sys\nfrom awsglue.utils import getResolvedOptions\nfrom awsglue.context import GlueContext\nfrom awsglue.job import Job\nfrom pyspark.context import SparkContext\nfrom pyspark.sql import functions as F\n\nargs = getResolvedOptions(sys.argv, ['JOB_NAME', 'data_particao'])\nsc = SparkContext()\nglueContext = GlueContext(sc)\nspark = glueContext.spark_session\njob = Job(glueContext)\njob.init(args['JOB_NAME'], args)\nspark.conf.set(\"spark.sql.sources.partitionOverwriteMode\", \"dynamic\")\n\nparticao = args['data_particao']\n\nprata = glueContext.create_dynamic_frame.from_catalog(\n    database=\"cadencia_prata\",\n    table_name=\"pedidos\",\n    push_down_predicate=f\"data_particao = '{particao}'\",\n    transformation_ctx=\"prata_bookmark\",\n).toDF()\n\n# O UNICO ponto do pipeline em que a granularidade muda de evento para\n# resumo. E por isso que ouro existe separado de prata: sao duas perguntas\n# diferentes (\"o que aconteceu\" vs \"quanto vendeu cada loja\").\nagregado = (\n    prata\n    .groupBy(\"loja_id\", \"data_particao\")\n    .agg(\n        F.count(\"pedido_id\").alias(\"qtd_pedidos\"),\n        F.sum(\"valor_total\").alias(\"valor_total_dia\"),\n        F.avg(\"valor_total\").alias(\"ticket_medio\"),\n    )\n)\n\nsaida = glueContext.create_dynamic_frame.from_dataframe(agregado, glueContext, \"saida\")\n\nglueContext.write_dynamic_frame.from_catalog(\n    frame=saida,\n    database=\"cadencia_ouro\",\n    table_name=\"vendas_diarias_por_loja\",\n    additional_options={\n        \"partitionKeys\": [\"data_particao\"],\n        \"updateBehavior\": \"UPDATE_IN_DATABASE\",\n    },\n)\n\njob.commit()\n"
+          }
+        },
+        {
+          "id": "b10_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "A pegadinha do `partitionOverwriteMode`",
+            "content": "O padrão do Spark é `static`: ao escrever com `INSERT OVERWRITE`, ele apaga a TABELA inteira antes de gravar, não só a partição do DataFrame. Sem trocar para `dynamic`, reexecutar o job para reprocessar um único dia apaga sozinho os outros 240 dias de histórico de prata. Este é o tipo de erro que só aparece na segunda execução — a primeira sempre \"funciona\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: o validador de contrato, em .NET 8"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "É a única peça de aplicação deste laboratório, e ela existe para um propósito estreito: decidir, antes de qualquer job olhar o arquivo, se ele obedece ao contrato de bronze. Contrato quebrado não é bloqueado silenciosamente — vai para quarentena, com o motivo anexado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "ContratoBronzeValidator.cs",
+            "code": "// ContratoBronzeValidator.cs — Lambda em .NET 8, acionada por evento de criacao\n// de objeto no prefixo bronze/. E o unico ponto do pipeline que decide se um\n// arquivo \"conta\" como dado de bronze ou vai para quarentena.\n\nusing Amazon.Lambda.Core;\nusing Amazon.Lambda.S3Events;\nusing Amazon.S3;\nusing Amazon.S3.Model;\nusing System.Text.RegularExpressions;\n\n[assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]\n\nnamespace Cadência.Lake.Validador;\n\npublic class Function\n{\n    // O contrato de bronze, em uma expressao: dominio conhecido, particionado\n    // por ano/mes/dia, e extensao que o job sabe ler. Qualquer coisa fora\n    // disto nao e \"bronze invalido\" — e simplesmente NAO bronze.\n    private static readonly Regex CaminhoValido = new(\n        @\"^bronze/(pedidos|estoque|clientes)/ano=\\d{4}/mes=\\d{2}/dia=\\d{2}/[\\w-]+\\.parquet$\",\n        RegexOptions.Compiled);\n\n    private static readonly IAmazonS3 _s3 = new AmazonS3Client();\n\n    public async Task FunctionHandler(S3Event evento, ILambdaContext contexto)\n    {\n        foreach (var registro in evento.Records)\n        {\n            var bucket = registro.S3.Bucket.Name;\n            var chave = Uri.UnescapeDataString(registro.S3.Object.Key);\n\n            var motivo = await Validar(bucket, chave);\n\n            if (motivo is not null)\n            {\n                await MoverParaQuarentena(bucket, chave, motivo);\n                contexto.Logger.LogWarning(\n                    $\"quarentena: {chave} — {motivo}\");\n                continue;\n            }\n\n            contexto.Logger.LogInformation($\"contrato ok: {chave}\");\n        }\n    }\n\n    private async Task<string?> Validar(string bucket, string chave)\n    {\n        // 1. Caminho e nome. Nao abre o arquivo se o caminho ja reprova —\n        //    e a verificacao mais barata, entao vem primeiro.\n        if (!CaminhoValido.IsMatch(chave))\n            return $\"caminho fora do contrato de bronze: '{chave}'\";\n\n        // 2. Tamanho minimo. Arquivo de 0 byte e sintoma comum de escrita\n        //    interrompida no meio (upload multipart que falhou parcialmente).\n        var cabecalho = await _s3.GetObjectMetadataAsync(bucket, chave);\n        if (cabecalho.ContentLength < 12) // menor Parquet valido tem magic bytes\n            return $\"arquivo suspeito de escrita incompleta: {cabecalho.ContentLength} bytes\";\n\n        // NAO verificado aqui: schema interno do Parquet. Abrir e ler o\n        // rodape do arquivo custa uma leitura completa do objeto na Lambda,\n        // e o job Glue ja reprova schema incompativel na proxima execucao.\n        // Declarar esse limite é mais honesto que fingir uma validação de\n        // schema que este laboratório não implementa.\n        return null;\n    }\n\n    private async Task MoverParaQuarentena(string bucket, string chave, string motivo)\n    {\n        var destino = chave.Replace(\"bronze/\", \"quarentena/\", StringComparison.Ordinal);\n\n        await _s3.CopyObjectAsync(new CopyObjectRequest\n        {\n            SourceBucket = bucket,\n            SourceKey = chave,\n            DestinationBucket = bucket,\n            DestinationKey = destino,\n            MetadataDirective = S3MetadataDirective.REPLACE,\n        });\n\n        // O motivo fica no proprio objeto — quem for investigar a quarentena\n        // nao precisa cruzar com log do CloudWatch para saber por que caiu ali.\n        await _s3.PutObjectTaggingAsync(new PutObjectTaggingRequest\n        {\n            BucketName = bucket,\n            Key = destino,\n            Tagging = new Tagging\n            {\n                TagSet = [new Tag { Key = \"motivo-quarentena\", Value = motivo[..Math.Min(motivo.Length, 200)] }],\n            },\n        });\n\n        await _s3.DeleteObjectAsync(bucket, chave);\n    }\n}\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O que este validador NÃO verifica, por decisão explícita",
+            "content": "Ele não abre o Parquet para conferir o schema interno — isso custaria uma leitura completa do objeto dentro da Lambda, para um arquivo que pode ter centenas de MB. A verificação de schema fica para o job do Glue, que já precisa ler o arquivo mesmo. O validador cobre o que é barato verificar sem abrir o conteúdo: caminho, extensão e tamanho mínimo plausível."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar que o contrato se sustenta"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "implantar.sh",
+            "code": "#!/usr/bin/env bash\nset -euo pipefail\nterraform apply -auto-approve\n\n# Publica os dois jobs do Glue a partir do script local.\naws s3 cp bronze_para_prata.py \"s3://$(terraform output -raw bucket_lake)/scripts/\"\naws s3 cp prata_para_ouro.py \"s3://$(terraform output -raw bucket_lake)/scripts/\"\n\n# Publica a Lambda validadora (build previo com dotnet lambda package).\naws lambda update-function-code \\\n  --function-name cadencia-contrato-bronze-validator \\\n  --zip-file fileb://bin/Release/net8.0/ContratoBronzeValidator.zip\n\necho \"lake no ar; proxima etapa: provas.sh\""
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. Nenhuma aceita \"parece que organizou\" como resultado — cada uma tem um número ou um estado esperado."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "BUCKET=$(terraform output -raw bucket_lake)\n\n# ── Prova 1: a estrutura existe, e cada camada tem dono de schema ────────────\naws s3 ls \"s3://$BUCKET/\" \n# Esperado: bronze/  prata/  ouro/  quarentena/  scripts/\naws glue get-tables --database-name cadencia_prata --query \"TableList[].Name\" --output text\n# Esperado: pedidos — registrada PELO JOB, sem crawler agendado sobre prata\n\n# ── Prova 2: bytes varridos, ouro contra bronze, mesma pergunta de negocio ───\naws athena start-query-execution \\\n  --query-string \"SELECT sum(valor_total_dia) FROM cadencia_ouro.vendas_diarias_por_loja WHERE data_particao LIKE '2026-07%'\" \\\n  --result-configuration OutputLocation=s3://$BUCKET/consultas/ \\\n  --query-execution-context Database=cadencia_ouro\n# aws athena get-query-execution --query-execution-id <id> --query \"QueryExecution.Statistics.DataScannedInBytes\"\n# Esperado: poucas centenas de MB. A mesma pergunta contra bronze sem filtro de\n# particao varre gigabytes — e a diferenca e a prova da secao de custo.\n\n# ── Prova 3: a negativa do Lake Formation, testada de verdade ────────────────\naws sts assume-role --role-arn \"$(terraform output -raw papel_analista_negocio)\" \\\n  --role-session-name teste-negativa --query \"Credentials\" --output json > /tmp/cred.json\n# com essas credenciais, tente consultar cadencia_prata.pedidos no Athena\n# Esperado: erro de permissao do Lake Formation, nao um resultado vazio\n\n# ── Prova 4: reprocessar um dia nao duplica os outros ────────────────────────\naws athena start-query-execution --query-execution-context Database=cadencia_prata \\\n  --query-string \"SELECT count(*) FROM pedidos\" --result-configuration OutputLocation=s3://$BUCKET/consultas/\n# anote o numero, rode o job bronze_para_prata de novo para o MESMO dia, repita a\n# contagem. Esperado: numero identico. Se cresceu, o overwrite nao esta dynamic.\n\n# ── Prova 5: contrato invalido cai em quarentena, nao no catalogo ────────────\necho \"lixo\" | aws s3 cp - \"s3://$BUCKET/bronze/sem-particao.txt\"\nsleep 5\naws s3 ls \"s3://$BUCKET/quarentena/\" | grep sem-particao\n# Esperado: o arquivo aparece em quarentena, com a tag motivo-quarentena, e NUNCA\n# aparece em bronze/ nem em nenhuma tabela do catalogo."
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Estrutura e dono do schema",
+                "`s3 ls` + `glue get-tables`",
+                "quatro prefixos; tabela de prata existe sem crawler ter rodado sobre ela",
+                "se a tabela só aparece depois de crawler manual, o job não está atualizando o catálogo"
+              ],
+              [
+                "2 · Bytes varridos",
+                "`DataScannedInBytes` da consulta",
+                "ouro varre duas ordens de grandeza menos que bronze para a mesma pergunta",
+                "se a diferença é pequena, falta partição, ou a consulta não filtra por ela"
+              ],
+              [
+                "3 · Negativa do Lake Formation",
+                "assumir papel do analista e consultar prata",
+                "erro de permissão do LF, explícito",
+                "se retorna resultado vazio (não erro), a tabela pode não estar registrada no LF"
+              ],
+              [
+                "4 · Reprocessamento idempotente",
+                "contagem antes/depois de rerun do mesmo dia",
+                "contagem idêntica",
+                "contagem maior indica `partitionOverwriteMode` estático, sobrescrevendo tudo ou nada"
+              ],
+              [
+                "5 · Quarentena funciona",
+                "subir arquivo fora do contrato",
+                "aparece em quarentena com a tag de motivo, nunca em bronze nem no catálogo",
+                "se aparece no catálogo, a validação não está no caminho antes do job"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três falhas abaixo têm o mesmo sintoma superficial — \"o número está errado\" ou \"o acesso está errado\" — e são diagnosticadas em lugares completamente diferentes."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Reprocessamento duplica linha",
+                "remova `partitionOverwriteMode=dynamic` do job e rode duas vezes para o mesmo dia",
+                "contagem de linhas em prata dobra a cada reexecução",
+                "contagem por partição antes/depois; comportamento do `INSERT OVERWRITE`",
+                "reativar `dynamic`, ou truncar explicitamente a partição antes de escrever"
+              ],
+              [
+                "Permissão de bucket contorna o Lake Formation",
+                "adicione `s3:GetObject` no papel do analista, direto no bucket",
+                "Athena nega a consulta em prata, mas `aws s3 cp` do mesmo objeto funciona",
+                "policy IAM do papel, fora do que o Lake Formation administra",
+                "remover o acesso direto de S3; todo acesso ao dado passa pelo LF"
+              ],
+              [
+                "Crawler substitui o job como dono do schema",
+                "agende um crawler genérico também sobre prata",
+                "a fatura do Glue sobe sem novo volume de dado, e o schema oscila entre execuções",
+                "histórico de execuções do crawler vs. do job na mesma tabela",
+                "um dono por tabela: o job atualiza; nenhum crawler agendado sobre camada já gerida por job"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A falha que a negativa do Lake Formation não cobre sozinha",
+            "content": "O Lake Formation decide se uma consulta via Athena ou Glue enxerga a tabela. Ele não intercepta uma chamada direta de `s3:GetObject` feita com credencial que já tem permissão de bucket — porque esse caminho nunca passa pelo Data Catalog. É por isso que a Terraform desta seção deliberadamente NÃO dá `s3:GetObject` aos papéis de consumo: sem essa ausência, a permissão do LF seria decorativa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Um analista de negócio tem SELECT concedido pelo Lake Formation apenas no banco `cadencia_ouro`. Ele consegue ler um objeto Parquet de `cadencia_prata` copiando-o diretamente com `aws s3 cp`. O que isso indica?",
+        "options": [
+          "O Lake Formation tem um bug e a permissão não foi aplicada corretamente",
+          "O crawler não atualizou o catálogo com a permissão mais recente",
+          "O papel dele tem `s3:GetObject` direto no bucket, e esse caminho nunca passa pelo Lake Formation",
+          "A tabela de prata não está particionada corretamente"
+        ],
+        "correctIndex": 2,
+        "explanation": "O Lake Formation decide acesso feito ATRAVÉS do Data Catalog — uma consulta do Athena ou um job do Glue lendo por nome de tabela. Uma chamada direta de `s3:GetObject` num objeto específico nunca passa por esse caminho: se o papel do IAM tem essa permissão no bucket, ela vale por si só, independente do que o Lake Formation concede ou nega para a mesma pessoa via SQL. A correção é não conceder `s3:GetObject` no bucket do lake a papéis de consumo — só aos papéis de execução dos jobs.\n\nA primeira alternativa erra o mecanismo: não é bug, é comportamento esperado de dois sistemas de permissão independentes que não se sobrepõem automaticamente. A terceira confunde particionamento com controle de acesso — partição afeta quanto uma consulta varre, não quem pode fazê-la. A quarta atribui ao crawler um papel que ele não tem: permissão não é metadado de schema, e o catálogo não precisa ser atualizado para uma concessão do Lake Formation valer."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o que muda quando o dado ganha camada"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Estruturar o lake também estrutura o risco: ele deixa de ser \"alguém acha um arquivo sensível por acaso\" e passa a ser \"a permissão da camada certa está configurada certo\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Acesso direto ao S3 contorna o Lake Formation",
+                "média",
+                "alto",
+                "nenhum papel de consumo recebe `s3:GetObject` no bucket do lake",
+                "CloudTrail: `GetObject` por identidade que não é papel de execução de job",
+                "revogar a policy que concedeu o acesso direto; auditar o que foi lido"
+              ],
+              [
+                "CPF do cliente chega a uma camada de consumo amplo",
+                "baixa",
+                "alto",
+                "coluna removida na transformação bronze→prata; ouro nunca a recebeu",
+                "Macie sobre prata e ouro, periodicamente",
+                "reprocessar a camada afetada sem a coluna; avaliar necessidade de notificação"
+              ],
+              [
+                "Permissão do Lake Formation concedida ampla demais",
+                "média",
+                "médio",
+                "concessão por tabela nomeada, nunca banco inteiro por hábito",
+                "revisão periódica de `list-permissions`",
+                "revogar e reconceder no nível de tabela ou coluna que o caso exige"
+              ],
+              [
+                "Bronze sobrescrito por engano",
+                "baixa",
+                "alto — perde a fonte de reprocessamento",
+                "versionamento no bucket; convenção de escrita write-once por partição",
+                "CloudTrail: `PutObject` sobre chave já existente em bronze",
+                "restaurar a versão anterior do objeto; se não houver, reextrair da fonte via L61"
+              ],
+              [
+                "Job com papel de execução amplo demais",
+                "média",
+                "médio",
+                "policy restrita a `s3:GetObject/PutObject/ListBucket` só no bucket do lake",
+                "IAM Access Analyzer sobre uso real do papel",
+                "derivar a política do uso medido, remover ação não exercida"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que remover a coluna em prata, e não só restringir por permissão",
+            "content": "Restringir por Lake Formation protege quem consulta com a identidade certa. Remover a coluna na origem protege também contra erro de configuração de permissão — se algum dia um papel receber acesso mais amplo do que deveria, a coluna simplesmente não existe para ser exposta. É defesa em profundidade: duas camadas de proteção que falham de formas diferentes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel do lake responde"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "O job de bronze→prata está atrasado?",
+                "duração e horário do run do Glue job",
+                "captura acumulando sem ser processada",
+                "> 2 h desde a última execução bem-sucedida"
+              ],
+              [
+                "Quanto cada consulta varre?",
+                "`DataScannedInBytes` por execução do Athena",
+                "consulta caiu numa camada errada ou perdeu a partição",
+                "consulta em ouro > 5 GB"
+              ],
+              [
+                "Alguém consulta prata quando deveria usar ouro?",
+                "log de consulta do Athena por papel",
+                "padrão de acesso sugere que ouro não cobre a necessidade real",
+                "volume de consulta a prata crescendo sem novo caso de investigação"
+              ],
+              [
+                "Quantos arquivos caem em quarentena por dia?",
+                "contagem de objetos no prefixo `quarentena/`",
+                "produtor está enviando fora do contrato de forma sistemática",
+                "> 1% do volume diário"
+              ],
+              [
+                "A permissão do Lake Formation mudou?",
+                "CloudTrail em `GrantPermissions`/`RevokePermissions`",
+                "concessão fora do processo revisado",
+                "qualquer concessão fora de Terraform aplicado"
+              ],
+              [
+                "O schema de uma tabela mudou sem aviso?",
+                "versão do schema no Data Catalog",
+                "coluna nova ou removida silenciosamente entre execuções",
+                "qualquer mudança de versão fora de deploy planejado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que parece boa e esconde o problema",
+            "content": "Custo de armazenamento estável não significa lake saudável — bronze pode estar crescendo enquanto prata e ouro ficam parados, porque o job está falhando silenciosamente e ninguém está olhando a duração do run. O painel certo mede o PIPELINE, não só o bucket."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão de objetos"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 arquivos/dia",
+                "jobs terminam em segundos; catálogo trivial de manter",
+                "nada; é abaixo do cenário deste laboratório",
+                "nada"
+              ],
+              [
+                "1.800 objetos/dia (Cadência hoje)",
+                "jobs em minutos; contrato de nome já necessário",
+                "exatamente o que este laboratório resolve",
+                "a estrutura de três camadas descrita aqui"
+              ],
+              [
+                "10 mil objetos/dia",
+                "o job ainda processa por partição, mas o número de arquivos por partição cresce",
+                "\"small file problem\": muitos arquivos pequenos custam mais em LIST e em abertura do que o volume de bytes justificaria",
+                "compactar dentro da partição — o job já escreve poucos arquivos grandes em vez de milhares de pequenos"
+              ],
+              [
+                "1 milhão de objetos",
+                "listagem do S3 vira parte relevante do tempo do job",
+                "crawler (se ainda existisse sobre essa camada) demoraria horas; catálogo desatualiza",
+                "S3 Inventory em vez de listagem via API; particionamento mais fino (por hora, não só por dia)"
+              ],
+              [
+                "Pico de ingestão (ex.: Black Friday)",
+                "mais partições novas no mesmo dia",
+                "o job agendado por horário fixo pode não dar conta do volume extra",
+                "acionar por evento (chegada de dado) além de horário, com concorrência controlada"
+              ],
+              [
+                "\"Falha de AZ\"",
+                "não se aplica da forma como se aplica a EC2/RDS",
+                "S3 é um serviço regional, replicado entre AZs por padrão — o ponto de atenção real é a disponibilidade regional do Glue e do próprio Athena, não uma AZ isolada",
+                "nenhuma ação de rede; a resiliência aqui vem de o dado bruto em bronze permitir reprocessar do zero em outra região, se necessário"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta de exame que este dimensionamento resolve",
+            "content": "Um cenário de prova frequentemente pede para você escolher entre \"aumentar o cluster\" e \"mudar a estratégia de arquivo\" quando uma consulta está lenta em grande escala. Com lake bem particionado e em formato colunar, o gargalo raramente é poder computacional — é volume de bytes lido por arquivo pequeno demais. A resposta certa quase sempre é compactar, não escalar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: onde o dinheiro vai, camada por camada"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um lake em camadas não é mais caro que um bucket único — na maioria dos casos é mais barato, porque bronze esfria e ouro é pequeno. O risco de custo está nos hábitos que a estrutura, sozinha, não impede."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que domina o custo",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "< 100 GB, poucas consultas por semana",
+                "armazenamento em Standard; quase tudo desprezível",
+                "baixa",
+                "nenhuma; otimizar aqui é gastar atenção onde não há dinheiro"
+              ],
+              [
+                "Cadência hoje (produção pequena)",
+                "2,3 TB, dezenas de consultas por dia",
+                "DPU-hora dos jobs Glue e bytes varridos por consulta de investigação em prata",
+                "crescente com o volume de captura",
+                "ciclo de vida por camada + formato colunar já reduzem bytes varridos"
+              ],
+              [
+                "Alta escala",
+                "dezenas de TB, centenas de consultas por dia",
+                "bytes varridos passa a dominar se alguém consulta bronze/prata por hábito",
+                "pode crescer mais rápido que o armazenamento",
+                "CTAS para materializar agregados frequentes; revisar quem consulta o quê"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Armazenamento S3, por camada",
+                "GB-mês, por classe de armazenamento",
+                "bronze sem regra de ciclo de vida nunca esfria, e é a maior parte do volume"
+              ],
+              [
+                "Execução do Glue job",
+                "DPU-hora",
+                "job que lê partição inteira sem bookmark reprocessa histórico a cada execução"
+              ],
+              [
+                "Consulta do Athena",
+                "TB varrido",
+                "consulta sem filtro de partição em prata ou bronze é a linha que mais surpreende"
+              ],
+              [
+                "Requisições ao S3",
+                "GET/LIST por milhar",
+                "muitos arquivos pequenos multiplicam requisições sem aumentar volume de dado útil"
+              ],
+              [
+                "Lake Formation",
+                "sem custo direto de permissão",
+                "o custo indireto é operacional: manter concessão por tabela exige revisão periódica"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O custo oculto que a estrutura evita, mas não sozinha",
+            "content": "Bronze sem regra de ciclo de vida é o erro mais comum: como \"nunca se mexe nela\", ninguém lembra de configurar a transição de classe de armazenamento, e ela cresce para sempre em Standard. A regra deste laboratório resolve isso — mas só porque foi escrita explicitamente. Copiar a estrutura de pasta sem copiar o Terraform do ciclo de vida reproduz exatamente o problema que a camada deveria evitar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "contrato de camada explícito; jobs idempotentes; validação na entrada",
+                "ainda não há alerta automático de qualidade de dado por regra de negócio",
+                "Glue Data Quality com quarentena por regra (L70)",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "permissão por tabela/coluna no Lake Formation; coluna sensível removida na origem",
+                "concessão de permissão ainda é operação manual, sem revisão periódica automatizada",
+                "revisão programada de `list-permissions` + governança por coluna em escala (L69)",
+                "alta"
+              ],
+              [
+                "Confiabilidade",
+                "bronze imutável garante reprocessamento; jobs reexecutáveis sem duplicar",
+                "correção pontual dentro de uma partição ainda exige reprocessar o dia inteiro",
+                "formato de tabela transacional com UPDATE/DELETE (L67)",
+                "média"
+              ],
+              [
+                "Eficiência de performance",
+                "formato colunar, partição por data, agregação pronta em ouro",
+                "consulta ad hoc ainda pode escapar da partição por engano",
+                "projeção de partição e revisão de consultas mais custosas",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "ciclo de vida por camada; catálogo mantido pelo job, sem crawler redundante",
+                "sem alerta de orçamento específico para o lake",
+                "AWS Budgets com alarme por serviço (Glue, Athena) e por prefixo",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "bronze esfria para classes de menor pegada; menos bytes lidos por consulta",
+                "histórico retido indefinidamente em Glacier ainda ocupa recurso físico",
+                "revisar horizonte real de reprocessamento e definir expiração de bronze muito antigo",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho novo: é a resposta a QUANDO o lake em três camadas deixa de ser suficiente, e o que cada nível seguinte troca por um risco novo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do bucket sem estrutura à plataforma de dados que alimenta modelo de IA",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Um bucket, sem prefixo por camada, crawler genérico sobre tudo. É onde a Cadência estava, e continua legítimo para um experimento de poucos arquivos.",
+                "note": "Risco resolvido: nenhum. Novo risco: ninguém sabe qual arquivo serve, e o custo aparece como tempo humano, não como fatura. Custo: armazenamento barato, mas crescente sem controle."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Três camadas com contrato, jobs idempotentes atualizando o próprio catálogo, Lake Formation concedendo acesso por tabela e coluna.",
+                "note": "Risco resolvido: dado sem dono e sem contrato. Novo risco: correção pontual dentro de uma partição ainda exige reprocessar o dia inteiro. Custo: baixo — mesma infraestrutura, ciclo de vida bem configurado."
+              },
+              {
+                "label": "Nível 3 — Qualidade como regra, não como confiança",
+                "instruction": "Glue Data Quality valida contrato de conteúdo — faixa de valor, schema esperado, taxa de nulo aceitável — e quarentena por regra de negócio, não só por caminho malformado (L70).",
+                "note": "Risco resolvido: número errado que passa pela estrutura correta porque ninguém checou o CONTEÚDO. Novo risco: regra rígida demais quarentena dado legítimo com variação sazonal. Custo: execução adicional de validação."
+              },
+              {
+                "label": "Nível 4 — Alta escala e streaming",
+                "instruction": "Ingestão contínua via streaming em vez de lote, com compactação automática combatendo o problema do arquivo pequeno (L63, L64).",
+                "note": "Risco resolvido: latência de disponibilidade de dado em picos de volume. Novo risco: ordem e reprocesso de evento em streaming têm semântica própria, mais complexa que lote. Custo: infraestrutura de streaming ligada continuamente."
+              },
+              {
+                "label": "Nível 5 — Plataforma e múltiplos domínios",
+                "instruction": "Vários times donos de seus próprios dados, com Lake Formation tag-based cruzando contas, e governança por coluna em escala (L69).",
+                "note": "Risco resolvido: método nomeado tabela por tabela não escala para dezenas de times. Novo risco: modelo de tag mal desenhado concede acesso amplo demais por engano de rotulagem. Custo: overhead organizacional de manter as tags corretas."
+              },
+              {
+                "label": "Nível 6 — Dados e IA sobre o lake",
+                "instruction": "A camada ouro deixa de servir só o BI e passa a alimentar um MODELO: features para treino, ou uma base de conhecimento que um agente de IA consulta para responder pergunta de negócio sobre os DADOS agregados em linguagem natural.",
+                "note": "Risco resolvido: pergunta de negócio que hoje exige SQL escrito por especialista. Novo risco: resposta gerada por IA sobre dado agregado pode soar confiável mesmo quando a agregação subjacente tem um problema de qualidade não pego pelo nível 3 — a IA herda o erro sem sinalizar dúvida. Custo: baixo em infraestrutura; alto em avaliação, porque a base já existe em ouro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Um agente de IA respondendo sobre dado agregado (nível 6) depende de a agregação estar correta — que é o que a validação de conteúdo do nível 3 garante. Sem ela, o nível 6 produz respostas fluentes e erradas com a mesma confiança de respostas certas, porque nada na cadeia sinalizou o problema antes da IA."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não resolve o problema central, e forçá-la seria o antipadrão que a própria série critica. \"Qual arquivo serve\" tem resposta determinística: contrato de camada, formato e partição. Um modelo não organiza um lake — disciplina de engenharia organiza."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar em que IA acrescentaria valor real, e ele é modesto: classificar um arquivo que chega fora do contrato de nome, quando ele é legítimo mas mal nomeado por um time novo. Hoje esse arquivo vai para quarentena e alguém corrige manualmente o nome. Um classificador sobre o conteúdo poderia sugerir o domínio correto — mas só depois que a regra simples (regex de caminho) mostrar seu limite real, não antes."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "sugerir o domínio correto de um arquivo mal nomeado, em vez de quarentena manual"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "a regra de caminho já resolve o caso comum; IA só se justificaria para o resíduo — arquivos legítimos mas fora do padrão de nome"
+              ],
+              [
+                "De onde viriam os dados?",
+                "conteúdo do próprio arquivo (colunas, faixa de valor) comparado ao schema das tabelas já catalogadas"
+              ],
+              [
+                "Qual o risco?",
+                "classificar errado e mover um arquivo sensível para uma camada com permissão mais ampla do que deveria"
+              ],
+              [
+                "Por que não agora?",
+                "a Cadência tem 187 padrões de nome, a maioria corrigível por convenção simples primeiro"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"olhar o bucket e organizar os arquivos\" troca um contrato determinístico — caminho, formato, schema — por uma decisão probabilística sobre onde cada arquivo pertence. Um erro de classificação nessa tarefa não gera resposta chata: gera dado sensível na camada errada, com a permissão errada. Organização estrutural é exatamente o domínio onde regra determinística vence."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Uma pasta, todo mundo escreve",
+                "é o caminho de menor resistência do DMS e das exportações ad hoc",
+                "nenhum arquivo diz se é bruto, limpo ou pronto; a pergunta de negócio não tem tradução",
+                "\"qual arquivo serve\" vira arqueologia; 41 mil objetos sem dono",
+                "prefixo por camada, com contrato de schema/formato/frequência documentado",
+                "nunca em produção; tolerável num rascunho de poucos arquivos"
+              ],
+              [
+                "Corrigir dado direto na camada bronze",
+                "parece mais rápido do que reprocessar tudo",
+                "destrói a fonte de verdade para reprocessamento e quebra a auditoria de \"o que a fonte enviou\"",
+                "bronze não bate mais com o que a captura realmente entregou",
+                "bronze é imutável; correção entra via nova captura ou reprocessamento explícito",
+                "nunca"
+              ],
+              [
+                "Permissão de bucket em vez de Lake Formation",
+                "IAM em S3 é o que todo time de infraestrutura já sabe fazer",
+                "contorna a governança por tabela/coluna; a negativa do LF vira decorativa",
+                "Athena nega, mas `s3 cp` do mesmo objeto funciona",
+                "acesso ao dado só via Lake Formation; papel de consumo sem `s3:GetObject` direto",
+                "nunca em dado com qualquer classificação de sensibilidade"
+              ],
+              [
+                "Crawler agendado de hora em hora sobre o lake inteiro",
+                "parece garantir \"sempre atualizado\"",
+                "custo de LIST/GET cresce com o volume mesmo quando nada mudou",
+                "fatura do Glue crawler maior que a de armazenamento",
+                "crawler só para descoberta inicial de bronze; prata e ouro atualizados pelo próprio job",
+                "lake pequeno, poucas dezenas de milhares de objetos, sem job próprio ainda"
+              ],
+              [
+                "Camada ouro sem contrato de atualização documentado",
+                "ninguém prioriza documentar frequência quando o pipeline \"está funcionando\"",
+                "decisão de negócio tomada sobre dado desatualizado sem ninguém saber que está desatualizado",
+                "número \"errado\" que na verdade está certo — só que de ontem",
+                "contrato explícito de frequência por tabela, e marca de \"atualizado até\" na própria tabela",
+                "nunca"
+              ],
+              [
+                "Achar que o nome \"ouro\" garante qualidade sozinho",
+                "o nome da camada sugere confiabilidade",
+                "sem validação de conteúdo, um bug no job de agregação propaga silenciosamente até ouro",
+                "número redondo demais, e ninguém questiona porque \"é a camada de confiança\"",
+                "validação de contrato de conteúdo antes de publicar (L70)",
+                "protótipo em que o time ainda confere os números manualmente"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "`HIVE_PARTITION_SCHEMA_MISMATCH` no Athena",
+                "prata foi reescrita com schema diferente sem o catálogo saber",
+                "compare o schema do job com a versão registrada na tabela",
+                "histórico de versão da tabela no Data Catalog",
+                "garantir `updateBehavior=UPDATE_IN_DATABASE` no job, ou reconciliar manualmente"
+              ],
+              [
+                "Contagem de linhas em prata dobra a cada execução",
+                "reprocessamento sem `partitionOverwriteMode=dynamic`",
+                "compare contagem por partição antes e depois de reexecutar o mesmo dia",
+                "configuração de escrita do job Spark",
+                "`partitionOverwriteMode=dynamic`, ou truncar a partição explicitamente antes de escrever"
+              ],
+              [
+                "Analista recebe erro de permissão mesmo com SELECT concedido em ouro",
+                "a tabela ainda está em modo de controle só-IAM, não migrada para o Lake Formation",
+                "confira as configurações padrão do catálogo e da tabela específica",
+                "configurações do Data Catalog / configuração por tabela no console do LF",
+                "desativar o controle apenas-IAM legado nas tabelas que devem obedecer ao LF"
+              ],
+              [
+                "Consulta varre o mesmo volume independente do filtro de data",
+                "a partição não está registrada no catálogo, ou o filtro não usa a coluna de partição",
+                "rode `EXPLAIN` na consulta e confira o plano de poda de partição",
+                "contagem de partições no catálogo vs. objetos existentes no S3",
+                "garantir que o job registre a partição nova; filtrar sempre pela coluna de partição"
+              ],
+              [
+                "Crawler classifica arquivo de bronze como `UNKNOWN`",
+                "arquivo corrompido, ou escrita interrompida no meio (upload parcial)",
+                "abra o arquivo suspeito isoladamente",
+                "log do crawler; o arquivo específico apontado",
+                "o validador de contrato deveria ter pego isso antes — confira se a Lambda está no caminho do evento"
+              ],
+              [
+                "Job prata→ouro falha com falta de memória",
+                "agregação lendo prata inteira em vez de só a partição do dia",
+                "confira as métricas de DPU/memória da execução do job",
+                "métricas do run do Glue job",
+                "aumentar DPU como paliativo; corrigir o `push_down_predicate` como causa raiz"
+              ],
+              [
+                "Arquivo legítimo cai em quarentena com frequência",
+                "time produtor mudou a convenção de nome sem avisar",
+                "leia o motivo anexado na tag do objeto em quarentena",
+                "tag `motivo-quarentena` no objeto",
+                "alinhar a convenção com o time produtor; ajustar a regex do validador se o contrato mudou de fato"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em job ou permissão, pergunte: o problema é no DADO (schema, duplicata, valor) ou no ACESSO (quem pode ver o quê)? As duas famílias de sintoma se parecem — \"está errado\" — mas se investigam em lugares opostos: uma no job e no catálogo, a outra no Lake Formation e no IAM."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório cria recurso que sobrevive ao "
+              },
+              {
+                "text": "terraform destroy",
+                "code": true
+              },
+              {
+                "text": " de formas específicas — um bucket com objeto dentro, e permissões do Lake Formation que não pertencem ao ciclo de vida do bucket."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Revogue as permissoes do Lake Formation ANTES de tentar remover o catalogo —\n#    o Terraform normalmente resolve isso na ordem certa, mas se voce interrompeu\n#    o apply no meio, pode ficar permissao orfa apontando para tabela que sumiu.\naws lakeformation list-permissions --query \"PrincipalResourcePermissions\" --output table\n\n# 2. Esvazie o bucket ANTES do destroy: bucket com objeto (e com versionamento,\n#    com VERSOES de objeto) faz o destroy falhar silenciosamente na aparencia — o\n#    erro aparece, mas e facil de rodar de novo sem investigar por que falhou.\naws s3api list-object-versions --bucket cadencia-lake \\\n  --query \"length(Versions)\" --output text\naws s3 rm \"s3://cadencia-lake/\" --recursive\naws s3api list-object-versions --bucket cadencia-lake \\\n  --query \"Versions[].{Key:Key,VersionId:VersionId}\" --output json \\\n  | jq -c \".[]\" | while read -r v; do\n    key=$(echo \"$v\" | jq -r .Key); id=$(echo \"$v\" | jq -r .VersionId)\n    aws s3api delete-object --bucket cadencia-lake --key \"$key\" --version-id \"$id\"\n  done\n\n# 3. Agora o Terraform consegue remover bucket, catalogo, permissoes e a chave KMS.\nterraform destroy -auto-approve\n\n# 4. CHAVE KMS: entra em exclusao PENDENTE, nao some na hora — continua existindo\n#    (sem cobrar por uso, mas ocupando o limite de chaves da conta) pelo periodo\n#    de espera configurado.\naws kms list-keys --query \"Keys[?KeyId=='$(terraform output -raw kms_key_id 2>/dev/null)']\"\n\n# 5. Prova final: nada com o nome do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=cadencia-lake \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Bucket com objeto dentro",
+                "não, falha até esvaziar",
+                "sim, GB-mês",
+                "o destroy recusa remover bucket não vazio; com versionamento, \"vazio\" inclui apagar toda versão"
+              ],
+              [
+                "Chave KMS",
+                "entra em exclusão pendente",
+                "não, mas ocupa cota",
+                "tem período de espera obrigatório antes de ser removida de fato"
+              ],
+              [
+                "Permissões do Lake Formation",
+                "sim, se em Terraform",
+                "não",
+                "permissão criada fora do Terraform (à mão no console) não aparece no estado"
+              ],
+              [
+                "Bancos do Data Catalog",
+                "sim",
+                "não",
+                "sem custo direto, mas tabela órfã confunde quem lista bancos depois"
+              ],
+              [
+                "Versões antigas de objeto (S3 versionado)",
+                "não automaticamente",
+                "sim, GB-mês",
+                "apagar a versão \"atual\" não remove as anteriores; cada versão cobra separadamente"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Não sei qual arquivo serve",
+                "três camadas com contrato explícito",
+                "prefixo + formato + frequência documentados tornam a pergunta respondível sem abrir arquivo"
+              ],
+              [
+                "Schema desatualizado ou inconsistente",
+                "catálogo alimentado pelo próprio job",
+                "quem escreve a tabela é quem melhor sabe o schema dela — sem esperar crawler agendado"
+              ],
+              [
+                "Reprocessar um dia afeta os outros",
+                "`partitionOverwriteMode=dynamic`",
+                "escreve só a partição processada, sem tocar no restante da tabela"
+              ],
+              [
+                "Analista vê dado que não deveria",
+                "Lake Formation por tabela e coluna",
+                "permissão no catálogo, não no bucket — sobrevive mesmo se a estrutura de pasta mudar"
+              ],
+              [
+                "CPF do cliente exposto em relatório",
+                "coluna removida na transformação bronze→prata",
+                "defesa na origem: a coluna nem existe para ser exposta por erro de permissão"
+              ],
+              [
+                "Consulta cara e lenta",
+                "formato colunar + partição em prata e ouro",
+                "poda de partição e leitura de coluna reduzem bytes varridos em ordens de grandeza"
+              ],
+              [
+                "Arquivo fora do contrato entra no catálogo",
+                "validador de contrato antes de bronze",
+                "barato de verificar sem abrir o conteúdo; quarentena com motivo anexado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Reprocessamento que duplica dado",
+                "`partitionOverwriteMode=dynamic`",
+                "erro de lógica de agregação que produz número errado, mas sem duplicar linha"
+              ],
+              [
+                "Acesso indevido via consulta",
+                "Lake Formation por tabela/coluna",
+                "acesso direto ao S3 com credencial que tem `s3:GetObject` no bucket"
+              ],
+              [
+                "Arquivo malformado no catálogo",
+                "validador de contrato antes de bronze",
+                "schema interno inconsistente que passa no caminho e no tamanho — cabe ao L70"
+              ],
+              [
+                "Bronze sobrescrito",
+                "versionamento + convenção write-once",
+                "exclusão deliberada de todas as versões por quem tem permissão para isso"
+              ],
+              [
+                "Custo de armazenamento crescendo sem limite",
+                "ciclo de vida por camada",
+                "crescimento do VOLUME de dado captado — ciclo de vida move classe, não reduz volume"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "A captura contínua grava um arquivo Parquet em bronze, dentro da partição do dia.",
+              "O validador confere caminho, extensão e tamanho antes de qualquer job olhar o arquivo.",
+              "Contrato quebrado vai para quarentena, com o motivo anexado como tag.",
+              "O job bronze→prata roda com bookmark, processa só o que é novo naquela partição.",
+              "Ele deduplica, tipa e remove a coluna sensível, gravando em prata com overwrite dinâmico.",
+              "O próprio job atualiza o schema de prata no Data Catalog — nenhum crawler agendado.",
+              "O job prata→ouro lê só prata, agrega por loja e dia, grava em ouro.",
+              "O Lake Formation concede SELECT em ouro ao analista de negócio, e em bronze/prata ao engenheiro.",
+              "Uma consulta em ouro varre poucos gigabytes; a mesma pergunta em bronze varria o histórico inteiro.",
+              "A permissão concedida — e negada — fica registrada e auditável via CloudTrail."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "lab-data-des1",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Desafio — sem roteiro"
+      },
+      "children": [
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "O requisito",
+            "content": "Adicione uma NOVA fonte de dado à camada bronze (um segundo tipo de evento, ou uma segunda tabela de origem) e leve-a até um agregado na camada ouro, provando a linhagem de ponta a ponta."
+          },
+          "id": "lab-data-des2",
+          "position": 0
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "Critério de aceite — executável, não \"verifique se funciona\"",
+            "content": "Um registro específico inserido na fonte nova é rastreável, por um identificador comum, desde o arquivo bruto na camada bronze até o número final que ele afeta na camada ouro — e alterar esse registro de origem muda o agregado ouro na PRÓXIMA execução do pipeline."
+          },
+          "id": "lab-data-des3",
+          "position": 1
+        },
+        {
+          "type": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "Dica 1: A camada prata é onde a fonte nova precisa ganhar o MESMO formato/schema das fontes existentes (tipos, nomes de coluna, granularidade) — sem essa normalização, a camada ouro não consegue agregar as duas fontes juntas de forma correta.",
+              "Dica 2: Inclua na prata uma coluna de origem (`fonte_dado`) — sem ela, quando o agregado ouro der um número errado, não dá pra saber se o problema veio da fonte antiga ou da nova.",
+              "Dica 3: Prove a linhagem de verdade: pegue UM registro específico, anote seu identificador, e mostre ele (ou o efeito dele) presente nas três camadas — não baste rodar o pipeline e confiar que \"não deu erro\"."
+            ]
+          },
+          "id": "lab-data-des4",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "success",
+            "title": "Lembrete de limpeza",
+            "content": "Todo recurso que este desafio criar entra no mesmo `terraform destroy` do laboratório — nada fica para trás cobrando sozinho."
+          },
+          "id": "lab-data-des5",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que pastas bem nomeadas no S3 não bastam, sem Glue nem Lake Formation?",
+            "answer": "Porque nome de pasta é convenção, e convenção sem aplicação técnica se degrada com o tempo — foi exatamente assim que o bucket da Cadência chegou a 41 mil objetos sem estrutura, apesar de a intenção inicial ter sido organizada. O Data Catalog transforma prefixo em tabela consultável por SQL, e o Lake Formation transforma prefixo em unidade de permissão auditável. Sem os dois, nada impede um quinto time de criar sua própria convenção amanhã, e a estrutura volta a se perder da mesma forma que se perdeu da primeira vez."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Qual a diferença real entre a camada prata e a camada ouro, se as duas já são \"limpas\"?",
+            "answer": "Granularidade. Prata tem uma linha por evento — um pedido, uma transação — só que sem duplicata, com tipo corrigido e sem registro inválido; ela ainda responde \"o que aconteceu, em detalhe\". Ouro é agregada: total por loja e por dia, por exemplo, e responde \"quanto vendeu\", não \"quais foram os pedidos\". A confusão mais comum é achar que \"limpo\" e \"agregado\" são a mesma coisa — prata é limpa e granular ao mesmo tempo, e é isso que permite investigar um caso específico sem abrir bronze de novo."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Preciso de um crawler do Glue rodando sobre prata e ouro?",
+            "answer": "Não, e evitar isso é uma decisão deliberada deste laboratório. O próprio job de transformação já conhece o schema que está escrevendo, então ele atualiza a tabela no Data Catalog diretamente, com `updateBehavior=UPDATE_IN_DATABASE`. Um crawler agendado sobre uma camada que já tem dono cobra por LIST e GET a cada execução, na maioria das vezes sem encontrar nada novo, e ainda corre o risco de inferir um schema diferente do que o job pretendia. Crawler continua tendo função em bronze, para descoberta inicial de um formato que ainda não se conhece."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Lake Formation substitui a política de IAM no bucket do S3?",
+            "answer": "Não substitui — e essa é a distinção que mais gera incidente quando ignorada. Lake Formation controla o acesso feito através do Data Catalog, como uma consulta do Athena ou um job do Glue lendo por nome de tabela. Se um papel do IAM também tiver `s3:GetObject` direto no bucket, esse caminho nunca passa pelo Lake Formation, e a negativa configurada lá simplesmente não se aplica a ele. A regra prática é: papel de consumo de dado não deveria ter permissão de S3 alguma no bucket do lake — só o papel de execução dos jobs precisa."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Por que remover a coluna de CPF na limpeza, e não só restringir por permissão?",
+            "answer": "Porque restringir por permissão protege contra acesso indevido de quem consulta a tabela pelo caminho certo, mas não protege contra erro de configuração — uma permissão concedida mais ampla do que deveria por engano expõe a coluna imediatamente. Removendo a coluna na origem, a exposição por erro de permissão deixa de ser possível, porque a coluna não existe em prata nem em ouro para começo de conversa. As duas camadas de proteção — remoção na origem e permissão no catálogo — cobrem falhas diferentes, e usar só uma delas deixa metade do risco descoberto."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "O que acontece se eu rodar o job bronze→prata duas vezes para o mesmo dia?",
+            "answer": "Nada muda no resultado, e essa é a propriedade que o torna seguro de reexecutar depois de uma falha: com `partitionOverwriteMode=dynamic`, a segunda execução sobrescreve exatamente a partição daquele dia, sem tocar nas demais nem duplicar linha. Sem essa configuração — que é o padrão `static` do Spark — a mesma reexecução apagaria a TABELA inteira antes de escrever, destruindo o histórico de todos os outros dias. É a diferença entre um job seguro de tentar de novo e um que só pode rodar uma vez com sucesso."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Bronze precisa ficar em Standard para sempre, caso eu precise reprocessar?",
+            "answer": "Não — reprocessar não exige leitura rápida com frequência, exige que o dado ainda exista. A regra de ciclo de vida deste laboratório move bronze para Standard-IA em 30 dias e para Glacier em 90, porque o padrão de acesso real é \"quase nunca lido depois que prata foi gerada, mas precisa continuar existindo para o dia em que for necessário\". Restaurar do Glacier custa tempo e uma tarifa de recuperação — o trade-off aceito é pagar isso na rara vez que se reprocessa, em troca de armazenamento muito mais barato no dia a dia."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Como decidir se um dado precisa das três camadas, ou só de bronze e prata?",
+            "answer": "Pela pergunta que alguém vai fazer sobre ele. Se a resposta útil é sempre um resumo — total, média, contagem por período — vale criar ouro. Se a resposta útil é quase sempre um registro individual — \"mostre este pedido específico\" — prata já basta, e criar ouro seria agregar um dado que ninguém consulta agregado. Neste laboratório, pedidos ganham as três camadas porque o BI consulta o agregado diário com frequência; um log de auditoria, por exemplo, tipicamente para em prata."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "O job `bronze_para_prata.py` roda pela segunda vez para reprocessar o dia 2026-08-07, depois de uma correção no código. A tabela de prata tinha 240 dias de histórico. O que acontece se `partitionOverwriteMode` está no padrão do Spark (`static`) em vez de `dynamic`?",
+            "options": [
+              "Nada muda: o job só processa o dia informado como parâmetro",
+              "A tabela inteira é apagada e recriada só com os dados do dia 2026-08-07",
+              "As linhas do dia 2026-08-07 são duplicadas, sem afetar os outros dias",
+              "O job falha com erro de permissão, porque o modo estático bloqueia sobrescrita"
+            ],
+            "correctIndex": 1,
+            "explanation": "O modo `static` do Spark, ao escrever com `INSERT OVERWRITE`, apaga a TABELA inteira antes de gravar — não só a partição correspondente ao DataFrame que está sendo escrito. Isso significa que reprocessar um único dia com o modo padrão destrói os outros 239 dias de histórico de prata, silenciosamente, porque o job \"funciona\" do ponto de vista de quem só olha o dia processado. É exatamente por isso que o `prata_para_ouro.py` e o `bronze_para_prata.py` definem explicitamente `partitionOverwriteMode=dynamic`.\n\nA primeira alternativa ignora que o parâmetro do job controla QUAL partição é lida e processada, não o escopo da ESCRITA — são operações independentes. A terceira descreve o sintoma que `dynamic` evita, não o que `static` causa: duplicação aconteceria com `append`, não com `overwrite` estático, que sobrescreve em vez de adicionar. A quarta inventa um comportamento de bloqueio que não existe: o modo `static` sobrescreve sem pedir confirmação nem falhar — é justamente por não avisar que o erro é perigoso."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Uma tabela em `cadencia_ouro` mostra o mesmo total de vendas há três dias seguidos, mesmo com pedidos novos entrando em bronze todo dia. O disjuntor de qualidade do L70 ainda não foi implementado. Qual é a investigação mais direta?",
+            "options": [
+              "Verificar se a coluna de CPF foi removida corretamente na transformação",
+              "Verificar o tamanho médio dos arquivos Parquet na camada bronze",
+              "Verificar se o analista de negócio tem permissão de SELECT em ouro",
+              "Verificar a duração e o horário das últimas execuções do job prata→ouro"
+            ],
+            "correctIndex": 3,
+            "explanation": "Número estagnado enquanto a fonte continua recebendo dado novo é o sintoma clássico de pipeline parado, não de dado errado. Como o job atualiza a própria tabela no catálogo a cada execução bem-sucedida, checar quando ele rodou pela última vez e se terminou sem erro é o caminho mais curto até a causa — se ele não roda há três dias, a tabela mostra exatamente o que mostrava na última execução válida, porque não há nada mais recente escrito.\n\nA primeira alternativa investiga um risco de segurança real, mas não teria relação com o total ficar igual — a coluna de CPF não afeta o valor agregado. A terceira confunde os dois tipos de falha do módulo: se a permissão estivesse errada, o analista veria erro de acesso, não um número desatualizado — ele claramente está lendo a tabela, só que ela não mudou. A quarta olha para a camada errada: tamanho de arquivo em bronze afeta custo e desempenho de leitura, não se o job seguinte rodou ou não."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 29,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L61 no ar (extração incremental do operacional para o S3), SQL básico, noções de Spark/PySpark e de particionamento"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "o que cada camada garante e o que não garante; contrato de camada como schema + formato + frequência + dono; catálogo alimentado pelo job em vez de crawler agendado; permissão por tabela e coluna via Lake Formation, e por que ela não substitui revisar IAM de bucket; reprocessamento idempotente com overwrite dinâmico por partição"
+              ],
+              [
+                "Limitação que fica",
+                "correção pontual dentro de uma partição já gravada exige reprocessar o dia inteiro — Parquet simples não tem UPDATE/DELETE real; e o conteúdo do dado ainda não é validado por regra de negócio, só o caminho e o tamanho do arquivo"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L65 — Catálogo e ETL: Glue Data Catalog, crawler e job idempotente em profundidade. Reutiliza os dois jobs deste módulo e detalha a evolução de schema"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L67 (lakehouse com Iceberg, upsert e time travel) resolve a limitação de correção pontual; L69 (governança do lake por coluna, em escala) estende a permissão do Lake Formation com LF-TBAC; L70 (qualidade de dado e quarentena por regra) valida o CONTEÚDO que este módulo ainda não valida"
+              ],
+              [
+                "Data da última validação técnica",
+                "8 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Lake Formation tag-based access control (LF-TBAC)",
+                "code": true
+              },
+              {
+                "text": " — o modelo de permissão por tabela, coluna e tag, e a distinção entre método nomeado e tag-based; e "
+              },
+              {
+                "text": "Using crawlers to populate the Data Catalog / Data discovery and cataloging in AWS Glue",
+                "code": true
+              },
+              {
+                "text": " — o papel do crawler na descoberta inicial e o suporte a crawling incremental via notificação de evento do S3, que é o que justifica não usar crawler agendado sobre camada já mantida por job. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço de armazenamento, DPU e byte varrido varia por região e muda com mais frequência do que este conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "O volume citado — 41.312 objetos, 2,3 TB — é o cenário de exemplo da Cadência, não uma referência de quando \"vale a pena\" estruturar em camadas; a resposta certa é \"desde o primeiro dia de produção\", porque o custo de retrofit cresce com o volume. Os prazos de transição de ciclo de vida (30 e 90 dias) também vêm do padrão de acesso hipotético deste exemplo — meça a frequência real de consulta a bronze e prata na sua conta antes de copiar esses números."
+          }
+        }
+      ]
+    }
+  ]
+}

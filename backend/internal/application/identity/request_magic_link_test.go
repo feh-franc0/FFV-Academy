@@ -40,6 +40,19 @@ func (m *mockTokenStore) Consume(_ context.Context, _ domidentity.Email) (domide
 	return *m.consumed, nil
 }
 
+// Peek espelha Consume sem deletar — o mock não distingue estado
+// consumido/pendente, o que é suficiente para os testes deste pacote (nenhum
+// depende de Peek e Consume verem estados diferentes).
+func (m *mockTokenStore) Peek(_ context.Context, _ domidentity.Email) (domidentity.MagicToken, error) {
+	if m.consumeErr != nil {
+		return domidentity.MagicToken{}, m.consumeErr
+	}
+	if m.consumed == nil {
+		return domidentity.MagicToken{}, shared.ErrNotFound
+	}
+	return *m.consumed, nil
+}
+
 func (m *mockTokenStore) IncrAttempts(_ context.Context, _ domidentity.Email) (int64, error) {
 	m.incrCalls++
 	return 1, nil

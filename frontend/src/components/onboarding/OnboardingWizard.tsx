@@ -19,7 +19,8 @@
  *   - Dispensável apenas ao terminar — não tem X de fechar (intencional).
  */
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 import {
   updatePreferences,
   HUB_OPTIONS,
@@ -45,6 +46,8 @@ export function OnboardingWizard({ onComplete }: Props) {
   const [certificationIds, setCertificationIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, true);
 
   function toggle<T extends string>(list: T[], item: T): T[] {
     return list.includes(item) ? list.filter(i => i !== item) : [...list, item];
@@ -74,9 +77,11 @@ export function OnboardingWizard({ onComplete }: Props) {
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby="onboarding-title"
+      tabIndex={-1}
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)' }}
     >

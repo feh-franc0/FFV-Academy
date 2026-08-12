@@ -1,0 +1,2273 @@
+{
+  "slug": "lab-sagemaker-treino-experimento-rastreavel",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência já resolveu o schema do dado (L65), o contrato de valor que protege o modelo de reposição automática de mudança silenciosa de unidade (L70), e passou a calcular cada feature de preço normalizado uma única vez, para treino e para inferência, com o Feature Store do L72. O modelo em produção hoje continua sendo o mesmo modelo de sempre — 40 lojistas, 310 SKUs, recomendação de reposição semanal."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Esse modelo específico, o que está servindo agora, foi treinado há três meses por um cientista de dados num notebook Jupyter local, antes de o Feature Store existir. Ele exportou um CSV do Athena, ajustou hiperparâmetro célula por célula até o resultado parecer bom, salvou um model.tar.gz num bucket S3 e avisou o time de plataforma para apontar o endpoint de inferência para aquele arquivo. Funcionou. Ninguém mais mexeu nisso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Agora uma correção no ruleset do L70 mudou a distribuição de preço que entra no treino, e o time de dados precisa decidir: o modelo atual ainda é bom sobre o dado corrigido, ou precisa retreinar? Para responder, alguém teria de reproduzir o treino original e comparar. E aí aparece o problema: nem o próprio cientista que treinou consegue. O notebook ainda existe, mas as células foram reexecutadas fora de ordem dezenas de vezes desde então — o hiperparâmetro final não está escrito em lugar nenhum, o CSV exportado já não corresponde a nenhuma consulta reproduzível no Athena de hoje, e a seed aleatória do framework nunca foi fixada explicitamente."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Avançado — depende do tema do L72 (Feature Store: mesmo cálculo no treino e na inferência); não pressupõe experiência prévia com SageMaker Training Jobs"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "tema do L70 (contrato de dado sobre prata_produtos) e do L72 (Feature Store offline com o cálculo de feature normalizado); este módulo assume que existe um snapshot de feature versionado para ler, não uma tabela solta"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 55 min · implementação 2 h a 2 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo a médio: instâncias de treino CPU custam por hora, ainda que Spot reduza a fatura — o que mais pesa é o tempo de treino em si, não o rastreamento"
+              },
+              {
+                "k": "Serviços",
+                "v": "SageMaker AI (Training Job, Experiments), S3, IAM, KMS, CloudWatch"
+              },
+              {
+                "k": "Volume atual",
+                "v": "1 modelo de reposição em produção, retreinado sob demanda — hoje sem cadência fixa, o que agrava o problema de rastreabilidade"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "a partir do commit do script e do hash do snapshot de dado, qualquer pessoa do time reproduz a métrica do treino dentro de uma tolerância numérica declarada"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "o Feature Store do L72 já garante que a FEATURE calculada é idêntica entre execuções — a lacuna aqui é rastrear COMMIT, HIPERPARÂMETRO e SNAPSHOT do treino, não recalcular a feature"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "um Training Job reprodutível a partir de três coordenadas — commit, hash do dado, hiperparâmetro — com cada execução registrada como um Run do SageMaker Experiments, resiliente a interrupção de instância Spot"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é sobre calcular a feature certa — o L72 já resolve que o treino e a inferência usam exatamente o mesmo cálculo. Não é sobre escolher entre regra e modelo — isso é o L71. E não é sobre COMO servir o modelo depois de treinado, nem sobre aprovar e promover uma versão — isso é o L74 e o L75, que dependem deste. Este módulo resolve uma coisa: dado o mesmo commit, o mesmo dado e o mesmo hiperparâmetro, alguém consegue reproduzir a métrica do treino que está em produção — hoje ninguém consegue, nem quem treinou."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando ou uma consulta na seção de implantação."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "items": [
+              "Explicar por que ter o Feature Store do L72 não resolve reprodutibilidade do treino — são dois problemas complementares, não o mesmo.",
+              "Configurar um SageMaker Training Job com instâncias Spot e checkpoint periódico, sobrevivendo a uma interrupção sem perder o progresso.",
+              "Registrar cada execução como um Run do SageMaker Experiments, com commit do código, hash do snapshot de dado, hiperparâmetro completo (incluindo seed) e métrica final.",
+              "Justificar por que reprodutibilidade de métrica em treino distribuído é 'dentro de tolerância', não bit a bit — e o que isso muda na prova de reprodutibilidade.",
+              "Escrever a policy IAM mínima do papel de execução, restrita ao prefixo de dado que o job precisa ler e ao prefixo de artefato que ele precisa escrever.",
+              "Reexecutar um treino a partir de um Run salvo — mesmo commit, mesmo hash de dado, mesmo hiperparâmetro — e comparar a métrica nova com a original dentro de uma tolerância declarada.",
+              "Diagnosticar, a partir dos hiperparâmetros de dois Runs, por que uma reprodução divergiu além da tolerância.",
+              "Provar com número: qual a diferença percentual entre a métrica do Run original e a da reprodução, e se ela fica dentro do limiar aceito."
+            ],
+            "ordered": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "SageMaker Training Job e Estimator",
+                "MLA-C01",
+                "job configurado com instance_count > 1, use_spot_instances e checkpoint_s3_uri",
+                "diferença entre instância On-Demand e Spot gerenciada pelo SageMaker, e o papel exato do checkpoint na retomada automática"
+              ],
+              [
+                "SageMaker Experiments (Experiment, Trial, Run)",
+                "MLA-C01",
+                "cada execução do job vira um Run com hiperparâmetro, commit, hash de dado e métrica, consultável por API",
+                "o que o SDK de Experiments registra por conta própria (duração, instância, imagem) e o que precisa de log manual (commit, hash de dado, seed)"
+              ],
+              [
+                "Reprodutibilidade como prática de MLOps",
+                "MLA-C01",
+                "commit, dado e hiperparâmetro versionados juntos, nunca 'estava no notebook'",
+                "por que determinismo BIT A BIT é diferente de determinismo de MÉTRICA em treino multi-thread de CPU"
+              ],
+              [
+                "Hiperparâmetro como decisão registrada, não valor solto",
+                "MLA-C01, AIF-C01",
+                "hiperparâmetro passado como argumento estruturado do Estimator, nunca hardcoded no meio do script",
+                "diferença entre hiperparâmetro (decisão humana, ex.: learning rate) e parâmetro aprendido (peso do modelo, saída do treino)"
+              ],
+              [
+                "Custo de treino: Spot vs. On-Demand",
+                "MLA-C01, MLS-C01",
+                "Estimator com use_spot_instances=True, max_wait e max_run configurados explicitamente",
+                "por que Spot exige checkpoint para ser seguro, e o que acontece com o job se max_wait expira antes da conclusão"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não muda uma linha de configuração é intenção, não requisito. A terceira coluna é onde cada um deixou marca no desenho."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Ninguém reproduz o modelo que está em produção",
+                "mesmo commit + mesmo hash de snapshot + mesmo hiperparâmetro produzem métrica dentro de uma tolerância numérica declarada",
+                "obriga que CADA execução do Training Job vire um Run do SageMaker Experiments, registrado ANTES de o job terminar, não reconstruído depois de memória"
+              ],
+              [
+                "Treino não pode perder progresso quando a instância Spot é interrompida",
+                "retomada automática a partir do último checkpoint, sem reprocessar do zero",
+                "exige checkpoint_s3_uri configurado no Estimator e lógica no script de treino que procura um checkpoint antes de inicializar os pesos do zero"
+              ],
+              [
+                "O dado de treino tem de ser exatamente o mesmo entre duas execuções do mesmo commit",
+                "timestamp de corte (as-of) do join ponto-no-tempo do L72 travado, e hash do dataset resultante da extração, nunca 'a versão mais recente'",
+                "o Run recusa rodar sem os dois identificadores — o as-of do `point_in_time_accurate_join()` e o hash do arquivo extraído — e ambos viram parte do que o Experiments registra"
+              ],
+              [
+                "A seed aleatória tem de ser fixada e registrada, não deixada no default",
+                "um único valor de seed aplicado a numpy, ao framework de treino e, quando existir, à biblioteca de CUDA",
+                "seed vira hiperparâmetro versionado no Run, com valor explícito — nunca um número que só existe dentro da sessão do notebook"
+              ],
+              [
+                "Custo de treino contido, mesmo com múltiplas tentativas de reprodução",
+                "instância Spot com checkpoint, não instância On-Demand ociosa esperando aprovação humana",
+                "Estimator com use_spot_instances=True, max_wait e max_run — não a configuração padrão do SDK"
+              ],
+              [
+                "Papel de execução restrito ao que o job realmente usa",
+                "leitura só do prefixo do snapshot do Feature Store, escrita só nos prefixos de artefato e checkpoint",
+                "policy IAM por prefixo específico, chave KMS dedicada à criptografia do artefato e do checkpoint — nunca `Resource: \"*\"`"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: o notebook que treinou o modelo que está em produção"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que gerou o modelo que a Cadência usa hoje, e ele é legítimo como ponto de partida: um cientista de dados treinando localmente é como praticamente todo mundo começa. O defeito não está em treinar num notebook — está em nada, além da memória de quem escreveu o código, sobreviver depois que o job termina."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O treino que funcionou uma vez e não se repete",
+            "caption": "Este desenho produz um modelo que serve em produção hoje — e nenhuma peça dele sobrevive além da execução. Percorra os passos e repare onde a informação necessária para reproduzir o resultado desaparece.",
+            "groups": [
+              {
+                "label": "Origem: código e dado, sem rastro",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ide",
+                    "service": "ide",
+                    "label": "Notebook local do cientista de dados",
+                    "note": "script de treino editado e reexecutado célula por célula; commit no Git é opcional e ninguém confere antes de rodar"
+                  },
+                  {
+                    "id": "feature_store",
+                    "service": "feature_store",
+                    "label": "Feature Store offline (tema do L72)",
+                    "note": "o job chama point_in_time_accurate_join() sem um as-of explícito, então cada execução reconstrói o dataset a partir do instante atual, nunca de um corte travado"
+                  }
+                ]
+              },
+              {
+                "label": "Treino",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sagemaker_job",
+                    "service": "sagemaker",
+                    "label": "SageMaker Training Job — instância única",
+                    "note": "sobe uma instância On-Demand, roda o script até o fim; hiperparâmetro é argumento passado à mão a cada chamada, nunca salvo"
+                  }
+                ]
+              },
+              {
+                "label": "Saída, sem proveniência",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3_modelos",
+                    "service": "s3",
+                    "label": "s3://cadencia-ml/modelos/modelo-reposicao.tar.gz",
+                    "note": "sobrescreve o mesmo caminho fixo a cada treino; nada aqui diz qual commit, dado ou hiperparâmetro gerou este arquivo específico"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "ide",
+                "to": "sagemaker_job",
+                "label": "hiperparâmetro passado à mão como argumento da chamada, nunca versionado",
+                "style": "solid"
+              },
+              {
+                "from": "feature_store",
+                "to": "sagemaker_job",
+                "label": "join ponto-no-tempo sem as-of fixo, então lê o instante da chamada, não um corte travado",
+                "style": "solid"
+              },
+              {
+                "from": "sagemaker_job",
+                "to": "s3_modelos",
+                "label": "grava o artefato final, sobrescrevendo o caminho do treino anterior",
+                "style": "solid"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O cientista escreve o script no notebook local, sem exigência de commit antes de rodar",
+                "detail": "As células são editadas e reexecutadas fora de ordem ao longo de semanas. Não há gate nenhum entre 'terminei de ajustar' e 'rodei o treino que virou produção'.",
+                "nodes": [
+                  "ide",
+                  "sagemaker_job"
+                ],
+                "edges": [
+                  "ide>sagemaker_job"
+                ]
+              },
+              {
+                "label": "O job chama o join ponto-no-tempo do Feature Store sem travar um as-of",
+                "detail": "O L72 garante que o CÁLCULO da feature é o mesmo no treino e na inferência — mas 'o mesmo cálculo' não é 'o mesmo dado no tempo'. Sem um as-of explícito passado a point_in_time_accurate_join(), cada execução reconstrói o dataset a partir de 'agora', e duas chamadas em dias diferentes podem devolver linhas diferentes.",
+                "nodes": [
+                  "feature_store",
+                  "sagemaker_job"
+                ],
+                "edges": [
+                  "feature_store>sagemaker_job"
+                ]
+              },
+              {
+                "label": "O treino roda numa única instância; a seed aleatória do framework nunca é fixada explicitamente",
+                "detail": "Sem instance_count > 1 e sem seed declarada, cada execução inicializa pesos e embaralha lotes de um jeito ligeiramente diferente — mesmo sobre o dado idêntico.",
+                "nodes": [
+                  "sagemaker_job"
+                ],
+                "edges": []
+              },
+              {
+                "label": "O job grava o artefato final, sobrescrevendo o mesmo caminho do treino anterior",
+                "detail": "model.tar.gz vira o único registro físico do resultado. Não existe metadado estruturado anexado a ele — nem commit, nem hiperparâmetro, nem hash de dado.",
+                "nodes": [
+                  "sagemaker_job",
+                  "s3_modelos"
+                ],
+                "edges": [
+                  "sagemaker_job>s3_modelos"
+                ]
+              },
+              {
+                "label": "Nenhum registro liga este arquivo ao commit, ao dado ou ao hiperparâmetro que o geraram",
+                "detail": "É exatamente esse vazio que aparece três meses depois, quando alguém precisa responder 'este modelo ainda é bom sobre o dado corrigido?' e não tem como reproduzir o treino original para comparar.",
+                "nodes": [
+                  "ide",
+                  "feature_store",
+                  "sagemaker_job",
+                  "s3_modelos"
+                ],
+                "edges": [
+                  "ide>sagemaker_job",
+                  "feature_store>sagemaker_job",
+                  "sagemaker_job>s3_modelos"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "code": "# Reproduz o cenário: dois treinos do MESMO notebook, dado supostamente igual,\n# hiperparametro so na cabeca de quem escreveu -- e a metrica diverge.\n\n# 1) Primeiro treino, ha tres meses (simulado aqui como execucao A)\npython treinar_local.py --learning-rate 0.03 --arvores 400\n# saida: rmse_validacao=18.42 -- ninguem anotou esses dois numeros em lugar nenhum\n\n# 2) Hoje, tentando reproduzir de memoria (execucao B)\npython treinar_local.py --learning-rate 0.05 --arvores 350\n# saida: rmse_validacao=21.07 -- diferente, e ninguem sabe dizer se e o\n# hiperparametro, o dado, ou a seed que mudou, porque nenhum dos tres foi\n# registrado na primeira execucao\n\n# 3) Confirma que nao ha NENHUM metadado de proveniencia no artefato publicado\naws s3api head-object --bucket cadencia-ml --key modelos/modelo-reposicao.tar.gz \\\n  --query 'Metadata'\n# Esperado: {} -- objeto vazio. So existe o binario, sem commit, sem dado, sem hiperparametro.\n",
+            "filename": "reproduzir-o-defeito.sh"
+          }
+        },
+        {
+          "id": "b4_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "O job SUCCEEDED não é a informação que falta — a proveniência é",
+            "content": "As duas execuções terminam sem erro nenhum: JobRunState fica SUCCEEDED nas duas, e cada uma produz um model.tar.gz válido. O problema nunca aparece como falha — aparece como duas métricas diferentes sem ninguém saber dizer por quê, porque a arquitetura mínima nunca registrou o que teria explicado a diferença: hiperparâmetro exato, hash do dado exato, seed exata."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A troca não é 'acrescentar um log' ao desenho anterior — é substituir 'terminou sem erro' por 'terminou com proveniência completa', e 'na cabeça de quem treinou' por 'consultável por API'."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Cada execução vira um Run rastreável, resiliente a interrupção de Spot",
+            "caption": "A diferença não é uma caixa a mais: o papel de execução e a chave KMS autorizam o job antes de qualquer leitura, o treino agora é distribuído em instâncias Spot com checkpoint recuperável, e cada execução termina registrada num Run do Experiments — com commit, hash de dado, hiperparâmetro e métrica. Percorra os passos: cada peça nova resolve exatamente um requisito da seção anterior.",
+            "groups": [
+              {
+                "label": "Origem: commit e dado, agora com hash",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ide",
+                    "service": "ide",
+                    "label": "Notebook/IDE com commit exigido",
+                    "note": "o script só é aceito pelo job com um commit hash válido associado — editar sem comitar não produz um treino executável"
+                  },
+                  {
+                    "id": "feature_store",
+                    "service": "feature_store",
+                    "label": "Feature Store — join ponto-no-tempo travado (do L72)",
+                    "note": "o job chama point_in_time_accurate_join() com um as-of explícito, não 'agora' — a mesma chamada sempre reconstrói o mesmo dataset de treino"
+                  }
+                ]
+              },
+              {
+                "label": "Papel e segredo",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "iam",
+                    "service": "iam",
+                    "label": "Papel de execução do Training Job",
+                    "note": "escopado a ler só o prefixo do snapshot indicado e a escrever só nos prefixos de artefato e checkpoint deste job"
+                  },
+                  {
+                    "id": "kms",
+                    "service": "kms",
+                    "label": "Chave KMS dedicada",
+                    "note": "criptografa o artefato final e cada checkpoint intermediário gravado no S3, chave própria e não a padrão do bucket"
+                  }
+                ]
+              },
+              {
+                "label": "Treino distribuído e resiliente a interrupção",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "sagemaker_job",
+                    "service": "sagemaker",
+                    "label": "SageMaker Training Job — Spot, distribuído",
+                    "note": "múltiplas instâncias ml.* em modo Spot treinam em paralelo, com max_wait e max_run configurados explicitamente no Estimator"
+                  },
+                  {
+                    "id": "checkpoint",
+                    "service": "checkpoint",
+                    "label": "Checkpoint periódico em S3",
+                    "note": "grava o estado do treino a cada N passos; se a instância for interrompida, o job novo retoma daqui em vez de recomeçar do zero"
+                  }
+                ]
+              },
+              {
+                "label": "Rastreamento do experimento",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "experiments",
+                    "service": "sagemaker",
+                    "label": "SageMaker Experiments — Run",
+                    "note": "registra automaticamente duração e instância, e recebe via SDK o commit, o hash do snapshot, o hiperparâmetro completo e a métrica final"
+                  }
+                ]
+              },
+              {
+                "label": "Artefato e observabilidade",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "s3_modelos",
+                    "service": "s3",
+                    "label": "s3://cadencia-ml/modelos/{run_id}/model.tar.gz",
+                    "note": "artefato nomeado pelo identificador do Run, nunca sobrescreve um treino anterior — cada execução tem seu próprio caminho"
+                  },
+                  {
+                    "id": "cloudwatch",
+                    "service": "cloudwatch",
+                    "label": "Logs e métricas do job",
+                    "note": "captura stdout do script de treino e métricas de utilização de CPU/memória, consultável mesmo depois de o job terminar"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "ide",
+                "to": "sagemaker_job",
+                "label": "commit hash como argumento obrigatório do job, não anotação solta",
+                "style": "solid"
+              },
+              {
+                "from": "iam",
+                "to": "sagemaker_job",
+                "label": "autoriza a leitura do dataset extraído e a escrita nos prefixos de artefato e checkpoint",
+                "style": "solid"
+              },
+              {
+                "from": "kms",
+                "to": "sagemaker_job",
+                "label": "chave usada para criptografar cada objeto gravado por este job",
+                "style": "solid"
+              },
+              {
+                "from": "feature_store",
+                "to": "sagemaker_job",
+                "label": "entrega o dataset reconciliado pelo as-of travado, não pelo instante da chamada",
+                "style": "solid"
+              },
+              {
+                "from": "sagemaker_job",
+                "to": "checkpoint",
+                "label": "grava o estado do treino a cada N passos configurados",
+                "style": "solid"
+              },
+              {
+                "from": "checkpoint",
+                "to": "sagemaker_job",
+                "label": "retomada automática do último checkpoint quando uma instância Spot é interrompida",
+                "style": "dashed"
+              },
+              {
+                "from": "sagemaker_job",
+                "to": "experiments",
+                "label": "registra commit, hash de dado, hiperparâmetro completo e métrica final ao terminar",
+                "style": "solid"
+              },
+              {
+                "from": "sagemaker_job",
+                "to": "s3_modelos",
+                "label": "grava o artefato nomeado pelo run_id, sem sobrescrever execuções anteriores",
+                "style": "solid"
+              },
+              {
+                "from": "sagemaker_job",
+                "to": "cloudwatch",
+                "label": "envia log e métrica de utilização durante toda a execução",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O papel de execução e a chave KMS autorizam o job antes de qualquer leitura",
+                "detail": "iam e kms não são adorno: sem a policy escopada ao prefixo certo e sem a chave dedicada, o job simplesmente não sobe — a autorização vem antes do treino, não depois dele.",
+                "nodes": [
+                  "iam",
+                  "kms",
+                  "sagemaker_job"
+                ],
+                "edges": [
+                  "iam>sagemaker_job",
+                  "kms>sagemaker_job"
+                ]
+              },
+              {
+                "label": "O commit do script vira argumento obrigatório do job, não anotação solta",
+                "detail": "O job recusa rodar sem um commit hash associado. Isso fecha a lacuna da arquitetura mínima: não existe mais 'reexecutei o notebook de memória' como caminho válido.",
+                "nodes": [
+                  "ide",
+                  "sagemaker_job"
+                ],
+                "edges": [
+                  "ide>sagemaker_job"
+                ]
+              },
+              {
+                "label": "O job chama o join ponto-no-tempo com um as-of travado, e hasheia o resultado",
+                "detail": "Diferente da mínima, que lia 'o instante da chamada', aqui o as-of passado a point_in_time_accurate_join() é parte do contrato do job, e o hash do dataset extraído fica registrado — a mesma chamada, em qualquer dia, reconstrói o mesmo dado, e o hash prova isso.",
+                "nodes": [
+                  "feature_store",
+                  "sagemaker_job"
+                ],
+                "edges": [
+                  "feature_store>sagemaker_job"
+                ]
+              },
+              {
+                "label": "Múltiplas instâncias Spot treinam em paralelo, salvando checkpoint periódico",
+                "detail": "instance_count > 1 distribui o treino, e use_spot_instances=True reduz o custo — a um preço: a AWS pode recuperar a instância a qualquer momento, com aviso de 2 minutos.",
+                "nodes": [
+                  "sagemaker_job",
+                  "checkpoint"
+                ],
+                "edges": [
+                  "sagemaker_job>checkpoint"
+                ]
+              },
+              {
+                "label": "Se uma instância Spot é interrompida, o job retoma automaticamente do último checkpoint",
+                "detail": "checkpoint_s3_uri é o que torna Spot seguro de usar: o script de treino procura um checkpoint existente antes de inicializar pesos do zero, e continua dali.",
+                "nodes": [
+                  "checkpoint",
+                  "sagemaker_job"
+                ],
+                "edges": [
+                  "checkpoint>sagemaker_job"
+                ]
+              },
+              {
+                "label": "Ao terminar, o job registra commit, hash de dado, hiperparâmetro e métrica num Run",
+                "detail": "Isso é o que a arquitetura mínima nunca fez: a chamada ao SDK de Experiments acontece DENTRO do script de treino, antes de o job encerrar — não é um passo manual que alguém pode esquecer.",
+                "nodes": [
+                  "sagemaker_job",
+                  "experiments"
+                ],
+                "edges": [
+                  "sagemaker_job>experiments"
+                ]
+              },
+              {
+                "label": "O artefato final é gravado por run_id, e logs vão ao CloudWatch",
+                "detail": "Cada execução tem seu próprio caminho de artefato — nada é sobrescrito. Quem precisar investigar um treino de três meses atrás encontra o artefato exato, não a versão mais recente por cima.",
+                "nodes": [
+                  "sagemaker_job",
+                  "s3_modelos",
+                  "cloudwatch"
+                ],
+                "edges": [
+                  "sagemaker_job>s3_modelos",
+                  "sagemaker_job>cloudwatch"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação à mínima não é 'ligar o Experiments': é que a proveniência do treino deixou de depender da memória de uma pessoa. Cada Run existe independente de quem o criou ainda estar no time, e é consultável pela API meses depois — que é exatamente o cenário que expôs o problema deste módulo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho que só aparece três meses depois",
+            "content": "No dia em que o treino roda, registrar commit e hiperparâmetro parece burocracia sem retorno imediato — o modelo já funciona, para quê anotar mais? O retorno aparece exatamente quando alguém, meses depois, precisa responder se o modelo em produção ainda é válido: com o Run, a resposta é uma consulta à API; sem ele, é uma investigação arqueológica que pode nem chegar a uma resposta."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho do treino, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os campos que o Run registra não são acidente: commit_hash e snapshot_hash são o que transforma 'rodei de novo' em 'rodei exatamente a mesma coisa'. É observável consultando o Run pela API, e a seção de provas faz exatamente isso."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "De um script comitado a um Run consultável meses depois",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "Cientista comita o script com hiperparâmetro como argumento estruturado",
+                "desc": "Nada de valor mágico solto no meio do código — learning_rate, n_estimators e seed entram como um dicionário de hiperparâmetro versionado no próprio commit."
+              },
+              {
+                "label": "Job recebe o commit hash e o identificador do snapshot como argumentos obrigatórios",
+                "desc": "CreateTrainingJob falha cedo se qualquer um dos dois estiver ausente — a validação acontece antes de subir qualquer instância."
+              },
+              {
+                "label": "Papel IAM e chave KMS autorizam a leitura do snapshot e a escrita do artefato",
+                "desc": "Sem a permissão certa, o job falha em segundos, não depois de horas de treino gasto."
+              },
+              {
+                "label": "Treino roda distribuído em instâncias Spot, com checkpoint a cada N passos",
+                "desc": "Se uma instância for recuperada pela AWS, o job novo lê o último checkpoint e continua — sem reprocessar o que já tinha sido feito."
+              },
+              {
+                "label": "Script chama o SDK de Experiments e cria um Run com os quatro campos: commit, snapshot, hiperparâmetro, métrica",
+                "desc": "A chamada acontece DENTRO do script, no fim do treino — não é uma etapa manual separada que alguém pode pular."
+              },
+              {
+                "label": "Artefato final é gravado em s3://.../modelos/{run_id}/model.tar.gz, criptografado pela chave dedicada",
+                "desc": "O caminho inclui o identificador do próprio Run — não há ambiguidade sobre qual treino gerou qual arquivo."
+              },
+              {
+                "label": "Logs e métricas de utilização vão para o CloudWatch durante toda a execução",
+                "desc": "Serve para diagnosticar treino lento ou CPU ociosa, sem precisar reproduzir o job só para investigar performance."
+              },
+              {
+                "label": "Meses depois, qualquer pessoa consulta o Run pela API e tem os quatro campos completos",
+                "desc": "É a consulta que a seção de implantação faz — sem abrir notebook nenhum, sem perguntar a quem treinou."
+              }
+            ]
+          }
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O que fica registrado num Run do SageMaker Experiments ao final do treino. Estes campos sao escolha DESTE modulo -- o SDK registra duracao, instancia e imagem automaticamente; commit_hash, snapshot_hash e as chaves de hiperparametro sao logados explicitamente pelo script."
+              }
+            ]
+          },
+          "position": 2
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "json",
+            "code": "{\n  \"ExperimentName\": \"cadencia-modelo-reposicao\",\n  \"TrialName\": \"treino-2026-08-08-01\",\n  \"RunName\": \"run-a1b2c3d4\",\n  \"Parameters\": {\n    \"commit_hash\": \"e4f1a02\",\n    \"snapshot_hash\": \"fs-2026-08-05T23-00-00Z-sha256-7d9c1e\",\n    \"learning_rate\": 0.05,\n    \"n_estimators\": 400,\n    \"max_depth\": 6,\n    \"seed\": 42,\n    \"instance_type\": \"ml.m5.2xlarge\",\n    \"instance_count\": 2,\n    \"use_spot_instances\": true\n  },\n  \"Metrics\": {\n    \"rmse_validacao\": 18.41,\n    \"tempo_treino_segundos\": 1847\n  }\n}\n",
+            "filename": "run-experiments.json"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "Duração e instância vêm de graça; commit e hash de dado, não",
+            "content": "O SDK de Experiments captura sozinho a duração do job, o tipo de instância e a imagem de container usada — isso vem do próprio CreateTrainingJob, sem código extra. commit_hash, snapshot_hash e cada hiperparâmetro só aparecem no Run porque o script chama explicitamente `run.log_parameters(...)` antes de terminar — esquecer essa chamada produz um Run tecnicamente registrado e pedagogicamente inútil."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "A Cadência precisa reexecutar o treino do modelo de reposição para investigar se ele continua bom sobre o dado corrigido pelo ruleset do L70 — mas o notebook original não roda mais como rodava: hiperparâmetro perdido, dado de três meses atrás sem um snapshot correspondente, seed nunca fixada.",
+            "winner": "SageMaker Training Job com instâncias Spot e checkpoint, hiperparâmetro e seed como argumento estruturado versionado no commit, snapshot do Feature Store travado por hash, e cada execução registrada como um Run do SageMaker Experiments",
+            "why": "Resolve as três lacunas — hiperparâmetro, dado, seed — usando peças que já existem no ecossistema (Training Job, Feature Store do L72, Experiments), sem inventar um serviço de rastreamento paralelo. O checkpoint em Spot resolve resiliência e custo ao mesmo tempo: treino mais barato, sem risco de perder progresso na interrupção.",
+            "alternatives": [
+              {
+                "name": "Continuar treinando em notebook local, só com mais disciplina de anotação manual",
+                "downside": "depende de disciplina humana constante — exatamente o que já falhou uma vez. Sem uma API que force o registro, a próxima pessoa reproduz o mesmo buraco de proveniência."
+              },
+              {
+                "name": "Guardar hiperparâmetro e métrica numa planilha compartilhada",
+                "downside": "a planilha não vincula automaticamente ao job de fato executado, e diverge do real assim que alguém edita a célula errada ou esquece de atualizar depois de um treino."
+              },
+              {
+                "name": "Confiar no nome do arquivo do artefato para saber o que é (modelo_v2_final_bom.tar.gz)",
+                "downside": "nome de arquivo não é metadado estruturado — não tem hiperparâmetro, não tem hash de dado, e 'final' já apareceu em nome de arquivo que não era o final."
+              },
+              {
+                "name": "Treinar sempre em instância On-Demand para evitar a complexidade de checkpoint de Spot",
+                "downside": "troca o problema de resiliência por custo mais alto sem necessidade — o problema real deste módulo, rastreabilidade, continua sem solução nenhuma, só fica mais caro rodar de novo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativa considerada",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Onde registrar hiperparâmetro e métrica",
+                "SageMaker Experiments (Run)",
+                "planilha ou README mantido manualmente",
+                "consultável por API, vinculado ao ARN do job que de fato rodou, não a uma cópia que alguém pode esquecer de atualizar",
+                "sintaxe própria do SDK de Experiments que o time precisa aprender"
+              ],
+              [
+                "Como sobreviver à interrupção da instância Spot",
+                "checkpoint periódico em S3 com retomada automática",
+                "instância On-Demand, sem Spot",
+                "Spot custa uma fração do On-Demand para o mesmo treino, e o checkpoint torna a interrupção um custo de minutos, não de horas",
+                "lógica de checkpoint e retomada a mais dentro do script de treino"
+              ],
+              [
+                "Como travar a versão do dado de treino",
+                "hash do snapshot do Feature Store registrado no Run",
+                "sempre ler 'a versão mais recente' da tabela",
+                "garante que o MESMO commit, rodado duas vezes, treina sobre o MESMO dado — pré-requisito para qualquer comparação de métrica fazer sentido",
+                "exige que o Feature Store do L72 exponha um identificador de snapshot, não só a leitura corrente"
+              ],
+              [
+                "Onde fixar a seed aleatória",
+                "argumento de hiperparâmetro versionado, aplicado a numpy, ao framework e à CUDA quando existir",
+                "deixar o valor default de cada biblioteca",
+                "o default muda entre versões de biblioteca e nunca fica registrado em lugar nenhum — fixar custa uma linha de código",
+                "mais um valor que o script precisa setar explicitamente em cada biblioteca usada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este módulo cria, e que ele não paga",
+            "content": "LightGBM com mais de uma thread usa soma em ponto flutuante cuja ORDEM de acumulação entre threads não é garantida — o histograma de cada split pode fechar com um arredondamento ligeiramente diferente entre execuções, mesmo com `random_state` idêntico. A prova de reprodutibilidade deste módulo é DENTRO DE TOLERÂNCIA numérica, não bit idêntica. Forçar determinismo bit a bit exige `deterministic=True` mais `force_row_wise=True` — trade-off de velocidade que este módulo NÃO faz, porque não é o problema que ele resolve — o problema aqui é rastrear a PROVENIÊNCIA (commit, dado, hiperparâmetro), que é exatamente reprodutível, mesmo quando o último dígito da métrica varia."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: o papel de execução e a chave que criptografa o artefato"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A escolha mais consequente deste bloco não é a chave KMS em si — é o escopo da policy IAM. Ler o bucket inteiro do Feature Store 'porque é mais simples' é o mesmo erro que o L65 já ensinou a evitar em outro contexto: escopo largo hoje é auditoria dolorosa amanhã."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "code": "# treino.tf -- papel de execucao, chave KMS e bucket de artefatos\n\nresource \"aws_kms_key\" \"treino_reposicao\" {\n  description             = \"Criptografa artefato e checkpoint do treino do modelo de reposicao\"\n  deletion_window_in_days = 30\n  enable_key_rotation     = true\n}\n\nresource \"aws_kms_alias\" \"treino_reposicao\" {\n  name          = \"alias/${var.projeto}-treino-reposicao\"\n  target_key_id = aws_kms_key.treino_reposicao.key_id\n}\n\nresource \"aws_s3_bucket_versioning\" \"modelos\" {\n  bucket = var.bucket_ml\n  versioning_configuration {\n    status = \"Enabled\"\n  }\n}\n\nresource \"aws_iam_role\" \"treino_execucao\" {\n  name = \"${var.projeto}-sagemaker-treino-execucao\"\n  assume_role_policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect    = \"Allow\"\n      Principal = { Service = \"sagemaker.amazonaws.com\" }\n      Action    = \"sts:AssumeRole\"\n    }]\n  })\n}\n\n# Le SO o prefixo do snapshot do Feature Store -- nao o bucket inteiro.\ndata \"aws_iam_policy_document\" \"le_snapshot\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"s3:GetObject\", \"s3:ListBucket\"]\n    resources = [\n      \"arn:aws:s3:::${var.bucket_feature_store}\",\n      \"arn:aws:s3:::${var.bucket_feature_store}/offline/produtos/*\",\n    ]\n  }\n}\n\n# Escreve SO nos prefixos de artefato e checkpoint deste job.\ndata \"aws_iam_policy_document\" \"escreve_artefato\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"s3:PutObject\", \"s3:GetObject\"]\n    resources = [\n      \"arn:aws:s3:::${var.bucket_ml}/modelos/*\",\n      \"arn:aws:s3:::${var.bucket_ml}/checkpoints/*\",\n    ]\n  }\n}\n\ndata \"aws_iam_policy_document\" \"usa_kms\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"kms:Encrypt\", \"kms:Decrypt\", \"kms:GenerateDataKey\"]\n    resources = [aws_kms_key.treino_reposicao.arn]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"treino_le_snapshot\" {\n  role   = aws_iam_role.treino_execucao.id\n  policy = data.aws_iam_policy_document.le_snapshot.json\n}\n\nresource \"aws_iam_role_policy\" \"treino_escreve_artefato\" {\n  role   = aws_iam_role.treino_execucao.id\n  policy = data.aws_iam_policy_document.escreve_artefato.json\n}\n\nresource \"aws_iam_role_policy\" \"treino_usa_kms\" {\n  role   = aws_iam_role.treino_execucao.id\n  policy = data.aws_iam_policy_document.usa_kms.json\n}\n\noutput \"papel_execucao_arn\" {\n  value = aws_iam_role.treino_execucao.arn\n}\n",
+            "filename": "treino.tf"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O papel do job não é o papel de quem chama o job",
+            "content": "aws_iam_role.treino_execucao é o papel que o SERVIÇO SageMaker assume para rodar o container de treino — equivalente à execution role do ECS que o L01 já distinguiu da task role. Quem CHAMA CreateTrainingJob (a pessoa, ou o serviço do .NET da seção seguinte) usa uma identidade própria, com permissão só de `sagemaker:CreateTrainingJob` — confundir as duas é dar ao chamador acesso direto ao S3 que só o job deveria ter."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o script que treina e se registra sozinho"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A mudança em relação ao notebook original é cirúrgica em código, e decisiva em efeito: três chamadas a mais — fixar seed, procurar checkpoint, logar o Run — transformam um treino descartável num treino auditável."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# treinar_reposicao.py -- roda dentro do container do Training Job.\n# Hiperparametro chega via argumento (SageMaker injeta como --nome valor);\n# commit e hash do snapshot chegam do mesmo jeito, nunca hardcoded.\n\nimport argparse\nimport os\nimport random\nimport numpy as np\nfrom sagemaker.experiments.run import Run, load_run\nfrom lightgbm import LGBMRegressor\nimport joblib\n\n\ndef fixar_seed(seed: int) -> None:\n    # Um unico valor aplicado a TODAS as fontes de aleatoriedade que o\n    # script usa. Fixar so o numpy e deixar o framework de treino no\n    # default e o erro mais comum: parece reprodutivel e nao e.\n    random.seed(seed)\n    np.random.seed(seed)\n    os.environ[\"PYTHONHASHSEED\"] = str(seed)\n\n\ndef buscar_checkpoint(diretorio: str):\n    # Se a instancia Spot foi interrompida e o job foi reiniciado, o\n    # SageMaker preserva o conteudo de --checkpoint-s3-uri no mesmo\n    # diretorio local. Comeca do zero SO se nao houver nada aqui.\n    caminho = os.path.join(diretorio, \"modelo.checkpoint\")\n    if os.path.exists(caminho):\n        print(f\"checkpoint encontrado em {caminho}, retomando\")\n        return joblib.load(caminho)\n    print(\"nenhum checkpoint -- treino comeca do zero\")\n    return None\n\n\ndef main() -> None:\n    p = argparse.ArgumentParser()\n    p.add_argument(\"--commit-hash\", required=True)\n    p.add_argument(\"--snapshot-hash\", required=True)\n    p.add_argument(\"--learning-rate\", type=float, required=True)\n    p.add_argument(\"--n-estimators\", type=int, required=True)\n    p.add_argument(\"--max-depth\", type=int, required=True)\n    p.add_argument(\"--seed\", type=int, required=True)\n    p.add_argument(\"--checkpoint-dir\", default=\"/opt/ml/checkpoints\")\n    p.add_argument(\"--model-dir\", default=os.environ.get(\"SM_MODEL_DIR\"))\n    p.add_argument(\"--train\", default=os.environ.get(\"SM_CHANNEL_TRAIN\"))\n    args = p.parse_args()\n\n    fixar_seed(args.seed)\n\n    # dentro de um Training Job, load_run() acha o contexto do Run\n    # automaticamente -- nao precisa passar experiment_name na mao aqui.\n    with load_run() as run:\n        # Registra ANTES de treinar: se o job cair no meio, o Run ja tem\n        # a proveniencia completa, mesmo sem metrica final.\n        run.log_parameters({\n            \"commit_hash\": args.commit_hash,\n            \"snapshot_hash\": args.snapshot_hash,\n            \"learning_rate\": args.learning_rate,\n            \"n_estimators\": args.n_estimators,\n            \"max_depth\": args.max_depth,\n            \"seed\": args.seed,\n        })\n\n        x_treino, y_treino, x_val, y_val = carregar_snapshot(\n            args.train, args.snapshot_hash)\n\n        modelo = buscar_checkpoint(args.checkpoint_dir) or LGBMRegressor(\n            learning_rate=args.learning_rate,\n            n_estimators=args.n_estimators,\n            max_depth=args.max_depth,\n            random_state=args.seed,\n        )\n        modelo.fit(x_treino, y_treino)\n        joblib.dump(modelo, os.path.join(args.checkpoint_dir, \"modelo.checkpoint\"))\n\n        rmse = avaliar(modelo, x_val, y_val)\n        run.log_metric(\"rmse_validacao\", rmse)\n\n        joblib.dump(modelo, os.path.join(args.model_dir, \"model.joblib\"))\n        print(f\"rmse_validacao={rmse:.4f} commit={args.commit_hash} \"\n              f\"snapshot={args.snapshot_hash}\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+            "filename": "treinar_reposicao.py"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "code": "# disparar_treino.py -- roda FORA do container, monta o Estimator e\n# inicia o job. E aqui que Spot, checkpoint e distribuicao sao configurados.\n\nimport subprocess\nfrom sagemaker.sklearn.estimator import SKLearn\n\ncommit_hash = subprocess.check_output(\n    [\"git\", \"rev-parse\", \"--short\", \"HEAD\"]).decode().strip()\n\n# LightGBM roda em CPU, nao em GPU -- o container de scikit-learn do\n# SageMaker cobre o essencial (joblib, numpy), e requirements.txt via\n# `dependencies` instala o LightGBM em cima. Usar um container PyTorch\n# aqui pagaria por GPU que o LightGBM nunca usa, e faltaria a biblioteca.\nestimator = SKLearn(\n    entry_point=\"treinar_reposicao.py\",\n    dependencies=[\"requirements.txt\"],  # so uma linha: lightgbm==4.3.0\n    role=\"arn:aws:iam::<conta>:role/cadencia-sagemaker-treino-execucao\",\n    instance_count=2,\n    instance_type=\"ml.m5.2xlarge\",\n    framework_version=\"1.2-1\",\n    py_version=\"py3\",\n    # Spot reduz custo, e SO e seguro por causa do checkpoint abaixo.\n    use_spot_instances=True,\n    max_wait=7200,   # tempo total tolerado, incluindo espera por capacidade\n    max_run=5400,    # tempo de treino em si\n    checkpoint_s3_uri=\"s3://cadencia-ml/checkpoints/\",\n    output_path=\"s3://cadencia-ml/modelos/\",\n    hyperparameters={\n        \"commit-hash\": commit_hash,\n        \"snapshot-hash\": \"fs-2026-08-05T23-00-00Z-sha256-7d9c1e\",\n        \"learning-rate\": 0.05,\n        \"n-estimators\": 400,\n        \"max-depth\": 6,\n        \"seed\": 42,\n    },\n)\n\nestimator.fit({\"train\": \"s3://cadencia-ml/feature-store/offline/produtos/\"})\nprint(f\"job iniciado a partir do commit {commit_hash}\")\n",
+            "filename": "disparar_treino.py"
+          }
+        },
+        {
+          "id": "b9_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "Fixar a seed do numpy e esquecer a do framework produz reprodutibilidade falsa",
+            "content": "`np.random.seed(args.seed)` sozinho NÃO fixa a inicialização de pesos do LightGBM/PyTorch nem o embaralhamento de lote do framework — cada biblioteca tem sua própria fonte de aleatoriedade, e algumas exigem seed própria (`random_state` no scikit-learn/LightGBM, `torch.manual_seed` no PyTorch). Um script que fixa só uma fonte parece determinístico no teste rápido e diverge silenciosamente na primeira reprodução real, meses depois."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: reproduzir um Run a partir do serviço em .NET"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O time de plataforma da Cadência expõe um endpoint interno que qualquer engenheiro usa para pedir 'reproduza o Run X' sem abrir o console do SageMaker. A parte que mais importa aqui não é iniciar o job de novo — é NÃO declarar sucesso só porque ele terminou."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "code": "// ReproduzirTreinoHandler.cs -- inicia um treino com o MESMO commit, dado\n// e hiperparametro de um Run existente, e compara a metrica dentro de\n// uma tolerancia -- nunca bit a bit, pelo motivo explicado na secao de decisoes.\n\nusing Amazon.SageMaker;\nusing Amazon.SageMaker.Model;\nusing Amazon.Lambda.Core;\n\nnamespace Cadencia.MLOps;\n\npublic record ReproduzirRun(string RunOriginalArn, double ToleranciaRelativa = 0.01);\n\npublic class ReproduzirTreinoHandler\n{\n    private static readonly AmazonSageMakerClient _sagemaker = new();\n    private const string PapelExecucao =\n        \"arn:aws:iam::<conta>:role/cadencia-sagemaker-treino-execucao\";\n\n    public async Task<string> ReproduzirAsync(ReproduzirRun pedido, ILambdaContext contexto)\n    {\n        // 1. Le o Run original -- commit, hash de dado e hiperparametro\n        //    completo, exatamente o que foi registrado no treino de tres\n        //    meses atras.\n        var runOriginal = await ObterParametrosDoRunAsync(pedido.RunOriginalArn);\n        double metricaOriginal = runOriginal.Metricas[\"rmse_validacao\"];\n\n        // 2. Inicia um NOVO job com os MESMOS parametros -- nao aprovado a\n        //    aprovar novo hiperparametro aqui, so reproduzir o que existia.\n        var nomeJob = $\"reproducao-{DateTime.UtcNow:yyyyMMddHHmmss}\";\n        await _sagemaker.CreateTrainingJobAsync(new CreateTrainingJobRequest\n        {\n            TrainingJobName = nomeJob,\n            RoleArn = PapelExecucao,\n            HyperParameters = runOriginal.Hiperparametros,\n            EnableManagedSpotTraining = true,\n            StoppingCondition = new StoppingCondition { MaxWaitTimeInSeconds = 7200, MaxRuntimeInSeconds = 5400 },\n            CheckpointConfig = new CheckpointConfig { S3Uri = \"s3://cadencia-ml/checkpoints/\" },\n            // ... AlgorithmSpecification, ResourceConfig, InputDataConfig omitidos por brevidade\n        });\n\n        await AguardarConclusaoAsync(nomeJob, contexto);\n\n        // 3. NAO declara reproduzivel so porque o job terminou SUCCEEDED.\n        //    Compara a metrica nova com a original, DENTRO DE TOLERANCIA --\n        //    treino multi-thread em CPU nao garante bit a bit (secao de decisoes).\n        double metricaNova = await ObterMetricaFinalAsync(nomeJob);\n        double diferencaRelativa = Math.Abs(metricaNova - metricaOriginal) / metricaOriginal;\n\n        contexto.Logger.LogInformation(\n            $\"original={metricaOriginal:F4} nova={metricaNova:F4} \" +\n            $\"diferenca_relativa={diferencaRelativa:P2} tolerancia={pedido.ToleranciaRelativa:P2}\");\n\n        if (diferencaRelativa > pedido.ToleranciaRelativa)\n        {\n            throw new InvalidOperationException(\n                $\"reproducao FALHOU: diferenca de {diferencaRelativa:P2} excede a \" +\n                $\"tolerancia de {pedido.ToleranciaRelativa:P2} -- confira se o \" +\n                \"commit, o snapshot e o hiperparametro realmente batem com o Run original\");\n        }\n\n        return $\"reproduzido: {nomeJob}, diferenca de {diferencaRelativa:P2} \" +\n               $\"dentro da tolerancia de {pedido.ToleranciaRelativa:P2}\";\n    }\n}\n",
+            "filename": "ReproduzirTreinoHandler.cs"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Um por cento de tolerância não é arbitrário — é o que a métrica da Cadência tolera",
+            "content": "A tolerância de 1% relativo neste exemplo vem do que faz sentido para rmse_validacao de reposição de estoque, não de um padrão universal — outro modelo, outra métrica, pode exigir uma tolerância mais apertada ou mais larga. O que é fixo é o PRINCÍPIO: a prova de reprodutibilidade compara contra um limiar declarado explicitamente, nunca contra 'parece parecido'."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Implantar, e provar que o treino é reproduzível"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Quatro provas. A terceira é a que mais gente pula, porque exige rodar o MESMO treino duas vezes de propósito só para comparar — mas é exatamente essa comparação que este módulo promete."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# provas.sh -- quatro medicoes; nenhuma conclusao vem de \"o job rodou\"\n\nPROJETO=cadencia; BUCKET=cadencia-ml\n\n# --- Prova 1: o Run registra os quatro campos obrigatorios ------------------\naws sagemaker describe-trial-component --trial-component-name run-a1b2c3d4 \\\n  --query 'Parameters.{commit:commit_hash, snapshot:snapshot_hash, lr:learning_rate, seed:seed}'\n# Esperado: os quatro campos preenchidos, nenhum vazio.\n\n# --- Prova 2: interrupcao de Spot retoma do checkpoint, nao do zero ---------\naws sagemaker stop-training-job --training-job-name treino-2026-08-08-01\nsleep 5\naws sagemaker create-training-job --training-job-name treino-2026-08-08-01-retomado \\\n  --cli-input-json file://job-retomado.json\naws sagemaker describe-training-job --training-job-name treino-2026-08-08-01-retomado \\\n  --query 'SecondaryStatusTransitions[?Status==`Downloading`].StatusMessage'\n# Esperado: mensagem confirma leitura do checkpoint previo, nao inicializacao do zero.\n\n# --- Prova 3: reproduzir o MESMO Run duas vezes e comparar a metrica --------\naws sagemaker create-training-job --cli-input-json file://reproducao-a.json\naws sagemaker create-training-job --cli-input-json file://reproducao-b.json\naws sagemaker wait training-job-completed-or-stopped --training-job-name reproducao-a\naws sagemaker wait training-job-completed-or-stopped --training-job-name reproducao-b\naws sagemaker describe-training-job --training-job-name reproducao-a \\\n  --query 'FinalMetricDataList[?MetricName==`rmse_validacao`].Value' --output text\naws sagemaker describe-training-job --training-job-name reproducao-b \\\n  --query 'FinalMetricDataList[?MetricName==`rmse_validacao`].Value' --output text\n# Esperado: diferenca relativa entre os dois valores abaixo de 1%.\n\n# --- Prova 4: papel de execucao nao alcanca nada fora do escopo -------------\naws iam simulate-principal-policy \\\n  --policy-source-arn arn:aws:iam::<conta>:role/cadencia-sagemaker-treino-execucao \\\n  --action-names s3:GetObject \\\n  --resource-arns arn:aws:s3:::cadencia-lake/quarentena/produtos/dt=2026-07-19/arquivo.parquet\n# Esperado: implicitDeny -- o papel do treino nao le o prefixo de quarentena do L70.\n",
+            "filename": "provas.sh"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Run com os quatro campos",
+                "describe-trial-component sobre commit/snapshot/hiperparâmetro/seed",
+                "os quatro campos preenchidos, nenhum vazio",
+                "campo vazio indica que `run.log_parameters` não foi chamado, ou foi chamado antes de o valor existir"
+              ],
+              [
+                "2 · Retomada de checkpoint após interrupção",
+                "stop-training-job seguido de novo create-training-job apontando o mesmo checkpoint_s3_uri",
+                "mensagem de status confirma leitura de checkpoint prévio",
+                "job reiniciando do zero indica que `buscar_checkpoint` não está sendo chamado, ou o caminho do checkpoint está errado"
+              ],
+              [
+                "3 · Duas reproduções do mesmo Run, métrica comparada",
+                "dois jobs com os mesmos hiperparâmetros, `FinalMetricDataList` de cada um",
+                "diferença relativa abaixo de 1%",
+                "diferença acima do limiar indica hiperparâmetro faltando no registro, seed não propagada a alguma biblioteca, ou snapshot que mudou entre as duas execuções"
+              ],
+              [
+                "4 · Papel de execução restrito ao escopo declarado",
+                "iam simulate-principal-policy sobre um prefixo fora do escopo",
+                "implicitDeny para qualquer prefixo que não seja o snapshot do Feature Store nem os prefixos de artefato/checkpoint",
+                "allow inesperado indica policy escrita com `Resource: \"*\"` em algum statement, não por prefixo específico"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "px-4",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Quebrar de propósito: quatro maneiras de perder a reprodutibilidade"
+      },
+      "children": [
+        {
+          "id": "px-1",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um treino reproduzível não é um treino que rodou duas vezes com o mesmo número — é um treino cuja diferença, quando aparece, você consegue EXPLICAR. As quatro injeções abaixo produzem divergência de métrica por quatro causas diferentes, e a habilidade que este laboratório treina é separá-las."
+              }
+            ]
+          }
+        },
+        {
+          "id": "px-2",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha injetada",
+              "Como injetar",
+              "Sintoma enganoso",
+              "Diagnóstico correto"
+            ],
+            "rows": [
+              [
+                "Dado de origem mudou entre os dois Runs",
+                "Rodar o treino, ingerir um lote novo no Feature Store, rodar de novo com o MESMO código e o MESMO hiperparâmetro",
+                "A métrica muda. Como o código é idêntico e o commit é o mesmo, a conclusão imediata é \"o treino não é determinístico\"",
+                "O treino está perfeitamente determinístico — a ENTRADA mudou. É exatamente o defeito que trouxe este módulo à existência, reaparecendo com outra roupa. Por isso o Run registra o timestamp de corte do Feature Store, não só o nome do dataset: sem essa marca, \"mesmo dataset\" é uma afirmação que ninguém consegue verificar"
+              ],
+              [
+                "Semente não fixada",
+                "Remover a fixação de seed do script e rodar duas vezes sobre o mesmo corte",
+                "Diferença pequena na métrica, na terceira ou quarta casa. Fácil de descartar como ruído de medição",
+                "É ruído real, mas ruído que você escolheu não controlar. Numa comparação entre modelo atual e candidato, uma diferença de terceira casa é frequentemente a diferença que decide a promoção — e sem seed fixa você não sabe se promoveu o modelo melhor ou o sorteio melhor. Fixar seed não torna o modelo bom; torna a COMPARAÇÃO honesta"
+              ],
+              [
+                "Instância spot interrompida sem checkpoint",
+                "Configurar o job com `use_spot_instances=True` e `max_wait` curto, sem `checkpoint_s3_uri`",
+                "O job reinicia e termina mais tarde, com métrica final parecida. Custa mais tempo, e a leitura é \"spot é instável, volta para on-demand\"",
+                "A conclusão custa dinheiro à toa. Spot com checkpoint retoma de onde parou; spot sem checkpoint recomeça do zero, e a diferença entre os dois não é do spot, é da configuração. O script já procura checkpoint na inicialização — essa linha existe para esta falha, e sem `checkpoint_s3_uri` no estimador ela nunca encontra nada"
+              ],
+              [
+                "Artefato sobrescrito no mesmo caminho S3",
+                "Rodar dois Runs apontando `output_path` para o mesmo prefixo sem sufixo de job",
+                "Os dois Runs aparecem no Experiments, com métricas distintas, e tudo parece certo no painel",
+                "A proveniência está mentindo: os dois Runs apontam para o mesmo objeto, e o objeto é o do último que terminou. Reproduzir o Run mais antigo devolve o artefato do mais novo, e a comparação entre eles é uma comparação de um modelo consigo mesmo. Registro de metadado sem imutabilidade do artefato dá a sensação de rastreabilidade sem a coisa"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "px-3",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A primeira injeção é a que o time vai encontrar de verdade",
+            "content": "Semente, spot e caminho de saída são erros de configuração, e configuração se corrige uma vez. Dado de origem que muda entre dois treinos é a condição NORMAL de uma plataforma viva — o Feature Store recebe ingestão o tempo todo. Rode a primeira injeção primeiro, e repare que a única defesa é o corte temporal registrado no Run."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24_0",
+      "type": "quiz",
+      "position": 13,
+      "data": {
+        "question": "O cientista de dados da Cadência re-executa hoje o notebook local que gerou o modelo em produção há três meses, apontando para o mesmo Feature Store. A métrica resultante é diferente da original. Por que a arquitetura MÍNIMA deste módulo não garante que as duas métricas batam?",
+        "options": [
+          "Porque o problema é só de custo — treinar numa instância maior resolveria a diferença de métrica entre as duas execuções",
+          "Porque nenhuma das três coisas necessárias sobreviveu entre execuções: o hiperparâmetro era argumento passado à mão e nunca foi salvo, o Feature Store foi lido como 'o mais recente' em vez de um snapshot travado, e a seed aleatória nunca foi fixada explicitamente",
+          "Porque o SageMaker Training Job fixa automaticamente uma seed padrão diferente a cada execução, então bastaria configurar random_state=0 para bater",
+          "Porque o Feature Store do L72 sempre devolve uma resposta diferente para a mesma consulta, independentemente de quando os dados mudaram"
+        ],
+        "correctIndex": 1,
+        "explanation": "A arquitetura mínima nunca teve nenhuma peça desenhada para preservar as três coisas de que a reprodução depende, e é exatamente esse vazio que o módulo existe para fechar: o hiperparâmetro era digitado a cada chamada e nunca ficava registrado em lugar nenhum; a consulta ao Feature Store buscava a versão mais recente disponível no momento, não um snapshot identificado por hash, então duas execuções em datas diferentes podiam ler dados diferentes; e sem instance_count fixo nem seed declarada, a inicialização de pesos e o embaralhamento de lote variam a cada chamada mesmo sobre dado idêntico. A segunda alternativa inventa uma capacidade que o SageMaker não tem: o serviço não fixa seed nenhuma por conta própria, isso é sempre responsabilidade do script de treino. A terceira está errada sobre o papel do Feature Store: o L72 garante que o CÁLCULO da feature é consistente, não que toda consulta devolva sempre o mesmo valor no tempo — sem um snapshot travado, a tabela evolui e a consulta 'mais recente' evolui junto. A quarta confunde capacidade computacional com proveniência: uma instância maior treina mais rápido, mas não registra hiperparâmetro nem fixa seed sozinha — o defeito não é de poder de processamento, é de que nenhuma informação necessária para reproduzir foi salva."
+      }
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 14,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Reprodução dá métrica muito diferente, além da tolerância declarada",
+                "hiperparâmetro faltando no Run original (ex.: dropout não registrado), ou seed fixada só em parte das bibliotecas",
+                "comparar o dicionário `Parameters` dos dois Runs campo a campo via API",
+                "SageMaker Experiments, Run details",
+                "completar o registro de hiperparâmetros faltantes; revisar `fixar_seed` para cobrir todas as bibliotecas usadas"
+              ],
+              [
+                "Job Spot interrompido nunca retoma, sempre recomeça do zero",
+                "checkpoint_s3_uri não configurado no Estimator, ou o script nunca chama `buscar_checkpoint` antes de inicializar o modelo",
+                "conferir se existe objeto em s3://cadencia-ml/checkpoints/ logo após uma interrupção simulada",
+                "log do script de treino, linha 'nenhum checkpoint -- treino comeca do zero'",
+                "adicionar checkpoint_s3_uri ao Estimator e garantir que o script procura o checkpoint antes de criar o modelo"
+              ],
+              [
+                "Run não aparece no SageMaker Experiments depois do job terminar",
+                "chamada a `run.log_parameters`/`log_metric` falhou silenciosamente por falta de permissão IAM, ou `load_run()` não achou o contexto",
+                "conferir o log do container por exceção da chamada ao SDK de Experiments",
+                "CloudWatch Logs do Training Job, grupo /aws/sagemaker/TrainingJobs",
+                "adicionar `sagemaker:AddAssociation` e `sagemaker:CreateTrialComponent` à policy do papel de execução"
+              ],
+              [
+                "Hash do snapshot do Run não bate com o snapshot atual do Feature Store",
+                "o Feature Store foi atualizado depois deste treino — o dado de hoje já não é o mesmo do Run consultado",
+                "comparar o snapshot_hash do Run com o identificador mais recente exposto pelo Feature Store do L72",
+                "metadado do Feature Store offline (tema do L72)",
+                "isso não é bug: é o esperado quando o dado evoluiu — decida se vale retreinar sobre o snapshot novo, documentando a divergência"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em qualquer configuração, pergunte: a divergência está no COMMIT, no DADO, ou no HIPERPARÂMETRO? São três investigações diferentes — commit divergente é `git diff` entre os dois hashes; dado divergente é comparar snapshot_hash; hiperparâmetro divergente é comparar o dicionário `Parameters` dos dois Runs campo a campo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o artefato que vira produção sem ninguém revisar"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O artefato deste laboratório não passa por aprovação humana antes de estar disponível — essa disciplina só chega no L75, com o Model Registry. Até lá, o maior risco não é acesso indevido: é escopo de permissão largo demais e artefato sem criptografia dedicada."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Papel de execução com leitura do bucket do Feature Store inteiro, não só o prefixo do snapshot",
+                "média",
+                "médio",
+                "policy escopada a `offline/produtos/*`, nunca ao bucket inteiro — mesmo padrão do L65 e do L70",
+                "CloudTrail em GetObject fora do prefixo esperado, pelo papel de execução do treino",
+                "restringir a policy e reprocessar se algo foi lido fora do escopo"
+              ],
+              [
+                "Artefato do modelo gravado sem criptografia dedicada, usando a chave padrão do bucket",
+                "baixa",
+                "médio",
+                "chave KMS própria para este treino, com rotação habilitada, referenciada explicitamente no Estimator",
+                "AWS Config checando `SSEKMSKeyId` dos objetos em modelos/ e checkpoints/",
+                "reescrever os objetos afetados com a chave correta; revisar quem tinha acesso à chave padrão"
+              ],
+              [
+                "Commit hash registrado no Run não corresponde a nenhum commit real (digitado à mão, errado)",
+                "média",
+                "alto",
+                "obter o commit via `git rev-parse` no momento de disparar o job, nunca por digitação manual do cientista",
+                "validação simples: o commit_hash do Run existe no histórico do repositório",
+                "corrigir o Run com o commit real, se recuperável, ou marcar o Run como não confiável"
+              ],
+              [
+                "Papel que chama CreateTrainingJob tem também permissão de leitura direta do S3",
+                "baixa",
+                "médio",
+                "separar identidade de quem DISPARA o job (só `sagemaker:CreateTrainingJob`) da execution role do job em si — mesma lógica do callout da seção 8",
+                "CloudTrail comparando o principal de GetObject com o principal de CreateTrainingJob",
+                "remover a permissão de S3 direta da identidade que dispara o job"
+              ],
+              [
+                "Checkpoint intermediário acumulando indefinidamente sem ciclo de vida",
+                "média",
+                "baixo",
+                "política de ciclo de vida no prefixo `checkpoints/`, expirando objetos de jobs já concluídos",
+                "custo crescente de armazenamento sem crescimento correspondente de treinos ativos",
+                "aplicar a política de ciclo de vida e remover checkpoints de jobs encerrados há mais de 30 dias"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "O prefixo do artefato é público até a policy provar o contrário",
+            "content": "Um bucket de modelos sem `s3:PutObject`/`s3:GetObject` restritos ao prefixo certo, e sem bloqueio de acesso público no nível do bucket, expõe o model.tar.gz — que pode carregar informação sobre o próprio dado de treino, dependendo do algoritmo — a qualquer principal com credencial válida na conta. Confirme `aws s3api get-public-access-block` no bucket antes de considerar este laboratório pronto para produção."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel de treino tem de responder"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um painel deste módulo tem uma função estreita: dizer se o próximo treino vai ser reproduzível e se o último foi. Métrica de qualidade do MODELO em si (acurácia de negócio) pertence a outro painel — o do L78."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "Quantos Runs recentes têm os quatro campos de proveniência completos?",
+                "% de Runs dos últimos 30 dias com commit_hash, snapshot_hash, hiperparâmetro e métrica não vazios",
+                "queda indica que alguém está treinando fora do fluxo com `disparar_treino.py`",
+                "abaixo de 100% — não há exceção legítima para Run incompleto"
+              ],
+              [
+                "Quantos jobs usaram Spot vs. On-Demand no mês?",
+                "contagem por `EnableManagedSpotTraining` nos Training Jobs do período",
+                "queda no uso de Spot indica alguém contornando a configuração padrão, geralmente por medo de interrupção",
+                "abaixo de 80% de uso de Spot merece pergunta ao time"
+              ],
+              [
+                "Quantos jobs foram interrompidos e retomaram do checkpoint com sucesso?",
+                "eventos de interrupção Spot no CloudTrail cruzados com SecondaryStatusTransitions de 'Downloading' checkpoint",
+                "retomada falha indica checkpoint mal configurado — o custo de Spot deixa de compensar",
+                "menos de 100% de retomada bem-sucedida é bug, não estatística aceitável"
+              ],
+              [
+                "A última reprodução testada bateu dentro da tolerância?",
+                "diferença relativa registrada pelo handler .NET da última chamada de reprodução",
+                "divergência crescente ao longo do tempo sugere drift silencioso na infraestrutura de treino, não só no dado",
+                "acima de 1% relativo (o limiar declarado no exemplo deste módulo) abre investigação"
+              ],
+              [
+                "Há Run cujo snapshot_hash já não bate com o snapshot atual do Feature Store?",
+                "comparação entre snapshot_hash do Run mais recente em produção e o identificador corrente do L72",
+                "divergência é esperada com o tempo — o alerta é sobre SABER, não sobre impedir",
+                "qualquer Run em produção com snapshot mais antigo que 90 dias"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana neste pipeline",
+            "content": "'O Run existe' não significa 'o Run é reproduzível'. Um Run pode ter os quatro campos preenchidos e ainda assim divergir na reprodução, se algum hiperparâmetro relevante do framework (dropout, batch size, ordem de embaralhamento) nunca foi incluído no dicionário registrado. Cobertura de campo não é prova de suficiência — só a reprodução de fato é."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 1 modelo, 10 modelos, e o que passa a doer sem AZ nenhuma"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "1 modelo, treino sob demanda (Cadência hoje)",
+                "poucos Runs por mês, revisão manual de cada um é viável",
+                "nada",
+                "nada"
+              ],
+              [
+                "10 modelos (reposição, precificação, previsão de ruptura, etc.)",
+                "dezenas de Runs por semana, cada um com seu próprio Experiment",
+                "revisão manual de cada Run não escala — falta um painel agregando cobertura de proveniência",
+                "consulta agregada por API (seção de observabilidade) em vez de abrir Run por Run"
+              ],
+              [
+                "Retrain diário automatizado (fora do escopo deste módulo, tema do L76)",
+                "um Run novo por dia, por modelo",
+                "volume de Runs dificulta achar 'o Run que está em produção agora' sem um ponteiro explícito",
+                "o L75 (Model Registry) é quem resolve isso — apontar qual Run/versão está promovida"
+              ],
+              [
+                "Treino em instância GPU (ml.g5) para um algoritmo CPU-bound como LightGBM",
+                "GPU parece sempre 'mais rápido' e ninguém checa se o algoritmo usa CUDA",
+                "custo por hora sobe consideravelmente sem ganho de velocidade nenhum — LightGBM não usa GPU nesta configuração, então a GPU fica ociosa e cobrando",
+                "checar se o framework/algoritmo realmente usa GPU antes de pagar por ela; LightGBM ganha com mais vCPU, não com GPU"
+              ],
+              [
+                "Falha de AZ",
+                "SageMaker Training Job é regional; artefato em S3 sobrevive normalmente",
+                "nada específico deste módulo — o artefato e o Run continuam acessíveis",
+                "garantir versionamento do bucket de modelos, mesma proteção contra apagar errado que outros módulos da série já recomendam"
+              ],
+              [
+                "Mais de uma pessoa disparando reprodução do mesmo Run ao mesmo tempo",
+                "dois jobs de reprodução concorrentes, cada um com seu próprio nome",
+                "desperdício de custo se ninguém perceber que já existe uma reprodução em andamento",
+                "consultar Runs em status InProgress antes de disparar uma nova reprodução do mesmo commit+snapshot"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O gargalo que só aparece com muitos modelos",
+            "content": "Um único modelo, como o de reposição da Cadência hoje, torna revisão manual de Run viável. O ganho de ter Experiments aparece de verdade quando existem múltiplos modelos e múltiplos times — é a diferença entre perguntar 'quem lembra o hiperparâmetro deste treino' e consultar a API."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que este laboratório acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O rastreamento em si é praticamente gratuito — o que pesa é a instância de treino, com ou sem este módulo. A diferença de custo real está em Spot vs. On-Demand, e em quanta reprodução se faz por curiosidade em vez de por necessidade."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Piloto",
+                "poucos treinos de teste, instância pequena",
+                "minutos de instância a mais para configurar checkpoint e Experiments",
+                "desprezível",
+                "nenhuma"
+              ],
+              [
+                "Produção pequena",
+                "Cadência hoje: 1 modelo, treino sob demanda, poucas dezenas de Runs por mês",
+                "instância Spot custa uma fração da On-Demand equivalente; checkpoint acrescenta GB-mês de armazenamento",
+                "baixa e previsível — o gargalo de custo é a instância de treino, não o rastreamento",
+                "usar Spot com checkpoint por padrão; reservar On-Demand para janelas com prazo rígido"
+              ],
+              [
+                "Alta escala",
+                "múltiplos modelos, retrain frequente (tema do L76)",
+                "custo de treino cresce com número de modelos × frequência de retrain, não com o rastreamento em si",
+                "passa a ser linha visível se reprodução completa virar rotina em vez de exceção",
+                "usar métrica registrada como primeira checagem; reservar reprodução real para investigação"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Instância de treino (Spot)",
+                "hora-instância, com desconto sobre o preço On-Demand equivalente",
+                "desconto varia por tipo de instância e disponibilidade de capacidade — confira no console antes de assumir um percentual fixo"
+              ],
+              [
+                "Instância de treino (On-Demand, se usada)",
+                "hora-instância, preço cheio",
+                "reservar para quando o prazo não tolera interrupção de Spot, não como padrão"
+              ],
+              [
+                "Armazenamento de checkpoint e artefato no S3",
+                "GB-mês armazenado",
+                "checkpoint de treinos antigos acumula sem ciclo de vida — a mesma lição do L70 aplicada a outro prefixo"
+              ],
+              [
+                "SageMaker Experiments (metadado de Run)",
+                "não cobra por si só — é metadado, não computação",
+                "o custo real de 'rastrear demais' é zero; o custo de 'não rastrear' é reproduzir sem conseguir"
+              ],
+              [
+                "KMS (chave dedicada)",
+                "por chave-mês mais por requisição de criptografia/descriptografia",
+                "centavos no volume da Cadência; relevante só em escala de milhares de objetos criptografados por dia"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O custo que este módulo evita, e que não aparece em nenhuma fatura da AWS",
+            "content": "Três meses de um modelo em produção sem ninguém saber se ele ainda é bom sobre o dado atual é risco de negócio silencioso — decisão de reposição tomada sobre um modelo potencialmente desatualizado, sem ninguém com como verificar. O custo de instância de um treino reproduzido é centavos comparado ao custo de uma recomendação de estoque errada sustentada por meses."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "cada treino registrado automaticamente como Run, sem passo manual separável",
+                "hiperparâmetro relevante esquecido no dicionário registrado continua possível",
+                "checklist de hiperparâmetros obrigatórios revisado a cada mudança de algoritmo",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "papel de execução escopado por prefixo, artefato criptografado por chave dedicada",
+                "commit hash pode ser digitado errado se o disparo não usar `git rev-parse` automatizado",
+                "validar o commit_hash contra o histórico do repositório antes de aceitar o job",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "checkpoint periódico torna interrupção de Spot recuperável, não catastrófica",
+                "checkpoint corrompido ou parcial ainda não tem verificação de integridade automática",
+                "checksum do checkpoint antes de retomar o treino a partir dele",
+                "média"
+              ],
+              [
+                "Eficiência de performance",
+                "treino distribuído em múltiplas instâncias reduz tempo de parede",
+                "distribuição mal calibrada pode gastar mais em coordenação do que ganha em paralelismo, sem medição",
+                "medir tempo de treino por número de instâncias antes de assumir que mais é sempre melhor",
+                "baixa"
+              ],
+              [
+                "Otimização de custos",
+                "Spot como padrão, checkpoint evitando retrabalho em interrupção",
+                "checkpoint sem ciclo de vida acumula custo de armazenamento indefinidamente",
+                "política de ciclo de vida no prefixo de checkpoints, expirando jobs concluídos",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "checkpoint evita reprocessamento completo do zero a cada interrupção",
+                "reprodução testada 'por garantia' sem necessidade real desperdiça ciclo de CPU",
+                "reservar reprodução completa para investigação real, não para checagem rotineira",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório inteiro é sobre treinar um modelo — mas o PROBLEMA que ele resolve, reprodutibilidade, não é resolvido com mais inteligência artificial. É disciplina de engenharia: registrar commit, dado e hiperparâmetro de forma que sobreviva à memória de quem treinou. Nenhum modelo aprende a fazer isso por você."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar adjacente onde IA de fato agrega — mas é uma tarefa diferente da deste módulo: SageMaker Automatic Model Tuning usa busca bayesiana para ENCONTRAR o melhor hiperparâmetro, em vez de o cientista ajustar célula por célula. É tentador ver isso como extensão natural deste laboratório, mas ele introduz um risco que reforça, em vez de substituir, o que este módulo já construiu: cada trial do tuner também precisa virar um Run rastreável, senão o tuner encontra o melhor hiperparâmetro e ninguém sabe reproduzir aquele trial específico depois — exatamente o problema original, multiplicado pelo número de trials."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria aqui?",
+                "nenhum diretamente — reprodutibilidade é rastreamento de proveniência, não uma tarefa de aprendizado"
+              ],
+              [
+                "Por que registro estruturado basta, e não precisa de um modelo para 'lembrar' o hiperparâmetro?",
+                "porque o hiperparâmetro é uma decisão humana explícita no momento do treino — gravar o valor é suficiente; não há ambiguidade para um modelo resolver"
+              ],
+              [
+                "Onde IA entraria de fato num tema adjacente?",
+                "SageMaker Automatic Model Tuning (busca bayesiana de hiperparâmetro) — mas resolve ENCONTRAR o melhor valor, não rastrear o que foi usado"
+              ],
+              [
+                "Qual o risco de tratar o tuning automático como substituto deste módulo?",
+                "cada trial do tuner ainda precisa de um Run — sem isso, o tuner resolve um problema e recria outro: o melhor hiperparâmetro encontrado, e ninguém sabe reproduzi-lo depois"
+              ],
+              [
+                "Por que não agora?",
+                "a Cadência tem um modelo e um cientista de dados — o ganho de busca automática de hiperparâmetro é real, mas secundário ao problema urgente: nenhum treino atual é reproduzível, automático ou manual"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b18_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é prematuro aqui",
+            "content": "Ligar Automatic Model Tuning antes de ter Experiments funcionando multiplicaria o problema deste módulo: dezenas de trials rodando, cada um um treino não rastreado, e o vencedor escolhido por métrica sem proveniência nenhuma. A ordem importa — rastreabilidade primeiro, busca automática de hiperparâmetro depois, nunca o contrário."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Treinar em notebook local e subir o artefato manualmente para o S3",
+                "é mais rápido para prototipar, sem esperar provisionar um Training Job gerenciado",
+                "nada versiona commit, dado ou hiperparâmetro daquele treino específico — é exatamente o cenário que este módulo existe para corrigir",
+                "modelo em produção que ninguém consegue reproduzir três meses depois",
+                "SageMaker Training Job + Experiments, mesmo para uma exploração rápida",
+                "protótipo de uma tarde que nunca vai a produção, descartado ao fim do dia"
+              ],
+              [
+                "Deixar a seed aleatória no valor default de cada biblioteca",
+                "'funciona' sem configurar nada a mais, e o resultado parece bom na primeira tentativa",
+                "reprodutibilidade quebra silenciosamente entre execuções — a métrica varia sem ninguém mudar código ou dado",
+                "duas pessoas rodando o mesmo script obtêm métricas diferentes, sem explicação óbvia",
+                "seed explícita e única, aplicada a cada biblioteca que gera aleatoriedade, versionada como hiperparâmetro",
+                "nunca — custa uma linha de código fixar, o retorno é imediato"
+              ],
+              [
+                "Registrar hiperparâmetro só quando o resultado 'parece bom'",
+                "parece economia de esforço documentar só o que interessa, e treinos ruins parecem descartáveis",
+                "sem histórico completo, não dá para comparar experimentos ruins com os bons e aprender por que um funcionou e outro não",
+                "ninguém sabe explicar por que uma tentativa anterior foi pior — a informação nunca existiu",
+                "todo Run registrado, inclusive os descartados, porque o valor está na comparação",
+                "nunca — o custo de registrar é o mesmo, tenha o resultado sido bom ou não"
+              ],
+              [
+                "Sobrescrever o mesmo caminho de artefato a cada treino",
+                "simplifica o código de inferência, que sempre lê o mesmo caminho fixo",
+                "perde a versão anterior — se o novo modelo piora, não há para onde voltar",
+                "rollback impossível quando um modelo novo regride em produção",
+                "artefato nomeado por run_id, versão travada; a escolha de QUAL versão servir é decisão do L75, não deste módulo",
+                "protótipo de um dia, nunca um modelo que serve tráfego real"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório cria três coisas que sobrevivem por conta própria: os artefatos e checkpoints acumulados no S3, os Runs do Experiments (sem custo, mas com volume que cresce), e a chave KMS, que tem janela de exclusão obrigatória."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "#!/usr/bin/env bash\n# limpar.sh -- o que o destroy nao leva, e o que continua cobrando\nset -euo pipefail\n\nPROJETO=\"${PROJETO:?defina PROJETO}\"\n\n# 1. Derrube o que o Terraform administra (papel, policies, chave KMS,\n#    versionamento do bucket).\nterraform destroy -auto-approve\n\n# 2. A CHAVE KMS nao desaparece na hora -- fica com deletion_window_in_days\n#    (30 dias no treino.tf) antes de ser removida de verdade. Confirme.\naws kms describe-key --key-id \"alias/${PROJETO}-treino-reposicao\" \\\n  --query 'KeyMetadata.{Estado:KeyState,DataExclusao:DeletionDate}'\n# Esperado: KeyState=PendingDeletion, DataExclusao ~30 dias a frente.\n\n# 3. ARTEFATOS E CHECKPOINTS no S3 NAO sao removidos pelo destroy.\naws s3 ls \"s3://cadencia-ml/modelos/\" --recursive --summarize | tail -2\naws s3 ls \"s3://cadencia-ml/checkpoints/\" --recursive --summarize | tail -2\n# Decida: manter artefatos de Runs referenciados por algum modelo em\n# producao, e remover so o resto.\naws s3 rm \"s3://cadencia-ml/checkpoints/\" --recursive\n\n# 4. Runs do Experiments NAO cobram por existir, mas tambem nao somem\n#    sozinhos -- listar antes de decidir arquivar.\naws sagemaker list-trial-components --experiment-name cadencia-modelo-reposicao \\\n  --query 'TrialComponentSummaries[].TrialComponentName' --output table\n\n# 5. Prova final: nada com o nome do projeto de pe fora do esperado.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=\"${PROJETO}\" \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table\n",
+            "filename": "limpar.sh"
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Papel de execução e policies IAM",
+                "sim, se em Terraform",
+                "não",
+                "IAM não cobra por si só, mas um papel órfão sobrevivendo ao módulo é risco de auditoria"
+              ],
+              [
+                "Chave KMS dedicada",
+                "agendado, não imediato",
+                "sim, por chave-mês durante os 30 dias de janela",
+                "AWS exige janela de exclusão (7 a 30 dias) antes de remover uma chave de verdade, para evitar perda irreversível de dado criptografado"
+              ],
+              [
+                "Artefatos de modelo no S3",
+                "não — não pertence ao Terraform, é gravado pelo job",
+                "sim, GB-mês",
+                "decisão editorial: manter artefatos de Runs que ainda são referência histórica, remover o resto"
+              ],
+              [
+                "Checkpoints intermediários no S3",
+                "não",
+                "sim, GB-mês",
+                "sem ciclo de vida configurado, acumula indefinidamente — mesmo padrão de dívida que o L70 já documentou para outro prefixo"
+              ],
+              [
+                "Runs e Trials do SageMaker Experiments",
+                "não — metadado, não recurso do Terraform",
+                "não",
+                "não cobra, mas cresce sem limite — decida uma política de arquivamento se o volume de Runs virar centenas"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "Apagar a chave KMS antes da janela expirar é irreversível",
+            "content": "Se você cancelar o `deletion_window_in_days` de propósito ou deixar a janela expirar, todo objeto criptografado por aquela chave — artefato de modelo, checkpoint — fica permanentemente ilegível, mesmo que o objeto em si continue no S3. Confirme que nenhum artefato ainda referenciado por um modelo em produção usa essa chave antes de deixar a janela seguir."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Evolução em níveis: do notebook sem rastro ao pipeline que audita a si mesmo"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco deste módulo e compra outro — até o ponto em que o próprio modelo, já servindo, é quem avisa quando algo mudou embaixo dele."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do notebook que ninguém reproduz ao modelo que se audita sozinho",
+            "layers": [
+              {
+                "label": "Nível 1 — Notebook local, upload manual (o antes)",
+                "instruction": "Cientista treina localmente e sobe o artefato à mão para o S3 — é onde a Cadência estava até este módulo, e é como praticamente todo mundo começa.",
+                "note": "Risco resolvido: nenhum. Novo risco: ninguém reproduz o modelo em produção — nem quem treinou. Custo: o mais baixo, sem job gerenciado nem rastreamento."
+              },
+              {
+                "label": "Nível 2 — Este laboratório: treino rastreável",
+                "instruction": "SageMaker Training Job com Spot e checkpoint, hiperparâmetro e seed versionados no commit, snapshot do Feature Store travado por hash, cada execução registrada como um Run do Experiments.",
+                "note": "Risco resolvido: reprodutibilidade de commit, dado e hiperparâmetro, dentro de tolerância numérica declarada. Novo risco: métrica pode variar na quinta casa decimal por não-determinismo de soma multi-thread; ainda não decide COMO servir nem QUANDO promover uma versão. Custo: instância de treino, reduzido por Spot."
+              },
+              {
+                "label": "Nível 3 — Servir com o modo certo",
+                "instruction": "Quatro modos de inferência — tempo real, serverless, assíncrono, lote — escolhidos pelo padrão real de tráfego do modelo de reposição, não por hábito (L74).",
+                "note": "Risco resolvido: endpoint superdimensionado (custo ocioso) ou subdimensionado (latência) para o padrão real de chamadas. Novo risco: escolher o modo errado custa dinheiro ou latência sem ninguém perceber de imediato. Custo: varia por modo, de quase zero (lote raro) a contínuo (tempo real)."
+              },
+              {
+                "label": "Nível 4 — Registry e promoção com rollback",
+                "instruction": "SageMaker Model Registry versiona o artefato treinado aqui e formaliza aprovação humana antes de promover uma versão a produção, com caminho de volta (L75).",
+                "note": "Risco resolvido: modelo pior promovido a produção sem ninguém aprovar, e sem forma de reverter. Novo risco: processo de aprovação vira gargalo se não tiver dono e SLA claros. Custo: baixo — é principalmente metadado e um passo de workflow."
+              },
+              {
+                "label": "Nível 5 — Pipeline de ML orquestrado",
+                "instruction": "Retrain disparado automaticamente por dado novo, com linhagem completa do dado até o modelo publicado, sem notebook nenhum no caminho crítico (L76).",
+                "note": "Risco resolvido: retrain manual que ninguém sabe se reflete o dado mais recente pós-contrato do L70. Novo risco: retrain automático herda qualquer furo dos níveis anteriores, em escala — se o registro de proveniência falha, falha para TODOS os retrains, não só um. Custo: orquestração adicional (Step Functions ou Pipelines)."
+              },
+              {
+                "label": "Nível 6 — Dados e IA: o modelo monitora a si mesmo",
+                "instruction": "O modelo de reposição, já treinado de forma reproduzível e servido pelo modo certo, passa a ter monitoramento contínuo de drift sobre os mesmos dados que o L70 valida e avaliação ligada a métrica de negócio, não só técnica (tema dos laboratórios seguintes de MLOps).",
+                "note": "Risco resolvido: modelo tecnicamente reproduzível, mas silenciosamente desatualizado em relação ao comportamento real do mercado. Novo risco: falso alarme de drift em sazonalidade legítima (Black Friday da construção, por exemplo). Custo: execução contínua de monitoramento, o mais alto da escada."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b21_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Promover automaticamente (nível 4) um modelo treinado sem rastreabilidade (sem o nível 2) promoveria exatamente o problema que abriu este módulo: um artefato que ninguém sabe reproduzir, só que agora com um selo de aprovação em cima. O Registry formaliza QUAL versão está em produção — ele não cria a proveniência que o treino em si precisa ter registrado primeiro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Ninguém reproduz o modelo em produção",
+                "commit, hash de snapshot e hiperparâmetro registrados juntos num Run do SageMaker Experiments",
+                "consultável por API meses depois, independente de quem treinou ainda estar no time"
+              ],
+              [
+                "Treino perde progresso quando a instância Spot é interrompida",
+                "checkpoint periódico em S3, com retomada automática",
+                "torna Spot seguro de usar — resolve resiliência e custo ao mesmo tempo"
+              ],
+              [
+                "Dado de treino muda de leitura para leitura",
+                "snapshot do Feature Store travado por hash, não 'o mais recente'",
+                "pré-requisito para qualquer comparação de métrica entre execuções fazer sentido"
+              ],
+              [
+                "Seed aleatória nunca fixada explicitamente",
+                "seed única, versionada como hiperparâmetro, aplicada a cada biblioteca que gera aleatoriedade",
+                "sem isso, a mesma configuração produz métrica diferente a cada execução"
+              ],
+              [
+                "Papel de execução com escopo largo demais",
+                "policy IAM por prefixo — leitura só do snapshot, escrita só de artefato e checkpoint",
+                "mesma disciplina do L65 e do L70 aplicada a um novo domínio (treino, não pipeline de dado)"
+              ],
+              [
+                "Métrica bit a bit é meta irreal em treino multi-thread de CPU",
+                "prova de reprodutibilidade DENTRO DE TOLERÂNCIA numérica declarada",
+                "honesto sobre a limitação real de hardware, em vez de prometer determinismo que treino distribuído não entrega"
+              ],
+              [
+                "Qual versão está de fato em produção, e como reverter",
+                "não resolvido neste módulo",
+                "risco residual aceito e documentado; é o assunto do L75 (Model Registry e rollback)"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Hiperparâmetro perdido entre execuções",
+                "registro estruturado no Run, dentro do script de treino, antes de o job terminar",
+                "hiperparâmetro que o script nunca chegou a registrar (campo esquecido no dicionário)"
+              ],
+              [
+                "Instância Spot interrompida no meio do treino",
+                "checkpoint periódico com retomada automática",
+                "checkpoint corrompido ou parcial, sem verificação de integridade"
+              ],
+              [
+                "Dado mudando de leitura para leitura",
+                "snapshot travado por hash, registrado no Run",
+                "o Feature Store em si mudar de cálculo — isso é garantia do L72, não deste módulo"
+              ],
+              [
+                "Papel de execução acessando dado fora do escopo",
+                "policy IAM por prefixo específico",
+                "identidade que DISPARA o job ter permissão de S3 direta — separação tratada no callout da seção 8"
+              ],
+              [
+                "Modelo pior promovido a produção sem aprovação",
+                "nada neste módulo",
+                "é o L75 inteiro, com Model Registry"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "items": [
+              "Cientista comita o script com hiperparâmetro e seed como argumento estruturado, não valor solto.",
+              "O papel de execução e a chave KMS autorizam o job antes de qualquer leitura de dado.",
+              "O job lê um snapshot travado do Feature Store, identificado por hash, do L72.",
+              "Múltiplas instâncias Spot treinam em paralelo, salvando checkpoint periódico no S3.",
+              "Se uma instância é interrompida, o job novo retoma do último checkpoint, sem recomeçar do zero.",
+              "Ao terminar, o script registra commit, hash de dado, hiperparâmetro completo e métrica num Run do Experiments.",
+              "O artefato final é gravado por run_id, sem sobrescrever execuções anteriores.",
+              "Meses depois, qualquer pessoa consulta o Run pela API e reproduz o treino dentro de uma tolerância declarada."
+            ],
+            "ordered": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que fixar a seed não garante reprodutibilidade bit a bit em treino multi-thread?",
+            "answer": "Porque LightGBM com mais de uma thread usa operações de soma em ponto flutuante cuja ordem de acumulação entre threads não é garantida, mesmo com `random_state` fixado corretamente. O histograma de cada split pode fechar com arredondamento ligeiramente diferente entre execuções, produzindo diferença mínima na métrica final. Por isso a prova de reprodutibilidade deste módulo compara dentro de uma tolerância numérica declarada, não byte a byte — o que precisa ser idêntico é a PROVENIÊNCIA (commit, dado, hiperparâmetro), e isso sim é garantido."
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "O que o SageMaker Experiments registra automaticamente, sem eu escrever código a mais?",
+            "answer": "Automaticamente vêm duração do job, tipo e contagem de instância, imagem de container usada e o status final — tudo isso o SDK captura a partir do próprio CreateTrainingJob, sem nenhuma chamada extra no script. Commit hash, hash do snapshot de dado, cada hiperparâmetro e a métrica final não vêm de graça: exigem chamadas explícitas a `run.log_parameters` e `run.log_metric` dentro do script de treino, antes de ele terminar — esquecer essas chamadas produz um Run tecnicamente existente e pedagogicamente inútil."
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Preciso do Feature Store do L72 para este laboratório funcionar?",
+            "answer": "Sim, no sentido de que este módulo assume que existe um snapshot de feature versionado e identificável por hash para ler — sem isso, a peça 'dado exatamente igual entre execuções' simplesmente não existe. O L72 garante que o CÁLCULO da feature é idêntico entre treino e inferência; este módulo garante que o VALOR lido é o mesmo entre duas execuções de treino, travando por snapshot em vez de ler 'o mais recente' a cada chamada — são garantias complementares, e a segunda depende da primeira já existir."
+          }
+        },
+        {
+          "id": "b23_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Por que usar instância Spot para treino, se a AWS pode interromper a qualquer momento?",
+            "answer": "Porque Spot custa uma fração do preço da instância On-Demand equivalente, e a interrupção deixa de ser um problema real assim que o checkpoint periódico existe — o job novo retoma de onde parou em vez de reprocessar horas de treino do zero. A troca só vale a pena com o checkpoint configurado: Spot sem checkpoint transforma uma economia de custo numa perda de progresso toda vez que a AWS recupera a instância, que é exatamente o risco que a arquitetura de produção deste módulo elimina."
+          }
+        },
+        {
+          "id": "b23_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Um Run do Experiments substitui o Model Registry do L75?",
+            "answer": "Não — resolvem problemas diferentes que se complementam. O Run registra a PROVENIÊNCIA de uma execução de treino específica: qual commit, qual dado, qual hiperparâmetro, qual métrica resultou. O Model Registry decide QUAL versão, entre vários Runs bem-sucedidos, está de fato aprovada e servindo em produção, com histórico de promoção e caminho de rollback. Um modelo pode ter dezenas de Runs rastreáveis e ainda assim nenhum processo formal decidindo qual deles é 'o de produção' — isso é exatamente o que falta até o L75 entrar."
+          }
+        },
+        {
+          "id": "b23_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Quanto tempo leva para reproduzir o treino original a partir do commit e do hash do dado?",
+            "answer": "O tempo de reprodução é essencialmente o mesmo do treino original — não há atalho, porque reproduzir significa rodar o treino de novo com os mesmos parâmetros, não recuperar um resultado em cache. O que muda é o esforço de PREPARAR a reprodução: com o Run registrado, isso é uma consulta à API seguida de um CreateTrainingJob com os parâmetros copiados, questão de minutos; sem o Run, é a investigação arqueológica que abriu este módulo, que pode nem chegar a uma resposta."
+          }
+        },
+        {
+          "id": "b23_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "O que acontece se eu esquecer de configurar checkpoint_s3_uri no Estimator?",
+            "answer": "O treino roda normalmente até terminar ou ser interrompido — a ausência de checkpoint_s3_uri não gera erro, só significa que não existe nenhum estado intermediário salvo. Se a instância Spot for recuperada pela AWS no meio do treino, o job novo não tem de onde retomar e recomeça do zero, perdendo todo o progresso até aquele ponto — exatamente o comportamento da arquitetura mínima deste módulo, só que agora escondido dentro de uma configuração de produção que parecia completa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b24_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "A arquitetura de PRODUÇÃO usa múltiplas instâncias Spot para treinar. O que este desenho faz quando a AWS interrompe uma das instâncias no meio do treino?",
+            "options": [
+              "O checkpoint serve só para auditoria posterior; por definição, o treino sempre recomeça do zero para garantir que a métrica seja reprodutível",
+              "A AWS substitui a instância Spot por uma On-Demand automaticamente, sem nenhuma configuração adicional do lado do Estimator",
+              "O job falha definitivamente, e o Run correspondente no SageMaker Experiments é apagado automaticamente para não poluir o histórico",
+              "O job novo retoma automaticamente a partir do último checkpoint salvo em S3, sem reprocessar o progresso já feito antes da interrupção"
+            ],
+            "correctIndex": 3,
+            "explanation": "checkpoint_s3_uri é exatamente a peça que torna Spot seguro de usar neste desenho: o script de treino procura um checkpoint existente antes de inicializar os pesos do zero, e quando encontra, retoma dali — o job novo continua o progresso do job interrompido em vez de refazer horas de treino. A segunda alternativa inventa um comportamento que o Experiments não tem: nada apaga um Run automaticamente por causa de uma interrupção de instância; pelo contrário, é útil que o Run registre inclusive tentativas interrompidas, para diagnóstico. A terceira confunde dois conceitos: Spot e On-Demand são tipos de instância configurados no Estimator antes do job começar, e a AWS não troca um pelo outro no meio da execução — se a capacidade Spot não está disponível, o job espera dentro do max_wait configurado, não migra sozinho. A quarta inverte o propósito do checkpoint: ele existe justamente para EVITAR recomeçar do zero, e forçar reinício completo a cada interrupção não teria nenhuma relação com reprodutibilidade — reprodutibilidade vem de commit, dado e hiperparâmetro idênticos, não de sempre recomeçar o treino."
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Dois Runs do SageMaker Experiments compartilham o mesmo commit, o mesmo hash de snapshot do Feature Store e o mesmo hiperparâmetro completo, incluindo seed. Treinados na mesma instância CPU multi-thread, a métrica final dos dois difere na quinta casa decimal. O que este desenho considera 'reproduzível' nesse caso?",
+            "options": [
+              "Não é reprodutível, e o desenho trata qualquer diferença de métrica, por menor que seja, como falha de pipeline que precisa ser investigada como bug",
+              "É prova de que a seed não foi realmente fixada, já que uma seed corretamente fixada garante resultado bit a bit idêntico em qualquer hardware",
+              "Considera reprodutível, porque a diferença fica dentro da tolerância numérica declarada — a proveniência (commit, dado, hiperparâmetro) bate exatamente, mesmo que operações não determinísticas de soma multi-thread produzam variação mínima na métrica",
+              "A diferença é irrelevante porque o SageMaker Experiments não registra métrica nenhuma, só hiperparâmetro e commit"
+            ],
+            "correctIndex": 2,
+            "explanation": "A seção de decisões deste módulo é explícita sobre esse ponto: a prova de reprodutibilidade é dentro de uma tolerância numérica declarada, não bit a bit, porque LightGBM com mais de uma thread usa operações — a ordem de acumulação em ponto flutuante entre threads no cálculo de histograma — que não são determinísticas por padrão mesmo com toda seed fixada corretamente. A segunda alternativa trataria como bug um comportamento esperado da própria biblioteca em modo multi-thread, e investigar cada diferença de quinta casa decimal como incidente desperdiçaria esforço num limite que `deterministic=True` resolveria só ao custo de velocidade. A terceira alternativa está tecnicamente errada: seed fixada corretamente controla as fontes de aleatoriedade do SOFTWARE (amostragem, inicialização), mas não controla a ORDEM de operações de ponto flutuante que threads paralelas escolhem internamente — os dois são independentes. A quarta contraria o que este módulo constrói: o Run registra métrica explicitamente via `run.log_metric`, e é justamente a comparação dessa métrica registrada entre dois Runs que permite a prova de tolerância existir."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "tema do L70 (contrato de dado sobre prata_produtos) e do L72 (Feature Store: mesmo cálculo de feature no treino e na inferência) — este módulo assume que existe um snapshot de feature versionado e identificável por hash"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "diferença entre reprodutibilidade de PROVENIÊNCIA (commit, dado, hiperparâmetro) e determinismo BIT A BIT de treino multi-thread de CPU; checkpoint e retomada em instância Spot; o que o SageMaker Experiments registra automaticamente vs. o que exige log manual; papel de execução escopado por prefixo"
+              ],
+              [
+                "Limitação que fica",
+                "qual versão está de fato promovida a produção, e como reverter para uma anterior — não é resolvido aqui, é o assunto do L75 (Model Registry e rollback)"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L74 — Servir: tempo real, serverless, assíncrono ou lote. Usa o artefato reproduzível deste módulo e resolve o próximo risco: qual modo de inferência combina com o padrão real de tráfego do modelo de reposição"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L75 (Registry e promoção com rollback) depende de um treino rastreável — é o que este laboratório entrega — para que uma versão promovida tenha proveniência completa por trás, não só um artefato binário sem histórico"
+              ],
+              [
+                "Data da última validação técnica",
+                "8 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: Amazon SageMaker Training Jobs — configuração de instâncias Spot gerenciadas, `max_wait`, `max_run` e `checkpoint_s3_uri`; Amazon SageMaker Experiments — SDK Python (`sagemaker.experiments.run`), o que `load_run()` captura automaticamente e o que exige chamada explícita de `log_parameters`/`log_metric`; AWS Identity and Access Management — escopo de policy por prefixo de S3 e uso de chave KMS dedicada por recurso; documentação do LightGBM sobre reprodutibilidade multi-thread (`deterministic`, `force_row_wise`). Nenhum valor de preço de instância aparece neste módulo por decisão: confira o AWS Pricing Calculator, porque preço varia por região, tipo de instância e disponibilidade de capacidade Spot, e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "O nome exato dos métodos do SDK de Experiments (`load_run`, `log_parameters`, `log_metric`) e o comportamento padrão de `EnableManagedSpotTraining` podem variar entre versões do SDK do SageMaker — confira a referência atual antes de copiar o código deste módulo linha a linha. O limiar de tolerância de 1% usado no exemplo de reprodução é ilustrativo para a métrica rmse_validacao deste cenário; calibre o seu de acordo com o que a métrica do seu modelo realmente tolera."
+          }
+        }
+      ]
+    }
+  ]
+}

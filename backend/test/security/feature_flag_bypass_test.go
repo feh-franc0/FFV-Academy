@@ -51,6 +51,9 @@ func (ffTokenStore) Store(context.Context, domidentity.Email, domidentity.MagicT
 func (ffTokenStore) Consume(context.Context, domidentity.Email) (domidentity.MagicToken, error) {
 	return domidentity.MagicToken{}, shared.ErrNotFound
 }
+func (ffTokenStore) Peek(context.Context, domidentity.Email) (domidentity.MagicToken, error) {
+	return domidentity.MagicToken{}, shared.ErrNotFound
+}
 func (ffTokenStore) IncrAttempts(context.Context, domidentity.Email) (int64, error) { return 1, nil }
 func (ffTokenStore) GetAttempts(context.Context, domidentity.Email) (int64, error)  { return 0, nil }
 

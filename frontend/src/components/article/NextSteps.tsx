@@ -1,17 +1,21 @@
 'use client';
 
 import Link from 'next/link';
-import { getModuleNextSteps } from '@/lib/curriculum';
+// Import type-only — apagado no runtime. `steps` chega pronto como prop: o
+// Server Component (`/aprenda/[slug]/page.tsx`) já chama `getModuleNextSteps`
+// no servidor. Até 11/ago/2026 este componente chamava a mesma função de
+// novo no CLIENTE, o que arrastava `CURRICULUM` completo (~92 KB gz) — a
+// função constrói um mapa de TODOS os módulos para achar 1-3 sugestões.
+import type { NextStepInfo } from '@/lib/curriculum';
 import { useGameState } from '@/hooks/useGameState';
 
 interface NextStepsProps {
-  slug: string;
+  steps: NextStepInfo[];
 }
 
-export function NextSteps({ slug }: NextStepsProps) {
+export function NextSteps({ steps }: NextStepsProps) {
   const { state } = useGameState();
   const completed = state?.completedModules ?? [];
-  const steps = getModuleNextSteps(slug);
 
   if (steps.length === 0) return null;
 
@@ -40,8 +44,8 @@ export function NextSteps({ slug }: NextStepsProps) {
                   {s.module.title}
                   {done && <span className="ml-2 text-xs" style={{ color: 'var(--ffv-green)' }}>✓ feito</span>}
                 </p>
-                <p className="text-xs truncate" style={{ color: 'var(--ffv-muted)' }}>
-                  <span style={{ color: s.trail.color }}>{s.trail.name}</span>
+                <p className="text-xs truncate ffv-acento-texto" style={{ color: 'var(--ffv-muted)' }}>
+                  <span style={{ '--ffv-acento': s.trail.color } as React.CSSProperties}>{s.trail.name}</span>
                   {' · '}{s.module.readTime} min · +{s.module.xp} XP
                 </p>
               </div>

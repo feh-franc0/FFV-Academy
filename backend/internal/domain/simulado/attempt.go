@@ -29,6 +29,12 @@ type Attempt struct {
 	answers     Answers
 	reviewFlags QuestionIDSet
 	score       *Score
+	// questionIDs é o sorteio de questões feito pelo SERVIDOR em StartAttempt —
+	// fixo para a vida da tentativa. AnswerQuestion só aceita IDs deste
+	// conjunto, e FinishAttempt pontua exatamente estas questões (buscadas no
+	// Postgres real, não no catálogo estático). Sem isso, o sorteio acontecia
+	// no cliente, que também tinha o gabarito em mãos.
+	questionIDs []shared.QuestionID
 }
 
 // Erros de domínio da Attempt.
@@ -118,11 +124,14 @@ func (s QuestionIDSet) ToSlice() []shared.QuestionID {
 // ─────────────────────────────────────────────────────────────────
 
 // StartAttempt cria uma nova Attempt para o usuário/simulado.
+// questionIDs é o sorteio já feito pelo caller (server-side, contra o banco
+// real) — a Attempt só guarda o resultado, não sorteia.
 func StartAttempt(
 	id shared.AttemptID,
 	userID shared.UserID,
 	simuladoID shared.SimuladoID,
 	timeLimitMin int,
+	questionIDs []shared.QuestionID,
 	now time.Time,
 ) *Attempt {
 	return &Attempt{
@@ -133,6 +142,7 @@ func StartAttempt(
 		deadline:    now.Add(time.Duration(timeLimitMin) * time.Minute),
 		answers:     NewAnswers(),
 		reviewFlags: NewQuestionIDSet(),
+		questionIDs: questionIDs,
 	}
 }
 
@@ -147,6 +157,7 @@ func ReconstituteAttempt(
 	answers map[shared.QuestionID]OptionID,
 	reviewFlags []shared.QuestionID,
 	score *Score,
+	questionIDs []shared.QuestionID,
 ) *Attempt {
 	a := &Attempt{
 		id:          id,
@@ -157,6 +168,7 @@ func ReconstituteAttempt(
 		finishedAt:  finishedAt,
 		reviewFlags: NewQuestionIDSet(reviewFlags...),
 		score:       score,
+		questionIDs: questionIDs,
 	}
 	ans := NewAnswers()
 	for k, v := range answers {
@@ -170,15 +182,26 @@ func ReconstituteAttempt(
 // Queries
 // ─────────────────────────────────────────────────────────────────
 
-func (a *Attempt) ID() shared.AttemptID          { return a.id }
-func (a *Attempt) UserID() shared.UserID         { return a.userID }
-func (a *Attempt) SimuladoID() shared.SimuladoID { return a.simuladoID }
-func (a *Attempt) StartedAt() time.Time          { return a.startedAt }
-func (a *Attempt) Deadline() time.Time           { return a.deadline }
-func (a *Attempt) FinishedAt() *time.Time        { return a.finishedAt }
-func (a *Attempt) Answers() Answers              { return a.answers }
-func (a *Attempt) ReviewFlags() QuestionIDSet    { return a.reviewFlags }
-func (a *Attempt) Score() *Score                 { return a.score }
+func (a *Attempt) ID() shared.AttemptID             { return a.id }
+func (a *Attempt) UserID() shared.UserID            { return a.userID }
+func (a *Attempt) SimuladoID() shared.SimuladoID    { return a.simuladoID }
+func (a *Attempt) StartedAt() time.Time             { return a.startedAt }
+func (a *Attempt) Deadline() time.Time              { return a.deadline }
+func (a *Attempt) FinishedAt() *time.Time           { return a.finishedAt }
+func (a *Attempt) Answers() Answers                 { return a.answers }
+func (a *Attempt) ReviewFlags() QuestionIDSet       { return a.reviewFlags }
+func (a *Attempt) Score() *Score                    { return a.score }
+func (a *Attempt) QuestionIDs() []shared.QuestionID { return a.questionIDs }
+
+// HasQuestion reporta se qID faz parte do sorteio desta tentativa.
+func (a *Attempt) HasQuestion(qID shared.QuestionID) bool {
+	for _, id := range a.questionIDs {
+		if id == qID {
+			return true
+		}
+	}
+	return false
+}
 
 func (a *Attempt) IsFinished() bool { return a.finishedAt != nil }
 
@@ -215,6 +238,12 @@ func (a *Attempt) AnswerQuestion(qID shared.QuestionID, opt OptionID, now time.T
 	}
 	if !opt.IsValid() {
 		return fmt.Errorf("%w: %q", ErrInvalidOptionID, opt)
+	}
+	// Só aceita resposta para questão que fez parte do sorteio desta
+	// tentativa — fecha a possibilidade de responder uma questão arbitrária
+	// que nunca foi mostrada ao usuário.
+	if len(a.questionIDs) > 0 && !a.HasQuestion(qID) {
+		return fmt.Errorf("%w: %q", ErrQuestionNotFound, qID)
 	}
 	a.answers = a.answers.Set(qID, opt)
 	return nil

@@ -1,0 +1,939 @@
+{
+  "slug": "bedrock-servicos-observabilidade-finops",
+  "title": null,
+  "blocks": [
+    {
+      "id": "q844-0",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": "A primeira onda de IA numa empresa é aprovada por entusiasmo. A segunda é aprovada por número — e é aqui que a maioria trava, porque "
+          },
+          {
+            "text": "o histórico não é reconstituível",
+            "bold": true
+          },
+          {
+            "text": ". Ninguém consegue dizer quanto economizou sem ter medido o baseline; ninguém consegue mostrar o que o modelo respondeu em março se o registro de conteúdo foi ligado em maio; ninguém separa o custo por squad se o inference profile nasceu no mês seis. Este módulo cobre os 16 serviços dessa camada, os três registros diferentes que a auditoria pede, e a instrumentação que precisa existir antes da primeira chamada."
+          }
+        ]
+      }
+    },
+    {
+      "id": "q844-1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Como escolher nesta camada"
+      },
+      "children": [
+        {
+          "id": "q844-2",
+          "type": "list",
+          "position": 0,
+          "data": {
+            "ordered": true,
+            "items": [
+              "A pergunta é de saúde, de causa ou de dinheiro? Saúde é métrica e alarme. Causa é traço distribuído e log estruturado. Dinheiro é atribuição por tag. São três ferramentas diferentes e confundi-las produz painel que não responde nada.",
+              "É reconstituível depois? Registro de conteúdo, atribuição de custo e baseline não são. Se cai nessa lista, é dia 1 — não é sprint de melhoria.",
+              "Quem vai olhar? Métrica que ninguém abre é custo de armazenamento. Todo painel precisa de um dono e de uma decisão que ele destrava."
+            ]
+          }
+        },
+        {
+          "id": "q844-3",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "O que a observabilidade de IA tem de diferente",
+            "content": "Numa API comum, você mede latência, erro e throughput. Em IA, três métricas novas dominam a operação: tokens de saída (o lado caro da conta), taxa de leitura de cache (se cai, o custo dispara sem nenhum erro aparecer) e rodadas por execução num laço agêntico (a cauda longa é o que estoura o orçamento). Nenhuma das três existe em painel de aplicação tradicional — você precisa emiti-las."
+          }
+        }
+      ]
+    },
+    {
+      "id": "q844-4",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Métrica, log e sonda"
+      },
+      "children": [
+        {
+          "id": "q844-5",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Serviço",
+              "O que é",
+              "O que soma ao Bedrock",
+              "O limite que decide"
+            ],
+            "rows": [
+              [
+                "Amazon CloudWatch",
+                "Métrica dimensionada, log, alarme e painel",
+                "Tokens por app, latência por tier, razão de cache e rodadas por execução — as métricas que só existem se você emitir",
+                "Métrica customizada cobra por métrica única; dimensão de alta cardinalidade (id de usuário) explode o custo"
+              ],
+              [
+                "CloudWatch Logs Insights",
+                "Consulta sobre log estruturado, sem indexar previamente",
+                "Investigar uma conversa específica e agrupar erro por ferramenta do agent",
+                "Cobra por volume escaneado na consulta; log em texto corrido torna a consulta caríssima e imprecisa"
+              ],
+              [
+                "CloudWatch Synthetics",
+                "Sonda que executa um caminho de tempos em tempos",
+                "Detecta que o assistente parou de responder antes de o usuário reclamar",
+                "Cada execução da sonda consome inferência real — sonda frequente em rota cara atinge a fatura"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "q844-6",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "filename": "obs/telemetria.py",
+            "code": "import json, time, boto3\n\ncw = boto3.client(\"cloudwatch\")\nNS = \"Plataforma/IA\"\n\n\ndef registrar(app, rota, tier, uso, ms, desfecho, ferramentas=0):\n    dims = [{\"Name\": \"app\", \"Value\": app},\n            {\"Name\": \"tier\", \"Value\": tier}]\n\n    entrada = uso.get(\"inputTokens\", 0)\n    saida = uso.get(\"outputTokens\", 0)\n    cache = uso.get(\"cacheReadInputTokens\", 0)\n\n    cw.put_metric_data(Namespace=NS, MetricData=[\n        {\"MetricName\": \"TokensEntrada\", \"Value\": entrada, \"Unit\": \"Count\", \"Dimensions\": dims},\n        {\"MetricName\": \"TokensSaida\",   \"Value\": saida,   \"Unit\": \"Count\", \"Dimensions\": dims},\n        {\"MetricName\": \"CacheLido\",     \"Value\": cache,   \"Unit\": \"Count\", \"Dimensions\": dims},\n        {\"MetricName\": \"Latencia\",      \"Value\": ms, \"Unit\": \"Milliseconds\", \"Dimensions\": dims},\n        {\"MetricName\": \"Ferramentas\",   \"Value\": ferramentas, \"Unit\": \"Count\", \"Dimensions\": dims},\n        # Razao de cache: se cair, algo invalidou o prefixo. E o alarme\n        # mais barato de configurar e o que mais evita surpresa na fatura.\n        {\"MetricName\": \"RazaoCache\",\n         \"Value\": cache / max(entrada + cache, 1),\n         \"Unit\": \"None\", \"Dimensions\": dims},\n    ])\n\n    # Log ESTRUTURADO: o que permite consultar depois sem parsear texto.\n    print(json.dumps({\n        \"app\": app, \"rota\": rota, \"tier\": tier, \"desfecho\": desfecho,\n        \"tokens_entrada\": entrada, \"tokens_saida\": saida, \"cache_lido\": cache,\n        \"latencia_ms\": ms, \"ferramentas\": ferramentas,\n        \"ts\": int(time.time()),\n    }, ensure_ascii=False))\n"
+          }
+        },
+        {
+          "id": "q844-7",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "Log de IA não pode ser texto solto",
+            "content": "Registrar a resposta inteira em texto corrido cria dois problemas: você não consegue consultar por atributo depois, e joga dado pessoal em log sem controle. Registre campos estruturados — app, rota, tier, tokens, latência, desfecho — e deixe o conteúdo integral no destino próprio de registro de invocação, que tem chave e retenção definidas. Separar esses dois destinos é o que permite investigar performance sem passear por dado sensível."
+          }
+        },
+        {
+          "id": "q844-8",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "Cuidado com a cardinalidade da dimensão",
+            "content": "É tentador dimensionar as métricas por id de usuário ou por id de sessão, para poder fatiar tudo. Não faça: métrica customizada cobra por combinação única de dimensões, e id de usuário gera uma métrica nova por pessoa. Dimensione por app, rota, tier e desfecho — cardinalidade baixa e estável. Para investigar um caso individual, o instrumento é o log estruturado, não a métrica."
+          }
+        }
+      ]
+    },
+    {
+      "id": "q844-9",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Rastreamento: onde o tempo foi"
+      },
+      "children": [
+        {
+          "id": "q844-10",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Serviço",
+              "O que é",
+              "O que soma ao Bedrock",
+              "O limite que decide"
+            ],
+            "rows": [
+              [
+                "AWS X-Ray",
+                "Rastreamento distribuído: um traço atravessando serviços, com tempo por segmento",
+                "Responde a pergunta mais frequente da operação de IA: a lentidão é retrieval, inferência, ferramenta ou fila?",
+                "Amostragem padrão não pega o caso raro; o traço lento costuma ser o que você quer, e é o que a amostra descarta"
+              ],
+              [
+                "ADOT (OpenTelemetry)",
+                "Distribuição AWS do padrão aberto de telemetria",
+                "Padroniza traço e métrica quando a empresa já tem observabilidade própria fora da AWS",
+                "Mais peças para operar; ganha quando existe destino externo, perde em stack só AWS"
+              ],
+              [
+                "AgentCore Observability",
+                "Visão de sessão de agent: trajetória, uso de ferramenta e consumo",
+                "O único que mostra a execução do agent como unidade — traço genérico fragmenta o laço em N chamadas soltas",
+                "Específico do AgentCore; agent em Lambda ou Fargate precisa de instrumentação própria"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "q844-11",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "Ajuste a amostragem para pegar a cauda",
+            "content": "Amostragem uniforme é ótima para medir o comportamento típico e inútil para investigar o problema — que quase sempre está no percentil 95. Configure a regra para capturar 100% dos traços que estouram um limiar de latência ou que terminam em erro, e amostre baixo o resto. Sem isso, você olha um painel bonito de casos médios enquanto o usuário reclama de um caminho que nunca foi capturado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "q844-12",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Os três registros diferentes"
+      },
+      "children": [
+        {
+          "id": "q844-13",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Times confundem os três, e a confusão só aparece quando a auditoria pergunta algo que nenhum deles responde. Eles registram coisas "
+              },
+              {
+                "text": "diferentes e complementares",
+                "bold": true
+              },
+              {
+                "text": " — você precisa dos três, e cada um tem custo e risco próprios."
+              }
+            ]
+          }
+        },
+        {
+          "id": "q844-14",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Os três níveis de registro",
+            "layers": [
+              {
+                "label": "CloudTrail",
+                "instruction": "Quem chamou qual API, quando, de onde e com qual identidade. É o plano de controle e a chamada em si.",
+                "note": "Não guarda o conteúdo do prompt"
+              },
+              {
+                "label": "Model invocation logging",
+                "instruction": "O conteúdo: prompt enviado, resposta gerada, tokens, modelo e guardrail aplicados.",
+                "note": "Ligue no dia 1 — não é reconstituível depois"
+              },
+              {
+                "label": "Log da aplicação",
+                "instruction": "A decisão de negócio: qual rota, qual tier, qual limiar, qual revisão humana, qual desfecho.",
+                "note": "É o único que explica o PORQUÊ"
+              }
+            ]
+          }
+        },
+        {
+          "id": "q844-15",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta da auditoria",
+              "Quem responde",
+              "Se estiver faltando"
+            ],
+            "rows": [
+              [
+                "Quem invocou o modelo em 12 de março às 14h?",
+                "CloudTrail",
+                "Você não consegue atribuir a chamada a uma identidade"
+              ],
+              [
+                "O que exatamente foi perguntado e respondido?",
+                "Model invocation logging",
+                "Não é recuperável de forma alguma — o conteúdo não é armazenado por padrão"
+              ],
+              [
+                "Por que o sistema decidiu não escalar para humano?",
+                "Log da aplicação",
+                "Você tem o conteúdo mas não a lógica; a decisão fica inexplicável"
+              ],
+              [
+                "O guardrail estava ativo naquele dia e nesta versão?",
+                "Log de invocação + Config",
+                "Fica como afirmação sem prova"
+              ],
+              [
+                "Quem revisou e o que alterou?",
+                "Log da aplicação",
+                "O controle de revisão humana deixa de ser auditável"
+              ],
+              [
+                "O log foi alterado depois?",
+                "Bucket com versionamento e bloqueio de escrita",
+                "A trilha perde valor probatório"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "q844-16",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Registro",
+              "O que é",
+              "O que soma ao Bedrock",
+              "O limite que decide"
+            ],
+            "rows": [
+              [
+                "AWS CloudTrail",
+                "Trilha de chamadas de API: quem, quando, de onde, com qual identidade",
+                "Atribui cada invocação a uma identidade — a base de qualquer investigação de acesso",
+                "Não guarda o conteúdo do prompt nem da resposta. Evento de dado tem custo próprio e volume alto"
+              ],
+              [
+                "Model invocation logging",
+                "Registro do conteúdo: prompt enviado, resposta gerada, tokens, modelo e guardrail aplicados",
+                "É o único que responde \"o que exatamente foi perguntado e respondido\" — e não é reconstituível depois",
+                "Passivo de privacidade: exige chave própria, política restritiva e retenção acordada antes de ligar"
+              ],
+              [
+                "Log da aplicação",
+                "O que o seu código registra sobre a decisão de negócio",
+                "É o único que explica o PORQUÊ: qual rota, qual tier, qual limiar vigente, qual revisão humana",
+                "Só existe se você instrumentar; e precisa ser estruturado para ser consultável"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "q844-17",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "O log de invocação é um passivo de privacidade",
+            "content": "Ligar o registro de conteúdo significa que prompts e respostas — com todo o dado pessoal que carregam — passam a viver em um destino de armazenamento. É necessário para auditoria e é um risco por si só. Trate esse destino como o dado mais sensível da arquitetura: chave gerenciada pelo cliente, política restritiva, acesso monitorado e retenção acordada com o encarregado de dados antes de ligar. E lembre que o mesmo cuidado vale para a tabela de conversas e para o bucket de transcrições."
+          }
+        }
+      ]
+    },
+    {
+      "id": "q844-18",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Custo: os serviços que fecham a conta"
+      },
+      "children": [
+        {
+          "id": "q844-19",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Serviço",
+              "O que é",
+              "O que soma ao Bedrock",
+              "O limite que decide"
+            ],
+            "rows": [
+              [
+                "Cost Explorer",
+                "Visão de custo por serviço, etiqueta e período",
+                "Custo por squad e por caso de uso, sem contabilidade caseira — se o inference profile estiver etiquetado",
+                "Só separa o que foi etiquetado; etiqueta criada hoje não retroage sobre o gasto de ontem"
+              ],
+              [
+                "AWS Budgets",
+                "Orçamento com alerta e ação automática",
+                "Teto por app, com ação quando estoura — não só e-mail para uma caixa que ninguém lê",
+                "Avisa quando o dinheiro já foi gasto; é rede de segurança, não controle preventivo"
+              ],
+              [
+                "Cost Anomaly Detection",
+                "Detecção de variação atípica de gasto, sem você definir limiar",
+                "Pega o laço descontrolado, o retry infinito e o cache que parou de acertar — no mesmo dia",
+                "Precisa de histórico para aprender o padrão; nas primeiras semanas é menos sensível"
+              ],
+              [
+                "Cost and Usage Report",
+                "O dado bruto de custo e uso, no detalhe, para o seu próprio painel",
+                "Cruzar custo com métrica de negócio para chegar ao custo por resultado — a métrica que vai ao comitê",
+                "Volume grande; exige consulta sobre o lago para ser útil"
+              ],
+              [
+                "Compute Optimizer",
+                "Recomendação de dimensionamento de recurso de compute",
+                "Acha capacidade parada no compute em volta da inferência",
+                "Não enxerga o custo de inferência em si, que é a maior parcela em volume alto"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "q844-20",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "Orçamento mensal avisa tarde demais",
+            "content": "Quando o alerta de orçamento dispara, o dinheiro já foi gasto. O que protege de verdade é a detecção de variação diária combinada com quota por aplicação no gateway: a primeira avisa no mesmo dia, e a segunda transforma um incidente de custo numa recusa controlada com mensagem clara. Configure as duas antes de abrir o sistema para o segundo time — não depois do primeiro susto."
+          }
+        },
+        {
+          "id": "q844-21",
+          "type": "annotated_formula",
+          "position": 2,
+          "data": {
+            "title": "A métrica que o comitê pede",
+            "formula": "custo_por_resultado = (inferência + retrieval + plataforma) ÷ resultados_de_negócio",
+            "parts": [
+              {
+                "symbol": "inferência",
+                "name": "Do inference profile etiquetado",
+                "color": "var(--ffv-blue)",
+                "description": "Puxado do relatório de custo por etiqueta. Sem o profile por app, esta parcela é uma linha única indivisível e a conversa vira rateio político."
+              },
+              {
+                "symbol": "retrieval",
+                "name": "Vector store e embeddings",
+                "color": "var(--ffv-purple)",
+                "description": "Inclui a capacidade mínima que cobra 24 horas por dia. Em volume baixo, domina o total — e é o que faz o custo unitário do piloto assustar sem motivo."
+              },
+              {
+                "symbol": "plataforma",
+                "name": "Compute, gateway, log",
+                "color": "var(--ffv-green)",
+                "description": "A menor parcela em volume alto, e uma surpresa desagradável quando o log não tem política de retenção."
+              },
+              {
+                "symbol": "resultados_de_negócio",
+                "name": "O denominador honesto",
+                "color": "var(--ffv-blue)",
+                "description": "Ticket resolvido, documento processado, funcionário ativo na semana. Nunca requisições: requisição não é resultado, e dividir por ela esconde exatamente o que o comitê quer saber."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "q844-33",
+      "type": "quiz",
+      "position": 6,
+      "data": {
+        "question": "A auditoria pede o conteúdo exato de uma conversa de quatro meses atrás. O CloudTrail está ativo desde o início do projeto. É possível responder?",
+        "options": [
+          "Sim, o CloudTrail registra o conteúdo das chamadas",
+          "Não, se o registro de invocação não estava ligado naquela data — o CloudTrail registra quem chamou, quando e de onde, não o prompt nem a resposta",
+          "Sim, basta reprocessar os logs da aplicação",
+          "Sim, o conteúdo é retido por padrão no serviço por 90 dias"
+        ],
+        "correctIndex": 1,
+        "explanation": "São registros diferentes e complementares. O CloudTrail cobre o plano de controle e a chamada — identidade, horário, origem, API — mas não o conteúdo. O prompt e a resposta só existem se o registro de invocação estava habilitado naquele momento, e não há como reconstituí-los depois. Por isso ele é item de dia 1, junto com a definição de chave e de retenção. O log da aplicação explica a decisão tomada, mas só se o time tiver instrumentado isso."
+      }
+    },
+    {
+      "id": "q844-22",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Entrega: como isso sobe"
+      },
+      "children": [
+        {
+          "id": "q844-23",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Serviço",
+              "O que é",
+              "O que soma ao Bedrock",
+              "O limite que decide"
+            ],
+            "rows": [
+              [
+                "CDK / CloudFormation / Terraform",
+                "Infraestrutura declarada em código, versionada e reproduzível",
+                "Guardrail, base de conhecimento e inference profile também são infraestrutura — versione-os como código",
+                "Recurso de IA muda de forma rápida; provider pode ficar atrás do console em recurso novo"
+              ],
+              [
+                "CodePipeline / CodeBuild",
+                "Esteira de build e deploy gerenciada",
+                "É onde o gate de avaliação entra como etapa que bloqueia regressão antes do merge",
+                "Rodar a eval completa no pipeline custa inferência; use conjunto rápido no PR e completo no gate"
+              ],
+              [
+                "Amazon ECR",
+                "Registro de imagem de container",
+                "Quando o agent roda em Fargate ou EKS em vez de Lambda",
+                "Armazenamento por GB; imagem antiga acumula se não houver política de expiração"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "q844-24",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Prompt e guardrail são artefatos versionados",
+            "content": "O erro operacional mais comum em plataforma de IA madura: alguém melhora uma frase do prompt direto em produção numa sexta-feira, a qualidade cai e não existe diff para reverter. Prompt, versão de guardrail, limiar de confiança e mapeamento de tier precisam viver em configuração versionada, com o identificador registrado em cada chamada. É o que permite responder \"o que mudou?\" e, principalmente, voltar atrás em minutos."
+          }
+        }
+      ]
+    },
+    {
+      "id": "q844-25",
+      "type": "arch_diagram",
+      "position": 8,
+      "data": {
+        "title": "De uma requisição a três destinos: métrica, trilha e fatura",
+        "caption": "A mesma chamada produz três registros com finalidades distintas. Nenhum dos três substitui os outros — e o do meio, o conteúdo, é o único que não dá para reconstituir depois.",
+        "groups": [
+          {
+            "label": "Aplicação instrumentada",
+            "kind": "vpc",
+            "nodes": [
+              {
+                "id": "fn",
+                "service": "lambda",
+                "label": "Gateway de IA",
+                "note": "Emite métrica e log estruturado"
+              },
+              {
+                "id": "prof",
+                "service": "bedrock",
+                "label": "Inference profile",
+                "note": "Etiquetado por centro de custo"
+              },
+              {
+                "id": "br",
+                "service": "bedrock",
+                "label": "Bedrock",
+                "note": "A chamada em si"
+              }
+            ]
+          },
+          {
+            "label": "Métrica e traço",
+            "kind": "account",
+            "nodes": [
+              {
+                "id": "cw",
+                "service": "cloudwatch",
+                "note": "Tokens, latência, razão de cache"
+              },
+              {
+                "id": "xray",
+                "service": "xray",
+                "note": "Retrieval, inferência ou tool?"
+              },
+              {
+                "id": "syn",
+                "service": "cloudwatch",
+                "label": "Synthetics",
+                "note": "Sonda no caminho crítico"
+              }
+            ]
+          },
+          {
+            "label": "Auditoria",
+            "kind": "account",
+            "nodes": [
+              {
+                "id": "ct",
+                "service": "cloudtrail",
+                "note": "Quem chamou, quando, de onde"
+              },
+              {
+                "id": "inv",
+                "service": "cloudtrail",
+                "label": "Invocation logging",
+                "note": "Prompt e resposta — com CMK"
+              },
+              {
+                "id": "kms",
+                "service": "kms",
+                "note": "Chave e retenção definidas"
+              }
+            ]
+          },
+          {
+            "label": "Custo",
+            "kind": "account",
+            "nodes": [
+              {
+                "id": "ce",
+                "service": "costexplorer",
+                "note": "Custo por squad via etiqueta"
+              },
+              {
+                "id": "anom",
+                "service": "costexplorer",
+                "label": "Anomaly Detection",
+                "note": "Variação atípica no mesmo dia"
+              },
+              {
+                "id": "bud",
+                "service": "budgets",
+                "note": "Teto com ação"
+              }
+            ]
+          }
+        ],
+        "edges": [
+          {
+            "from": "fn",
+            "to": "prof",
+            "label": "invoca pelo profile etiquetado"
+          },
+          {
+            "from": "prof",
+            "to": "br"
+          },
+          {
+            "from": "fn",
+            "to": "cw",
+            "label": "métrica dimensionada por app, rota e tier"
+          },
+          {
+            "from": "fn",
+            "to": "xray",
+            "style": "dashed"
+          },
+          {
+            "from": "syn",
+            "to": "fn",
+            "style": "dashed",
+            "label": "sonda executa o caminho crítico"
+          },
+          {
+            "from": "br",
+            "to": "ct",
+            "style": "dashed"
+          },
+          {
+            "from": "br",
+            "to": "inv",
+            "label": "conteúdo: não é reconstituível depois"
+          },
+          {
+            "from": "kms",
+            "to": "inv",
+            "style": "dashed"
+          },
+          {
+            "from": "prof",
+            "to": "ce",
+            "label": "a etiqueta é o que separa o custo por squad"
+          },
+          {
+            "from": "ce",
+            "to": "anom",
+            "style": "dashed"
+          },
+          {
+            "from": "ce",
+            "to": "bud",
+            "style": "dashed"
+          }
+        ],
+        "steps": [
+          {
+            "label": "A chamada acontece pelo profile certo",
+            "detail": "O gateway invoca pelo application inference profile do app — é a etiqueta dele que vai permitir separar o custo depois.",
+            "nodes": [
+              "fn",
+              "prof",
+              "br"
+            ],
+            "edges": [
+              "fn>prof",
+              "prof>br"
+            ]
+          },
+          {
+            "label": "Emitir a métrica que não existe de graça",
+            "detail": "Tokens de entrada e saída, razão de cache, latência e desfecho, dimensionados por app, rota e tier — cardinalidade baixa.",
+            "nodes": [
+              "fn",
+              "cw"
+            ],
+            "edges": [
+              "fn>cw"
+            ]
+          },
+          {
+            "label": "Rastrear para responder onde o tempo foi",
+            "detail": "Traço distribuído com amostragem ajustada para capturar 100% do que estoura o limiar. A cauda é o que interessa.",
+            "nodes": [
+              "fn",
+              "xray",
+              "syn"
+            ],
+            "edges": [
+              "fn>xray",
+              "syn>fn"
+            ]
+          },
+          {
+            "label": "Registrar identidade e conteúdo",
+            "detail": "A trilha de API diz quem chamou; o registro de invocação guarda prompt e resposta — com chave própria e retenção acordada antes de ligar.",
+            "nodes": [
+              "br",
+              "ct",
+              "inv",
+              "kms"
+            ],
+            "edges": [
+              "br>ct",
+              "br>inv",
+              "kms>inv"
+            ]
+          },
+          {
+            "label": "Fechar a conta por squad",
+            "detail": "A etiqueta do profile faz o custo chegar separado, sem contabilidade caseira. Sem ela, é uma linha única e a conversa vira rateio.",
+            "nodes": [
+              "prof",
+              "ce"
+            ],
+            "edges": [
+              "prof>ce"
+            ]
+          },
+          {
+            "label": "Proteger contra surpresa",
+            "detail": "Detecção de variação diária pega o laço descontrolado no mesmo dia; o orçamento é a rede de segurança, não o controle.",
+            "nodes": [
+              "ce",
+              "anom",
+              "bud"
+            ],
+            "edges": [
+              "ce>anom",
+              "ce>bud"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "q844-26",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Combinações que se repetem"
+      },
+      "children": [
+        {
+          "id": "q844-27",
+          "type": "matrix_diagram",
+          "position": 0,
+          "data": {
+            "title": "A pergunta da operação → o instrumento certo",
+            "rowLabels": [
+              "\"Está fora do ar?\"",
+              "\"Por que está lento?\"",
+              "\"Por que ficou caro ontem?\"",
+              "\"O que o modelo respondeu?\"",
+              "\"Quanto custa por ticket?\"",
+              "\"O que mudou no deploy?\""
+            ],
+            "colLabels": [
+              "Instrumento",
+              "Sinal que você olha",
+              "Erro comum"
+            ],
+            "matrix": [
+              [
+                "Synthetics + alarme",
+                "Sonda falhando no caminho crítico",
+                "Descobrir pelo usuário porque a sonda não existe"
+              ],
+              [
+                "X-Ray com amostragem da cauda",
+                "Tempo por segmento: retrieval, inferência, tool, fila",
+                "Amostragem uniforme, que descarta justamente o traço lento"
+              ],
+              [
+                "Cost Anomaly Detection",
+                "Variação percentual diária por app",
+                "Confiar no orçamento mensal, que avisa depois do gasto"
+              ],
+              [
+                "Model invocation logging",
+                "Prompt e resposta daquela chamada",
+                "Achar que o CloudTrail guarda conteúdo — não guarda"
+              ],
+              [
+                "Cost Explorer + métrica de negócio",
+                "Custo etiquetado dividido por resultado, não por request",
+                "Dividir por requisição, o que esconde o que o comitê quer saber"
+              ],
+              [
+                "Parameter Store + log estruturado",
+                "Versão de prompt, guardrail e tier registrada na chamada",
+                "Prompt alterado direto em produção, sem diff para reverter"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "q844-28",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Checklist do dia 1 desta camada"
+      },
+      "children": [
+        {
+          "id": "q844-29",
+          "type": "list",
+          "position": 0,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Application inference profile por app, etiquetado com o centro de custo — antes do primeiro request.",
+              "Métricas de tokens de entrada e saída, razão de cache, latência e desfecho publicadas desde a primeira chamada.",
+              "Log estruturado em campos, separado do destino que guarda o conteúdo integral.",
+              "Registro de invocação ligado, com chave própria e retenção acordada com o encarregado de dados.",
+              "Alarme de variação percentual diária de gasto, além do orçamento mensal.",
+              "Quota por aplicação no gateway, para transformar incidente de custo em recusa controlada.",
+              "Rastreamento distribuído ligado, com regra que captura 100% do que estoura o limiar de latência.",
+              "Sonda sintética no caminho crítico, executando após cada publicação.",
+              "Baseline do processo manual anotado por escrito, com data — é o denominador de todo cálculo de retorno."
+            ]
+          }
+        },
+        {
+          "id": "q844-30",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "O item 9 é o mais barato e o mais esquecido",
+            "content": "Anotar quanto o processo manual custa e demora, hoje, com data, leva uma tarde e é impossível de recuperar depois. Sem esse número, a pergunta \"quanto economizamos?\" só tem resposta em forma de sensação — e sensação perde para planilha na revisão de orçamento. Se a operação não tem os dados, uma estimativa grosseira registrada por escrito vale mais que nenhuma."
+          }
+        }
+      ]
+    },
+    {
+      "id": "q844-31",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Erros clássicos desta camada"
+      },
+      "children": [
+        {
+          "id": "q844-32",
+          "type": "list",
+          "position": 0,
+          "data": {
+            "items": [
+              "Achar que o CloudTrail guarda o conteúdo do prompt: ele registra a chamada, não o texto. Descobrir isso na auditoria é tarde.",
+              "Ligar o registro de conteúdo sem chave própria e sem retenção: você criou um repositório de dado pessoal sem política.",
+              "Dimensionar métrica por id de usuário: cardinalidade explode e a fatura de observabilidade rivaliza com a de inferência.",
+              "Log em texto corrido: impossível de consultar por atributo e caro de escanear.",
+              "Amostragem uniforme de traço: o problema está no percentil 95, que é exatamente o que a amostra descarta.",
+              "Só orçamento mensal: quando o alerta dispara, o dinheiro já foi. Falta a detecção de variação diária.",
+              "Etiqueta criada depois: não retroage. O custo dos meses anteriores continua indivisível.",
+              "Custo por requisição em vez de por resultado de negócio: esconde exatamente o que a diretoria quer comparar.",
+              "Prompt e guardrail fora do controle de versão: alguém melhora uma frase na sexta e não existe diff para reverter."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "q844-34",
+      "type": "quiz",
+      "position": 12,
+      "data": {
+        "question": "Um agent entrou em laço e consumiu um valor inesperado num único dia. O time tem orçamento mensal configurado com alerta em 80%. Por que o alerta não ajudou?",
+        "options": [
+          "Porque orçamento mensal avisa quando o dinheiro já foi gasto — o instrumento para pegar isso no mesmo dia é a detecção de variação atípica, combinada com quota por app no gateway",
+          "Porque orçamento não cobre custo de inferência",
+          "Porque faltava etiquetar o inference profile",
+          "Porque o limiar de 80% estava alto demais"
+        ],
+        "correctIndex": 0,
+        "explanation": "Orçamento é rede de segurança retrospectiva: ele mede acumulado contra um teto, então um pico de um dia só dispara o alerta depois do gasto. A detecção de variação atípica compara com o padrão histórico e sinaliza no mesmo dia, que é quando o laço ainda pode ser interrompido. E a quota por aplicação no gateway é o controle preventivo — transforma o incidente numa recusa com mensagem clara em vez de numa fatura. Etiquetar o profile é o que permite saber qual app foi, mas não evita o gasto."
+      }
+    },
+    {
+      "id": "q844-35",
+      "type": "quiz",
+      "position": 13,
+      "data": {
+        "question": "Você quer levar ao comitê o retorno do projeto de atendimento. Qual denominador usar no custo?",
+        "options": [
+          "Número de requisições ao modelo",
+          "Número de tokens consumidos no período",
+          "Número de usuários com acesso habilitado",
+          "Resultado de negócio — ticket resolvido, documento processado, funcionário ativo — porque é a única unidade comparável com o processo que existia antes"
+        ],
+        "correctIndex": 3,
+        "explanation": "Requisição e token são unidades técnicas: elas medem consumo, não valor, e não têm equivalente no processo manual que o comitê quer comparar. Custo por resultado de negócio é a única forma de colocar o antes e o depois na mesma régua. Usuários habilitados é a métrica de vaidade clássica — sobe sem que ninguém use. E atenção ao denominador: só desfechos reais, sem abandono e sem quem reabriu contato em 48 horas."
+      }
+    },
+    {
+      "id": "q844-36",
+      "type": "callout",
+      "position": 14,
+      "data": {
+        "variant": "info",
+        "title": "Próximo passo",
+        "content": "Com governança e operação no lugar, voltamos para o caminho do usuário. Os três próximos módulos percorrem a borda por onde o pedido entra, o compute e a orquestração que coordenam os passos, e a camada de dados que alimenta o modelo — cada serviço com o que é, o que soma e o limite que decide."
+      }
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "O que medir num sistema de IA na AWS?",
+            "answer": "Além de latência e erro, três métricas que só existem aqui: tokens por requisição, que é custo; número de voltas quando há agente, que é comportamento; e taxa de saída rejeitada pela validação, que é qualidade. Sem as três, \"o sistema piorou\" não é investigável."
+          },
+          "id": "q844-38",
+          "position": 0
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Rastreamento distribuído ajuda em agente?",
+            "answer": "Ajuda muito, e é o que transforma \"o agente travou\" em \"a terceira busca devolveu vazio e ele tentou dezoito vezes\". Um trecho de rastro por chamada de ferramenta, com identificador único da requisição, é o mínimo. Log solto sem correlação não reconstrói decisão de agente."
+          },
+          "id": "q844-39",
+          "position": 1
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Como alertar sobre custo antes do fim do mês?",
+            "answer": "Com orçamento e alarme sobre a métrica de custo por período curto, e não sobre o total acumulado. Custo de IA é variável por uso, então o sinal útil é a derivada — gasto por hora fora do padrão —, que aparece dias antes de o total estourar. Alarme só no total avisa quando não há mais o que fazer."
+          },
+          "id": "q844-40",
+          "position": 2
+        }
+      ],
+      "id": "q844-37",
+      "position": 15
+    }
+  ]
+}

@@ -10,7 +10,10 @@ interface Props {
 
 /** Card reutilizável pra exibir um simulado no catálogo. */
 export function SimuladoCard({ simulado, variant = 'grid' }: Props) {
-  const accent = simulado.comingSoon ? '#a371f7' : '#f78166';
+  // Variável, não hex: `#a371f7`/`#f78166` são valores do tema ESCURO, e em tema
+  // claro mediam 2,9:1 e 2,21:1 — os 44 nós de contraste de `/simulados` saíam
+  // todos daqui. `--ffv-purple` e `--ffv-red` trocam de valor com o tema.
+  const accent = simulado.comingSoon ? 'var(--ffv-purple)' : 'var(--ffv-red)';
 
   return (
     <Link
@@ -18,7 +21,7 @@ export function SimuladoCard({ simulado, variant = 'grid' }: Props) {
       className="block rounded-xl overflow-hidden transition-all hover:scale-[1.01]"
       style={{
         background: 'var(--ffv-bg2)',
-        border: `1px solid ${accent}40`,
+        border: `1px solid color-mix(in srgb, ${accent} 25%, transparent)`,
       }}
     >
       <div className="p-5">
@@ -54,9 +57,9 @@ export function SimuladoCard({ simulado, variant = 'grid' }: Props) {
                 key={t}
                 className="text-[10px] px-2 py-0.5 rounded-full"
                 style={{
-                  background: `${accent}15`,
+                  background: `color-mix(in srgb, ${accent} 8%, transparent)`,
                   color: accent,
-                  border: `1px solid ${accent}30`,
+                  border: `1px solid color-mix(in srgb, ${accent} 19%, transparent)`,
                 }}
               >
                 {t}

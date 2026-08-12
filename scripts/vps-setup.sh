@@ -90,6 +90,9 @@ cat > /opt/ffv/.env.template << 'EOF'
 # ─── App ──────────────────────────────────────────────────────────────────────
 APP_ENV=production
 HTTP_PORT=8080
+# AUTH_DEV_BYPASS_ENABLED deve ficar false em produção — o boot recusa subir
+# se estiver true com APP_ENV != development. Explícito aqui por segurança.
+AUTH_DEV_BYPASS_ENABLED=false
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 DATABASE_URL=postgres://ffv:SUA_SENHA_POSTGRES@postgres:5432/ffv_prod?sslmode=disable

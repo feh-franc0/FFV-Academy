@@ -3,7 +3,7 @@
   "title": null,
   "blocks": [
     {
-      "id": "bc65e2e6-f78a-46ab-8cf9-888e2b7543f1",
+      "id": "q69-0",
       "type": "section",
       "position": 0,
       "data": {
@@ -11,26 +11,254 @@
       },
       "children": [
         {
-          "id": "82d323eb-4f9c-423c-831f-1dbc54cab550",
+          "id": "q69-1",
           "type": "code_block",
           "position": 0,
           "data": {
             "language": "yaml",
             "code": "Accounts envolvidas:\n  tools-account:     CodePipeline + CodeBuild + ECR + artifacts\n  dev-account:       stacks de dev (auto-deploy)\n  staging-account:   stacks de staging (auto-deploy)\n  prod-account:      stacks de prod (manual approval)\n\nBootstrap CDK:\n  Em cada conta-alvo, 'cdk bootstrap aws://ACCOUNT/REGION\n  --trust TOOLS_ACCOUNT --cloudformation-execution-policies ...'\n  cria IAM role que tools-account pode assumir pra deploy.\n\nPipeline (CDK):\n  1. Source: CodeCommit/GitHub via CodeStar Connection\n  2. Build: CodeBuild cdk synth → artifact cloud assembly\n  3. SelfMutate: pipeline atualiza a si mesmo\n  4. DevStage: deploy em dev-account (auto)\n  5. IntegrationTests: CodeBuild smoke tests\n  6. StagingStage: deploy em staging-account (auto)\n  7. ManualApproval: SNS notifica team, espera aprovação\n  8. ProdStage: deploy em prod-account\n  9. PostProdValidation: CodeBuild valida + alarmes"
           }
+        },
+        {
+          "type": "arch_diagram",
+          "data": {
+            "title": "Pipeline cross-account: onde o artefato vive e quem pode implantar",
+            "groups": [
+              {
+                "label": "Conta de ferramentas",
+                "kind": "account",
+                "nodes": [
+                  {
+                    "id": "cp",
+                    "service": "codepipeline",
+                    "label": "CodePipeline",
+                    "note": "orquestra tudo, de fora das contas de carga"
+                  },
+                  {
+                    "id": "cb",
+                    "service": "compute",
+                    "label": "CodeBuild",
+                    "note": "build e teste"
+                  },
+                  {
+                    "id": "art",
+                    "service": "s3",
+                    "label": "Bucket de artefato",
+                    "note": "cifrado com CMK compartilhada"
+                  },
+                  {
+                    "id": "cmk",
+                    "service": "kms",
+                    "label": "CMK",
+                    "note": "política permite as contas destino"
+                  }
+                ]
+              },
+              {
+                "label": "Conta Dev",
+                "kind": "account",
+                "nodes": [
+                  {
+                    "id": "rd",
+                    "service": "iam",
+                    "label": "Role de deploy",
+                    "note": "assumida pelo pipeline"
+                  },
+                  {
+                    "id": "dev",
+                    "service": "lambda",
+                    "label": "Stack Dev"
+                  }
+                ]
+              },
+              {
+                "label": "Conta Produção",
+                "kind": "account",
+                "nodes": [
+                  {
+                    "id": "rp",
+                    "service": "iam",
+                    "label": "Role de deploy",
+                    "note": "trust só para a conta de ferramentas"
+                  },
+                  {
+                    "id": "prod",
+                    "service": "lambda",
+                    "label": "Stack Produção"
+                  }
+                ]
+              },
+              {
+                "label": "Portão",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "apr",
+                    "service": "user",
+                    "label": "Aprovação manual",
+                    "note": "antes de produção"
+                  },
+                  {
+                    "id": "cfn",
+                    "service": "cdk",
+                    "label": "CloudFormation",
+                    "note": "change set revisado"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "cb",
+                "to": "art",
+                "label": "publica artefato"
+              },
+              {
+                "from": "cmk",
+                "to": "art",
+                "label": "cifra",
+                "style": "dashed"
+              },
+              {
+                "from": "cp",
+                "to": "rd",
+                "label": "AssumeRole"
+              },
+              {
+                "from": "rd",
+                "to": "dev",
+                "label": "implanta"
+              },
+              {
+                "from": "cp",
+                "to": "apr",
+                "label": "pausa"
+              },
+              {
+                "from": "apr",
+                "to": "rp",
+                "label": "aprovado → AssumeRole"
+              },
+              {
+                "from": "rp",
+                "to": "prod",
+                "label": "implanta"
+              },
+              {
+                "from": "cfn",
+                "to": "prod",
+                "label": "change set",
+                "style": "dashed"
+              }
+            ],
+            "caption": "Três decisões que a questão testa: pipeline em conta separada, artefato cifrado com CMK que as contas destino podem usar, e deploy por AssumeRole em role de escopo mínimo.",
+            "steps": [
+              {
+                "label": "O pipeline vive fora das contas de carga",
+                "detail": "Numa conta de ferramentas dedicada. Assim produção não hospeda o que pode alterar produção, e o raio de ação de um comprometimento do CI fica limitado.",
+                "nodes": [
+                  "cp",
+                  "cb"
+                ],
+                "edges": []
+              },
+              {
+                "label": "Artefato compartilhado exige CMK compartilhada",
+                "detail": "O bucket de artefato é cifrado com KMS, e a key policy precisa permitir as contas destino — senão o deploy falha com \"access denied\" ao decifrar. É o erro nº 1 de pipeline cross-account.",
+                "nodes": [
+                  "art",
+                  "cmk"
+                ],
+                "edges": [
+                  "cb>art",
+                  "cmk>art"
+                ]
+              },
+              {
+                "label": "Cada conta destino expõe uma role",
+                "detail": "Com trust policy apontando exclusivamente para a conta de ferramentas, e permissão mínima para criar a stack daquela aplicação. Nunca credencial de longa duração.",
+                "nodes": [
+                  "cp",
+                  "rd",
+                  "rp"
+                ],
+                "edges": [
+                  "cp>rd"
+                ]
+              },
+              {
+                "label": "Aprovação manual entre ambientes",
+                "detail": "Dev implanta automático; produção espera aprovação. É o portão que separa entrega contínua de deploy contínuo — e a maioria das empresas reguladas precisa dele.",
+                "nodes": [
+                  "apr",
+                  "rp",
+                  "prod"
+                ],
+                "edges": [
+                  "cp>apr",
+                  "apr>rp",
+                  "rp>prod"
+                ]
+              },
+              {
+                "label": "Change set antes de aplicar em produção",
+                "detail": "O pipeline cria o change set, alguém revisa o que vai ser substituído, e só então executa. É onde se descobre que a mudança recriaria o banco — antes, não depois.",
+                "nodes": [
+                  "cfn",
+                  "prod"
+                ],
+                "edges": [
+                  "cfn>prod"
+                ]
+              }
+            ]
+          },
+          "id": "q69-2",
+          "position": 1
         }
       ]
     },
     {
-      "id": "a1455972-3854-4c6d-bdd1-e5666cb93f2a",
+      "id": "q69-3",
       "type": "section",
       "position": 1,
+      "data": {
+        "title": "Onde isso entra no exame"
+      },
+      "children": [
+        {
+          "id": "q69-4",
+          "type": "exam_domain_badge",
+          "position": 0,
+          "data": {
+            "domain": "Domain 3 — Continuous Improvement for Existing Solutions",
+            "weight": "25%"
+          }
+        },
+        {
+          "id": "q69-5",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Domain 3 parte de algo que já roda. Aqui: como levar pipeline para várias contas (papel cross-account no CodePipeline, artefato em bucket compartilhado com KMS), e como reduzir risco de release — canary com rollback automático disparado por alarme do CloudWatch, não por decisão manual."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "q69-6",
+      "type": "section",
+      "position": 2,
       "data": {
         "title": "CDK Pipelines mínimo"
       },
       "children": [
         {
-          "id": "b0256ede-e569-45b5-9d8c-1209aedced4b",
+          "id": "q69-7",
           "type": "code_block",
           "position": 0,
           "data": {
@@ -41,15 +269,31 @@
       ]
     },
     {
-      "id": "916ae567-74f0-49fd-851b-132e1557d22a",
+      "type": "quiz",
+      "data": {
+        "question": "Um pipeline cross-account falha ao implantar em produção com erro de acesso negado ao decifrar o artefato. Qual é a causa mais provável?",
+        "options": [
+          "O CodePipeline não suporta deploy cross-account",
+          "A key policy da CMK que cifra o bucket de artefato não autoriza a conta de destino",
+          "O bucket de artefato está em outra região",
+          "A role de deploy não tem permissão no CloudFormation"
+        ],
+        "correctIndex": 1,
+        "explanation": "É o erro número um de pipeline cross-account: o artefato é cifrado com KMS na conta de ferramentas, e a key policy precisa autorizar explicitamente as contas de destino a usar a chave — permissão IAM na role de destino não basta, porque o KMS exige autorização no recurso. Falta de permissão no CloudFormation daria erro na criação da stack, não na decifragem. Região diferente daria outro erro. E CodePipeline suporta cross-account nativamente."
+      },
+      "id": "q69-16",
+      "position": 3
+    },
+    {
+      "id": "q69-8",
       "type": "section",
-      "position": 2,
+      "position": 4,
       "data": {
         "title": "Artifact signing e rollback"
       },
       "children": [
         {
-          "id": "505e0bbc-3acf-4e4e-8d9c-4466a308b4d4",
+          "id": "q69-9",
           "type": "paragraph",
           "position": 0,
           "data": {
@@ -61,7 +305,7 @@
           }
         },
         {
-          "id": "f9f90ae4-f04e-452a-8494-e0d93a5c7388",
+          "id": "q69-10",
           "type": "callout",
           "position": 1,
           "data": {
@@ -71,6 +315,85 @@
           }
         }
       ]
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Como implantar em várias contas com segurança?",
+            "answer": "Com pipeline numa conta de ferramentas assumindo papel nas contas de destino, aprovação manual antes de produção, e artefato promovido — o mesmo binário testado em homologação. Reconstruir o artefato por ambiente é o que faz produção receber algo que ninguém testou."
+          },
+          "id": "q69-12",
+          "position": 0
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Onde colocar a aprovação manual?",
+            "answer": "Entre homologação e produção, e apenas ali. Aprovação em cada etapa transforma o pipeline em fila e o time aprende a aprovar sem ler. Uma barreira significativa protege mais que cinco decorativas — e é o que a prova espera em cenário de conformidade."
+          },
+          "id": "q69-13",
+          "position": 1
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Como reverter uma implantação enterprise?",
+            "answer": "Mantendo a versão anterior implantável e o dado compatível nas duas direções. Reversão de código é fácil; de migração de banco, não. Por isso mudança de esquema vai em duas etapas — compatível primeiro, remoção depois —, e é isso que torna a reversão possível de verdade."
+          },
+          "id": "q69-14",
+          "position": 2
+        }
+      ],
+      "id": "q69-11",
+      "position": 5
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "type": "quiz",
+          "data": {
+            "question": "Por que o pipeline deve viver numa conta de ferramentas separada das contas de carga?",
+            "options": [
+              "Para permitir mais estágios no pipeline",
+              "Para reduzir o custo do CodePipeline",
+              "Porque produção não deve hospedar o que pode alterar produção — isso limita o raio de ação de um comprometimento do CI",
+              "Porque o CodePipeline não funciona na mesma conta do destino"
+            ],
+            "correctIndex": 2,
+            "explanation": "Separar o plano de controle do plano de execução limita o dano: quem compromete o CI não compromete diretamente produção, e o acesso acontece por AssumeRole com escopo mínimo e auditável. Não há economia de custo nessa separação. O CodePipeline funciona na mesma conta — a separação é decisão de segurança, não limitação técnica. E o número de estágios não muda."
+          },
+          "id": "q69-17",
+          "position": 0
+        },
+        {
+          "type": "quiz",
+          "data": {
+            "question": "Qual controle é obrigatório antes de aplicar uma mudança de infraestrutura em produção?",
+            "options": [
+              "Change set revisado, mostrando o que será criado, alterado e principalmente SUBSTITUÍDO",
+              "Aprovação automática se os testes passarem",
+              "Snapshot manual de todos os recursos",
+              "Deploy simultâneo em todas as contas, para consistência"
+            ],
+            "correctIndex": 0,
+            "explanation": "O change set é onde você descobre que a mudança causaria replacement de um banco — ou seja, destruição e recriação, com perda de dado — antes de executar, não depois. Teste verde não detecta replacement, que é comportamento do CloudFormation e não da aplicação. Snapshot de tudo é caro e não substitui a revisão. E deploy simultâneo em todas as contas remove o portão que evita propagar o erro."
+          },
+          "id": "q69-18",
+          "position": 1
+        }
+      ],
+      "id": "q69-15",
+      "position": 6
     }
   ]
 }

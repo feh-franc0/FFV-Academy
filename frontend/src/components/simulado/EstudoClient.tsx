@@ -1,21 +1,29 @@
 'use client';
 
 /**
- * EstudoClient — modo de estudo livre Cloud Practitioner.
+ * EstudoClient — modo de estudo livre, POR CERTIFICAÇÃO.
  *
  * Sem timer, sem score persistente, sem paywall: o usuário recebe uma questão
- * aleatória do banco unificado CLF (distribuição weighted por domínio do
- * blueprint oficial), responde, vê a explicação rica e pode tirar dúvida via
- * <TutorAsk />.
+ * aleatória do banco daquela certificação no Postgres, responde, vê a
+ * explicação rica e pode tirar dúvida via <TutorAsk />.
  *
  * Histórico da sessão (acertos/erros últimas 20 questões) fica só em memória —
  * não polui localStorage e nem afeta o XP/streak do game state.
+ *
+ * ## Generalizado em ago/2026 (openspec/changes/simulados-multi-certificacao)
+ *
+ * Até então este componente importava `CLF_SIMULADO_ID` fixo — só a CLF-C02
+ * tinha modo de estudo, embora o backend já aceitasse qualquer `simuladoId` em
+ * `/study/random`. A AIF chegou a ANUNCIAR um link de estudo para uma rota que
+ * não existia. Agora o componente recebe a certificação por prop; a rota
+ * estática de CLF continua funcionando sem mudança de comportamento (usa os
+ * defaults), e uma rota dinâmica cobre as demais certificações com banco.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { SimuladoQuestion, OptionId } from '@/lib/simulados';
-import { fetchOneRandomQuestion } from '@/lib/clf-bank';
+import { fetchOneRandomQuestion, CLF_SIMULADO_ID } from '@/lib/clf-bank';
 import { FEATURES } from '@/lib/features';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter } from 'next/navigation';
@@ -24,6 +32,27 @@ import { TutorAsk } from './TutorAsk';
 const TUTOR_AVAILABLE = FEATURES.tutorAI;
 
 type Phase = 'selecting' | 'answered';
+
+export interface EstudoClientProps {
+  /** Id do banco no Postgres (`questions.simulado_id`). Default: CLF-C02. */
+  dbBankId?: string;
+  /** Rótulo curto exibido acima do H1 (ex.: "AWS CLF-C02 · Estudo livre"). */
+  badgeLabel?: string;
+  /** Título da página (H1). */
+  title?: string;
+  /** Frase de apoio abaixo do título. */
+  subtitle?: string;
+  /** Texto do breadcrumb (nome da certificação). */
+  breadcrumbLabel?: string;
+}
+
+const DEFAULTS: Required<Omit<EstudoClientProps, 'dbBankId'>> = {
+  badgeLabel: 'AWS CLF-C02 · Estudo livre',
+  title: 'Estudo livre — Cloud Practitioner',
+  subtitle:
+    'Sem timer. Sem score. Sem pressão. Questões sorteadas do banco completo CLF respeitando a distribuição oficial do blueprint AWS.',
+  breadcrumbLabel: 'Estudo livre Cloud Practitioner',
+};
 
 interface SessionEntry {
   questionId: string;
@@ -46,7 +75,13 @@ function getRich(question: SimuladoQuestion): RichExplanation | null {
   return question.explanation as unknown as RichExplanation;
 }
 
-export function EstudoClient() {
+export function EstudoClient(props: EstudoClientProps = {}) {
+  const dbBankId = props.dbBankId ?? CLF_SIMULADO_ID;
+  const badgeLabel = props.badgeLabel ?? DEFAULTS.badgeLabel;
+  const title = props.title ?? DEFAULTS.title;
+  const subtitle = props.subtitle ?? DEFAULTS.subtitle;
+  const breadcrumbLabel = props.breadcrumbLabel ?? DEFAULTS.breadcrumbLabel;
+
   const router = useRouter();
   const { isLoggedIn, requireLogin } = useAuth();
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -69,27 +104,33 @@ export function EstudoClient() {
   const fetchNext = useCallback(async (exclude: string[]) => {
     setLoading(true);
     try {
-      let picked = await fetchOneRandomQuestion({ excludeIds: exclude });
+      let picked = await fetchOneRandomQuestion({ simuladoId: dbBankId, excludeIds: exclude });
       // Se o backend devolver vazio, esgotou o banco com aqueles filtros:
       // reabre o pool zerando o exclude.
       if (!picked && exclude.length > 0) {
         seenIdsRef.current = [];
-        picked = await fetchOneRandomQuestion({});
+        picked = await fetchOneRandomQuestion({ simuladoId: dbBankId });
       }
       if (!picked) {
-        setLoadError('Não há questões disponíveis no banco. Verifique se o seed foi rodado.');
+        // Pode ser banco genuinamente vazio (seed não rodou) ou uma falha
+        // momentânea do servidor — o aluno não distingue e não precisa: a
+        // ação é a mesma (tentar de novo). O diagnóstico de mantenedor vai
+        // só pro console.
+        console.warn(`[EstudoClient] fetchOneRandomQuestion vazio para simuladoId=${dbBankId}`);
+        setLoadError('Não conseguimos carregar as questões agora. Tente de novo.');
         return;
       }
       setCurrent(picked);
       setSelected(null);
       setPhase('selecting');
       setTutorOpen(false);
-    } catch {
-      setLoadError('Não consegui carregar a próxima questão. Tente recarregar a página.');
+    } catch (err) {
+      console.error('[EstudoClient] falha ao buscar próxima questão', err);
+      setLoadError('Não conseguimos carregar as questões agora. Tente de novo.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [dbBankId]);
 
   // Primeira questão ao logar.
   useEffect(() => {
@@ -134,7 +175,19 @@ export function EstudoClient() {
   }, [session]);
 
   if (loadError) {
-    return <div className="max-w-3xl mx-auto px-6 py-12 text-sm" role="alert">{loadError}</div>;
+    return (
+      <div className="max-w-3xl mx-auto px-6 py-12 text-center" role="alert">
+        <p className="text-sm mb-4">{loadError}</p>
+        <button
+          type="button"
+          onClick={() => { setLoadError(null); fetchNext(seenIdsRef.current); }}
+          className="px-4 py-2 rounded-md text-sm font-semibold"
+          style={{ background: 'var(--ffv-blue)', color: 'var(--primary-foreground)' }}
+        >
+          Tentar novamente
+        </button>
+      </div>
+    );
   }
 
   if (loading || !current) {
@@ -154,16 +207,16 @@ export function EstudoClient() {
       <nav className="text-xs mb-6" style={{ color: 'var(--ffv-muted)' }}>
         <Link href="/simulados" style={{ color: 'var(--ffv-muted)' }}>Simulados</Link>
         <span className="mx-1">/</span>
-        <span style={{ color: 'var(--foreground)' }}>Estudo livre Cloud Practitioner</span>
+        <span style={{ color: 'var(--foreground)' }}>{breadcrumbLabel}</span>
       </nav>
 
       <header className="mb-8">
-        <p className="text-[10px] font-mono uppercase tracking-widest mb-1" style={{ color: '#f78166' }}>
-          AWS CLF-C02 · Estudo livre
+        <p className="text-[10px] font-mono uppercase tracking-widest mb-1" style={{ color: 'var(--ffv-red)' }}>
+          {badgeLabel}
         </p>
-        <h1 className="text-2xl md:text-3xl font-bold mb-2">Estudo livre — Cloud Practitioner</h1>
+        <h1 className="text-2xl md:text-3xl font-bold mb-2">{title}</h1>
         <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
-          Sem timer. Sem score. Sem pressão. Questões sorteadas do banco completo CLF respeitando a distribuição oficial do blueprint AWS.
+          {subtitle}
         </p>
       </header>
 
@@ -188,7 +241,7 @@ export function EstudoClient() {
         style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
       >
         <div className="flex flex-wrap gap-2 mb-4 text-[10px] font-mono uppercase tracking-widest">
-          <span className="px-2 py-0.5 rounded-full" style={{ background: 'rgba(247,129,102,0.12)', color: '#f78166' }}>
+          <span className="px-2 py-0.5 rounded-full" style={{ background: 'color-mix(in srgb, var(--ffv-red) 12%, transparent)', color: 'var(--ffv-red)' }}>
             {current.topic}
           </span>
           <span className="px-2 py-0.5 rounded-full" style={{ background: 'var(--ffv-bg)', color: 'var(--ffv-muted)' }}>
@@ -208,7 +261,7 @@ export function EstudoClient() {
             let border = 'var(--ffv-border)';
             if (isAnsweredCorrect) { bg = 'rgba(46,160,67,0.12)'; border = '#2ea043'; }
             else if (isAnsweredWrong) { bg = 'rgba(248,81,73,0.12)'; border = '#f85149'; }
-            else if (isSelected) { border = '#f78166'; }
+            else if (isSelected) { border = 'var(--ffv-red)'; }
 
             return (
               <li key={opt.id}>
@@ -234,7 +287,7 @@ export function EstudoClient() {
             onClick={confirm}
             disabled={!selected}
             className="mt-5 px-5 py-2 rounded-lg text-sm font-medium transition-opacity disabled:opacity-40"
-            style={{ background: '#f78166', color: '#fff' }}
+            style={{ background: 'var(--ffv-red)', color: 'var(--primary-foreground)' }}
           >
             Confirmar resposta
           </button>
@@ -264,14 +317,14 @@ export function EstudoClient() {
               title={TUTOR_AVAILABLE ? undefined : 'Tutor IA disponível em breve (requer NEXT_PUBLIC_FEATURE_TUTOR_AI_ENABLED=true + backend Anthropic configurado)'}
               aria-disabled={!TUTOR_AVAILABLE}
               className="px-4 py-2 rounded-lg text-sm font-medium transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ background: 'var(--ffv-bg2)', border: '1px solid #f78166', color: '#f78166' }}
+              style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-red)', color: 'var(--ffv-red)' }}
             >
               {TUTOR_AVAILABLE ? 'Tire minha dúvida' : '💤 Tutor IA em breve'}
             </button>
             <button
               onClick={next}
               className="px-4 py-2 rounded-lg text-sm font-medium"
-              style={{ background: '#f78166', color: '#fff' }}
+              style={{ background: 'var(--ffv-red)', color: 'var(--primary-foreground)' }}
             >
               Próxima questão →
             </button>
@@ -350,7 +403,7 @@ function RichExplanationBlock({ rich, options }: { rich: RichExplanation; option
           {rich.keyConcept && (
             <span
               className="px-3 py-1 rounded-full text-xs"
-              style={{ background: 'rgba(88,166,255,0.12)', color: '#58a6ff', border: '1px solid rgba(88,166,255,0.3)' }}
+              style={{ background: 'color-mix(in srgb, var(--ffv-blue) 12%, transparent)', color: 'var(--ffv-blue)', border: '1px solid color-mix(in srgb, var(--ffv-blue) 30%, transparent)' }}
             >
               Conceito-chave: {rich.keyConcept}
             </span>

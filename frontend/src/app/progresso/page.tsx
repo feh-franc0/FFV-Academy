@@ -2,7 +2,9 @@ import type { Metadata } from 'next';
 import { ProgressoClient } from '@/components/ProgressoClient';
 
 export const metadata: Metadata = {
-  title: 'Progresso — FFV Academy',
+  // painel pessoal — conteúdo é do usuário, não do site — fora do índice de propósito.
+  robots: { index: false, follow: false },
+  title: 'Progresso',
   description:
     'Seu dashboard completo: nível, XP, streak, badges, progresso por hub e por trilha. Todo o seu aprendizado em um só lugar.',
   keywords:

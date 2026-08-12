@@ -96,7 +96,13 @@ export function TrailStatsTable() {
         </p>
       </header>
 
-      <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--ffv-border)' }}>
+      <div
+        tabIndex={0}
+        role="group"
+        aria-label="Stats por trilha, rolável na horizontal"
+        className="rounded-xl overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ffv-blue)]"
+        style={{ border: '1px solid var(--ffv-border)' }}
+      >
         <table className="w-full text-xs">
           <thead style={{ background: 'var(--ffv-bg2)' }}>
             <tr>
@@ -117,7 +123,7 @@ export function TrailStatsTable() {
                 }}
               >
                 <td className="px-3 py-2">
-                  <Link href={s.href} className="font-semibold hover:underline">
+                  <Link href={s.href} className="inline-flex items-center min-h-[24px] font-semibold hover:underline">
                     {s.name}
                   </Link>
                 </td>
@@ -132,7 +138,7 @@ export function TrailStatsTable() {
                             ? 'var(--ffv-blue)'
                             : 'var(--ffv-bg2)',
                       color:
-                        s.status === 'not-started' ? 'var(--ffv-muted)' : 'white',
+                        s.status === 'not-started' ? 'var(--ffv-muted)' : 'var(--primary-foreground)',
                       border: s.status === 'not-started' ? '1px solid var(--ffv-border)' : 'none',
                     }}
                   >

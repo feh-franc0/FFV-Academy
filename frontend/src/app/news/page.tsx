@@ -2,20 +2,21 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { loadNewsFeedAsync, sortByDateDesc } from '@/lib/news';
 import { NewsClient } from '@/components/news/NewsClient';
+import { BASE, social } from '@/lib/metadata-social';
 
 export const metadata: Metadata = {
-  title: 'News — IA, Anthropic, OpenAI, infra · FFV Academy',
+  // Sem "FFV Academy": o template do layout raiz aplica o sufixo.
+  title: 'News — IA, Anthropic, OpenAI e infraestrutura',
   description:
     'As notícias mais relevantes da semana em IA, modelos, arquitetura e infra. Curadoria editorial sem hype, com link pra fonte original.',
   keywords:
     'noticias ia, anthropic, openai, claude opus, gemini, llama, regulação ai act, benchmarks, deepseek, nvidia blackwell',
-  alternates: { canonical: 'https://fernandofrancovalle.com/news' },
-  openGraph: {
-    title: 'News — IA e engenharia moderna · FFV Academy',
-    description: 'Curadoria semanal das notícias que realmente importam em IA e arquitetura.',
-    type: 'website',
-    url: 'https://fernandofrancovalle.com/news',
-  },
+  alternates: { canonical: `${BASE}/news` },
+  ...social({
+    titulo: 'News — IA e engenharia moderna · FFV Academy',
+    descricao: 'Curadoria semanal das notícias que realmente importam em IA e arquitetura.',
+    caminho: '/news',
+  }),
 };
 
 export default async function NewsPage() {
@@ -55,7 +56,7 @@ export default async function NewsPage() {
           <nav className="text-xs mb-6 font-mono" style={{ color: 'var(--ffv-muted)', letterSpacing: '0.06em' }}>
             <Link
               href="/"
-              className="transition-opacity hover:opacity-70"
+              className="inline-flex min-h-[24px] items-center transition-opacity hover:opacity-70"
               style={{ color: 'var(--ffv-muted)' }}
             >
               FFV ACADEMY

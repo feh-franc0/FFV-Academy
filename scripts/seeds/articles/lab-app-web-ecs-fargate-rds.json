@@ -1,0 +1,2434 @@
+{
+  "slug": "lab-app-web-ecs-fargate-rds",
+  "title": null,
+  "blocks": [
+    {
+      "type": "paragraph",
+      "data": {
+        "content": [
+          {
+            "text": "A API roda na máquina de alguém. O front, no "
+          },
+          {
+            "text": "npm run dev",
+            "code": true
+          },
+          {
+            "text": " de outra pessoa. O banco é um contêiner local que já perdeu os dados duas vezes. Quando o cliente pede para ver, alguém liga um túnel e reza. Este laboratório encerra esse arranjo: no fim dele existe uma URL pública, servida por uma aplicação .NET 8 em contêiner, com banco gerenciado que a internet não alcança, e tudo descrito em Terraform — de modo que a próxima pessoa reproduz sem perguntar nada."
+          }
+        ]
+      },
+      "id": "l01-0",
+      "position": 0
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Uma equipe de quatro pessoas mantém o sistema de pedidos de uma distribuidora. São cerca de "
+              },
+              {
+                "text": "400 usuários internos",
+                "bold": true
+              },
+              {
+                "text": " e um pico previsível às segundas, quando o time comercial lança as ordens da semana: aproximadamente "
+              },
+              {
+                "text": "12 mil requisições na primeira hora",
+                "bold": true
+              },
+              {
+                "text": ", contra 1.500 numa hora comum. O horário comercial é o que importa; à noite o sistema pode ficar mais lento sem que ninguém reclame."
+              }
+            ]
+          },
+          "id": "l01-2",
+          "position": 0
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "A dor não é desempenho: é que "
+              },
+              {
+                "text": "não existe um ambiente que não seja o laptop de alguém",
+                "bold": true
+              },
+              {
+                "text": ". Publicar significa parar. Um deploy malfeito na sexta custou quatro horas de operação, e a única cópia do banco daquele dia estava no disco de quem fez o deploy. O orçamento é apertado — trata-se de uma equipe pequena, não de uma empresa com time de plataforma —, então a arquitetura precisa ser defensável no custo, não apenas correta."
+              }
+            ]
+          },
+          "id": "l01-3",
+          "position": 1
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Os números acima são "
+              },
+              {
+                "text": "hipóteses declaradas",
+                "bold": true
+              },
+              {
+                "text": " para dimensionar o laboratório, não medições de um caso real. O que eles determinam é concreto: com esse volume, o gargalo não será CPU de aplicação, e sim conexão de banco e tempo de deploy. Se o seu caso tem outra ordem de grandeza, a seção de escala mostra o que muda."
+              }
+            ]
+          },
+          "id": "l01-4",
+          "position": 2
+        },
+        {
+          "type": "key_value",
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Básico — é o primeiro laboratório da série, e não pressupõe AWS"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "Conta AWS própria, Docker local, C# e SQL básicos, Terraform instalado"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 40 min · implementação 2 h a 3 h na primeira vez"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo, e não elegível ao nível gratuito: RDS Multi-AZ e ALB cobram por hora ligada"
+              },
+              {
+                "k": "Serviços",
+                "v": "ECS Fargate, RDS PostgreSQL, ALB, CloudFront, ECR, Secrets Manager, KMS, CloudWatch"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "URL pública em HTTPS servindo front e API, banco em sub-rede privada, tudo em Terraform"
+              }
+            ]
+          },
+          "id": "l01-5",
+          "position": 3
+        }
+      ],
+      "id": "l01-1",
+      "position": 1
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Objetivo de laboratório não é reconhecer nome de serviço. Cada linha abaixo é verificável por alguém olhando o seu ambiente:"
+              }
+            ]
+          },
+          "id": "l01-7",
+          "position": 0
+        },
+        {
+          "type": "list",
+          "data": {
+            "items": [
+              "Explicar, apontando no desenho, por que o banco não tem rota para a internet e o que o impede de aceitar conexão de fora.",
+              "Provisionar a VPC de duas AZs com Terraform e justificar cada sub-rede pelo que mora nela.",
+              "Publicar uma imagem .NET 8 no ECR e implantar por digest, não por tag móvel.",
+              "Fazer a aplicação ler a senha do banco em execução, sem nenhuma credencial na imagem nem no repositório.",
+              "Distinguir health check raso de profundo e dizer o que quebra ao usar o profundo no balanceador.",
+              "Rodar um deploy e observar o rollout sem devolver erro 5xx a nenhum cliente.",
+              "Medir o custo por componente desta arquitetura com tag de alocação.",
+              "Restaurar o banco em um ponto no tempo e informar o RTO que você mediu, não o que estimou.",
+              "Destruir o ambiente e provar, por comando, que nada ficou cobrando."
+            ],
+            "ordered": true
+          },
+          "id": "l01-8",
+          "position": 1
+        }
+      ],
+      "id": "l01-6",
+      "position": 2
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Esta arquitetura é o cenário mais frequente das provas de associate, porque ela concentra três decisões que a AWS considera fundamentais: onde o recurso mora, quem alcança quem, e o que acontece quando uma zona cai."
+              }
+            ]
+          },
+          "id": "l01-10",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece neste laboratório",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Sub-rede pública vs privada",
+                "CLF, SAA",
+                "ALB público, aplicação e banco privados",
+                "Que \"privada\" significa sem rota para o gateway de internet, não uma etiqueta"
+              ],
+              [
+                "AZ como domínio de falha",
+                "CLF, SAA",
+                "Duas AZs, duas tasks, banco Multi-AZ",
+                "Que redundância dentro de uma AZ não protege da queda dela"
+              ],
+              [
+                "Security group por origem",
+                "SAA, SOA",
+                "SG do banco referencia o SG da task",
+                "Que referência a grupo sobrevive a mudança de endereçamento; CIDR não"
+              ],
+              [
+                "Multi-AZ vs réplica de leitura",
+                "SAA",
+                "Standby síncrono que não atende consulta",
+                "Que Multi-AZ é disponibilidade e réplica é escala de leitura — nunca a mesma coisa"
+              ],
+              [
+                "Role de execução vs role de task",
+                "DVA, SAA",
+                "Duas roles distintas na task definition",
+                "Quem puxa a imagem é o agente; quem chama a API é a sua aplicação"
+              ],
+              [
+                "Segredo gerenciado",
+                "SAA, SOA",
+                "Senha gerada e rotacionada pelo RDS",
+                "Que segredo em variável de ambiente não acompanha rotação"
+              ],
+              [
+                "Health check e drenagem",
+                "DVA, SOA",
+                "Alvo raso, atraso de remoção reduzido",
+                "Que health check profundo no balanceador propaga falha de dependência"
+              ],
+              [
+                "PITR e retenção",
+                "SAA, SOA",
+                "Retenção de 7 dias habilitando ponto no tempo",
+                "Que retenção zero desliga o recurso, e que RTO só existe se foi ensaiado"
+              ],
+              [
+                "Custo por hora ligada",
+                "CLF, SAA",
+                "ALB, NAT e Multi-AZ cobram parados",
+                "Distinguir custo por hora de custo por uso é metade das questões de FinOps"
+              ]
+            ]
+          },
+          "id": "l01-11",
+          "position": 1
+        }
+      ],
+      "id": "l01-9",
+      "position": 3
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "A coluna da direita é a que importa. Requisito que não altera nenhuma peça do desenho é declaração de intenção, e desenho com peça que nenhum requisito pede é adorno. Este laboratório existe para você conseguir traçar essa linha nos dois sentidos."
+              }
+            ]
+          },
+          "id": "l01-13",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor assumido",
+              "O que ele acrescenta ao desenho"
+            ],
+            "rows": [
+              [
+                "Funcional: consultar e lançar pedidos",
+                "API HTTP com persistência relacional",
+                "ECS Fargate para a aplicação, RDS PostgreSQL para o estado"
+              ],
+              [
+                "Funcional: front acessível por navegador",
+                "SPA e API no mesmo domínio",
+                "CloudFront servindo o estático e roteando a rota de API para o ALB"
+              ],
+              [
+                "Disponibilidade em horário comercial",
+                "Perder uma AZ não para a operação",
+                "Duas AZs, no mínimo duas tasks, banco Multi-AZ"
+              ],
+              [
+                "Latência",
+                "p95 abaixo de 400 ms na API interna",
+                "Cache na borda para estático, pool de conexão dimensionado na aplicação"
+              ],
+              [
+                "Durabilidade e recuperação",
+                "RPO de 5 min, RTO de 1 h",
+                "PITR habilitado com 7 dias de retenção, e um ensaio de restauração"
+              ],
+              [
+                "Segurança",
+                "Nenhuma credencial de longa duração fora do cofre",
+                "Secrets Manager com rotação pelo RDS, KMS, task role de duas ações"
+              ],
+              [
+                "Privacidade",
+                "Dado de cliente não vai para log",
+                "Log estruturado com campo negado, e revisão do que a aplicação serializa"
+              ],
+              [
+                "Observabilidade",
+                "Diagnosticar erro relatado em minutos",
+                "Log, métrica e trace com o mesmo id de correlação"
+              ],
+              [
+                "Custo",
+                "Defensável para equipe de quatro pessoas",
+                "VPC endpoint em vez de NAT, classe de banco pequena, tag em tudo"
+              ],
+              [
+                "Manutenibilidade",
+                "Qualquer pessoa reproduz o ambiente",
+                "Terraform com variável por ambiente e nenhum passo manual no console"
+              ]
+            ]
+          },
+          "id": "l01-14",
+          "position": 1
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "O requisito que este laboratório NÃO atende, de propósito",
+            "content": "Não há recuperação de desastre regional. O RTO de 1 hora é para falha de AZ e para erro humano no dado, não para a perda de uma região inteira. Assumir que Multi-AZ cobre desastre regional é o erro de leitura mais caro desta arquitetura, e é justamente o assunto do laboratório de DR multi-região."
+          },
+          "id": "l01-15",
+          "position": 2
+        }
+      ],
+      "id": "l01-12",
+      "position": 4
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Arquitetura mínima: o que basta para estar no ar"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Comece por aqui, e resista à tentação de já colocar WAF, KMS e trace. O desenho mínimo tem uma função pedagógica que a versão completa não tem: ele deixa visível o que cada peça da versão de produção veio resolver. Quem já sobe tudo junto aprende a receita e não a decisão."
+              }
+            ]
+          },
+          "id": "l01-17",
+          "position": 0
+        },
+        {
+          "type": "arch_diagram",
+          "data": {
+            "title": "O mínimo que põe a aplicação .NET 8 no ar, com o banco fora do alcance da internet",
+            "groups": [
+              {
+                "label": "Quem chama",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "nav",
+                    "service": "user",
+                    "label": "Navegador",
+                    "note": "conhece um nome DNS e mais nada da topologia"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede pública",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "Application Load Balancer",
+                    "note": "único componente com endereço alcançável de fora"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — sub-rede privada",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "task",
+                    "service": "fargate",
+                    "label": "Task Fargate (.NET 8)",
+                    "note": "sem IP público; serve a API e o estático do próprio contêiner"
+                  },
+                  {
+                    "id": "db",
+                    "service": "rds",
+                    "label": "RDS PostgreSQL",
+                    "note": "aceita conexão só do security group da task"
+                  }
+                ]
+              },
+              {
+                "label": "Regional, fora da VPC",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ecr",
+                    "service": "ecr",
+                    "label": "Amazon ECR",
+                    "note": "guarda a imagem; é serviço regional, não mora na sua rede"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "nav",
+                "to": "alb",
+                "label": "HTTPS na 443, pelo nome DNS do balanceador",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "task",
+                "label": "encaminha para o IP privado da task sadia",
+                "style": "solid"
+              },
+              {
+                "from": "task",
+                "to": "db",
+                "label": "consulta SQL na 5432, dentro da VPC",
+                "style": "solid"
+              },
+              {
+                "from": "ecr",
+                "to": "task",
+                "label": "imagem puxada quando a task inicia",
+                "style": "dashed"
+              }
+            ],
+            "caption": "Percorra os passos: o que separa este desenho de um contêiner solto na internet é onde cada peça mora. O balanceador é o único endereço público, a aplicação não tem rota de entrada e o banco só responde a um security group. A ligação tracejada é a que derruba o primeiro deploy de quase todo mundo.",
+            "steps": [
+              {
+                "label": "O cliente só conhece o balanceador",
+                "detail": "O nome público resolve para o ALB, não para a aplicação. Isso não é enfeite de segurança: é o que permite trocar, escalar e derrubar tasks sem que ninguém do lado de fora perceba, porque nenhum cliente jamais soube o endereço delas.",
+                "nodes": [
+                  "nav",
+                  "alb"
+                ],
+                "edges": [
+                  "nav>alb"
+                ]
+              },
+              {
+                "label": "A aplicação não tem porta de entrada",
+                "detail": "A task fica em sub-rede privada e aceita tráfego apenas do security group do ALB. Se alguém descobrir o IP dela, não consegue abrir conexão — a regra é por security group de origem, não por faixa de IP.",
+                "nodes": [
+                  "alb",
+                  "task"
+                ],
+                "edges": [
+                  "alb>task"
+                ]
+              },
+              {
+                "label": "A imagem vem de fora da rede privada",
+                "detail": "O ECR é regional e não fica dentro da VPC. Uma task em sub-rede privada sem NAT Gateway e sem VPC endpoints para ECR, S3 e CloudWatch Logs falha ao puxar a imagem, e o erro aparece como task que morre antes de logar qualquer coisa. É o passo que mais custa tempo em um primeiro deploy.",
+                "nodes": [
+                  "ecr",
+                  "task"
+                ],
+                "edges": [
+                  "ecr>task"
+                ]
+              },
+              {
+                "label": "O banco aceita um único vizinho",
+                "detail": "O security group do RDS referencia o security group da task, não um CIDR. Regra por CIDR envelhece: a sub-rede muda, alguém abre para a VPC inteira, e o banco passa a aceitar qualquer coisa que rode ali dentro.",
+                "nodes": [
+                  "task",
+                  "db"
+                ],
+                "edges": [
+                  "task>db"
+                ]
+              },
+              {
+                "label": "Onde este desenho quebra",
+                "detail": "Uma task e uma instância de banco numa AZ só: o desenho inteiro cai com a AZ, e cai também durante todo deploy e toda manutenção do banco. É por isso que ele é o mínimo para aprender e não a arquitetura de produção — a próxima seção mostra exatamente quais peças esse requisito acrescenta.",
+                "nodes": [
+                  "alb",
+                  "task",
+                  "db"
+                ],
+                "edges": [
+                  "alb>task",
+                  "task>db"
+                ]
+              }
+            ]
+          },
+          "id": "l01-18",
+          "position": 1
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Ele é implantável e serve tráfego real. Também tem três fraquezas conhecidas, e nomeá-las agora é o que faz a próxima seção parecer óbvia em vez de arbitrária: uma AZ só, senha escolhida por uma pessoa, e nenhuma forma de responder "
+              },
+              {
+                "text": "por que está lento",
+                "italic": true
+              },
+              {
+                "text": " além de abrir o log e ler."
+              }
+            ]
+          },
+          "id": "l01-19",
+          "position": 2
+        }
+      ],
+      "id": "l01-16",
+      "position": 5
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Mesma aplicação, mesmo banco, mesma responsabilidade. O que muda é que cada restrição declarada na seção de requisitos passou a ter uma peça que a atende — e nada além disso entrou."
+              }
+            ]
+          },
+          "id": "l01-21",
+          "position": 0
+        },
+        {
+          "type": "arch_diagram",
+          "data": {
+            "title": "A mesma aplicação com as restrições da seção de requisitos aplicadas",
+            "groups": [
+              {
+                "label": "Borda",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cf",
+                    "service": "cloudfront",
+                    "label": "CloudFront",
+                    "note": "serve o estático em cache e encerra o TLS perto do usuário"
+                  },
+                  {
+                    "id": "waf",
+                    "service": "waf",
+                    "label": "AWS WAF",
+                    "note": "barra o que não deve custar computação na origem"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — pública, duas AZs",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB em 2 AZs",
+                    "note": "tira de rotação a task que falha health check"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada, duas AZs",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "svc",
+                    "service": "ecs",
+                    "label": "Serviço ECS: 2+ tasks",
+                    "note": "pelo menos uma task por AZ, para a queda de uma não zerar capacidade"
+                  },
+                  {
+                    "id": "db",
+                    "service": "rds",
+                    "label": "RDS primária",
+                    "note": "a única que aceita escrita e leitura"
+                  },
+                  {
+                    "id": "sb",
+                    "service": "postgres",
+                    "label": "Standby em outra AZ",
+                    "note": "cópia síncrona que NÃO atende consulta nenhuma"
+                  }
+                ]
+              },
+              {
+                "label": "Regional: imagem, segredo e chave",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "ecr",
+                    "service": "ecr",
+                    "label": "ECR",
+                    "note": "imagem referenciada por digest, não por tag móvel"
+                  },
+                  {
+                    "id": "sm",
+                    "service": "secretsmanager",
+                    "label": "Secrets Manager",
+                    "note": "senha gerada e rotacionada pelo próprio RDS"
+                  },
+                  {
+                    "id": "kms",
+                    "service": "kms",
+                    "label": "KMS",
+                    "note": "cifra segredo, volume do banco e log"
+                  }
+                ]
+              },
+              {
+                "label": "Observabilidade",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw",
+                    "service": "cloudwatch",
+                    "label": "CloudWatch",
+                    "note": "log estruturado, métrica de escala e alarme"
+                  },
+                  {
+                    "id": "xr",
+                    "service": "xray",
+                    "label": "X-Ray",
+                    "note": "mostra em qual salto a latência nasceu"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "waf",
+                "to": "cf",
+                "label": "regra gerenciada e limite de taxa por IP",
+                "style": "dashed"
+              },
+              {
+                "from": "cf",
+                "to": "alb",
+                "label": "só a requisição dinâmica; o estático morre no cache",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "svc",
+                "label": "roteia para task sadia e drena a que está saindo",
+                "style": "solid"
+              },
+              {
+                "from": "svc",
+                "to": "db",
+                "label": "escrita e leitura pela 5432",
+                "style": "solid"
+              },
+              {
+                "from": "db",
+                "to": "sb",
+                "label": "replicação síncrona; promove no failover",
+                "style": "dashed"
+              },
+              {
+                "from": "ecr",
+                "to": "svc",
+                "label": "digest imutável no start da task",
+                "style": "dashed"
+              },
+              {
+                "from": "sm",
+                "to": "svc",
+                "label": "senha lida em execução pela task role",
+                "style": "dashed"
+              },
+              {
+                "from": "kms",
+                "to": "sm",
+                "label": "chave que cifra o segredo em repouso",
+                "style": "dashed"
+              },
+              {
+                "from": "svc",
+                "to": "cw",
+                "label": "log com id de correlação e métrica de negócio",
+                "style": "dashed"
+              },
+              {
+                "from": "svc",
+                "to": "xr",
+                "label": "trace com o mesmo id propagado",
+                "style": "dashed"
+              }
+            ],
+            "caption": "Cada peça nova aqui rastreia a um requisito não funcional declarado, e nenhuma foi acrescentada por completude. Se você não conseguir apontar o requisito que justifica um componente, ele é adorno — e adorno em arquitetura custa dinheiro e superfície de falha. O tracejado é controle e observação; o contínuo é o caminho do dado.",
+            "steps": [
+              {
+                "label": "A borda decide o que nem chega",
+                "detail": "Requisito: absorver tráfego automatizado sem escalar computação. WAF e CloudFront respondem ou descartam antes da origem, e o estático em cache não consome task nenhuma. Barrar na borda é mais barato que escalar para aguentar.",
+                "nodes": [
+                  "waf",
+                  "cf"
+                ],
+                "edges": [
+                  "waf>cf"
+                ]
+              },
+              {
+                "label": "Duas AZs, e o que elas custam",
+                "detail": "Requisito: sobreviver à perda de uma zona de disponibilidade. ALB e serviço em duas AZs, com no mínimo duas tasks. O custo não é só a segunda task: tráfego entre AZs é cobrado, e é a linha que aparece na fatura sem ninguém ter pedido.",
+                "nodes": [
+                  "alb",
+                  "svc"
+                ],
+                "edges": [
+                  "cf>alb",
+                  "alb>svc"
+                ]
+              },
+              {
+                "label": "O segredo não está na imagem",
+                "detail": "Requisito: nenhuma credencial de longa duração no repositório nem na imagem. O RDS gera e rotaciona a senha no Secrets Manager, e a aplicação a lê em execução com a task role. Injetar como variável de ambiente também funciona e é mais simples, mas a variável não acompanha rotação sem uma nova task.",
+                "nodes": [
+                  "sm",
+                  "kms",
+                  "svc"
+                ],
+                "edges": [
+                  "sm>svc",
+                  "kms>sm"
+                ]
+              },
+              {
+                "label": "O standby não serve leitura",
+                "detail": "Requisito: reduzir o tempo de indisponibilidade em falha do banco. Multi-AZ mantém uma cópia síncrona que assume no failover e não atende consulta em nenhuma circunstância. Quem espera ganho de leitura aqui está pensando em réplica de leitura, que é outro recurso e outra linha na fatura.",
+                "nodes": [
+                  "db",
+                  "sb"
+                ],
+                "edges": [
+                  "db>sb"
+                ]
+              },
+              {
+                "label": "A imagem é imutável",
+                "detail": "Requisito: o que subiu em homologação é o que sobe em produção. Referenciar por digest, e não por tag como latest, é o que faz rollback significar voltar ao artefato exato em vez de reconstruir e torcer.",
+                "nodes": [
+                  "ecr",
+                  "svc"
+                ],
+                "edges": [
+                  "ecr>svc"
+                ]
+              },
+              {
+                "label": "Sem telemetria correlacionada, nada acima é operável",
+                "detail": "Requisito: diagnosticar um erro relatado pelo cliente em minutos. Log, métrica e trace compartilhando o mesmo id de correlação transformam a pergunta \"por que está lento\" em uma consulta. Sem isso, a arquitetura acima é bonita e cega.",
+                "nodes": [
+                  "svc",
+                  "cw",
+                  "xr"
+                ],
+                "edges": [
+                  "svc>cw",
+                  "svc>xr"
+                ]
+              }
+            ]
+          },
+          "id": "l01-22",
+          "position": 1
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Peça acrescentada",
+              "Requisito que a justifica",
+              "O que acontece sem ela"
+            ],
+            "rows": [
+              [
+                "Segunda AZ no ALB e no serviço",
+                "Perder uma AZ não para a operação",
+                "A queda de uma zona derruba tudo, e o deploy também derruba"
+              ],
+              [
+                "RDS Multi-AZ",
+                "RTO de 1 h em falha de infraestrutura",
+                "Falha do banco vira restauração manual de snapshot, em horas"
+              ],
+              [
+                "CloudFront",
+                "Latência do estático e TLS perto do usuário",
+                "Cada arquivo estático consome capacidade de task"
+              ],
+              [
+                "AWS WAF",
+                "Tráfego automatizado não escala a computação",
+                "Escalar para aguentar bot custa mais que barrar o bot"
+              ],
+              [
+                "Secrets Manager com rotação",
+                "Nenhuma credencial de longa duração",
+                "A senha vive no histórico do Terraform e nunca muda"
+              ],
+              [
+                "KMS com chave própria",
+                "Auditoria precisa saber qual chave cifra o quê",
+                "Você não consegue revogar acesso ao dado sem apagar o dado"
+              ],
+              [
+                "CloudWatch e X-Ray correlacionados",
+                "Diagnosticar em minutos",
+                "Investigação por leitura de log, e latência sem causa identificável"
+              ],
+              [
+                "Imagem por digest",
+                "O que subiu em homologação sobe em produção",
+                "Tag móvel faz rollback reconstruir artefato diferente"
+              ]
+            ]
+          },
+          "id": "l01-23",
+          "position": 2
+        }
+      ],
+      "id": "l01-20",
+      "position": 6
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "O caminho da requisição, ponta a ponta"
+      },
+      "children": [
+        {
+          "type": "flow_diagram",
+          "data": {
+            "title": "Da barra de endereços até a linha do banco, e de volta",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1. Resolução de nome",
+                "desc": "O navegador resolve o domínio para o CloudFront. Falha aqui é DNS, e nenhum log de aplicação vai mostrar."
+              },
+              {
+                "label": "2. Borda avalia",
+                "desc": "WAF aplica regra gerenciada e limite de taxa. Requisição descartada aqui nunca chega ao ALB e não aparece na métrica da aplicação — o que confunde quem investiga queda de tráfego."
+              },
+              {
+                "label": "3. Cache ou origem",
+                "desc": "Rota de estático responde do cache. Rota de API vai à origem com a política que preserva cabeçalho e método."
+              },
+              {
+                "label": "4. ALB escolhe alvo",
+                "desc": "Encaminha para uma task marcada como sadia. Se todas estão insalubres, devolve 503 sem tocar em nenhuma delas."
+              },
+              {
+                "label": "5. Aplicação autentica e valida",
+                "desc": "ASP.NET Core valida a requisição. Erro de validação é 400 e não deve gerar alarme; 500 deve."
+              },
+              {
+                "label": "6. Conexão do pool",
+                "desc": "O Npgsql entrega uma conexão já aberta. Pool esgotado aparece como timeout na aplicação, não como erro no banco — e é a confusão mais comum de diagnóstico."
+              },
+              {
+                "label": "7. Banco responde",
+                "desc": "A primária atende leitura e escrita. O standby recebe a replicação e não participa desta requisição em nenhum momento."
+              },
+              {
+                "label": "8. Telemetria fecha o laço",
+                "desc": "Log estruturado, métrica e span saem com o mesmo id de correlação, que é o que permite reconstruir esta sequência depois."
+              }
+            ]
+          },
+          "id": "l01-25",
+          "position": 0
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Um log da etapa 8 precisa carregar o suficiente para reconstruir as sete anteriores. Este é o formato mínimo, e note o que ele "
+              },
+              {
+                "text": "não",
+                "bold": true
+              },
+              {
+                "text": " tem: nenhum dado de cliente."
+              }
+            ]
+          },
+          "id": "l01-26",
+          "position": 1
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "json",
+            "code": "{\n  \"timestamp\": \"2026-08-06T14:22:31.784Z\",\n  \"level\": \"Warning\",\n  \"traceId\": \"1-68f3a2c7-4b1e9d0f5a2c8e7b6d4f1a3c\",\n  \"spanId\": \"5a2c8e7b6d4f1a3c\",\n  \"requestId\": \"req-9f2c\",\n  \"route\": \"GET /api/itens\",\n  \"statusCode\": 500,\n  \"durationMs\": 4187,\n  \"dbPoolWaitMs\": 4102,\n  \"dbPoolSize\": 20,\n  \"taskArn\": \"arn:aws:ecs:us-east-1:111122223333:task/app/9c1f\",\n  \"availabilityZone\": \"us-east-1b\",\n  \"imageDigest\": \"sha256:3f7a\",\n  \"message\": \"timeout aguardando conexao do pool\"\n}",
+            "filename": "log-de-uma-falha-real.json"
+          },
+          "id": "l01-27",
+          "position": 2
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Com esses campos, a pergunta "
+              },
+              {
+                "text": "por que deu 500",
+                "italic": true
+              },
+              {
+                "text": " tem resposta em uma consulta: 4.102 ms dos 4.187 ms foram espera de pool, com pool de 20. Não é lentidão de banco nem de rede — é dimensionamento de pool. Sem o campo "
+              },
+              {
+                "text": "dbPoolWaitMs",
+                "code": true
+              },
+              {
+                "text": ", a mesma investigação vira meia hora de suposição."
+              }
+            ]
+          },
+          "id": "l01-28",
+          "position": 3
+        }
+      ],
+      "id": "l01-24",
+      "position": 7
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "type": "decision_box",
+          "data": {
+            "scenario": "Aplicação .NET 8 com estado em banco relacional, equipe de quatro pessoas, pico previsível em horário comercial e nenhum time de plataforma para operar infraestrutura.",
+            "winner": "ECS Fargate com RDS PostgreSQL Multi-AZ",
+            "why": "Fargate remove a camada que a equipe não tem gente para operar — patch de sistema operacional, capacidade de cluster, drenagem de instância — e mantém o modelo de contêiner que o time já usa localmente. O RDS gerenciado dá backup, PITR, failover e rotação de senha sem que ninguém precise escrever um script. A soma é a menor quantidade de operação por unidade de capacidade, que é o critério certo quando a restrição escassa é gente, não dinheiro.",
+            "alternatives": [
+              {
+                "name": "EC2 com Auto Scaling",
+                "downside": "Mais barato por unidade de CPU e mais caro em atenção humana: AMI, patch, ciclo de vida e drenagem passam a ser problema seu. Vale quando há compromisso de capacidade de longo prazo ou dependência que exige acesso ao host."
+              },
+              {
+                "name": "AWS Lambda",
+                "downside": "Excelente para o processamento assíncrono desta mesma aplicação, ruim como destino de API com conexão persistente de banco: cada execução concorrente quer sua conexão, e o pool que protege o RDS deixa de existir. Sem RDS Proxy, a concorrência esgota o banco antes de escalar."
+              },
+              {
+                "name": "DynamoDB em vez de PostgreSQL",
+                "downside": "Elimina o gargalo de conexão e escala melhor, ao preço de modelar por padrão de acesso e perder consulta relacional ad hoc. O relatório que o time comercial pede toda semana passa a exigir um segundo caminho."
+              },
+              {
+                "name": "AWS App Runner",
+                "downside": "Menos peças para configurar que o ECS, e menos controle sobre rede, balanceador e integração de VPC. É a escolha certa quando ninguém vai estudar a rede — e este laboratório existe justamente para estudá-la."
+              }
+            ]
+          },
+          "id": "l01-30",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativa",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Saída da sub-rede privada",
+                "VPC endpoints",
+                "NAT Gateway",
+                "Nenhum caminho precisa da internet; o gateway do S3 não cobra",
+                "Chamada a API externa deixa de funcionar até o NAT entrar"
+              ],
+              [
+                "Front",
+                "Estático no CloudFront",
+                "SSR na task",
+                "HTML pronto na borda, sem consumir capacidade de aplicação",
+                "Renderização por usuário exige voltar à origem"
+              ],
+              [
+                "Referência de imagem",
+                "Digest",
+                "Tag como latest",
+                "Rollback volta ao artefato exato",
+                "Um passo a mais no pipeline para capturar o digest"
+              ],
+              [
+                "Segredo",
+                "Lido em execução",
+                "Injetado na task definition",
+                "Rotação passa a valer sem novo deploy",
+                "Código a mais e uma chamada na inicialização"
+              ],
+              [
+                "Alvo do health check",
+                "Raso",
+                "Profundo, tocando o banco",
+                "Falha de dependência não remove todas as tasks de uma vez",
+                "Task com banco inacessível continua recebendo tráfego e falhando rápido"
+              ],
+              [
+                "Banco",
+                "Multi-AZ",
+                "Instância única com snapshot",
+                "RTO de minutos em vez de horas",
+                "Praticamente o dobro do custo do banco, sem ganho de leitura"
+              ]
+            ]
+          },
+          "id": "l01-31",
+          "position": 1
+        }
+      ],
+      "id": "l01-29",
+      "position": 8
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Construir: a rede, e a decisão que define a fatura"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "A rede é o primeiro passo porque tudo depois mora dentro dela. Duas sub-redes públicas, duas privadas, e a escolha entre NAT Gateway e VPC endpoints — que é onde a maior parte do custo evitável deste laboratório se decide."
+              }
+            ]
+          },
+          "id": "l01-33",
+          "position": 0
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "hcl",
+            "code": "# Duas AZs porque o requisito é sobreviver à perda de uma. Duas sub-redes\n# públicas (só o ALB mora nelas) e duas privadas (aplicação e banco).\ndata \"aws_availability_zones\" \"disponiveis\" {\n  state = \"available\"\n}\n\nresource \"aws_vpc\" \"principal\" {\n  cidr_block           = \"10.20.0.0/16\"\n  enable_dns_hostnames = true          # o endpoint do RDS é um nome, não um IP\n  enable_dns_support   = true\n  tags                 = local.tags\n}\n\nresource \"aws_subnet\" \"publica\" {\n  count                   = 2\n  vpc_id                  = aws_vpc.principal.id\n  cidr_block              = cidrsubnet(aws_vpc.principal.cidr_block, 8, count.index)\n  availability_zone       = data.aws_availability_zones.disponiveis.names[count.index]\n  map_public_ip_on_launch = false      # nada nesta sub-rede precisa de IP automático\n  tags                    = merge(local.tags, { Name = \"publica-${count.index}\" })\n}\n\nresource \"aws_subnet\" \"privada\" {\n  count             = 2\n  vpc_id            = aws_vpc.principal.id\n  cidr_block        = cidrsubnet(aws_vpc.principal.cidr_block, 8, count.index + 10)\n  availability_zone = data.aws_availability_zones.disponiveis.names[count.index]\n  tags              = merge(local.tags, { Name = \"privada-${count.index}\" })\n}\n\n# ── A parte que decide a fatura deste laboratório ──────────────────────────\n# A task precisa alcançar ECR, S3 (onde as camadas da imagem vivem) e\n# CloudWatch Logs. Há dois caminhos:\n#\n#   NAT Gateway  → simples, e cobra por hora ligada MAIS por GB processado.\n#   VPC endpoint → o trafego nao sai da rede da AWS; o gateway do S3 e gratuito.\n#\n# Aqui vão os endpoints, porque o laboratório não precisa de saída para a\n# internet em nenhum outro caminho. Se a sua aplicação chamar uma API externa,\n# aí o NAT volta a ser necessário — e a decisão passa a ser consciente.\nresource \"aws_vpc_endpoint\" \"s3\" {\n  vpc_id            = aws_vpc.principal.id\n  service_name      = \"com.amazonaws.${var.regiao}.s3\"\n  vpc_endpoint_type = \"Gateway\"\n  route_table_ids   = [aws_route_table.privada.id]\n  tags              = local.tags\n}\n\nresource \"aws_vpc_endpoint\" \"interface\" {\n  for_each            = toset([\"ecr.api\", \"ecr.dkr\", \"logs\", \"secretsmanager\"])\n  vpc_id              = aws_vpc.principal.id\n  service_name        = \"com.amazonaws.${var.regiao}.${each.key}\"\n  vpc_endpoint_type   = \"Interface\"\n  subnet_ids          = aws_subnet.privada[*].id\n  security_group_ids  = [aws_security_group.endpoints.id]\n  private_dns_enabled = true           # sem isto o SDK continua tentando o nome público\n  tags                = local.tags\n}",
+            "filename": "terraform/rede.tf"
+          },
+          "id": "l01-34",
+          "position": 1
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "O erro que faz a task morrer sem log nenhum",
+            "content": "Sem private_dns_enabled no endpoint de interface, o SDK dentro do contêiner continua resolvendo o nome público do ECR, a conexão não completa e a task morre antes de escrever a primeira linha de log. O sintoma é uma task que aparece e desaparece no console, e a causa não está em nenhum log de aplicação porque a aplicação nunca subiu."
+          },
+          "id": "l01-35",
+          "position": 2
+        }
+      ],
+      "id": "l01-32",
+      "position": 9
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Construir: o banco, o segredo e a cadeia de security groups"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Três security groups em cadeia, e nenhum deles cita faixa de IP. Essa é a diferença entre uma regra que continua correta em um ano e uma que alguém vai alargar para \"a VPC inteira\" no primeiro incidente."
+              }
+            ]
+          },
+          "id": "l01-37",
+          "position": 0
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "hcl",
+            "code": "# Três security groups em cadeia. Nenhum deles cita faixa de IP da VPC: a\n# referência é ao GRUPO de origem, e é isso que faz a regra continuar correta\n# quando as sub-redes mudarem.\nresource \"aws_security_group\" \"alb\" {\n  name   = \"alb\"\n  vpc_id = aws_vpc.principal.id\n\n  ingress {\n    description     = \"HTTPS vindo apenas do CloudFront\"\n    from_port       = 443\n    to_port         = 443\n    protocol        = \"tcp\"\n    prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront.id]\n  }\n\n  egress {\n    from_port       = 8080\n    to_port         = 8080\n    protocol        = \"tcp\"\n    security_groups = [aws_security_group.task.id]\n  }\n\n  tags = local.tags\n}\n\nresource \"aws_security_group\" \"task\" {\n  name   = \"task\"\n  vpc_id = aws_vpc.principal.id\n\n  ingress {\n    description     = \"so o ALB alcanca a aplicacao\"\n    from_port       = 8080\n    to_port         = 8080\n    protocol        = \"tcp\"\n    security_groups = [aws_security_group.alb.id]\n  }\n\n  egress {\n    description = \"saida para os endpoints e para o banco\"\n    from_port   = 0\n    to_port     = 0\n    protocol    = \"-1\"\n    cidr_blocks = [aws_vpc.principal.cidr_block]\n  }\n\n  tags = local.tags\n}\n\nresource \"aws_security_group\" \"banco\" {\n  name   = \"banco\"\n  vpc_id = aws_vpc.principal.id\n\n  ingress {\n    description     = \"5432 apenas do security group da task\"\n    from_port       = 5432\n    to_port         = 5432\n    protocol        = \"tcp\"\n    security_groups = [aws_security_group.task.id]\n  }\n\n  tags = local.tags\n}\n\nresource \"aws_db_instance\" \"principal\" {\n  identifier     = \"app-postgres\"\n  engine         = \"postgres\"\n  instance_class = var.classe_banco\n  allocated_storage     = 20\n  max_allocated_storage = 100          # crescimento automatico, com teto declarado\n\n  db_name  = \"appdb\"\n  username = \"appadmin\"\n\n  # O RDS gera a senha, guarda no Secrets Manager e rotaciona. Sem esta linha\n  # alguem escolhe a senha, e ela vaza para o histórico do Terraform.\n  manage_master_user_password = true\n\n  multi_az               = true        # requisito: falha de AZ nao para a escrita\n  storage_encrypted      = true\n  kms_key_id             = aws_kms_key.dados.arn\n  db_subnet_group_name   = aws_db_subnet_group.privada.name\n  vpc_security_group_ids = [aws_security_group.banco.id]\n\n  backup_retention_period = 7          # habilita PITR; 0 desliga\n  deletion_protection     = true\n  skip_final_snapshot     = false\n  final_snapshot_identifier = \"app-postgres-final\"\n\n  performance_insights_enabled = true\n  tags                         = local.tags\n}",
+            "filename": "terraform/banco.tf"
+          },
+          "id": "l01-38",
+          "position": 1
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "A linha "
+              },
+              {
+                "text": "manage_master_user_password = true",
+                "code": true
+              },
+              {
+                "text": " merece atenção: com ela, o RDS gera a senha, guarda no Secrets Manager e rotaciona. Sem ela, alguém escolhe a senha, ela entra no estado do Terraform e passa a existir em texto claro em qualquer lugar onde esse estado esteja."
+              }
+            ]
+          },
+          "id": "l01-39",
+          "position": 2
+        }
+      ],
+      "id": "l01-36",
+      "position": 10
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Construir: a imagem .NET 8"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Multi-stage, usuário não-root e a variável de porta que mudou no .NET 8. São três detalhes pequenos e cada um deles aparece em revisão de segurança ou em ticket de contêiner que não sobe."
+              }
+            ]
+          },
+          "id": "l01-41",
+          "position": 0
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "dockerfile",
+            "code": "# Multi-stage: o SDK compila, a imagem final só roda. A diferença de tamanho\n# não é vaidade — superfície menor é menos CVE para responder depois.\nFROM mcr.microsoft.com/dotnet/sdk:8.0 AS build\nWORKDIR /src\nCOPY [\"Api/Api.csproj\", \"Api/\"]\nRUN dotnet restore \"Api/Api.csproj\"\nCOPY . .\nRUN dotnet publish \"Api/Api.csproj\" -c Release -o /app/publish     /p:UseAppHost=false /p:PublishReadyToRun=true\n\nFROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final\nWORKDIR /app\nCOPY --from=build /app/publish .\n\n# As imagens .NET 8 já trazem um usuário não-root pronto. Rodar como root\n# dentro do contêiner é gratuito de evitar e caro de justificar em auditoria.\nUSER $APP_UID\n\n# .NET 8 trocou ASPNETCORE_URLS por ASPNETCORE_HTTP_PORTS neste cenário.\nENV ASPNETCORE_HTTP_PORTS=8080\nEXPOSE 8080\nENTRYPOINT [\"dotnet\", \"Api.dll\"]",
+            "filename": "Dockerfile"
+          },
+          "id": "l01-42",
+          "position": 1
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "E a aplicação. O trecho abaixo concentra as duas decisões que este laboratório quer ensinar em código: de onde vem a senha, e por que existem dois endpoints de saúde em vez de um."
+              }
+            ]
+          },
+          "id": "l01-43",
+          "position": 2
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "csharp",
+            "code": "using Amazon.SecretsManager;\nusing Amazon.SecretsManager.Model;\nusing Microsoft.EntityFrameworkCore;\nusing Npgsql;\nusing System.Text.Json;\n\nvar builder = WebApplication.CreateBuilder(args);\n\n// A senha é lida em EXECUÇÃO, com a task role. Nada de credencial na imagem\n// nem no repositório. O RDS rotaciona; ler aqui faz a rotação valer sem\n// precisar de um novo deploy.\nvar segredoArn = builder.Configuration[\"SEGREDO_BANCO_ARN\"]!;\nvar host = builder.Configuration[\"BANCO_HOST\"]!;\n\nusing var sm = new AmazonSecretsManagerClient();\nvar segredo = await sm.GetSecretValueAsync(new GetSecretValueRequest { SecretId = segredoArn });\nvar credencial = JsonSerializer.Deserialize<Credencial>(segredo.SecretString)!;\n\nvar conexao = new NpgsqlConnectionStringBuilder\n{\n    Host = host,\n    Database = \"appdb\",\n    Username = credencial.username,\n    Password = credencial.password,\n    SslMode = SslMode.VerifyFull,\n    RootCertificate = \"/app/rds-ca.pem\",\n\n    // Pool por processo. O padrão do Npgsql é 100, e o RDS deriva\n    // max_connections da memória da instância — duas tasks com pool cheio\n    // podem esgotar o banco antes de a CPU dele subir.\n    Pooling = true,\n    MaxPoolSize = 20,\n    Timeout = 5,\n    CommandTimeout = 10,\n}.ToString();\n\nbuilder.Services.AddDbContext<AppDb>(o => o.UseNpgsql(conexao));\n\n// Dois endpoints DIFERENTES, e é a distinção que evita apagão:\n//   /health  → o processo está vivo? Não toca em dependência nenhuma.\n//   /ready   → consigo atender? Toca no banco.\n// O ALB usa /health. Se ele usasse /ready, uma oscilação do banco tiraria\n// TODAS as tasks de rotação ao mesmo tempo, e o balanceador transformaria um\n// problema do banco numa indisponibilidade total.\nbuilder.Services.AddHealthChecks()\n    .AddNpgSql(conexao, name: \"banco\", tags: [\"ready\"]);\n\nvar app = builder.Build();\n\napp.MapGet(\"/health\", () => Results.Ok(new { status = \"ok\" }));\napp.MapHealthChecks(\"/ready\", new()\n{\n    Predicate = c => c.Tags.Contains(\"ready\"),\n});\n\napp.MapGet(\"/api/itens\", async (AppDb db) => await db.Itens.AsNoTracking().Take(50).ToListAsync());\n\napp.Run();\n\nrecord Credencial(string username, string password);",
+            "filename": "Api/Program.cs"
+          },
+          "id": "l01-44",
+          "position": 3
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "danger",
+            "title": "Health check profundo no balanceador transforma oscilação em apagão",
+            "content": "Se o alvo do ALB fosse /ready, uma oscilação de 30 segundos no banco marcaria TODAS as tasks como insalubres ao mesmo tempo. O balanceador removeria todas de rotação e a resposta ao cliente passaria de erro intermitente de banco para 503 total — o balanceador amplificaria a falha em vez de contê-la. Health check do balanceador responde \"este processo está vivo\"; profundidade de dependência é assunto de alarme, não de rotação de tráfego."
+          },
+          "id": "l01-45",
+          "position": 4
+        }
+      ],
+      "id": "l01-40",
+      "position": 11
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Construir: o serviço no ECS e o balanceador"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Aqui aparecem as duas roles que mais se confundem, o desired_count que atende ao requisito de AZ, e dois parâmetros que fazem o deploy parecer travado quando ficam no padrão."
+              }
+            ]
+          },
+          "id": "l01-47",
+          "position": 0
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "hcl",
+            "code": "# execution role: quem PUXA a imagem e escreve log. É do agente do ECS.\nresource \"aws_iam_role\" \"execucao\" {\n  name               = \"app-execucao\"\n  assume_role_policy = data.aws_iam_policy_document.confia_ecs_tasks.json\n}\n\nresource \"aws_iam_role_policy_attachment\" \"execucao_base\" {\n  role       = aws_iam_role.execucao.name\n  policy_arn = \"arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy\"\n}\n\n# task role: quem a SUA APLICAÇÃO é. Trocar as duas é o erro mais comum aqui.\nresource \"aws_iam_role\" \"task\" {\n  name               = \"app-task\"\n  assume_role_policy = data.aws_iam_policy_document.confia_ecs_tasks.json\n}\n\n# Menor privilégio de verdade: um segredo, uma chave, duas ações.\ndata \"aws_iam_policy_document\" \"task\" {\n  statement {\n    actions   = [\"secretsmanager:GetSecretValue\"]\n    resources = [aws_db_instance.principal.master_user_secret[0].secret_arn]\n  }\n  statement {\n    actions   = [\"kms:Decrypt\"]\n    resources = [aws_kms_key.dados.arn]\n    condition {\n      test     = \"StringEquals\"\n      variable = \"kms:ViaService\"\n      values   = [\"secretsmanager.${var.regiao}.amazonaws.com\"]\n    }\n  }\n}\n\nresource \"aws_ecs_task_definition\" \"app\" {\n  family                   = \"app\"\n  requires_compatibilities = [\"FARGATE\"]\n  network_mode             = \"awsvpc\"\n  cpu                      = 512       # combinações de CPU e memória são fixas no Fargate\n  memory                   = 1024\n  execution_role_arn       = aws_iam_role.execucao.arn\n  task_role_arn            = aws_iam_role.task.arn\n\n  container_definitions = jsonencode([{\n    name      = \"api\"\n    image     = \"${aws_ecr_repository.app.repository_url}@${var.digest_imagem}\"\n    essential = true\n    portMappings = [{ containerPort = 8080, protocol = \"tcp\" }]\n\n    environment = [\n      { name = \"ASPNETCORE_HTTP_PORTS\", value = \"8080\" },\n      { name = \"SEGREDO_BANCO_ARN\", value = aws_db_instance.principal.master_user_secret[0].secret_arn },\n      { name = \"BANCO_HOST\", value = aws_db_instance.principal.address },\n    ]\n\n    logConfiguration = {\n      logDriver = \"awslogs\"\n      options = {\n        \"awslogs-group\"         = aws_cloudwatch_log_group.app.name\n        \"awslogs-region\"        = var.regiao\n        \"awslogs-stream-prefix\" = \"api\"\n      }\n    }\n\n    # O health check do CONTÊINER pode ser mais fundo que o do balanceador.\n    healthCheck = {\n      command     = [\"CMD-SHELL\", \"wget -q -O- http://localhost:8080/health || exit 1\"]\n      interval    = 15\n      timeout     = 3\n      retries     = 3\n      startPeriod = 20\n    }\n  }])\n\n  tags = local.tags\n}\n\nresource \"aws_ecs_service\" \"app\" {\n  name            = \"app\"\n  cluster         = aws_ecs_cluster.principal.id\n  task_definition = aws_ecs_task_definition.app.arn\n  desired_count   = 2                  # uma por AZ: perder uma AZ nao zera capacidade\n  launch_type     = \"FARGATE\"\n\n  network_configuration {\n    subnets          = aws_subnet.privada[*].id\n    security_groups  = [aws_security_group.task.id]\n    assign_public_ip = false           # a task nao tem endereco publico\n  }\n\n  load_balancer {\n    target_group_arn = aws_lb_target_group.app.arn\n    container_name   = \"api\"\n    container_port   = 8080\n  }\n\n  # Deploy ruim volta sozinho em vez de esperar alguem perceber.\n  deployment_circuit_breaker {\n    enable   = true\n    rollback = true\n  }\n\n  # Espera o novo alvo ficar sadio antes de contar como pronto.\n  health_check_grace_period_seconds = 30\n  enable_execute_command            = true\n\n  depends_on = [aws_lb_listener.https]\n  tags       = local.tags\n}\n\nresource \"aws_lb_target_group\" \"app\" {\n  name        = \"app\"\n  port        = 8080\n  protocol    = \"HTTP\"\n  vpc_id      = aws_vpc.principal.id\n  target_type = \"ip\"                   # obrigatorio com awsvpc\n\n  health_check {\n    path                = \"/health\"    # raso de propósito: ver a seção de armadilhas\n    matcher             = \"200\"\n    interval            = 15\n    timeout             = 5\n    healthy_threshold   = 2\n    unhealthy_threshold = 3\n  }\n\n  # Padrao e 300s. Uma API HTTP curta nao precisa de 5 minutos para drenar, e\n  # esse valor faz cada deploy parecer travado.\n  deregistration_delay = 20\n  tags                 = local.tags\n}",
+            "filename": "terraform/ecs.tf"
+          },
+          "id": "l01-48",
+          "position": 1
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Note a policy da task role: um segredo, uma chave, duas ações, e uma condição que restringe o uso da chave ao Secrets Manager. É a forma que o laboratório de menor privilégio vai generalizar — derivar a permissão do uso real em vez de partir do amplo e nunca voltar."
+              }
+            ]
+          },
+          "id": "l01-49",
+          "position": 2
+        }
+      ],
+      "id": "l01-46",
+      "position": 12
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Implantar, e provar que está no ar"
+      },
+      "children": [
+        {
+          "type": "code_block",
+          "data": {
+            "language": "bash",
+            "code": "# 1. Construir e publicar a imagem, capturando o DIGEST (não a tag).\naws ecr get-login-password --region \"$REGIAO\" \\\n  | docker login --username AWS --password-stdin \"$CONTA.dkr.ecr.$REGIAO.amazonaws.com\"\n\ndocker build -t app:local .\ndocker tag app:local \"$REPO:$(git rev-parse --short HEAD)\"\ndocker push \"$REPO:$(git rev-parse --short HEAD)\"\n\nDIGEST=$(aws ecr describe-images --repository-name app \\\n  --image-ids imageTag=\"$(git rev-parse --short HEAD)\" \\\n  --query 'imageDetails[0].imageDigest' --output text)\n\n# 2. Aplicar a infraestrutura amarrada àquele digest exato.\nterraform apply -var=\"digest_imagem=$DIGEST\"\n\n# 3. Acompanhar o rollout. O circuit breaker reverte sozinho se falhar.\naws ecs wait services-stable --cluster app --services app\n\n# 4. Provar que está no ar, e que o front e a API respondem.\ncurl -fsS \"https://$DOMINIO/health\"\ncurl -fsS \"https://$DOMINIO/api/itens\" | head -c 200",
+            "filename": "implantar.sh"
+          },
+          "id": "l01-51",
+          "position": 0
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "O que confirma o sucesso não é o Terraform terminar sem erro. É esta sequência: o serviço estabilizar, as duas rotas responderem, e o log do CloudWatch mostrar duas tasks em AZs diferentes atendendo. Se o rollout reverteu, o circuit breaker agiu e a causa está no evento do serviço, não no log da aplicação."
+              }
+            ]
+          },
+          "id": "l01-52",
+          "position": 1
+        },
+        {
+          "type": "list",
+          "data": {
+            "items": [
+              "aws ecs describe-services devolve runningCount igual a desiredCount e nenhum evento de falha recente.",
+              "As duas tasks aparecem em zonas de disponibilidade diferentes — se as duas estão na mesma, a distribuição não está funcionando e a queda de uma AZ ainda derruba tudo.",
+              "O alvo do target group está healthy para as duas.",
+              "A rota de estático responde do cache da borda e a de API chega à origem.",
+              "Nenhum 5xx durante o rollout, verificado no log de acesso do balanceador."
+            ],
+            "ordered": false
+          },
+          "id": "l01-53",
+          "position": 2
+        }
+      ],
+      "id": "l01-50",
+      "position": 13
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico de cada uma"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Laboratório que só testa o caminho felizes ensina metade. As três falhas abaixo são as que aparecem de verdade nesta arquitetura, e cada uma tem um sintoma que aponta para o lugar errado se você não souber o que procurar."
+              }
+            ]
+          },
+          "id": "l01-55",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Falha injetada",
+              "Como injetar",
+              "Sintoma enganoso",
+              "Diagnóstico correto"
+            ],
+            "rows": [
+              [
+                "Banco inalcançável",
+                "Remover a regra de 5432 do security group",
+                "Aplicação devolve 500 e o ALB mantém as tasks em rotação",
+                "O alvo continua sadio porque o health check é raso — de propósito. O sinal está no alarme de erro, não na rotação"
+              ],
+              [
+                "Pool esgotado",
+                "Baixar MaxPoolSize para 2 e gerar carga",
+                "Timeout que parece lentidão de banco, com CPU do RDS baixa",
+                "dbPoolWaitMs alto com CPU de banco baixa é dimensionamento de pool, não capacidade de banco"
+              ],
+              [
+                "Imagem inacessível",
+                "Apagar um dos endpoints de interface do ECR",
+                "Task aparece e desaparece sem nenhum log de aplicação",
+                "A causa está no evento de paragem da task e no motivo do stopped, não em log — a aplicação nunca subiu"
+              ],
+              [
+                "Queda de AZ",
+                "Parar as tasks de uma zona e observar",
+                "Latência sobe e a capacidade cai pela metade por alguns segundos",
+                "Prova que desired_count de 2 é o mínimo, não o confortável: durante a recomposição você opera com uma task"
+              ],
+              [
+                "Deploy ruim",
+                "Publicar imagem que falha no start",
+                "O serviço parece travado em \"in progress\"",
+                "O circuit breaker reverte e registra no evento do serviço; sem ele, o serviço tentaria indefinidamente"
+              ]
+            ]
+          },
+          "id": "l01-56",
+          "position": 1
+        }
+      ],
+      "id": "l01-54",
+      "position": 14
+    },
+    {
+      "type": "quiz",
+      "data": {
+        "question": "A task do seu serviço está em sub-rede privada, sem NAT Gateway. Ela aparece no console, desaparece em segundos e não escreve nenhuma linha de log da aplicação. Qual é a causa MAIS provável?",
+        "options": [
+          "A aplicação está falhando no start e o log foi perdido",
+          "O health check do target group está apontando para a porta errada",
+          "O security group do banco está bloqueando a conexão na 5432",
+          "A task não conseguiu alcançar ECR, S3 e CloudWatch Logs para puxar a imagem"
+        ],
+        "correctIndex": 3,
+        "explanation": "A ausência total de log é o sinal decisivo: se a aplicação tivesse iniciado e falhado, existiria log, porque o driver awslogs já estaria conectado. Sem NAT e sem VPC endpoints para ecr.api, ecr.dkr, S3 (onde as camadas da imagem vivem) e logs, o agente do ECS não completa o download e a task morre antes de qualquer código seu rodar. Onde procurar: o campo stoppedReason de describe-tasks, não o CloudWatch. · A primeira alternativa inverte a ordem dos fatos — falha no start produz log, e é justamente a existência de log que distingue os dois casos. · A terceira descreve um problema real, mas o sintoma dele é diferente: a task fica em execução e o alvo nunca vira sadio, com 503 no balanceador. · A quarta pressupõe que a aplicação chegou a tentar conectar no banco, o que exigiria que ela tivesse subido. A regra generalizável: ausência de log aponta para antes da aplicação; presença de log aponta para dentro dela."
+      },
+      "id": "l01-101",
+      "position": 15
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Segurança: o risco, o controle e a detecção"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Responsabilidade compartilhada, aplicada a este desenho: a AWS responde pelo hipervisor, pelo patch do sistema operacional do Fargate e pelo motor do RDS. Você responde por tudo na tabela abaixo — e a linha mais provável não é ataque externo, é permissão ampla que alguém deixou passar."
+              }
+            ]
+          },
+          "id": "l01-58",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Prevenção",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Credencial no repositório",
+                "Alta",
+                "Alto",
+                "Senha gerenciada pelo RDS; nenhuma no código",
+                "Varredura de segredo no CI",
+                "Rotacionar pelo Secrets Manager e auditar uso no CloudTrail"
+              ],
+              [
+                "Policy ampla na task role",
+                "Alta",
+                "Alto",
+                "Duas ações e recurso específico",
+                "IAM Access Analyzer sobre uso real",
+                "Reduzir para o que foi usado em 30 dias e reaplicar"
+              ],
+              [
+                "Banco exposto",
+                "Média",
+                "Crítico",
+                "Sub-rede privada e SG por grupo de origem",
+                "AWS Config sobre acesso público",
+                "Remover a regra e verificar log de conexão"
+              ],
+              [
+                "Dado pessoal em log",
+                "Média",
+                "Alto",
+                "Log estruturado com campo negado",
+                "Consulta periódica por padrão de documento",
+                "Expurgar o stream e corrigir o serializador"
+              ],
+              [
+                "Imagem com CVE crítica",
+                "Média",
+                "Médio",
+                "Base slim e reconstrução periódica",
+                "Scan on push no ECR",
+                "Reconstruir e implantar por digest novo"
+              ],
+              [
+                "Tráfego automatizado",
+                "Alta",
+                "Médio",
+                "Regra gerenciada e limite de taxa no WAF",
+                "Métrica de bloqueio do WAF",
+                "Endurecer a regra para o padrão observado"
+              ],
+              [
+                "Exclusão acidental do banco",
+                "Baixa",
+                "Crítico",
+                "deletion_protection e snapshot final",
+                "CloudTrail sobre DeleteDBInstance",
+                "Restaurar por PITR e revisar quem tinha a permissão"
+              ]
+            ]
+          },
+          "id": "l01-59",
+          "position": 1
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "json",
+            "code": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Sid\": \"LerApenasOSegredoDesteBanco\",\n      \"Effect\": \"Allow\",\n      \"Action\": \"secretsmanager:GetSecretValue\",\n      \"Resource\": \"arn:aws:secretsmanager:us-east-1:111122223333:secret:rds!db-9c1f-*\"\n    },\n    {\n      \"Sid\": \"DecifrarApenasViaSecretsManager\",\n      \"Effect\": \"Allow\",\n      \"Action\": \"kms:Decrypt\",\n      \"Resource\": \"arn:aws:kms:us-east-1:111122223333:key/8b2e\",\n      \"Condition\": {\n        \"StringEquals\": { \"kms:ViaService\": \"secretsmanager.us-east-1.amazonaws.com\" }\n      }\n    }\n  ]\n}",
+            "filename": "task-role.json"
+          },
+          "id": "l01-60",
+          "position": 2
+        },
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Nenhum "
+              },
+              {
+                "text": "*",
+                "code": true
+              },
+              {
+                "text": " em "
+              },
+              {
+                "text": "Resource",
+                "code": true
+              },
+              {
+                "text": ". A condição em "
+              },
+              {
+                "text": "kms:ViaService",
+                "code": true
+              },
+              {
+                "text": " é o detalhe que separa permissão apertada de permissão que parece apertada: sem ela, a task poderia decifrar qualquer coisa cifrada com aquela chave, e não apenas o segredo do banco."
+              }
+            ]
+          },
+          "id": "l01-61",
+          "position": 3
+        }
+      ],
+      "id": "l01-57",
+      "position": 16
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel tem de responder"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Painel se justifica por pergunta respondida, não por gráfico exibido. Se um gráfico não responde a nenhuma das perguntas abaixo, ele está ocupando espaço que alguém vai precisar às três da manhã."
+              }
+            ]
+          },
+          "id": "l01-63",
+          "position": 0
+        },
+        {
+          "type": "list",
+          "data": {
+            "items": [
+              "A aplicação está no ar? Contagem de alvos sadios por AZ, não média.",
+              "Está lenta? Latência p95 do balanceador separada da latência da aplicação — a diferença entre as duas é rede e fila.",
+              "O erro é nosso ou do cliente? 5xx e 4xx em séries separadas; juntá-las esconde regressão atrás de erro de integração.",
+              "O banco é o gargalo? Conexões ativas e espera de pool ao lado da CPU do RDS.",
+              "Estamos perto de escalar? Utilização de CPU e memória das tasks contra o alvo da política.",
+              "O custo mudou de patamar? Custo diário por tag, com a linha da semana anterior."
+            ],
+            "ordered": false
+          },
+          "id": "l01-64",
+          "position": 1
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Alarme",
+              "Limiar inicial",
+              "Por que este limiar",
+              "Ação de plantão"
+            ],
+            "rows": [
+              [
+                "Alvos sadios abaixo de 2",
+                "Por 2 minutos",
+                "Abaixo de 2 já não há tolerância a falha de AZ",
+                "Investigar antes de o segundo cair"
+              ],
+              [
+                "5xx acima de 1% das requisições",
+                "5 minutos",
+                "Abaixo disso é ruído de borda e de cliente",
+                "Correlacionar por traceId no X-Ray"
+              ],
+              [
+                "p95 acima de 400 ms",
+                "10 minutos",
+                "É o requisito declarado; alarmar no requisito e não em número redondo",
+                "Ver espera de pool antes de olhar o banco"
+              ],
+              [
+                "Espera de pool acima de 100 ms",
+                "5 minutos",
+                "É o sintoma que precede o timeout",
+                "Avaliar MaxPoolSize antes de escalar task"
+              ],
+              [
+                "Falha de failover do RDS",
+                "Evento único",
+                "Evento raro; qualquer ocorrência é notícia",
+                "Confirmar promoção e medir o tempo real"
+              ],
+              [
+                "Custo diário 30% acima da média",
+                "Diário",
+                "Pega recurso esquecido no dia seguinte, não no fim do mês",
+                "Comparar por tag e procurar o que subiu"
+              ]
+            ]
+          },
+          "id": "l01-65",
+          "position": 2
+        }
+      ],
+      "id": "l01-62",
+      "position": 17
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "A mesma arquitetura em três ordens de grandeza. O que muda primeiro não é a aplicação: é conexão de banco, e depois a fronteira entre leitura e escrita."
+              }
+            ]
+          },
+          "id": "l01-67",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Ordem de grandeza",
+              "O que aguenta sem mudar",
+              "O que quebra primeiro",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 usuários",
+                "Tudo, com folga grande",
+                "Nada; o custo por usuário é absurdo",
+                "Reduzir a classe do banco e considerar AZ única em ambiente de estudo"
+              ],
+              [
+                "400 usuários (este caso)",
+                "A arquitetura como desenhada",
+                "Deploy sem cuidado de drenagem",
+                "É o ponto de operação alvo; medir antes de mexer"
+              ],
+              [
+                "10 mil usuários",
+                "ALB e Fargate, escalando horizontalmente",
+                "Conexões do banco, muito antes da CPU dele",
+                "Pool por task, cache de leitura e réplica de leitura para o que só lê"
+              ],
+              [
+                "1 milhão de requisições por hora",
+                "A borda absorve o estático",
+                "Escrita concentrada na primária",
+                "Separar leitura em réplica, extrair escrita assíncrona para fila"
+              ],
+              [
+                "Pico repentino de 10×",
+                "CloudFront e WAF na frente",
+                "Tempo de partida de task nova, que não é instantâneo",
+                "Escalar por métrica antecedente e manter capacidade mínima acima do vale"
+              ],
+              [
+                "Falha de uma AZ",
+                "Metade da capacidade e o failover do banco",
+                "A capacidade restante, se desired_count era 2",
+                "Mínimo de 4 tasks quando perder metade não pode doer"
+              ]
+            ]
+          },
+          "id": "l01-68",
+          "position": 1
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "A quota que ninguém confere antes do pico",
+            "content": "Antes de contar com escala horizontal, confira em Service Quotas o limite de tasks do Fargate por região na sua conta e o limite de conexões que a classe do seu RDS permite. O segundo deriva da memória da instância, e não é um número redondo. Descobrir isso durante o pico é a forma mais cara de aprender que quota existe."
+          },
+          "id": "l01-69",
+          "position": 2
+        }
+      ],
+      "id": "l01-66",
+      "position": 18
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Custo: onde o dinheiro vai nesta arquitetura"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Duas dimensões explicam quase toda a fatura deste desenho, e nenhuma delas é requisição: "
+              },
+              {
+                "text": "hora ligada",
+                "bold": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "byte que atravessa fronteira",
+                "bold": true
+              },
+              {
+                "text": ". ALB, NAT, Multi-AZ e endpoint de interface cobram parados. Tráfego entre AZs cobra por GB. É por isso que um ambiente de homologação esquecido ligado custa quase o mesmo que produção com uso baixo."
+              }
+            ]
+          },
+          "id": "l01-71",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "Componentes que dominam",
+              "Tendência",
+              "Otimização mais eficaz"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "10 usuários, horário comercial",
+                "ALB e banco, ambos por hora ligada",
+                "Quase fixa, independente de uso",
+                "AZ única, sem Multi-AZ, e desligar fora do horário"
+              ],
+              [
+                "Produção pequena (este caso)",
+                "400 usuários, 12 mil requisições no pico",
+                "Multi-AZ do banco, ALB, endpoints de interface",
+                "Fixa com pequena parcela variável",
+                "Trocar NAT por endpoints, dimensionar a classe do banco pelo uso medido"
+              ],
+              [
+                "Alta escala",
+                "Milhões de requisições por hora",
+                "Fargate, tráfego entre AZs, saída de dados",
+                "Variável e dominante",
+                "Cache na borda, Savings Plans para a base, Spot para o assíncrono"
+              ]
+            ]
+          },
+          "id": "l01-72",
+          "position": 1
+        },
+        {
+          "type": "annotated_formula",
+          "data": {
+            "title": "A conta mensal deste laboratório, por dimensão",
+            "formula": "custo = horas_ligado × (alb + banco_multi_az + endpoints) + gb_entre_az + gb_saida + horas_task × vcpu_e_memoria",
+            "parts": [
+              {
+                "symbol": "horas_ligado",
+                "name": "Horas com o recurso existindo",
+                "description": "A parcela que cobra sem ninguém usar. É onde ambiente esquecido queima orçamento, e é a primeira que se ataca desligando o que não precisa existir de madrugada."
+              },
+              {
+                "symbol": "banco_multi_az",
+                "name": "O prêmio da disponibilidade",
+                "description": "Multi-AZ custa praticamente o dobro do banco e não entrega nenhum ganho de leitura. Vale quando o RTO exige; não vale em homologação."
+              },
+              {
+                "symbol": "gb_entre_az",
+                "name": "Tráfego entre zonas",
+                "description": "Aparece na fatura sem ninguém ter pedido, porque é consequência de estar em duas AZs. Não é evitável sem abrir mão da disponibilidade, mas é previsível."
+              },
+              {
+                "symbol": "horas_task × vcpu_e_memoria",
+                "name": "A parcela elástica",
+                "description": "A única que acompanha o uso de verdade. Em volume baixo é a menor da conta, o que surpreende quem espera que computação domine a fatura."
+              }
+            ]
+          },
+          "id": "l01-73",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "Não decore preço; entenda a dimensão",
+            "content": "Valor por hora e por GB muda, e número decorado envelhece antes de você usar. O que não muda é a estrutura: o que cobra por existir, o que cobra por atravessar fronteira e o que cobra por uso. Calcule o seu caso no AWS Pricing Calculator com as dimensões acima e confirme a cobrança real no Cost Explorer no terceiro dia, com a tag que você aplicou em todo recurso."
+          },
+          "id": "l01-74",
+          "position": 3
+        }
+      ],
+      "id": "l01-70",
+      "position": 19
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Revisão honesta do que este laboratório entrega. As linhas de prioridade alta são dívida real, e cada uma tem um laboratório da série que a resolve — porque apontar risco sem apontar o caminho é auditoria, não ensino."
+              }
+            ]
+          },
+          "id": "l01-76",
+          "position": 0
+        },
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação após o laboratório",
+              "Risco que permanece",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "Infraestrutura em Terraform, deploy por digest, rollback automático",
+                "Deploy ainda parte da máquina de alguém",
+                "Pipeline com credencial federada",
+                "Alta"
+              ],
+              [
+                "Segurança",
+                "Sub-rede privada, SG por origem, segredo rotacionado, task role de duas ações",
+                "Sem detecção contínua nem revisão de permissão efetiva",
+                "GuardDuty, Config e Access Analyzer",
+                "Alta"
+              ],
+              [
+                "Confiabilidade",
+                "Duas AZs, Multi-AZ, circuit breaker, PITR habilitado",
+                "RTO não foi ensaiado, e não há DR regional",
+                "Ensaio de restauração cronometrado e DR",
+                "Alta"
+              ],
+              [
+                "Eficiência de performance",
+                "Cache na borda, pool dimensionado, escala por métrica",
+                "Nenhum teste de carga; o gargalo é hipótese",
+                "Curva de carga até a quebra",
+                "Média"
+              ],
+              [
+                "Otimização de custos",
+                "Tag em tudo, endpoints em vez de NAT, budget com alerta",
+                "Sem rightsizing medido e sem compromisso de capacidade",
+                "Compute Optimizer antes de Savings Plans",
+                "Média"
+              ],
+              [
+                "Sustentabilidade",
+                "Fargate dimensionado ao uso, sem instância ociosa",
+                "Ambiente de estudo ligado fora do horário",
+                "Agendar redução para zero à noite",
+                "Baixa"
+              ]
+            ]
+          },
+          "id": "l01-77",
+          "position": 1
+        }
+      ],
+      "id": "l01-75",
+      "position": 20
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "type": "layer_stack",
+          "data": {
+            "title": "Da mesma aplicação até plataforma — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Uma task, banco em AZ única, sem borda. Serve para aprender e para validar a ideia.",
+                "note": "Risco resolvido: nenhum. Novo risco: qualquer manutenção é indisponibilidade."
+              },
+              {
+                "label": "Nível 2 — Aplicação básica",
+                "instruction": "Domínio próprio, TLS, segredo no cofre, log estruturado. É o mínimo defensável com usuário real.",
+                "note": "Risco resolvido: credencial vazada e tráfego em claro. Novo risco: falha de AZ ainda derruba tudo."
+              },
+              {
+                "label": "Nível 3 — Produção",
+                "instruction": "Duas AZs, Multi-AZ, alarme, PITR, rollback automático. É onde este laboratório termina.",
+                "note": "Risco resolvido: falha de zona e deploy ruim. Novo risco: custo dobra e a operação passa a exigir plantão."
+              },
+              {
+                "label": "Nível 4 — Alta escala",
+                "instruction": "Réplica de leitura, cache, escrita assíncrona em fila, escala por métrica antecedente.",
+                "note": "Risco resolvido: gargalo de conexão e de escrita. Novo risco: consistência eventual chega à experiência do usuário."
+              },
+              {
+                "label": "Nível 5 — Plataforma",
+                "instruction": "Conta por ambiente, SCP, pipeline com aprovação, DR multi-região, FinOps com rateio.",
+                "note": "Risco resolvido: erro humano com alcance amplo e desastre regional. Novo risco: complexidade organizacional supera a técnica."
+              },
+              {
+                "label": "Nível 6 — Dados e IA",
+                "instruction": "Extração para o lake, e assistente sobre o acervo de pedidos quando houver pergunta em linguagem natural para responder.",
+                "note": "Risco resolvido: relatório travando a produção. Novo risco: resposta plausível e errada, que exige avaliação e citação de fonte."
+              }
+            ]
+          },
+          "id": "l01-79",
+          "position": 0
+        }
+      ],
+      "id": "l01-78",
+      "position": 21
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "Aqui, IA não resolve nada — e dizer isso é parte do conteúdo",
+            "content": "Este laboratório trata de onde o recurso mora e de quem alcança quem. Não existe problema de linguagem, de classificação nem de extração no caminho, e nenhuma decisão do desenho melhora com um modelo. Prever tráfego para escalar seria o exemplo clássico de IA decorativa: o CloudWatch já escala por métrica observada, com latência de segundos e custo próximo de zero, enquanto um modelo acrescentaria treino, deriva e uma nova dependência para operar. IA entra nesta série quando existe um problema que regra não resolve — busca em linguagem natural sobre o acervo, extração de dado preso em documento, assistente com ferramenta —, e ela entra depois de dado, segurança e observabilidade porque é sobre essas três que ela se sustenta em produção."
+          },
+          "id": "l01-81",
+          "position": 0
+        }
+      ],
+      "id": "l01-80",
+      "position": 22
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Anti-padrões desta arquitetura"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Banco com acesso público",
+                "Conectar o cliente SQL do laptop direto",
+                "Tentativa de login de origem desconhecida no log",
+                "Sub-rede privada e túnel por SSM",
+                "Nunca em produção; em estudo, por horas contadas"
+              ],
+              [
+                "SG com 0.0.0.0/0 na 5432",
+                "Destravar depressa durante depuração",
+                "Funciona, e ninguém volta atrás",
+                "Referenciar o SG de origem",
+                "Nunca; use SG temporário e apague"
+              ],
+              [
+                "Tag latest na task definition",
+                "Menos um passo no deploy",
+                "Rollback traz uma imagem diferente da esperada",
+                "Referenciar por digest",
+                "Em ambiente descartável de estudo"
+              ],
+              [
+                "Health check tocando o banco",
+                "Parece mais correto verificar tudo",
+                "Oscilação de banco vira 503 total",
+                "Raso no balanceador, profundo no alarme",
+                "Quando task sem banco é inútil E há capacidade de sobra"
+              ],
+              [
+                "Uma task só, com Multi-AZ no banco",
+                "Economizar metade da computação",
+                "Todo deploy e toda falha de task é indisponibilidade",
+                "Mínimo de duas, uma por AZ",
+                "Ambiente interno com janela de indisponibilidade acordada"
+              ],
+              [
+                "Senha em variável de ambiente do Terraform",
+                "É o caminho mais curto",
+                "A senha vive no estado e nunca é rotacionada",
+                "Senha gerenciada pelo RDS",
+                "Nunca; o custo de fazer certo aqui é uma linha"
+              ],
+              [
+                "NAT Gateway sem precisar",
+                "É o que todo tutorial mostra",
+                "Linha fixa na fatura por tráfego que não sairia",
+                "VPC endpoints para os serviços usados",
+                "Quando há chamada real a API externa"
+              ]
+            ]
+          },
+          "id": "l01-83",
+          "position": 0
+        }
+      ],
+      "id": "l01-82",
+      "position": 23
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Task inicia e para, sem log",
+                "Não alcançou ECR, S3 ou Logs",
+                "Ler o motivo de paragem da task, não o log",
+                "stoppedReason em describe-tasks",
+                "Criar os endpoints faltantes com DNS privado, ou NAT"
+              ],
+              [
+                "ALB devolve 503",
+                "Nenhum alvo sadio",
+                "Conferir estado do alvo antes de olhar a aplicação",
+                "describe-target-health",
+                "Ver se a porta do health check e a do contêiner coincidem"
+              ],
+              [
+                "ALB devolve 502",
+                "Aplicação fechou a conexão ou respondeu inválido",
+                "Comparar horário do 502 com o log da aplicação",
+                "Log de acesso do ALB e log da task",
+                "Conferir a porta em ASPNETCORE_HTTP_PORTS e o protocolo do target group"
+              ],
+              [
+                "Timeout ao conectar no banco",
+                "SG, sub-rede ou pool",
+                "Descartar rede antes de culpar o banco",
+                "Espera de pool no log, CPU do RDS",
+                "Se a espera de pool é alta e a CPU baixa, ajuste o pool"
+              ],
+              [
+                "Erro de TLS ao conectar no RDS",
+                "Certificado da AWS ausente na imagem",
+                "Testar com SslMode reduzido, em ambiente de estudo apenas",
+                "Exceção do Npgsql",
+                "Embutir o pacote de certificados do RDS e manter VerifyFull"
+              ],
+              [
+                "Deploy fica em progresso e reverte",
+                "Novo alvo nunca ficou sadio",
+                "Ler os eventos do serviço em ordem",
+                "Eventos do serviço ECS",
+                "Aumentar o período de graça ou corrigir o start da aplicação"
+              ],
+              [
+                "Segredo não encontrado",
+                "ARN de outro segredo, ou falta o sufixo",
+                "Conferir o ARN resolvido em execução",
+                "CloudTrail em GetSecretValue",
+                "O ARN do segredo gerenciado termina em sufixo; use o do atributo do recurso"
+              ],
+              [
+                "Terraform recusa destruir o banco",
+                "Proteção de deleção ligada",
+                "Ler a mensagem inteira, que nomeia o recurso",
+                "Saída do destroy",
+                "Desligar a proteção em um apply antes de destruir"
+              ]
+            ]
+          },
+          "id": "l01-85",
+          "position": 0
+        }
+      ],
+      "id": "l01-84",
+      "position": 24
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "type": "paragraph",
+          "data": {
+            "content": [
+              {
+                "text": "Esta seção não é formalidade. Laboratório de arquitetura deixa recurso cobrando depois que a aula termina, e o Terraform não remove o que ele foi instruído a preservar."
+              }
+            ]
+          },
+          "id": "l01-87",
+          "position": 0
+        },
+        {
+          "type": "code_block",
+          "data": {
+            "language": "bash",
+            "code": "# A ordem importa: o Terraform recusa remover o banco com proteção ligada, e\n# recusa remover a VPC enquanto houver endpoint ou ENI de task pendurada.\nterraform apply -var=\"digest_imagem=$DIGEST\" \\\n  -var=\"protecao_delecao=false\" -var=\"desired_count=0\"\n\naws ecs wait services-inactive --cluster app --services app || true\nterraform destroy -var=\"digest_imagem=$DIGEST\" -var=\"protecao_delecao=false\"\n\n# ── O que o destroy NÃO leva, e continua cobrando ──────────────────────────\naws rds describe-db-snapshots --snapshot-type manual \\\n  --query 'DBSnapshots[].DBSnapshotIdentifier'      # snapshot final fica\n\naws logs describe-log-groups \\\n  --query 'logGroups[?retentionInDays==null].logGroupName'  # log sem retenção\n\naws ecr list-images --repository-name app --query 'imageIds[].imageDigest'\naws ec2 describe-addresses --query 'Addresses[?AssociationId==null]'  # EIP órfão\naws kms describe-key --key-id \"$CHAVE\" --query 'KeyMetadata.KeyState'  # em espera\n\n# ── Endpoint de VPC — o que este laboratório cria em vez do NAT ──\n#\n# O de GATEWAY (S3, DynamoDB) não cobra por hora: ele é uma rota, e some com a VPC.\n# O de INTERFACE (ECR, Secrets Manager, CloudWatch Logs) cobra POR HORA E POR AZ,\n# e é o que precisa ser conferido. O destroy leva os declarados aqui; um criado à\n# mão numa tentativa anterior continua cobrando.\naws ec2 describe-vpc-endpoints \\\n  --query 'VpcEndpoints[*].[VpcEndpointId,ServiceName,VpcEndpointType,State]' \\\n  --output table\n# aws ec2 delete-vpc-endpoints --vpc-endpoint-ids <id>",
+            "filename": "limpar.sh"
+          },
+          "id": "l01-88",
+          "position": 1
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "danger",
+            "title": "O que continua na fatura depois de um destroy bem-sucedido",
+            "content": "Snapshot final do RDS, que a própria configuração pediu para criar. Log group sem retenção definida, que guarda para sempre. Imagens no ECR, cobradas por armazenamento. Elastic IP não associado, que cobra justamente por estar parado. Chave do KMS em espera de exclusão, que cobra durante toda a janela. E, se você criou o bucket do estado do Terraform à mão, ele fica. Rode os comandos acima e confira a fatura no dia seguinte: é o único jeito de saber. E confira os endpoints de VPC: o de interface (ECR, Secrets Manager) cobra por hora e por zona de disponibilidade, então três endpoints em duas AZs são seis cobranças por hora — a mesma ordem de grandeza do NAT Gateway que eles substituem."
+          },
+          "id": "l01-89",
+          "position": 2
+        }
+      ],
+      "id": "l01-86",
+      "position": 25
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Resumo: problema, serviço e motivo"
+      },
+      "children": [
+        {
+          "type": "comparison_table",
+          "data": {
+            "columns": [
+              "Problema",
+              "Serviço",
+              "Por que este e não outro"
+            ],
+            "rows": [
+              [
+                "Rodar a aplicação sem operar servidor",
+                "ECS Fargate",
+                "Mantém o modelo de contêiner e remove patch e capacidade de cluster"
+              ],
+              [
+                "Guardar estado relacional com backup",
+                "RDS PostgreSQL",
+                "PITR, failover e rotação de senha sem script próprio"
+              ],
+              [
+                "Receber tráfego e distribuir",
+                "Application Load Balancer",
+                "Roteamento por caminho e health check por alvo, que o NLB não faz"
+              ],
+              [
+                "Servir estático e encerrar TLS perto do usuário",
+                "CloudFront",
+                "Tira do contêiner o trabalho que não precisa de contêiner"
+              ],
+              [
+                "Barrar tráfego automatizado",
+                "AWS WAF",
+                "Bloquear é mais barato que escalar para aguentar"
+              ],
+              [
+                "Guardar a senha e rotacioná-la",
+                "Secrets Manager",
+                "Rotação gerenciada, que o Parameter Store não oferece"
+              ],
+              [
+                "Cifrar dado em repouso com chave própria",
+                "KMS",
+                "Permite revogar acesso ao dado sem apagar o dado"
+              ],
+              [
+                "Alcançar serviço regional sem sair da rede",
+                "VPC endpoints",
+                "Remove o NAT e a cobrança por GB de um tráfego que não precisava sair"
+              ],
+              [
+                "Diagnosticar em minutos",
+                "CloudWatch e X-Ray",
+                "Log, métrica e trace com o mesmo id de correlação"
+              ]
+            ]
+          },
+          "id": "l01-91",
+          "position": 0
+        }
+      ],
+      "id": "l01-90",
+      "position": 26
+    },
+    {
+      "id": "lab-app--des1",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Desafio — sem roteiro"
+      },
+      "children": [
+        {
+          "type": "callout",
+          "data": {
+            "variant": "info",
+            "title": "O requisito",
+            "content": "O time de relatórios quer rodar consultas pesadas sobre os mesmos dados, sem competir por conexão com a aplicação de produção. Adicione uma read replica do RDS e aponte um segundo endpoint da aplicação — só leitura — para ela."
+          },
+          "id": "lab-app--des2",
+          "position": 0
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "warning",
+            "title": "Critério de aceite — executável, não \"verifique se funciona\"",
+            "content": "Com a aplicação de produção sob carga simulada (um script disparando escrita continuamente), a consulta de relatório na replica continua respondendo em menos de 200ms. Comando: medir a latência da rota de relatório com `curl -w \"%{time_total}\"` durante a carga."
+          },
+          "id": "lab-app--des3",
+          "position": 1
+        },
+        {
+          "type": "list",
+          "data": {
+            "ordered": false,
+            "items": [
+              "Dica 1: A replica se cria com `aws_db_instance` apontando `replicate_source_db` para a instância primária — não precisa de outro `aws_db_subnet_group`.",
+              "Dica 2: A aplicação precisa de uma SEGUNDA connection string, não de trocar a existente — a rota de escrita continua na primária.",
+              "Dica 3: A replica está sempre um pouco atrás da primária (replicação assíncrona) — se o teste ler um dado escrito há menos de 1 segundo, ele pode não estar lá ainda. Isso não é bug, é o trade-off que o requisito aceitou."
+            ]
+          },
+          "id": "lab-app--des4",
+          "position": 2
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "danger",
+            "title": "Custo estimado do que este desafio acrescenta",
+            "content": "Uma segunda instância RDS do mesmo tamanho da primária — dobra o custo de compute do banco enquanto o desafio estiver de pé."
+          },
+          "id": "lab-app--des5",
+          "position": 3
+        },
+        {
+          "type": "callout",
+          "data": {
+            "variant": "success",
+            "title": "Lembrete de limpeza",
+            "content": "Todo recurso que este desafio criar entra no mesmo `terraform destroy` do laboratório — nada fica para trás cobrando sozinho."
+          },
+          "id": "lab-app--des6",
+          "position": 4
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Preciso de NAT Gateway para a task no Fargate puxar imagem do ECR?",
+            "answer": "Não, se você criar VPC endpoints para ECR (ecr.api e ecr.dkr), para o S3 e para o CloudWatch Logs — o download da imagem passa por dentro da rede da AWS e a task fica em sub-rede privada sem nenhuma rota de saída. Com NAT Gateway também funciona, e é o caminho que a maioria dos tutoriais mostra, mas você paga hora ligada mais byte processado por um tráfego que não precisava sair. O endpoint do S3 é do tipo gateway e não cobra por hora; ele é obrigatório porque as camadas da imagem ficam no S3, e esquecê-lo produz exatamente o mesmo sintoma de task que morre sem log."
+          },
+          "id": "l01-93",
+          "position": 0
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Onde a senha do banco deve ficar numa aplicação em ECS Fargate?",
+            "answer": "No Secrets Manager, gerada e rotacionada pelo próprio RDS, e lida pela aplicação em tempo de execução com a task role. Existem dois caminhos e eles não são equivalentes: declarar o segredo no campo secrets da task definition é mais simples, e o agente do ECS injeta o valor como variável de ambiente usando a role de execução — mas essa variável é resolvida no start e não acompanha rotação, então uma troca de senha exige nova task. Ler em execução custa algumas linhas de código e faz a rotação valer sem deploy. O que não é aceitável em nenhum dos dois casos é a senha existir no repositório ou no estado do Terraform."
+          },
+          "id": "l01-94",
+          "position": 1
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "O health check do ALB deve consultar o banco de dados?",
+            "answer": "Não. O health check do balanceador decide rotação de tráfego, e se ele tocar o banco então uma oscilação de trinta segundos marca todas as tasks como insalubres ao mesmo tempo, o balanceador remove todas de rotação e o cliente passa a receber 503 total em vez de erro intermitente. O balanceador amplifica a falha em vez de contê-la. A separação correta é um endpoint raso para o balanceador, que responde se o processo está vivo, e um endpoint profundo para alarme e para diagnóstico, que verifica dependência. Profundidade de dependência é assunto de alerta, não de decisão de roteamento."
+          },
+          "id": "l01-95",
+          "position": 2
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "RDS Multi-AZ aumenta a capacidade de leitura da aplicação?",
+            "answer": "Não, em nenhuma circunstância. O standby do Multi-AZ mantém uma cópia síncrona e não atende consulta alguma; ele existe para assumir no failover e reduzir o tempo de indisponibilidade. Quem espera ganho de leitura está pensando em réplica de leitura, que é outro recurso, com replicação assíncrona, endpoint próprio e cobrança separada. A confusão é frequente porque as duas coisas duplicam o custo do banco, e por isso parece natural que também dupliquem a capacidade. Multi-AZ compra disponibilidade; réplica compra escala de leitura."
+          },
+          "id": "l01-96",
+          "position": 3
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Preciso de CloudFront na frente do ALB ou o ALB basta?",
+            "answer": "O ALB basta para servir, e o CloudFront resolve dois problemas que o ALB não resolve: entregar arquivo estático sem consumir capacidade da aplicação e encerrar o TLS perto de quem acessa. Para um público concentrado numa região e uma aplicação sem estático relevante, o ALB sozinho é uma escolha defensável e mais simples. Com front no mesmo domínio da API, o CloudFront passa a pagar por si só: o estático sai do cache, a task fica livre para a rota dinâmica, e o WAF ganha um lugar natural antes da origem. Note que o certificado usado pelo CloudFront precisa estar na região us-east-1, independentemente de onde o resto vive."
+          },
+          "id": "l01-97",
+          "position": 4
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "Quantas tasks o serviço precisa para sobreviver à queda de uma AZ?",
+            "answer": "Duas é o mínimo aritmético e raramente é o número certo. Com duas tasks em duas zonas, perder uma zona deixa você operando com metade da capacidade durante toda a recomposição — e a partida de uma task nova não é instantânea. Se metade da capacidade atende ao pico, duas resolvem; se não atende, o número correto é aquele em que a perda de uma zona ainda deixa capacidade suficiente, o que normalmente significa quatro. A pergunta que decide não é quantas tasks, e sim quanto de capacidade o pico exige quando uma zona já não existe."
+          },
+          "id": "l01-98",
+          "position": 5
+        },
+        {
+          "type": "qa_item",
+          "data": {
+            "question": "O que o terraform destroy deixa cobrando neste laboratório?",
+            "answer": "Cinco coisas: snapshot final do RDS, log group sem retenção, imagens no ECR, Elastic IP não associado e chave do KMS em espera de exclusão. Nenhuma é bug — todas são consequência de configuração deliberada. O snapshot existe porque a própria definição pediu para criá-lo antes de remover a instância. O log group sem retenção guarda indefinidamente. Imagem armazenada e IP parado cobram por existir, e a chave cobra durante toda a janela de espera antes de ser apagada. Um destroy bem-sucedido não é prova de conta limpa: a única verificação que vale é listar cada um desses recursos por comando e conferir a fatura no dia seguinte."
+          },
+          "id": "l01-99",
+          "position": 6
+        }
+      ],
+      "id": "l01-92",
+      "position": 28
+    },
+    {
+      "type": "section",
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "type": "quiz",
+          "data": {
+            "question": "Sua equipe configurou o health check do target group para uma rota que executa SELECT 1 no PostgreSQL. O RDS oscila por 40 segundos. O que os clientes observam?",
+            "options": [
+              "Erros intermitentes em parte das requisições, proporcionais à oscilação",
+              "Nada, porque o ALB reencaminha para uma task sadia",
+              "Erro 503 em todas as requisições, por um período maior que a oscilação",
+              "Latência maior, sem aumento de erro"
+            ],
+            "correctIndex": 2,
+            "explanation": "Todas as tasks compartilham a mesma dependência, então todas falham o health check simultaneamente. O ALB remove todas de rotação e passa a responder 503 sem sequer tentar a aplicação — e a indisponibilidade dura mais que a oscilação, porque ainda é preciso acumular verificações sadias consecutivas para voltar. O balanceador amplificou uma degradação parcial em queda total. · A primeira é o que aconteceria com health check raso: a task permanece em rotação, algumas requisições falham e o cliente vê erro proporcional ao problema. É o comportamento desejável, e é por isso que a rota do balanceador não toca em dependência. · A segunda supõe que exista task sadia, mas a dependência é comum a todas; não há para onde reencaminhar. · A quarta descreve saturação, não falha de dependência. A regra: health check do balanceador decide roteamento e responde \"este processo vive\"; verificação de dependência pertence a alarme."
+          },
+          "id": "l01-102",
+          "position": 0
+        },
+        {
+          "type": "quiz",
+          "data": {
+            "question": "O time quer reduzir a fatura sem degradar o requisito de \"perder uma AZ não para a operação\". Qual mudança atende ao objetivo SEM violar o requisito?",
+            "options": [
+              "Servir o estático pela task e remover o CloudFront",
+              "Desligar o Multi-AZ do RDS e manter o snapshot diário",
+              "Substituir o NAT Gateway por VPC endpoints para ECR, S3 e Logs",
+              "Reduzir o serviço de duas tasks para uma, mantendo duas AZs configuradas"
+            ],
+            "correctIndex": 2,
+            "explanation": "Os endpoints removem uma cobrança por hora ligada e por GB processado de um tráfego que não precisava sair da rede da AWS, e não tocam em nenhuma dimensão de disponibilidade: a task continua em duas AZs e o banco continua Multi-AZ. É a economia rara, que não compra risco. · A primeira viola o requisito diretamente: sem standby, a falha de zona vira restauração de snapshot, com RTO em horas em vez de minutos. Snapshot diário também piora o RPO de minutos para até um dia. · A segunda viola de forma menos óbvia e mais perigosa: configurar duas AZs com uma task só significa que a task está em UMA delas, e perder aquela zona zera a capacidade. Sub-rede configurada não é capacidade distribuída. · A quarta reduz um custo pequeno e aumenta o consumo de capacidade da aplicação, além de remover o lugar natural do WAF — troca ruim em duas dimensões. A regra: antes de aceitar uma economia, pergunte qual requisito ela consome; se a resposta for nenhum, é a que se faz primeiro."
+          },
+          "id": "l01-103",
+          "position": 1
+        }
+      ],
+      "id": "l01-100",
+      "position": 29
+    },
+    {
+      "type": "callout",
+      "data": {
+        "variant": "success",
+        "title": "Próximo passo — Laboratório 02",
+        "content": "Você tem a aplicação no ar e a rede funcionando, mas provavelmente aceitou o plano de endereçamento sem discutir. O laboratório 02 abre a VPC: por que o banco não tem rota para a internet, o que diferencia sub-rede pública de privada além do nome, e quando NAT Gateway volta a ser necessário. É o pré-requisito dos laboratórios de rede privada e de rede híbrida. Última validação técnica deste módulo: 06/ago/2026, com os nomes de serviço e os atributos de Terraform conferidos na documentação oficial da AWS."
+      },
+      "id": "l01-104",
+      "position": 30
+    }
+  ]
+}

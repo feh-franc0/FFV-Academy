@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 import {
   BrainCircuit,
   Cloud,
@@ -21,7 +22,8 @@ import {
   UserCog,
   GraduationCap,
 } from 'lucide-react';
-import { HUBS } from '@/lib/curriculum';
+// Módulo estreito — ver a nota em GameHUD.tsx.
+import { HUBS } from '@/lib/curriculum/hubs';
 import { useGameState } from '@/hooks/useGameState';
 import type { ComponentType, SVGProps } from 'react';
 
@@ -56,6 +58,8 @@ export function MobileNav() {
   const pathname = usePathname() ?? '/';
   const { dueCards } = useGameState();
   const [sheetOpen, setSheetOpen] = useState(false);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(sheetRef, sheetOpen);
 
   // Fecha sheet ao trocar de rota
   useEffect(() => { setSheetOpen(false); }, [pathname]);
@@ -198,9 +202,11 @@ export function MobileNav() {
 
       {sheetOpen && (
         <div
+          ref={sheetRef}
           role="dialog"
           aria-modal="true"
           aria-label="Mais opções"
+          tabIndex={-1}
           className="md:hidden fixed inset-0 z-[60]"
           onClick={() => setSheetOpen(false)}
         >
@@ -264,7 +270,7 @@ export function MobileNav() {
               <SheetSection title="Atividade">
                 <SheetLink href="/progresso" label="Progresso" color="var(--ffv-green)" Icon={ChartBarIncreasing} />
                 <SheetLink href="/revisar" label={dueCards.length > 0 ? `Revisar (${dueCards.length})` : 'Revisar'} color="var(--ffv-green)" Icon={BookOpen} />
-                <SheetLink href="/revisao" label="Maratona de Revisão" color="var(--ffv-blue)" Icon={Brain} />
+                <SheetLink href="/revisar/maratona" label="Maratona de Revisão" color="var(--ffv-blue)" Icon={Brain} />
                 <SheetLink href="/plano" label="Meu Plano de Estudos" color="var(--ffv-purple)" Icon={Target} />
                 <SheetLink href="/simulados" label="Simulados" color="#f78166" Icon={Target} />
                 <SheetLink href="/certificacoes" label="Prep de Certificações" color="var(--ffv-yellow)" Icon={GraduationCap} />

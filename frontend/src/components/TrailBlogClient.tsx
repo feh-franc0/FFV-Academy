@@ -2,9 +2,10 @@
 import { safeJsonLd } from '@/lib/safe-json';
 
 import Link from 'next/link';
+import { BackButton } from '@/components/BackButton';
 import { useGameState } from '@/hooks/useGameState';
 import { Progress } from '@/components/ui/progress';
-import { type Trail } from '@/lib/curriculum';
+import { CURRICULUM, type Trail } from '@/lib/curriculum';
 
 interface Props {
   trail: Trail;
@@ -19,6 +20,32 @@ export function TrailBlogClient({ trail }: Props) {
   const completedModules = state?.completedModules ?? [];
   const totalXP = trail.modules.reduce((acc, m) => acc + m.xp, 0);
 
+  /**
+   * `Course` da trilha. Duas correções de semântica em ago/2026:
+   *
+   * 1. Os módulos estavam declarados como `hasCourseInstance`. Uma instância de
+   *    curso é uma OFERTA — uma turma, com modalidade e datas —, não uma aula. O
+   *    módulo é parte do programa, e o campo correto é `syllabusSections`, com
+   *    `Syllabus`. Declarar aula como turma dizia ao buscador que a trilha tem
+   *    cinco ofertas simultâneas, o que é falso.
+   *
+   * 2. `numberOfCredits` recebia a contagem de módulos. Crédito é unidade
+   *    acadêmica; a plataforma não emite crédito nenhum. Removido — e a carga de
+   *    trabalho, que é o que existe de verdade, entrou como `timeRequired`.
+   *
+   * Também passou a listar TODOS os módulos, e não os cinco primeiros: o programa
+   * é o argumento da página, e cortá-lo em cinco escondia o tamanho da trilha.
+   */
+  const minutosTotais = trail.modules.reduce((acc, m) => acc + (m.readTime ?? 0), 0);
+  const urlTrilha = trail.href
+    ? `https://fernandofrancovalle.com${trail.href}`
+    : 'https://fernandofrancovalle.com';
+
+  // Nomes das trilhas que esta exige antes — `prerequisites` guarda ids.
+  const prereqs = (trail.prerequisites ?? [])
+    .map(id => CURRICULUM.find(t => t.id === id)?.name)
+    .filter((n): n is string => Boolean(n));
+
   const courseJsonLd = {
     '@context': 'https://schema.org',
     '@type': 'Course',
@@ -29,27 +56,68 @@ export function TrailBlogClient({ trail }: Props) {
       name: 'FFV Academy',
       url: 'https://fernandofrancovalle.com',
     },
-    url: trail.href ? `https://fernandofrancovalle.com${trail.href}` : 'https://fernandofrancovalle.com',
+    url: urlTrilha,
     inLanguage: 'pt-BR',
     isAccessibleForFree: true,
-    numberOfCredits: trail.modules.length,
-    hasCourseInstance: trail.modules.slice(0, 5).map(m => ({
-      '@type': 'CourseInstance',
+    educationalLevel: trail.level,
+    timeRequired: `PT${minutosTotais}M`,
+    // `coursePrerequisites` estava vazio até ago/2026 embora o dado exista em
+    // `trail.prerequisites` desde sempre. É o campo que diz ao buscador que o
+    // site tem um PERCURSO ordenado, e não uma coleção de cursos avulsos —
+    // exatamente o que a jornada em `curriculum/jornada.ts` organiza.
+    ...(prereqs.length ? { coursePrerequisites: prereqs } : {}),
+    // A trilha seguinte na jornada. `isPartOf` amarra cada trilha ao curso
+    // completo, dando ao rastreador o caminho de volta para /jornada.
+    isPartOf: {
+      '@type': 'Course',
+      '@id': 'https://fernandofrancovalle.com/jornada#curso',
+      name: 'De zero a arquiteto de soluções de IA na AWS',
+      url: 'https://fernandofrancovalle.com/jornada',
+    },
+    // Gratuito é diferencial declarado da plataforma, e `offers` com preço zero é
+    // como isso se diz de forma legível por máquina.
+    offers: {
+      '@type': 'Offer',
+      price: 0,
+      priceCurrency: 'BRL',
+      availability: 'https://schema.org/InStock',
+      category: 'Free',
+    },
+    syllabusSections: trail.modules.map((m, i) => ({
+      '@type': 'Syllabus',
+      position: i + 1,
       name: m.title,
-      url: `https://fernandofrancovalle.com/aprenda/${m.slug}`,
-      courseMode: 'online',
+      url: `https://fernandofrancovalle.com/aprenda/${m.slug}/`,
+      ...(m.readTime ? { timeRequired: `PT${m.readTime}M` } : {}),
     })),
+  };
+
+  // A migalha visual existia desde sempre; a legível por máquina não. Sem ela o
+  // buscador não sabe que a trilha está sob um hub, e a linha de contexto no
+  // resultado de busca sai como URL crua.
+  const migalhaJsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'FFV Academy', item: 'https://fernandofrancovalle.com' },
+      { '@type': 'ListItem', position: 2, name: 'A jornada', item: 'https://fernandofrancovalle.com/jornada' },
+      { '@type': 'ListItem', position: 3, name: trail.name, item: urlTrilha },
+    ],
   };
 
   return (
     <div className="max-w-2xl mx-auto px-6 pb-24">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(courseJsonLd) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(migalhaJsonLd) }} />
 
       {/* ── Breadcrumb ── */}
       <nav className="flex items-center gap-2 text-xs pt-10 mb-8" style={{ color: 'var(--ffv-muted)' }}>
-        <Link href="/" className="hover:text-white transition-colors">FFV Academy</Link>
+        <Link href="/" className="inline-flex items-center min-h-[24px] hover:text-white transition-colors">FFV Academy</Link>
         <span>/</span>
-        <span style={{ color: trail.color }}>{trail.name}</span>
+        {/* `ffv-acento-texto` em todo texto que usa cor de trilha: a paleta é dark
+            e falha WCAG AA como texto em tema claro. Medido em 07/ago/2026 nesta
+            página: 5 nós entre 2,12:1 e 2,26:1. Ver globals.css. */}
+        <span className="ffv-acento-texto" style={{ '--ffv-acento': trail.color } as React.CSSProperties}>{trail.name}</span>
       </nav>
 
       {/* ── Header do blog ── */}
@@ -62,33 +130,50 @@ export function TrailBlogClient({ trail }: Props) {
             {trail.icon}
           </div>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: trail.color }}>
+            <p className="text-xs font-semibold uppercase tracking-wider ffv-acento-texto" style={{ '--ffv-acento': trail.color } as React.CSSProperties}>
               Blog
             </p>
             <h1 className="text-xl font-bold">{trail.name}</h1>
           </div>
         </div>
 
+        {/**
+         * O parágrafo de abertura vem do DADO da trilha, não do código.
+         *
+         * Aqui havia dois textos escritos no componente, escolhidos por
+         * `trail.id === 'trail1'`. Consequência medida em 06/ago/2026: as outras
+         * **39 trilhas** caíam no `else` e mostravam todas o mesmo parágrafo —
+         * "Para quem já sabe o básico… memória, roteamento, ferramentas, agentes" —
+         * que não descreve nenhuma delas, e menos ainda as certificações AWS, o
+         * Postgres Internals ou o Go.
+         *
+         * Dois danos ao mesmo tempo: o leitor lia uma promessa que a trilha não
+         * cumpria, e 39 páginas de prioridade 0,9 no sitemap compartilhavam o
+         * primeiro parágrafo de texto — sinal de conteúdo duplicado justamente nas
+         * páginas que mais importam.
+         *
+         * O mais revelador: a linha 47 deste arquivo JÁ usava `trail.desc` para a
+         * descrição do `Course` em JSON-LD. O rastreador recebia o texto certo e
+         * específico; só o humano recebia o genérico.
+         */}
         <p className="text-sm leading-7 mb-6" style={{ color: 'var(--ffv-muted)' }}>
-          {trail.id === 'trail1'
-            ? 'O ponto de partida. Aqui você vai entender o que a IA realmente é — sem buzzwords, sem exagero. Cada artigo constrói sobre o anterior, do conceito até a arquitetura que move o mundo hoje.'
-            : 'Para quem já sabe o básico e quer ir fundo. Aqui o assunto é como os modelos funcionam em produção: memória, roteamento, ferramentas, agentes. O lado técnico que pouca gente explica direito.'}
+          {trail.desc}
         </p>
 
         {/* Stats row */}
         <div className="flex items-center gap-6 text-sm flex-wrap">
           <div>
-            <span className="font-bold" style={{ color: trail.color }}>{trail.modules.length}</span>
+            <span className="font-bold ffv-acento-texto" style={{ '--ffv-acento': trail.color } as React.CSSProperties}>{trail.modules.length}</span>
             <span className="ml-1" style={{ color: 'var(--ffv-muted)' }}>artigos</span>
           </div>
           <div>
-            <span className="font-bold" style={{ color: trail.color }}>{totalXP}</span>
+            <span className="font-bold ffv-acento-texto" style={{ '--ffv-acento': trail.color } as React.CSSProperties}>{totalXP}</span>
             <span className="ml-1" style={{ color: 'var(--ffv-muted)' }}>XP total</span>
           </div>
           {trailProgress && trailProgress.done > 0 && (
             <div className="flex items-center gap-2 flex-1 min-w-32">
               <Progress value={trailProgress.pct} className="h-1.5 flex-1" />
-              <span className="text-xs tabular-nums" style={{ color: trail.color }}>
+              <span className="text-xs tabular-nums ffv-acento-texto" style={{ '--ffv-acento': trail.color } as React.CSSProperties}>
                 {trailProgress.done}/{trail.modules.length}
               </span>
             </div>
@@ -145,16 +230,16 @@ export function TrailBlogClient({ trail }: Props) {
                   <span className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
                     ⏱ {mod.readTime} min
                   </span>
-                  <span style={{ color: 'var(--ffv-border)' }}>·</span>
+                  <span aria-hidden="true" style={{ color: 'var(--ffv-muted)' }}>·</span>
                   <span
-                    className="text-xs font-semibold"
-                    style={{ color: trail.color }}
+                    className="text-xs font-semibold ffv-acento-texto"
+                    style={{ '--ffv-acento': trail.color } as React.CSSProperties}
                   >
                     +{mod.xp} XP
                   </span>
                   {quizScore && (
                     <>
-                      <span style={{ color: 'var(--ffv-border)' }}>·</span>
+                      <span aria-hidden="true" style={{ color: 'var(--ffv-muted)' }}>·</span>
                       <span className="text-xs" style={{ color: quizScore.perfect ? 'var(--ffv-green)' : 'var(--ffv-muted)' }}>
                         {quizScore.perfect ? '🎯' : '📝'} Quiz {quizScore.score}/{quizScore.total}
                       </span>
@@ -163,10 +248,12 @@ export function TrailBlogClient({ trail }: Props) {
                 </div>
               </div>
 
-              {/* Seta */}
+              {/* Seta. O axe não a acusa porque ela nasce com `opacity-0`, mas
+                  quem passa o mouse vê o mesmo contraste ruim — a regra vale pelo
+                  que fica na tela, não pelo que o medidor alcança. */}
               <span
-                className="text-sm mt-1 flex-shrink-0 transition-all opacity-0 group-hover:opacity-100 translate-x-0 group-hover:translate-x-1"
-                style={{ color: trail.color }}
+                className="text-sm mt-1 flex-shrink-0 transition-all opacity-0 group-hover:opacity-100 translate-x-0 group-hover:translate-x-1 ffv-acento-texto"
+                style={{ '--ffv-acento': trail.color } as React.CSSProperties}
               >
                 →
               </span>
@@ -177,9 +264,9 @@ export function TrailBlogClient({ trail }: Props) {
 
       {/* ── Footer do blog ── */}
       <div className="mt-12 pt-8 flex items-center justify-between flex-wrap gap-4" style={{ borderTop: '1px solid var(--ffv-border)' }}>
-        <Link href="/" className="text-xs transition-colors hover:text-white" style={{ color: 'var(--ffv-muted)' }}>
-          ← Voltar à home
-        </Link>
+        <BackButton href="/" className="inline-flex items-center gap-1.5 py-1 text-xs transition-colors hover:text-white">
+          Voltar à home
+        </BackButton>
         {trail.id === 'trail1' && (
           <Link
             href="/ia-alem-do-llm"

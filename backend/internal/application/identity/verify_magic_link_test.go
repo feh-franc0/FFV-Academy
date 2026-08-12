@@ -249,19 +249,207 @@ func Test_VerifyMagicLink_Execute_TokenMismatch_ReturnsUnauthorized(t *testing.T
 	}
 }
 
-func Test_VerifyMagicLink_Execute_NewUserWithoutRegistration_ReturnsValidation(t *testing.T) {
+func Test_VerifyMagicLink_Execute_NewUserWithoutRegistration_ReturnsRegistrationRequired(t *testing.T) {
 	now := time.Now()
 	stored := domidentity.Reconstitute("123456", now.Add(5*time.Minute))
-	tokenStore := makeTokenStoreWithToken(stored)
-	uc := appidentity.NewVerifyMagicLinkUseCase(tokenStore, newMockUserRepo(), newMockRefreshRepo(),
+	store := &statefulTokenStore{token: &stored}
+	uc := appidentity.NewVerifyMagicLinkUseCase(store, newMockUserRepo(), newMockRefreshRepo(),
 		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour, false)
 	_, err := uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
 		Email:        "new@example.com",
 		Token:        "123456",
 		Registration: nil,
 	})
-	if !errors.Is(err, shared.ErrValidation) {
-		t.Fatalf("expected ErrValidation, got %v", err)
+	// ErrRegistrationRequired, não ErrValidation — o código foi VALIDADO (posse
+	// provada); o que falta é dado de cadastro, e o frontend reenvia o MESMO
+	// código com nome/telefone. Por isso o token não pode ter sido consumido.
+	if !errors.Is(err, shared.ErrRegistrationRequired) {
+		t.Fatalf("expected ErrRegistrationRequired, got %v", err)
+	}
+	if store.token == nil {
+		t.Fatalf("token foi consumido mesmo faltando registro — o retry com o mesmo código ficaria impossível")
+	}
+	if store.consumes != 0 {
+		t.Fatalf("Consume não deveria ter sido chamado antes do registro chegar, foi chamado %d vez(es)", store.consumes)
+	}
+
+	// O mesmo código, agora com registro, deve completar o login.
+	res, err := uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
+		Email: "new@example.com",
+		Token: "123456",
+		Registration: &appidentity.RegistrationData{
+			Name:  "Nova Pessoa",
+			Phone: "+5511987654321",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected success on retry with registration, got %v", err)
+	}
+	if !res.IsNewUser {
+		t.Fatalf("expected IsNewUser=true")
+	}
+	if store.consumes != 1 {
+		t.Fatalf("expected exactly 1 Consume, got %d", store.consumes)
+	}
+}
+
+// statefulTokenStore modela Peek (não deleta) e Consume (deleta) como estados
+// distintos — a mockTokenStore compartilhada do pacote não distingue os dois,
+// então este mock prova especificamente que um palpite errado (Peek +
+// mismatch, sem chamar Consume) não queima o código correto pendente.
+type statefulTokenStore struct {
+	token    *domidentity.MagicToken
+	peeks    int
+	consumes int
+	attempts int64
+}
+
+func (s *statefulTokenStore) Store(_ context.Context, _ domidentity.Email, token domidentity.MagicToken) error {
+	s.token = &token
+	return nil
+}
+func (s *statefulTokenStore) Peek(_ context.Context, _ domidentity.Email) (domidentity.MagicToken, error) {
+	s.peeks++
+	if s.token == nil {
+		return domidentity.MagicToken{}, shared.ErrNotFound
+	}
+	return *s.token, nil
+}
+func (s *statefulTokenStore) Consume(_ context.Context, _ domidentity.Email) (domidentity.MagicToken, error) {
+	s.consumes++
+	if s.token == nil {
+		return domidentity.MagicToken{}, shared.ErrNotFound
+	}
+	t := *s.token
+	s.token = nil
+	return t, nil
+}
+func (s *statefulTokenStore) IncrAttempts(_ context.Context, _ domidentity.Email) (int64, error) {
+	s.attempts++
+	return s.attempts, nil
+}
+func (s *statefulTokenStore) GetAttempts(_ context.Context, _ domidentity.Email) (int64, error) {
+	return s.attempts, nil
+}
+
+func Test_VerifyMagicLink_Execute_WrongGuessThenCorrectGuess_BothSucceedToValidate(t *testing.T) {
+	now := time.Now()
+	stored := domidentity.Reconstitute("123456", now.Add(5*time.Minute))
+	store := &statefulTokenStore{token: &stored}
+	userRepo := newMockUserRepo()
+	email := domidentity.MustNewEmail("wrongthenright@example.com")
+	phone := domidentity.MustNewPhone("+5511987654321")
+	userID := shared.NewUserID()
+	user, _, err := domidentity.NewUser(userID, email, phone, "Fernando", false, shared.ReferralID("ref1234"), now)
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	userRepo.byID[userID] = user
+	userRepo.byEmail[email.String()] = user
+
+	uc := appidentity.NewVerifyMagicLinkUseCase(store, userRepo, newMockRefreshRepo(),
+		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour, false)
+
+	// 1) Palpite errado — deve falhar, mas SEM apagar o token.
+	_, err = uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
+		Email: email.String(),
+		Token: "000001",
+	})
+	if !errors.Is(err, shared.ErrUnauthorized) {
+		t.Fatalf("expected ErrUnauthorized on wrong guess, got %v", err)
+	}
+	if store.token == nil {
+		t.Fatalf("token foi apagado por um palpite ERRADO — é exatamente o defeito que este teste prova que não existe mais")
+	}
+	if store.consumes != 0 {
+		t.Fatalf("Consume não deveria ter sido chamado num palpite errado, foi chamado %d vez(es)", store.consumes)
+	}
+
+	// 2) Palpite correto em seguida — deve funcionar, porque o token sobreviveu.
+	res, err := uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
+		Email: email.String(),
+		Token: "123456",
+	})
+	if err != nil {
+		t.Fatalf("expected success on correct guess after a wrong one, got %v", err)
+	}
+	if res.AccessToken == "" {
+		t.Fatalf("expected access token to be issued")
+	}
+	if store.consumes != 1 {
+		t.Fatalf("expected exactly 1 Consume (on the successful match), got %d", store.consumes)
+	}
+}
+
+// Test_VerifyMagicLink_Execute_ExceedsMaxAttempts_LocksOutEvenCorrectCode é a
+// prova direta de P-03: depois do teto de tentativas, nem o código CERTO
+// passa — o lockout é por contagem de tentativas, não por "só bloqueia
+// palpite errado".
+func Test_VerifyMagicLink_Execute_ExceedsMaxAttempts_LocksOutEvenCorrectCode(t *testing.T) {
+	now := time.Now()
+	stored := domidentity.Reconstitute("123456", now.Add(5*time.Minute))
+	store := &statefulTokenStore{token: &stored}
+	userRepo := newMockUserRepo()
+	email := domidentity.MustNewEmail("bruteforce@example.com")
+
+	uc := appidentity.NewVerifyMagicLinkUseCase(store, userRepo, newMockRefreshRepo(),
+		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour, false).
+		WithMaxAttempts(5)
+
+	// 5 palpites errados — todos contam.
+	for i := 0; i < 5; i++ {
+		_, err := uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
+			Email: email.String(),
+			Token: "000000",
+		})
+		if !errors.Is(err, shared.ErrUnauthorized) {
+			t.Fatalf("tentativa %d: esperava ErrUnauthorized, veio %v", i+1, err)
+		}
+	}
+
+	// 6ª tentativa — mesmo com o código CERTO, o lockout já bateu o teto.
+	_, err := uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
+		Email: email.String(),
+		Token: "123456",
+	})
+	if !errors.Is(err, shared.ErrRateLimited) {
+		t.Fatalf("esperava ErrRateLimited na 6ª tentativa (código correto incluso), veio %v", err)
+	}
+	if store.consumes != 0 {
+		t.Fatalf("token não deveria ter sido consumido — a 6ª chamada nem chegou a checar o código")
+	}
+}
+
+// Test_VerifyMagicLink_Execute_CorrectCodeOnFirstTry_NeverLocksOut garante
+// que o caso comum (usuário digita certo de primeira) não é penalizado.
+func Test_VerifyMagicLink_Execute_CorrectCodeOnFirstTry_NeverLocksOut(t *testing.T) {
+	now := time.Now()
+	stored := domidentity.Reconstitute("123456", now.Add(5*time.Minute))
+	store := &statefulTokenStore{token: &stored}
+	userRepo := newMockUserRepo()
+	email := domidentity.MustNewEmail("firsttry@example.com")
+	phone := domidentity.MustNewPhone("+5511987654321")
+	userID := shared.NewUserID()
+	user, _, err := domidentity.NewUser(userID, email, phone, "Fernando", false, shared.ReferralID("ref5678"), now)
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	userRepo.byID[userID] = user
+	userRepo.byEmail[email.String()] = user
+
+	uc := appidentity.NewVerifyMagicLinkUseCase(store, userRepo, newMockRefreshRepo(),
+		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour, false).
+		WithMaxAttempts(5)
+
+	res, err := uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
+		Email: email.String(),
+		Token: "123456",
+	})
+	if err != nil {
+		t.Fatalf("código correto na primeira tentativa deveria funcionar, veio erro: %v", err)
+	}
+	if res.AccessToken == "" {
+		t.Fatalf("esperava access token emitido")
 	}
 }
 

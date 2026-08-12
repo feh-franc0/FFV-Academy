@@ -1,0 +1,2533 @@
+{
+  "slug": "lab-parquet-particao-arquivo-pequeno",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência agrega pedidos de 400 lojas parceiras num único app de entrega. Desde o "
+              },
+              {
+                "text": "L63",
+                "code": true
+              },
+              {
+                "text": ", cada pedido vira um evento no Kinesis Data Stream, com chave de partição por loja e ordem garantida. Este laboratório começa exatamente onde aquele termina: alguém precisa tirar esse evento do stream e colocá-lo em algum lugar em que o time de BI consiga consultar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "A solução que já está no ar faz exatamente isso e nada mais: um Firehose grava cada lote de eventos como JSON, num único prefixo do S3, sem se importar com data nem formato. Funcionou por catorze meses de operação. O que quebrou não foi a ingestão — foi a consulta que nasceu simples e virou impossível de esperar: \"quantos pedidos cada loja teve ontem\" hoje varre os 400 GB acumulados desde o primeiro dia, porque nada no desenho separa ontem do resto do histórico."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A consequência não é só o relógio. É que o time de BI parou de rodar a consulta em horário comercial — ela compete por I/O com o resto da conta — e passou a agendá-la de madrugada, o que significa que ninguém vê o número do dia antes do meio-dia seguinte. Um problema de formato de arquivo virou um problema de processo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Iniciante — não pressupõe experiência prévia com Athena ou Glue"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L63 concluído (o stream existe), AWS CLI, Python 3 para gerar a carga de teste"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 30 min · implementação 1 h a 1 h 30"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo: sem servidor fixo; o custo varia com volume ingerido e byte consultado"
+              },
+              {
+                "k": "Serviços",
+                "v": "Amazon Data Firehose, S3, Glue Data Catalog, Athena, CloudWatch"
+              },
+              {
+                "k": "Volume atual",
+                "v": "400 lojas, cerca de 1,4 milhão de pedidos/dia, 400 GB acumulados em 14 meses"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "a consulta de um dia não pode custar proporcional ao histórico inteiro"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "o painel de BI sempre filtra por data; nenhuma consulta recorrente filtra só por loja"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "a mesma consulta, medida antes e depois, com bytes varridos e tempo comparados"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é sobre acelerar o Athena com truque de sintaxe SQL, nem sobre trocar de motor de consulta. A pergunta aqui é inteiramente sobre a ESCRITA: o que decide quanto uma consulta custa é o formato e o layout do arquivo, decididos muito antes de qualquer SELECT existir. Otimizar Athena isolado do L66; este módulo entrega o dado no formato que faz o L66 valer a pena."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um número na seção de provas, não com a sensação de a consulta ter ficado mais rápida."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que formato de linha (JSON/CSV) obriga o motor a ler a linha inteira mesmo quando a consulta só usa três colunas.",
+              "Explicar por que ausência de partição obriga o motor a abrir todo objeto do prefixo, independente da data pedida.",
+              "Nomear o mecanismo do buffer do Firehose — tamanho OU tempo, o que vier primeiro — e prever quando ele produz arquivo pequeno.",
+              "Justificar por que particionar por data e não por loja, apesar de a chave de loja já existir no evento.",
+              "Configurar conversão de formato e partição dinâmica no Firehose sem função Lambda.",
+              "Medir bytes varridos de uma consulta antes e depois da mudança, com o comando exato.",
+              "Confirmar, pelo plano de execução, que a poda de partição realmente ocorreu.",
+              "Diagnosticar uma consulta que deveria estar podada e não está."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Formato colunar vs. baseado em linha",
+                "MLA, DEA-C01",
+                "Parquet lendo só as colunas pedidas",
+                "por que agregação sobre 3 de 20 colunas custa uma fração em formato colunar"
+              ],
+              [
+                "Partition pruning",
+                "MLA, DEA-C01, SAA-C03",
+                "filtro em ano/mes/dia evitando listar partições irrelevantes",
+                "que a poda exige filtro EXPLÍCITO na coluna de partição, não numa coluna equivalente"
+              ],
+              [
+                "Buffer de tamanho e tempo do Firehose",
+                "MLA, DEA-C01",
+                "o gatilho que vence primeiro decide o tamanho do arquivo",
+                "por que tráfego baixo por partição produz arquivo pequeno mesmo com buffer grande"
+              ],
+              [
+                "O problema do arquivo pequeno",
+                "MLA, DEA-C01",
+                "overhead de abertura de arquivo dominando sobre volume total",
+                "por que 10 mil arquivos de 10 KB é mais lento que 10 arquivos de 10 MB"
+              ],
+              [
+                "Particionamento dinâmico sem Lambda",
+                "MLA",
+                "expressão jq extraindo chave do próprio evento",
+                "a diferença entre inline parsing e transformação por função"
+              ],
+              [
+                "Custo do Athena por byte varrido",
+                "MLA, DEA-C01, CLF-C02",
+                "a métrica que a Prova 2 e a Prova 4 comparam",
+                "que o formato e a partição são a alavanca de custo, não o tamanho do cluster"
+              ],
+              [
+                "Row group do Parquet",
+                "DEA-C01",
+                "por que não reduzir abaixo do padrão de 128 MB",
+                "a diferença entre tamanho de ARQUIVO e tamanho de ROW GROUP dentro dele"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica dá uma tabela particionada por hora com consultas que sempre filtram por dia, e pede o efeito de granularidade fina demais. A resposta certa não é \"mais partição é sempre melhor\": partição demais fragmenta o dado em arquivos pequenos sem que nenhuma consulta real se beneficie do recorte extra — o gasto vira puro overhead."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito que não muda uma linha de configuração é intenção, não requisito. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Granularidade das consultas recorrentes",
+                "sempre por dia, nunca por hora",
+                "partição em ano/mes/dia é suficiente; partição por hora fragmentaria sem ganho"
+              ],
+              [
+                "Colunas usadas por consulta",
+                "3 a 4 de cerca de 20 no evento",
+                "formato colunar (Parquet) compensa; JSON obrigaria ler a linha inteira mesmo assim"
+              ],
+              [
+                "Atraso máximo até o dado ficar consultável",
+                "até 10 minutos, aceito pelo time de BI",
+                "buffer de 128 MiB/300 s cabe com folga, mesmo considerando o fator de até 1,5× da entrega em múltiplos estágios"
+              ],
+              [
+                "Estabilidade do schema do evento",
+                "poucos campos novos por trimestre, historicamente",
+                "viável manter uma tabela de schema-fonte só para a conversão, revisada por mudança, não por rotina"
+              ],
+              [
+                "Custo de consulta previsível",
+                "Athena cobra por byte varrido",
+                "formato colunar e partição deixam de ser otimização e passam a obrigatórios"
+              ],
+              [
+                "Cardinalidade de chave disponível para partição",
+                "loja_id (400 valores) e data (crescente)",
+                "a chave de partição é só a data; combinar com loja_id multiplicaria os buffers independentes"
+              ],
+              [
+                "Frequência de registro de partição nova",
+                "uma partição nova por dia",
+                "crawler diário é suficiente; não justifica um crawler contínuo nem Lambda por evento"
+              ],
+              [
+                "Time sem operação dedicada a pipeline de dados",
+                "equipe de plataforma enxuta",
+                "conversão dentro do Firehose evita manter um job de ETL separado para operar"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: a ingestão que só grava"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem hoje, e ele é um ponto de partida legítimo: entrega dado do stream para o S3 com a menor configuração possível. O laboratório começa medindo o custo real dele, porque um número torna o problema discutível — \"a consulta demora\" não é argumento, \"varre 400 GB para responder sobre 1,4 milhão de linhas de um dia\" é."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "A ingestão de menor esforço: JSON, sem partição, buffer mínimo",
+            "caption": "Este desenho publica dado no S3 com a menor configuração possível, e é por isso que sobrevive. A consulta \"pedidos de ontem\" acaba varrendo o histórico inteiro, porque nada aqui sabe que ontem é um recorte pequeno: nem o arquivo — linha inteira lida mesmo para 3 colunas — nem o prefixo, sem partição para o motor pular. Percorra os passos até o ponto em que a consulta desiste de ser seletiva.",
+            "groups": [
+              {
+                "label": "Origem (L63)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "stream",
+                    "service": "kinesis",
+                    "label": "Kinesis Data Stream",
+                    "note": "já entrega eventos ordenados por loja, com checkpoint e reprocesso — este módulo não repete essa ingestão"
+                  }
+                ]
+              },
+              {
+                "label": "Entrega sem ajuste",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "firehose",
+                    "service": "firehose",
+                    "label": "Firehose, buffer 1 MiB / 60 s",
+                    "note": "grava um objeto a cada minuto ou 1 MiB, o que vier primeiro — no tráfego real, quase sempre o tempo vence"
+                  }
+                ]
+              },
+              {
+                "label": "Armazenamento",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "bucket",
+                    "service": "s3",
+                    "label": "S3, prefixo plano, JSON",
+                    "note": "todo objeto cai no mesmo prefixo; não existe recorte que separe \"ontem\" do resto do histórico"
+                  }
+                ]
+              },
+              {
+                "label": "Consulta",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "catalogo",
+                    "service": "glue",
+                    "label": "Tabela sem PARTITIONED BY",
+                    "note": "aponta para o bucket inteiro; a única forma de achar \"ontem\" é abrir cada objeto e olhar dentro"
+                  },
+                  {
+                    "id": "consulta",
+                    "service": "athena",
+                    "label": "Athena: pedidos de ontem, por loja",
+                    "note": "a métrica que a fatura cobra é bytes varridos, e é ela que este laboratório mede antes de mudar qualquer coisa"
+                  },
+                  {
+                    "id": "analista",
+                    "service": "user",
+                    "label": "Time de BI",
+                    "note": "faz a mesma pergunta todo dia; é quem sente o resultado no relógio e no fim do mês"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "stream",
+                "to": "firehose",
+                "label": "GetRecords, consumo contínuo do stream do L63",
+                "style": "solid"
+              },
+              {
+                "from": "firehose",
+                "to": "bucket",
+                "label": "PutObject a cada estouro do buffer de 1 MiB/60 s",
+                "style": "solid"
+              },
+              {
+                "from": "bucket",
+                "to": "catalogo",
+                "label": "LOCATION do prefixo inteiro, sem coluna de partição",
+                "style": "dashed"
+              },
+              {
+                "from": "catalogo",
+                "to": "consulta",
+                "label": "schema JSON resolvido em tempo de leitura",
+                "style": "dashed"
+              },
+              {
+                "from": "analista",
+                "to": "consulta",
+                "label": "SELECT loja_id, count(*) WHERE criado_em = ontem",
+                "style": "solid"
+              },
+              {
+                "from": "consulta",
+                "to": "bucket",
+                "label": "lista e abre TODO objeto do prefixo, mesmo os de outros meses",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O stream já chega ordenado; a ingestão não repete esse trabalho",
+                "detail": "O Kinesis Data Stream do L63 entrega eventos por loja, na ordem em que aconteceram. Este laboratório assume esse contrato pronto: o Firehose é apenas um consumidor a mais do mesmo stream, sem reprocessar ordenação nem checkpoint.",
+                "nodes": [
+                  "stream",
+                  "firehose"
+                ],
+                "edges": [
+                  "stream>firehose"
+                ]
+              },
+              {
+                "label": "O buffer mínimo grava por tempo, não por volume",
+                "detail": "Com 1 MiB de gatilho de tamanho e tráfego moderado, o intervalo de 60 s quase sempre vence a corrida — cada disparo do Firehose grava um objeto pequeno, independente de quanto acumulou. É o mecanismo, não um acidente de configuração: o buffer entrega o PRIMEIRO gatilho satisfeito.",
+                "nodes": [
+                  "firehose",
+                  "bucket"
+                ],
+                "edges": [
+                  "firehose>bucket"
+                ]
+              },
+              {
+                "label": "O prefixo é uma pilha só, sem recorte",
+                "detail": "Sem `PARTITIONED BY`, o S3 recebe todo objeto no mesmo prefixo lógico. Não existe pasta \"de ontem\": existe uma pasta com tudo, crescendo desde o primeiro dia de operação.",
+                "nodes": [
+                  "bucket",
+                  "catalogo"
+                ],
+                "edges": [
+                  "bucket>catalogo"
+                ]
+              },
+              {
+                "label": "A tabela não tem onde podar",
+                "detail": "A definição da tabela aponta para o prefixo inteiro. Quando a consulta chega, o motor não tem metadado nenhum que diga \"esses objetos são de ontem, os outros não\" — a única forma de saber é abrir e ler.",
+                "nodes": [
+                  "catalogo",
+                  "consulta"
+                ],
+                "edges": [
+                  "catalogo>consulta"
+                ]
+              },
+              {
+                "label": "A pergunta é de um dia; o motor não sabe disso",
+                "detail": "O time de BI filtra por data no `WHERE`, mas o filtro atua DEPOIS de o dado já estar lido, porque o único jeito de avaliar a condição é abrir cada linha de cada arquivo e conferir o campo.",
+                "nodes": [
+                  "analista",
+                  "consulta"
+                ],
+                "edges": [
+                  "analista>consulta"
+                ]
+              },
+              {
+                "label": "A consulta abre tudo, porque nada aponta pro dia certo",
+                "detail": "Sem partição, sem coluna que aponte \"isso é de ontem\" no NOME do arquivo, o resultado é varrer o histórico inteiro para responder sobre um dia — e cada linha JSON é lida por completo, mesmo quando só 3 das cerca de 20 colunas importam para a resposta.",
+                "nodes": [
+                  "consulta",
+                  "bucket"
+                ],
+                "edges": [
+                  "consulta>bucket"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "O prefixo plano é uma bomba-relógio de custo, não só de velocidade",
+            "content": "Sem partição, o custo da consulta de \"ontem\" cresce junto com o histórico inteiro, para sempre. Uma consulta que hoje varre 400 GB varrerá 500 GB em três meses e 800 GB no ano que vem, pela mesma pergunta sobre o mesmo único dia. Não é um problema que se estabiliza: piora sozinho, sem nenhuma mudança no volume diário de pedidos."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para produção"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. Se você não conseguir apontar o requisito, a peça é adorno — e este desenho não tem nenhuma."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Conversão e partição na escrita, com o preço do buffer medido",
+            "caption": "A pergunta não mudou; o que muda é que agora existe uma resposta pronta ANTES de a consulta rodar: a coluna de partição no catálogo e o formato colunar no arquivo. Cada peça nova aqui rastreia a um requisito da seção anterior — percorra os passos e note que a decisão nunca é tomada na consulta, é sempre tomada na escrita.",
+            "groups": [
+              {
+                "label": "Origem (L63)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "stream2",
+                    "service": "kinesis",
+                    "label": "Kinesis Data Stream",
+                    "note": "o mesmo stream do desenho anterior; a mudança começa inteiramente na entrega"
+                  }
+                ]
+              },
+              {
+                "label": "Entrega convertendo e particionando",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "firehose2",
+                    "service": "firehose",
+                    "label": "Firehose: Parquet + partição dinâmica",
+                    "note": "extrai ano/mes/dia do próprio evento via expressão jq, e converte para Parquet antes de gravar — sem função Lambda de transformação"
+                  },
+                  {
+                    "id": "schema",
+                    "service": "glue",
+                    "label": "Tabela de schema-fonte (Glue)",
+                    "note": "o Firehose lê esta definição para saber como serializar em Parquet ANTES de escrever; não é a tabela que a consulta usa"
+                  }
+                ]
+              },
+              {
+                "label": "Armazenamento particionado",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "bucket2",
+                    "service": "s3",
+                    "label": "S3, ano=/mes=/dia= (Hive-style), Parquet",
+                    "note": "cada partição é um prefixo próprio; é o que permite ao motor pular tudo que não é ontem sem abrir nada"
+                  }
+                ]
+              },
+              {
+                "label": "Consulta",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "catalogo2",
+                    "service": "glue",
+                    "label": "Tabela Athena, PARTITIONED BY (ano,mes,dia)",
+                    "note": "as colunas de partição existem só no catálogo — não estão gravadas dentro dos arquivos Parquet"
+                  },
+                  {
+                    "id": "consulta2",
+                    "service": "athena",
+                    "label": "Athena: a mesma consulta de sempre",
+                    "note": "o filtro nas 3 colunas de partição é o que decide se há poda; sem ele, volta a varrer tudo"
+                  },
+                  {
+                    "id": "analista2",
+                    "service": "user",
+                    "label": "Time de BI",
+                    "note": "mesma pergunta, mesma ferramenta — só a escrita mudou, e é o ponto do laboratório"
+                  }
+                ]
+              },
+              {
+                "label": "Observação",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "cw2",
+                    "service": "cloudwatch",
+                    "label": "Métrica de atraso de entrega",
+                    "note": "mede o intervalo entre o evento chegar e o objeto aparecer no S3 — é o preço pago pelo buffer maior"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "stream2",
+                "to": "firehose2",
+                "label": "GetRecords, mesmo consumidor de antes",
+                "style": "solid"
+              },
+              {
+                "from": "firehose2",
+                "to": "schema",
+                "label": "lê a definição de colunas antes de serializar",
+                "style": "dashed"
+              },
+              {
+                "from": "firehose2",
+                "to": "bucket2",
+                "label": "PutObject por partição, buffer de 128 MiB/300 s",
+                "style": "solid"
+              },
+              {
+                "from": "bucket2",
+                "to": "catalogo2",
+                "label": "prefixo Hive-style registrado como partição",
+                "style": "dashed"
+              },
+              {
+                "from": "catalogo2",
+                "to": "consulta2",
+                "label": "schema Parquet + colunas de partição resolvidos",
+                "style": "dashed"
+              },
+              {
+                "from": "analista2",
+                "to": "consulta2",
+                "label": "SELECT loja_id, count(*) WHERE ano=.. AND mes=.. AND dia=..",
+                "style": "solid"
+              },
+              {
+                "from": "consulta2",
+                "to": "bucket2",
+                "label": "abre só a partição de ontem, só as colunas pedidas",
+                "style": "solid"
+              },
+              {
+                "from": "firehose2",
+                "to": "cw2",
+                "label": "emite métrica de atraso a cada entrega",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "O stream é o mesmo; a mudança começa na entrega",
+                "detail": "Nenhuma peça de origem foi trocada. Isso importa: a decisão inteira deste laboratório mora no consumidor do stream, não na produção dos eventos.",
+                "nodes": [
+                  "stream2",
+                  "firehose2"
+                ],
+                "edges": [
+                  "stream2>firehose2"
+                ]
+              },
+              {
+                "label": "O Firehose lê o schema-alvo antes de escrever, não depois",
+                "detail": "A conversão de formato do Firehose exige uma definição de colunas conhecida de antemão, lida de uma tabela do Glue Data Catalog dedicada a isso. Um campo que chega no evento e não está declarado nessa tabela é descartado silenciosamente na conversão — é a razão pela qual esta tabela de schema tem de ser revisada toda vez que o evento ganha um campo novo.",
+                "nodes": [
+                  "firehose2",
+                  "schema"
+                ],
+                "edges": [
+                  "firehose2>schema"
+                ]
+              },
+              {
+                "label": "O buffer maior grava menos arquivos, maiores",
+                "detail": "128 MiB e 300 s deslocam o gatilho para o tamanho na maior parte do tempo, produzindo arquivos saudáveis em vez de um por minuto. O efeito colateral é atraso: a documentação oficial registra que a entrega em múltiplos estágios pode levar até 1,5× o intervalo configurado — é o motivo do nó de observação existir.",
+                "nodes": [
+                  "firehose2",
+                  "bucket2"
+                ],
+                "edges": [
+                  "firehose2>bucket2"
+                ]
+              },
+              {
+                "label": "A partição é uma coluna que não existe dentro do arquivo",
+                "detail": "O valor de `dia=2026-08-07` vem do NOME do prefixo, não de uma coluna gravada no Parquet. É por isso que a tabela precisa registrar essa partição explicitamente — o dado por si só não a declara.",
+                "nodes": [
+                  "bucket2",
+                  "catalogo2"
+                ],
+                "edges": [
+                  "bucket2>catalogo2"
+                ]
+              },
+              {
+                "label": "O filtro tem de tocar a coluna de partição, não uma equivalente",
+                "detail": "A poda só acontece quando a condição do `WHERE` incide literalmente sobre `ano`, `mes` e `dia`. Filtrar por um campo de timestamp dentro do Parquet que descreva a mesma janela de tempo NÃO aciona a poda — o motor não sabe, sem o filtro explícito, que as duas coisas coincidem.",
+                "nodes": [
+                  "analista2",
+                  "consulta2"
+                ],
+                "edges": [
+                  "analista2>consulta2"
+                ]
+              },
+              {
+                "label": "A poda acontece antes de qualquer byte ser lido",
+                "detail": "Com o filtro certo, o planejador da consulta resolve os prefixos correspondentes e nem lista os demais. Some a isso o formato colunar — só as 3 colunas pedidas são lidas dentro dos arquivos da partição — e o volume varrido cai em duas dimensões independentes ao mesmo tempo.",
+                "nodes": [
+                  "consulta2",
+                  "bucket2"
+                ],
+                "edges": [
+                  "consulta2>bucket2"
+                ]
+              },
+              {
+                "label": "O atraso do buffer é o preço, e ele é medido",
+                "detail": "Nada aqui é de graça: o mesmo ajuste que produz arquivo saudável atrasa a hora em que o dado fica visível para consulta. Esse atraso é observável, não estimado — é a métrica de frescor de entrega do Firehose.",
+                "nodes": [
+                  "firehose2",
+                  "cw2"
+                ],
+                "edges": [
+                  "firehose2>cw2"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A diferença estrutural em relação ao desenho anterior não é uma caixa a mais: é que a decisão de formato e de partição deixou de acontecer na consulta — onde ela é cara e repetida todo dia — e passou a acontecer uma vez, na escrita."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "annotated_formula",
+          "position": 3,
+          "data": {
+            "title": "Quanto tempo até o dado aparecer para consulta, e qual parcela você controla",
+            "formula": "atraso_de_entrega ≈ min(tamanho_do_buffer / taxa_de_chegada, intervalo_do_buffer) × até 1,5",
+            "parts": [
+              {
+                "symbol": "tamanho_do_buffer / taxa_de_chegada",
+                "name": "Tempo até o gatilho de TAMANHO disparar",
+                "description": "Depende do volume da partição, não do volume total do stream. Uma partição de baixo tráfego quase nunca atinge 128 MiB antes do relógio."
+              },
+              {
+                "symbol": "intervalo_do_buffer",
+                "name": "O gatilho de TEMPO, fixo",
+                "description": "O primeiro dos dois gatilhos a ser satisfeito vence — não existe soma, é uma corrida.",
+                "highlight": true
+              },
+              {
+                "symbol": "× até 1,5",
+                "name": "O custo da entrega em múltiplos estágios",
+                "description": "A documentação oficial registra que, internamente, o Firehose usa buffering em vários estágios para produzir objetos de tamanho máximo — o atraso de ponta a ponta pode chegar a 1,5× o valor configurado. NÃO verificado neste laboratório com medição própria de produção; meça na sua conta antes de prometer um SLA de frescor."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "success",
+            "title": "A alavanca que reduz custo em duas dimensões independentes",
+            "content": "Partição reduz QUANTOS arquivos são abertos. Formato colunar reduz QUANTO de cada arquivo aberto é lido. As duas reduções compõem: uma consulta que filtra a partição certa E só pede 3 colunas paga a interseção das duas economias, não a maior das duas isoladamente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "O caminho de um pedido, do app à consulta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os nove passos abaixo não são cerimônia: cada um é um lugar onde algo pode dar errado de forma silenciosa, e a seção de provas testa exatamente essas costuras."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "De um pedido criado no app até a linha aparecer numa consulta",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1. Evento de pedido é publicado no Kinesis Data Stream",
+                "desc": "A chave de partição do stream é `loja_id` (decisão do L63) — garante ordem por loja, não ordem global."
+              },
+              {
+                "label": "2. Firehose consome o stream continuamente",
+                "desc": "É um consumidor independente, sem afetar outros consumidores do mesmo stream (ex.: um processo de alerta em tempo real)."
+              },
+              {
+                "label": "3. Expressão jq extrai ano, mês e dia do campo `criado_em`",
+                "desc": "Inline parsing, sem Lambda: `.criado_em | strftime(\"%Y\")` e equivalentes para mês e dia — resolvido dentro do próprio Firehose."
+              },
+              {
+                "label": "4. Registros do mesmo dia acumulam no MESMO buffer lógico",
+                "desc": "O Firehose agrupa por prefixo resultante; cada combinação de ano/mes/dia tem seu próprio buffer independente."
+              },
+              {
+                "label": "5. Buffer fecha por tamanho OU tempo, o que vier primeiro",
+                "desc": "128 MiB ou 300 s. No volume desta operação, a maioria fecha por tempo — e isso é esperado, não um defeito."
+              },
+              {
+                "label": "6. Conversão para Parquet usa o schema da tabela-fonte do Glue",
+                "desc": "Acontece dentro do próprio Firehose, antes do PutObject — não é um job separado depois."
+              },
+              {
+                "label": "7. Objeto Parquet é gravado no prefixo Hive-style",
+                "desc": "`s3://bucket/ano=2026/mes=08/dia=07/arquivo.parquet` — o caminho é a partição."
+              },
+              {
+                "label": "8. Um crawler agendado registra a partição nova na tabela de consulta",
+                "desc": "Sem isso, o arquivo existe no S3 mas a tabela Athena não sabe procurar ali."
+              },
+              {
+                "label": "9. A consulta filtra por ano/mes/dia e só então lê as colunas pedidas",
+                "desc": "Poda de partição primeiro, leitura colunar depois — as duas reduções compõem, não competem."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "json",
+            "filename": "evento-pedido.json",
+            "code": "// O evento que sai do Kinesis Data Stream do L63, um por pedido.\\n// E o que a expressao jq do Firehose le para extrair ano/mes/dia.\\n{\\n  \"pedido_id\": \"2026-08-06-0231-58421\",\\n  \"loja_id\": \"loja-0231\",\\n  \"criado_em\": \"2026-08-06T19:42:07Z\",\\n  \"status\": \"pago\",\\n  \"valor_total_centavos\": 8790,\\n  \"quantidade_itens\": 3,\\n  \"canal\": \"app\",\\n  \"cupom_aplicado\": null\\n}"
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "A partição composta que parece óbvia, e por que este módulo evita",
+            "content": "O evento já tem `loja_id`, então particionar por loja E data soa natural. O problema é o mecanismo do buffer: o Firehose mantém um buffer INDEPENDENTE por combinação de chave de partição resultante. Com 400 lojas, isso são até 400 buffers simultâneos por dia, e a maioria fecha pelo TEMPO — recriando o arquivo pequeno que a mudança pretendia eliminar. Como nenhuma consulta recorrente filtra só por loja (a hipótese declarada na seção 1), a partição por data sozinha já cobre o caso que importa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Uma consulta de BI recorrente — \"pedidos de ontem, por loja\" — precisa responder em segundos e custar pouco, sobre um histórico que já passa de 400 GB e cresce todo dia, alimentado por um stream do Kinesis que já existe.",
+            "winner": "Converter para Parquet e particionar por data DENTRO do próprio Firehose, na entrega",
+            "why": "A alternativa de converter depois, em lote, sempre deixa uma janela em que o dado mais recente ainda está em JSON cru e sem partição — exatamente a faixa que a consulta de \"ontem\" mais usa. Fazer a conversão na escrita elimina essa janela: o dado nasce no formato final, sem um segundo job para atrasar ou falhar. O custo é a complexidade de configurar o schema-fonte corretamente uma vez; o ganho é que ele nunca fica desatualizado por um job que não rodou.",
+            "alternatives": [
+              {
+                "name": "Glue ETL agendado, convertendo o dia anterior em lote",
+                "downside": "É mais simples de operar e mais barato por hora, mas deixa o dado de HOJE sempre em JSON sem partição até o job rodar — e \"hoje\" é justamente a faixa mais consultada em painel operacional. Aceitável quando o consumo é só analítico do dia anterior em diante."
+              },
+              {
+                "name": "CTAS sob demanda, convertendo só quando alguém precisa",
+                "downside": "Serve para exploração pontual, não para consulta recorrente: cada CTAS é ele mesmo uma consulta que varre o cru, então a primeira pergunta do dia paga o preço integral e as seguintes é que se beneficiam — e alguém precisa lembrar de rodá-lo."
+              },
+              {
+                "name": "Redshift Spectrum direto sobre o JSON cru",
+                "downside": "Troca o motor de consulta e não resolve o problema declarado: Spectrum também varre bytes proporcionalmente ao formato e à ausência de partição. É a mesma pergunta, respondida por outro serviço, com a mesma resposta errada."
+              },
+              {
+                "name": "Carregar tudo para dentro do Redshift (COPY nativo)",
+                "downside": "Resolve desempenho de consulta às custas de duplicar o armazenamento e assumir um ETL de ingestão contínua — correto quando o BI já vive no Redshift por outro motivo (L68), desproporcional só para esta pergunta."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Onde converter o formato",
+                "no Firehose, na escrita",
+                "Glue ETL em lote; CTAS sob demanda",
+                "elimina a janela em que o dado mais recente ainda está em JSON cru",
+                "schema-fonte precisa ser mantido junto com o evento; conversão inline é mais difícil de depurar que um job"
+              ],
+              [
+                "Chave de partição",
+                "só ano/mes/dia",
+                "ano/mes/dia + loja_id",
+                "evita multiplicar buffers independentes por 400 lojas",
+                "consulta que filtrasse só por loja não ganharia poda — mas nenhuma consulta recorrente faz isso"
+              ],
+              [
+                "Tamanho de buffer em produção",
+                "128 MiB / 300 s",
+                "1 MiB/60 s (mínimo); 128 MiB/900 s (máximo)",
+                "desloca o gatilho para tamanho na maior parte do tempo, sem violar o teto de atraso de 10 min",
+                "atraso até o dado ficar consultável sobe de segundos para minutos"
+              ],
+              [
+                "Registro de partição nova",
+                "crawler agendado, diário",
+                "ALTER TABLE ADD PARTITION manual; crawler contínuo",
+                "cobre o volume real (1 partição nova/dia) sem operação manual nem custo de execução contínua",
+                "uma partição só aparece para consulta até 24 h depois de existir no S3"
+              ],
+              [
+                "Compressão do Parquet",
+                "Snappy",
+                "Gzip; sem compressão",
+                "Snappy prioriza velocidade de leitura sobre taxa de compressão — coerente com consulta interativa",
+                "arquivo um pouco maior que Gzip produziria; irrelevante frente ao ganho do formato colunar"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este laboratório não paga",
+            "content": "Os quatorze meses de histórico em JSON, sem partição, continuam existindo depois deste módulo — ele resolve a ingestão DAQUI PARA FRENTE. Migrar o histórico acumulado é um backfill à parte, com o mesmo mecanismo de CTAS usado na medição, rodado uma vez sobre o total em vez de sobre a amostra de 30 dias."
+          }
+        },
+        {
+          "id": "b7_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "Por que Snappy, e não a compressão que reduz mais bytes",
+            "content": "Gzip comprime mais, mas exige ler o arquivo do início para descomprimir — o que impede paralelismo de leitura dentro de um mesmo arquivo. Snappy comprime menos e descomprime mais rápido, o que favorece consulta interativa sobre custo puro de armazenamento. A escolha certa depende de qual das duas dimensões pesa mais no seu caso — aqui, é o tempo de resposta do painel."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: a ingestão mínima, sem conversão"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "É a linha de base — o que a Cadência já tem no ar. Vale implantar mesmo sabendo que vai ser substituída: é sobre ela que a Prova 1 e a Prova 2 medem o problema."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "firehose_minimo.tf",
+            "code": "# firehose_minimo.tf — a entrega de menor esforço: JSON, sem partição\n\nresource \"aws_s3_bucket\" \"lake\" {\n  bucket = \"${var.projeto}-lake\"\n}\n\n# Prefixo plano. Nao ha PARTITIONED BY do lado da tabela porque nao ha\n# estrutura nenhuma aqui que justifique uma — e essa e a linha de base que\n# o laboratorio mede ANTES de mudar qualquer coisa.\nresource \"aws_iam_role\" \"firehose_minimo\" {\n  name = \"${var.projeto}-firehose-minimo\"\n  assume_role_policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect    = \"Allow\"\n      Principal = { Service = \"firehose.amazonaws.com\" }\n      Action    = \"sts:AssumeRole\"\n    }]\n  })\n}\n\ndata \"aws_iam_policy_document\" \"escrever_no_lake\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"s3:PutObject\", \"s3:GetBucketLocation\", \"s3:ListBucket\"]\n    resources = [aws_s3_bucket.lake.arn, \"${aws_s3_bucket.lake.arn}/*\"]\n  }\n}\n\nresource \"aws_iam_role_policy\" \"firehose_minimo\" {\n  role   = aws_iam_role.firehose_minimo.id\n  policy = data.aws_iam_policy_document.escrever_no_lake.json\n}\n\nresource \"aws_kinesis_firehose_delivery_stream\" \"cru\" {\n  name        = \"${var.projeto}-pedidos-cru\"\n  destination = \"extended_s3\"\n\n  kinesis_source_configuration {\n    kinesis_stream_arn = var.kinesis_stream_arn # o stream do L63\n    role_arn            = aws_iam_role.firehose_minimo.arn\n  }\n\n  extended_s3_configuration {\n    role_arn   = aws_iam_role.firehose_minimo.arn\n    bucket_arn = aws_s3_bucket.lake.arn\n    prefix     = \"cru/\" # prefixo plano — a linha de base do laboratorio\n\n    # O gatilho MINIMO permitido pela API (1 MiB / 60 s). E aqui, ao vivo,\n    # que o problema do arquivo pequeno nasce: com trafego moderado, o\n    # intervalo de 60 s quase sempre vence a corrida contra o tamanho.\n    buffering_size     = 1\n    buffering_interval = 60\n\n    # Sem conversao de formato: o que chega do stream (JSON) e o que grava.\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que o buffer mínimo não é um erro de configuração",
+            "content": "1 MiB e 60 s são os valores mais BAIXOS que a API aceita, não um esquecimento de quem configurou. É o desenho que prioriza latência de entrega acima de tudo — e é uma escolha legítima quando ninguém consulta o dado agregado, só processa evento a evento em tempo real."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o schema que o Firehose lê antes de escrever"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A conversão de formato do Firehose não infere schema do evento — ela exige uma definição de colunas conhecida de antemão. Esta tabela existe só para isso; não é a tabela que a consulta usa."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "schema_fonte.tf",
+            "code": "# schema_fonte.tf — a tabela que o Firehose le ANTES de escrever\n\n# Esta tabela nao serve para consulta. Ela existe so para o Firehose saber\n# o layout de colunas ao serializar em Parquet. Confundi-la com a tabela de\n# consulta (glue_tabela_consulta.tf) e o erro mais comum desta seção: sao\n# dois objetos com o mesmo schema de COLUNAS, mas propositos diferentes.\nresource \"aws_glue_catalog_database\" \"schema\" {\n  name = \"${var.projeto}_schema_fonte\"\n}\n\nresource \"aws_glue_catalog_table\" \"pedido_schema\" {\n  name          = \"pedido\"\n  database_name = aws_glue_catalog_database.schema.name\n\n  storage_descriptor {\n    columns {\n      name = \"pedido_id\"\n      type = \"string\"\n    }\n    columns {\n      name = \"loja_id\"\n      type = \"string\"\n    }\n    columns {\n      name = \"criado_em\"\n      type = \"string\" # ISO 8601; convertido em tempo de consulta, nao aqui\n    }\n    columns {\n      name = \"status\"\n      type = \"string\"\n    }\n    columns {\n      name = \"valor_total_centavos\"\n      type = \"bigint\"\n    }\n    columns {\n      name = \"quantidade_itens\"\n      type = \"int\"\n    }\n    # Um campo que chegar no evento e NAO estiver listado aqui e descartado\n    # silenciosamente pela conversao do Firehose. Revisar esta lista é parte\n    # do contrato de mudança de schema do produtor do evento (ver L70).\n  }\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Campo novo no evento sem esta tabela atualizada é dado perdido, em silêncio",
+            "content": "Se o time de produto adicionar um campo ao evento de pedido e ninguém atualizar esta tabela, a conversão do Firehose simplesmente descarta o campo novo — sem erro, sem alerta, sem linha no log. O dado chega ao Kinesis, existe no evento, e nunca aparece no Parquet. É por isso que mudança de schema do produtor precisa de um contrato explícito com quem opera este pipeline (o assunto do L70)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: conversão para Parquet e partição dinâmica, sem Lambda"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Duas coisas acontecem na mesma entrega: a expressão jq extrai as chaves de partição do próprio evento, e o Firehose serializa em Parquet usando o schema da tabela anterior — tudo antes do `PutObject`."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "firehose_producao.tf",
+            "code": "# firehose_producao.tf — conversao para Parquet + particao dinamica, sem Lambda\n\nresource \"aws_iam_role_policy\" \"firehose_producao_glue\" {\n  role = aws_iam_role.firehose_minimo.id # reaproveita o papel; escopo por acao abaixo\n  policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect = \"Allow\"\n      Action = [\n        \"glue:GetTable\",\n        \"glue:GetTableVersion\",\n        \"glue:GetTableVersions\",\n      ]\n      # O Firehose so PRECISA LER a definicao de schema, nunca escrever nela.\n      # Restrito as duas tabelas de schema-fonte deste projeto.\n      Resource = [\n        aws_glue_catalog_database.schema.arn,\n        aws_glue_catalog_table.pedido_schema.arn,\n      ]\n    }]\n  })\n}\n\nresource \"aws_kinesis_firehose_delivery_stream\" \"otimizado\" {\n  name        = \"${var.projeto}-pedidos-parquet\"\n  destination = \"extended_s3\"\n\n  kinesis_source_configuration {\n    kinesis_stream_arn = var.kinesis_stream_arn\n    role_arn            = aws_iam_role.firehose_minimo.arn\n  }\n\n  extended_s3_configuration {\n    role_arn   = aws_iam_role.firehose_minimo.arn\n    bucket_arn = aws_s3_bucket.lake.arn\n\n    # Prefixo Hive-style: a sintaxe \"!{partitionKeyFromQuery:chave}\" e a\n    # unica forma documentada de referenciar uma chave extraida por inline\n    # parsing. Repare que a chave usada aqui e SO a data — de proposito:\n    # incluir loja_id multiplicaria os buffers independentes por centenas\n    # de lojas, e a maioria fecharia por tempo antes de atingir tamanho\n    # saudavel. Ver o callout de particao composta na seção de construção.\n    prefix              = \"ano=!{partitionKeyFromQuery:ano}/mes=!{partitionKeyFromQuery:mes}/dia=!{partitionKeyFromQuery:dia}/\"\n    error_output_prefix = \"erros/ano=!{timestamp:yyyy}/mes=!{timestamp:MM}/dia=!{timestamp:dd}/!{firehose:error-output-type}/\"\n\n    # O gatilho de PRODUCAO: desloca a corrida para o tamanho na maior\n    # parte do tempo. O custo colateral e atraso ate o dado ficar visivel\n    # — ver FORMULA na seção de arquitetura.\n    buffering_size     = 128\n    buffering_interval = 300\n\n    dynamic_partitioning_configuration {\n      enabled = true\n    }\n\n    processing_configuration {\n      enabled = true\n\n      processors {\n        type = \"MetadataExtraction\"\n\n        parameters {\n          parameter_name  = \"MetadataExtractorQuery\"\n          # jq 1.6, o unico dialeto suportado por inline parsing. Extrai as\n          # tres chaves do campo `criado_em`, sem funcao Lambda.\n          parameter_value = \"{ano: (.criado_em | strftime(\\\"%Y\\\")), mes: (.criado_em | strftime(\\\"%m\\\")), dia: (.criado_em | strftime(\\\"%d\\\"))}\"\n        }\n        parameters {\n          parameter_name  = \"JsonParsingEngine\"\n          parameter_value = \"JQ-1.6\"\n        }\n      }\n    }\n\n    data_format_conversion_configuration {\n      enabled = true\n\n      input_format_configuration {\n        deserializer {\n          open_x_json_ser_de {}\n        }\n      }\n\n      output_format_configuration {\n        serializer {\n          # O tamanho de row group do Parquet fica no padrao de 128 MB — a\n          # AWS recomenda NAO diminui-lo. Aumentar so compensa com muitas\n          # colunas, o que nao e o caso aqui.\n          parquet_ser_de {}\n        }\n      }\n\n      schema_configuration {\n        database_name = aws_glue_catalog_database.schema.name\n        table_name     = aws_glue_catalog_table.pedido_schema.name\n        role_arn       = aws_iam_role.firehose_minimo.arn\n        region         = var.regiao\n        version_id     = \"LATEST\"\n      }\n    }\n  }\n}\n\n# NAO verificado neste laboratorio com trafego de producao real: os nomes\n# exatos de parametro acima (MetadataExtraction, MetadataExtractorQuery,\n# JsonParsingEngine) seguem a documentacao de particionamento dinamico\n# consultada em 08/ago/2026. Como e uma API que evolui, confirme contra a\n# referencia atual do provider antes de aplicar em conta real.\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Parâmetro",
+              "Mínimo (linha de base)",
+              "Produção",
+              "Por quê"
+            ],
+            "rows": [
+              [
+                "`buffering_size`",
+                "1 MiB",
+                "128 MiB",
+                "desloca o gatilho para tamanho na maior parte do tempo, produzindo arquivo saudável"
+              ],
+              [
+                "`buffering_interval`",
+                "60 s",
+                "300 s",
+                "ainda dentro do teto de atraso de 10 min do requisito, mesmo com o fator de até 1,5×"
+              ],
+              [
+                "Formato de saída",
+                "JSON (o que chega, o que grava)",
+                "Parquet via `data_format_conversion_configuration`",
+                "só Parquet permite ler 3 de 20 colunas sem abrir a linha inteira"
+              ],
+              [
+                "Chave de partição",
+                "nenhuma",
+                "ano/mes/dia via inline parsing (jq)",
+                "permite poda sem exigir função Lambda de transformação"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: a tabela que a consulta usa, e como as partições entram nela"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "É uma tabela DIFERENTE da que o Firehose lê para converter. Uma declara colunas para serialização; esta declara colunas E partições para consulta — e as colunas de partição não existem dentro do arquivo Parquet, só no caminho do S3."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "glue_tabela_consulta.tf",
+            "code": "# glue_tabela_consulta.tf — a tabela que o Athena de fato usa\n\nresource \"aws_glue_catalog_database\" \"lake\" {\n  name = \"${var.projeto}_lake\"\n}\n\nresource \"aws_glue_catalog_table\" \"pedidos_parquet\" {\n  name          = \"pedidos\"\n  database_name = aws_glue_catalog_database.lake.name\n  table_type    = \"EXTERNAL_TABLE\"\n\n  parameters = {\n    \"classification\"  = \"parquet\"\n    \"compressionType\" = \"snappy\"\n  }\n\n  storage_descriptor {\n    location      = \"s3://${aws_s3_bucket.lake.bucket}/\" # a raiz; as particoes moram embaixo\n    input_format  = \"org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat\"\n    output_format = \"org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat\"\n\n    ser_de_info {\n      serialization_library = \"org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe\"\n    }\n\n    columns {\n      name = \"pedido_id\"\n      type = \"string\"\n    }\n    columns {\n      name = \"loja_id\"\n      type = \"string\"\n    }\n    columns {\n      name = \"criado_em\"\n      type = \"string\"\n    }\n    columns {\n      name = \"status\"\n      type = \"string\"\n    }\n    columns {\n      name = \"valor_total_centavos\"\n      type = \"bigint\"\n    }\n    columns {\n      name = \"quantidade_itens\"\n      type = \"int\"\n    }\n  }\n\n  # As colunas de particao NAO aparecem em `storage_descriptor.columns`.\n  # Elas vem do PREFIXO, e e por isso que precisam ser declaradas aqui,\n  # separadamente — e por isso que a coluna \"ano\" nao existe dentro do\n  # arquivo Parquet, so no caminho.\n  partition_keys {\n    name = \"ano\"\n    type = \"string\" # Athena exige STRING em chave de particao para empurrar o filtro ao Glue\n  }\n  partition_keys {\n    name = \"mes\"\n    type = \"string\"\n  }\n  partition_keys {\n    name = \"dia\"\n    type = \"string\"\n  }\n}\n\n# O crawler registra particoes novas periodicamente. Alternativa mais barata\n# para baixo volume de particoes novas por dia (aqui, 1): ALTER TABLE ADD\n# PARTITION manual ou por Lambda agendada — o crawler cobra por DPU-hora e\n# e um exagero para uma unica particao nova por dia.\nresource \"aws_glue_crawler\" \"particoes_novas\" {\n  name          = \"${var.projeto}-particoes-pedidos\"\n  role          = aws_iam_role.crawler.arn\n  database_name = aws_glue_catalog_database.lake.name\n\n  s3_target {\n    path = \"s3://${aws_s3_bucket.lake.bucket}/ano=/\"\n  }\n\n  # Diario, apos o buffer do Firehose ja ter fechado a particao do dia\n  # anterior varias vezes — evita rodar sobre uma particao ainda incompleta.\n  schedule = \"cron(0 6 * * ? *)\"\n\n  schema_change_policy {\n    update_behavior = \"UPDATE_IN_DATABASE\"\n    delete_behavior = \"LOG\" # nunca apaga particao sozinho; so registra o log\n  }\n}\n\nresource \"aws_iam_role\" \"crawler\" {\n  name = \"${var.projeto}-crawler-particoes\"\n  assume_role_policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect    = \"Allow\"\n      Principal = { Service = \"glue.amazonaws.com\" }\n      Action    = \"sts:AssumeRole\"\n    }]\n  })\n}\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que crawler agendado, e não `MSCK REPAIR TABLE` em loop",
+            "content": "A documentação do Athena recomenda evitar `MSCK REPAIR TABLE` para manutenção contínua: ele só adiciona partição nova, nunca remove a que sumiu, e fica lento à medida que o número de partições cresce. Um crawler agendado, ou `ALTER TABLE ADD PARTITION` direto pela API do Glue, são as formas recomendadas — e com uma partição nova por dia, o custo de operação de qualquer um dos dois é desprezível."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Medir: carga sintética reproduzível, no lugar de esperar 14 meses"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Gerar 400 GB de verdade não cabe num laboratório. Este script produz uma amostra proporcionalmente pequena com a MESMA estrutura — 30 dias, 400 lojas — e a razão de bytes varridos medida nela se sustenta em qualquer escala, porque o mecanismo (formato, partição, tamanho de arquivo) não depende de volume total."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "carga_sintetica.sh",
+            "code": "#!/usr/bin/env bash\n# carga_sintetica.sh — reproduz o efeito em escala pequena, para medir agora\n#\n# O Firehose de producao faz isto continuamente. Para MEDIR sem esperar dias\n# reais, este script gera a mesma carga logica e a grava dos dois jeitos:\n# cru (imitando o buffer minimo) e via CTAS (imitando o resultado do Firehose\n# de producao). A RAZAO entre os dois e o que importa — os valores absolutos\n# so valem para esta carga de teste, nao para os 400 GB reais da empresa.\nset -euo pipefail\n\nBUCKET=\"${BUCKET:?defina BUCKET}\"\nDIAS=30\nLOJAS=400\nPEDIDOS_POR_LOJA_DIA=120   # ~48 mil pedidos/dia, ~1,44 milhao no periodo\n\npython3 - \"$BUCKET\" \"$DIAS\" \"$LOJAS\" \"$PEDIDOS_POR_LOJA_DIA\" <<'PY'\nimport json, random, sys, datetime, pathlib\n\nbucket, dias, lojas, por_loja = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])\nhoje = datetime.date(2026, 8, 7)\nsaida = pathlib.Path(\"/tmp/carga_cru\")\nsaida.mkdir(exist_ok=True)\n\n# Simula o efeito do buffer de 1 MiB/60 s: um arquivo pequeno a cada ~200\n# pedidos (tamanho medio ~400 bytes por linha JSON verbosa).\narquivo_atual, linhas_no_arquivo, idx_arquivo = [], 0, 0\nfor d in range(dias):\n    dia = hoje - datetime.timedelta(days=dias - d)\n    for loja in range(1, lojas + 1):\n        for _ in range(por_loja):\n            evento = {\n                \"pedido_id\": f\"{dia.isoformat()}-{loja}-{random.randint(0, 99999)}\",\n                \"loja_id\": f\"loja-{loja:04d}\",\n                \"criado_em\": f\"{dia.isoformat()}T{random.randint(8,22):02d}:{random.randint(0,59):02d}:00Z\",\n                \"status\": random.choice([\"pago\", \"pago\", \"pago\", \"cancelado\"]),\n                \"valor_total_centavos\": random.randint(1500, 45000),\n                \"quantidade_itens\": random.randint(1, 6),\n                \"canal\": random.choice([\"app\", \"web\", \"marketplace\"]),\n                \"cupom_aplicado\": random.choice([None, \"PRIMEIRACOMPRA\", \"FRETEGRATIS\"]),\n            }\n            arquivo_atual.append(json.dumps(evento, ensure_ascii=False))\n            linhas_no_arquivo += 1\n            if linhas_no_arquivo >= 200:\n                (saida / f\"parte-{idx_arquivo:06d}.json\").write_text(\"\\n\".join(arquivo_atual))\n                arquivo_atual, linhas_no_arquivo, idx_arquivo = [], 0, idx_arquivo + 1\nif arquivo_atual:\n    (saida / f\"parte-{idx_arquivo:06d}.json\").write_text(\"\\n\".join(arquivo_atual))\n    idx_arquivo += 1\n\nprint(f\"gerados {idx_arquivo} arquivos JSON em {saida}\")\nPY\n\naws s3 sync /tmp/carga_cru \"s3://${BUCKET}/cru/\" --quiet\necho \"carga sintetica publicada em s3://${BUCKET}/cru/\"\n"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que 200 linhas por arquivo, e não um número redondo",
+            "content": "É uma aproximação do que o buffer mínimo de 1 MiB/60 s produziria com o tamanho médio de evento desta carga (cerca de 400 bytes por linha JSON): 200 linhas somam perto de 80 KB, bem abaixo do gatilho de tamanho, então o intervalo de tempo é quem fecha o arquivo na prática — reproduzindo o mesmo mecanismo que ocorre em produção, não só o mesmo número de arquivos."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Implantar, e provar com número — não com sensação"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "# provas.sh — cinco medições; nenhuma conclusão vem de \"parece mais rápido\"\n\nPROJETO=ffv-lab; DB_CRU=${PROJETO}_cru; DB_LAKE=${PROJETO}_lake\nDIA_ALVO=\"2026-08-06\"   # o \"ontem\" fixo desta medição\n\n# ── Prova 1: quantos arquivos o buffer mínimo produziu ───────────────────────\naws s3 ls \"s3://${BUCKET}/cru/\" --recursive | wc -l\n# Esperado, com a carga do script acima (30 dias × 400 lojas × 120 pedidos,\n# ~200 linhas por arquivo): próximo de 7.200 arquivos JSON pequenos.\n# Reprova: um número muito menor sugere que o agrupamento de 200 linhas não\n# rodou; confira o script antes de seguir.\n\n# ── Prova 2: bytes varridos pela consulta SOBRE O CRU, sem partição ──────────\naws athena start-query-execution \\\n  --query-string \"SELECT loja_id, count(*) FROM ${DB_CRU}.pedidos_cru\n                   WHERE criado_em LIKE '${DIA_ALVO}%' GROUP BY loja_id\" \\\n  --result-configuration \"OutputLocation=s3://${BUCKET}/resultados-athena/\" \\\n  --query-execution-context \"Database=${DB_CRU}\" --output text --query QueryExecutionId\n# copie o ID acima e rode:\naws athena get-query-execution --query-execution-id \"$ID_CRU\" \\\n  --query 'QueryExecution.Statistics.{bytes:DataScannedInBytes,ms:EngineExecutionTimeInMillis}'\n# Esperado: DataScannedInBytes próximo do tamanho TOTAL do prefixo cru — a\n# consulta de 1 dia varreu os 30 dias inteiros, porque não há partição.\n\n# ── Prova 3: converter a MESMA carga via CTAS (o efeito do Firehose de produção) ──\naws athena start-query-execution --query-execution-context \"Database=${DB_CRU}\" \\\n  --query-string \"\n    CREATE TABLE ${DB_LAKE}.pedidos\n    WITH (format = 'PARQUET', parquet_compression = 'SNAPPY',\n          partitioned_by = ARRAY['ano','mes','dia'],\n          external_location = 's3://${BUCKET}/otimizado/')\n    AS SELECT pedido_id, loja_id, criado_em, status, valor_total_centavos, quantidade_itens,\n              substr(criado_em,1,4) AS ano, substr(criado_em,6,2) AS mes, substr(criado_em,9,2) AS dia\n    FROM ${DB_CRU}.pedidos_cru\" \\\n  --result-configuration \"OutputLocation=s3://${BUCKET}/resultados-athena/\"\n# Esperado: a tabela nova aparece com uma partição por dia, cada uma com\n# poucos arquivos Parquet grandes — não milhares de arquivos pequenos.\n\n# ── Prova 4: bytes varridos pela MESMA consulta lógica, sobre a tabela otimizada ──\naws athena start-query-execution --query-execution-context \"Database=${DB_LAKE}\" \\\n  --query-string \"SELECT loja_id, count(*) FROM ${DB_LAKE}.pedidos\n                   WHERE ano='2026' AND mes='08' AND dia='06' GROUP BY loja_id\" \\\n  --result-configuration \"OutputLocation=s3://${BUCKET}/resultados-athena/\" \\\n  --output text --query QueryExecutionId\naws athena get-query-execution --query-execution-id \"$ID_OTIMIZADO\" \\\n  --query 'QueryExecution.Statistics.{bytes:DataScannedInBytes,ms:EngineExecutionTimeInMillis}'\n# Esperado: DataScannedInBytes na casa de 1/30 do valor da Prova 2 OU MENOS\n# (o formato colunar soma redução por cima da poda de partição). Se o número\n# ficou igual ao da Prova 2, o filtro provavelmente não tocou nas colunas de\n# partição — releia o passo 5 do segundo diagrama.\n\n# ── Prova 5: a poda realmente aconteceu, não só \"a consulta ficou rápida\" ────\naws athena start-query-execution --query-execution-context \"Database=${DB_LAKE}\" \\\n  --query-string \"EXPLAIN SELECT loja_id, count(*) FROM ${DB_LAKE}.pedidos\n                   WHERE ano='2026' AND mes='08' AND dia='06' GROUP BY loja_id\" \\\n  --result-configuration \"OutputLocation=s3://${BUCKET}/resultados-athena/\"\n# No resultado, procure a linha \"dia := dia:string:PARTITION_KEY\" seguida de\n# UM valor só: [[06]]. Se aparecerem os 30 valores do período, a poda não\n# ocorreu — a consulta listou todas as partições e depois filtrou em memória.\n"
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · Contagem de arquivos no cru",
+                "`aws s3 ls --recursive | wc -l`",
+                "próximo de 7.200 arquivos JSON pequenos",
+                "número muito menor sugere que o agrupamento de 200 linhas por arquivo não rodou no script"
+              ],
+              [
+                "2 · Bytes varridos, sem partição",
+                "`get-query-execution` sobre a tabela cru",
+                "próximo do tamanho total do prefixo cru (os 30 dias inteiros)",
+                "se já vier baixo, a tabela provavelmente aponta para um subconjunto, não para o prefixo real"
+              ],
+              [
+                "3 · Conversão via CTAS",
+                "CTAS criando a tabela Parquet particionada",
+                "uma partição por dia, poucos arquivos grandes por partição",
+                "muitas partições vazias ou arquivo único gigante indica erro na extração de ano/mes/dia"
+              ],
+              [
+                "4 · Bytes varridos, com partição e Parquet",
+                "mesma consulta lógica, tabela otimizada",
+                "uma fração pequena do valor da Prova 2 — a poda soma com a leitura colunar",
+                "valor igual ao da Prova 2 indica que o filtro não tocou literalmente ano/mes/dia"
+              ],
+              [
+                "5 · A poda ocorreu de fato",
+                "`EXPLAIN` sobre a consulta otimizada",
+                "a linha de `PARTITION_KEY` lista só o dia pedido",
+                "listar as 30 partições do período significa que o motor filtrou depois de listar tudo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi medido em produção, e você deve conferir na sua conta",
+            "content": "A razão de redução de bytes varridos (Prova 2 vs. Prova 4) depende da distribuição real das colunas do seu evento — quantas existem, o quanto cada uma comprime. Os números deste laboratório vêm da carga sintética gerada acima, com 8 campos por evento; um evento com 40 campos onde a consulta usa 3 tende a mostrar uma razão AINDA maior, não menor."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "Uma tabela do Athena tem `PARTITIONED BY (ano, mes, dia)` sobre dados em Parquet. Uma consulta filtra `WHERE data_pedido = DATE '2026-08-06'`, sendo `data_pedido` uma coluna comum dentro do arquivo, não uma coluna de partição. O que acontece?",
+        "options": [
+          "O Athena poda parcialmente, abrindo só metade das partições",
+          "A consulta falha, porque colunas comuns não podem aparecer no WHERE de uma tabela particionada",
+          "O Athena varre todas as partições, porque o filtro não incide sobre as colunas de partição declaradas",
+          "O Athena reconhece que `data_pedido` corresponde ao dia da partição e poda automaticamente"
+        ],
+        "correctIndex": 2,
+        "explanation": "A poda de partição depende de o filtro tocar EXPLICITAMENTE as colunas de partição declaradas na tabela — aqui, `ano`, `mes` e `dia`. O motor não infere que uma coluna comum chamada `data_pedido` representa logicamente o mesmo período: ele avalia a condição só depois de abrir cada arquivo, porque é a única forma de ler o valor dessa coluna. O resultado é uma consulta que parece correta e mede exatamente como se a tabela não estivesse particionada.\n\nA primeira alternativa assume uma inferência semântica que o motor não faz — reconhecer que dois nomes de coluna diferentes descrevem a mesma data exigiria entender o significado dos dados, não só o schema. A terceira inventa uma restrição que não existe: colunas comuns podem aparecer livremente no WHERE, só não acionam poda. A quarta describe um comportamento intermediário que não corresponde ao mecanismo: poda de partição é tudo-ou-nada por partição avaliada, não um meio-termo por não reconhecer o filtro."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Quebrar de propósito: três falhas e o diagnóstico"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três reproduzem sintomas reais de operar este pipeline por meses, não só no dia da implantação."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Filtro que não toca a coluna de partição",
+                "troque `WHERE ano=... AND mes=... AND dia=...` por `WHERE criado_em LIKE '2026-08-06%'`",
+                "a consulta continua correta, mas os bytes varridos voltam ao patamar da Prova 2",
+                "`EXPLAIN` mostra todas as partições listadas, não só uma",
+                "filtre literalmente nas colunas de partição, além de (ou em vez de) qualquer coluna de timestamp"
+              ],
+              [
+                "Chave de partição de alta cardinalidade",
+                "adicione `loja_id` ao prefixo dinâmico com o mesmo buffer de 128 MiB/300 s",
+                "o número de objetos pequenos por dia sobe, não desce, mesmo com buffer \"de produção\"",
+                "contagem de objetos por partição no S3; a maioria terá poucos KB",
+                "volte a partição só para a chave de granularidade das consultas reais — aqui, a data"
+              ],
+              [
+                "Campo novo no evento sem atualizar a tabela de schema-fonte",
+                "adicione um campo ao gerador de eventos sem tocar `schema_fonte.tf`",
+                "o campo existe no Kinesis, mas nunca aparece nas linhas do Parquet — sem erro visível",
+                "compare o schema do evento no CloudWatch Logs de entrada com as colunas da tabela de schema-fonte",
+                "todo campo novo no evento é uma mudança coordenada com esta tabela, tratada como contrato"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b14_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A falha que dói mais por ser silenciosa",
+            "content": "Das três, a segunda é a mais perigosa em produção porque parece uma melhoria: mais granularidade \"deveria\" ajudar. O sintoma — mais arquivos pequenos, não menos — só aparece dias depois, na fatura e na lentidão, quando ninguém mais está olhando para a mudança que causou."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Segurança: o que muda quando o dado vira arquivo consultável por qualquer analista"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Dado que antes vivia só dentro do fluxo de checkout passa a ser um arquivo que qualquer papel com acesso ao bucket pode baixar por inteiro. A superfície de risco desloca de \"vazamento de evento em trânsito\" para \"vazamento de arquivo em repouso\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Analista com acesso de leitura ao bucket inteiro, sem controle por coluna",
+                "alta",
+                "médio",
+                "este laboratório NÃO resolve — é o L69, com Lake Formation e permissão por coluna",
+                "CloudTrail em `GetObject` fora do padrão de acesso",
+                "restringir o papel, migrar para acesso controlado por Lake Formation"
+              ],
+              [
+                "Papel do Firehose com permissão além de escrever no bucket",
+                "baixa",
+                "médio",
+                "política restrita a `PutObject` no prefixo do lake e leitura só das duas tabelas de schema",
+                "IAM Access Analyzer sobre o papel do Firehose",
+                "reduzir a política ao uso medido"
+              ],
+              [
+                "Erro de conversão gravando dado incompleto sem alertar",
+                "média",
+                "médio",
+                "`error_output_prefix` configurado, separado do prefixo de sucesso",
+                "contagem de objetos no prefixo de erro, com alarme acima de zero",
+                "reprocessar a partir do stream de origem, que mantém retenção própria"
+              ],
+              [
+                "Tabela de schema-fonte desatualizada descartando campo sensível por engano",
+                "baixa",
+                "alto",
+                "revisão obrigatória da tabela de schema em toda mudança de contrato do evento",
+                "comparação periódica entre schema do evento e colunas declaradas",
+                "reprocessar do stream após corrigir o schema — o dado bruto não se perde, só o convertido"
+              ],
+              [
+                "Bucket sem bloqueio de acesso público por configuração incorreta",
+                "baixa",
+                "alto",
+                "`aws_s3_bucket_public_access_block` aplicado a todo bucket do lake, sem exceção",
+                "AWS Config: regra de bucket público",
+                "bloquear acesso, auditar CloudTrail por download no período exposto"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel deste pipeline responde"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "O dado está atrasando para chegar ao S3?",
+                "métrica de frescor de entrega do Firehose",
+                "buffer represado ou throttling no destino",
+                "acima do teto de atraso do requisito (10 min)"
+              ],
+              [
+                "Alguma entrega está falhando?",
+                "contagem de objetos no `error_output_prefix`",
+                "erro de conversão — geralmente schema-fonte desatualizado",
+                "qualquer valor > 0"
+              ],
+              [
+                "O tamanho médio de arquivo está saudável?",
+                "GB entregues ÷ contagem de objetos por dia",
+                "buffer fechando por tempo, não por tamanho — sinal de partição fragmentada demais",
+                "abaixo de alguns MB por objeto"
+              ],
+              [
+                "A consulta recorrente ainda está podando?",
+                "bytes varridos por execução do painel de BI",
+                "regressão de filtro — é o que `GuardaVarredura` automatiza",
+                "acima de 3× o valor medido na Prova 4"
+              ],
+              [
+                "Partições novas estão sendo registradas?",
+                "contagem de partições na tabela vs. prefixos no S3",
+                "crawler não rodou ou schema mudou de forma incompatível",
+                "diferença > 1 dia entre os dois"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana logo depois de aumentar o buffer",
+            "content": "O atraso de entrega sobe imediatamente ao trocar de 60 s para 300 s de intervalo — isso é esperado, não uma regressão. Um alarme configurado com o limiar antigo dispara em todo deploy seguinte à mudança, e a resposta correta é reconfigurar o limiar, não reverter o buffer."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Escala: 10, 10 mil, 1 milhão de eventos por dia"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que acontece",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 lojas, poucos milhares de eventos/dia",
+                "buffer sempre fecha por tempo, mesmo em produção",
+                "nada; arquivo pequeno em volume baixo não tem alternativa real",
+                "aceitar; não há tráfego suficiente para o gatilho de tamanho disparar"
+              ],
+              [
+                "400 lojas, ~1,4 milhão/dia (este laboratório)",
+                "buffer de 128 MiB/300 s fecha por tamanho na maior parte do tempo",
+                "nada de novo; é o regime para o qual o desenho foi calibrado",
+                "nada"
+              ],
+              [
+                "5.000 lojas, ~15 milhões/dia",
+                "volume por dia cresce; partição por data continua com poucos arquivos, maiores",
+                "nada, DESDE que a partição continue só por data — é a decisão que evita a explosão",
+                "confirmar que ninguém adicionou `loja_id` à chave de partição no caminho"
+              ],
+              [
+                "Partição adicionada por engano em alta cardinalidade",
+                "centenas de buffers independentes simultâneos",
+                "risco real de aproximar-se do limite de 500 partições ativas por stream do Firehose",
+                "remover a chave extra; se genuinamente necessária, solicitar aumento de cota para até 2.500"
+              ],
+              [
+                "Pico sazonal (ex.: data comemorativa)",
+                "buffer de tamanho dispara com mais frequência dentro do dia",
+                "mais objetos por partição naquele dia específico — ainda saudável, só mais deles",
+                "nada; é o comportamento correto do mecanismo, não uma falha"
+              ],
+              [
+                "Indisponibilidade de uma zona de disponibilidade",
+                "nenhum efeito visível ao operador",
+                "nada — S3, Firehose, Athena e Glue são serviços regionais com redundância multi-AZ por padrão",
+                "NÃO é o modo de falha que importa aqui; o modo real é hot partition no Kinesis (assunto do L63) ou erro de conversão no Firehose"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Um limite real, com número da documentação",
+            "content": "O Firehose aceita até 500 partições ATIVAS simultâneas por stream, com aumento disponível até 2.500 mediante solicitação de cota. Com partição só por data, esse teto nunca chega perto de ser tocado — é exatamente o cálculo que justifica a decisão de não incluir `loja_id` na chave."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Custo: onde este laboratório move a fatura, e para onde"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O efeito líquido é deslocar custo de \"toda consulta recorrente\" para \"toda ingestão\" — e como a ingestão acontece uma vez por evento e a consulta é feita repetidamente, o deslocamento é favorável sempre que o dado é consultado mais de uma vez."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b18_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Volume",
+              "O que muda",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "400 lojas, ingestão sem conversão",
+                "custo de ingestão e armazenamento em JSON; custo de consulta cresce com o histórico",
+                "consulta fica progressivamente mais cara",
+                "nenhuma; é a linha de base que este laboratório substitui"
+              ],
+              [
+                "Produção (este laboratório)",
+                "400 lojas, Parquet particionado",
+                "pequeno acréscimo de custo de conversão no Firehose; grande redução de custo de consulta",
+                "consulta descolada do tamanho do histórico",
+                "ajustar buffer pelo requisito de atraso, não maximizar arquivo pelo maior valor permitido"
+              ],
+              [
+                "Alta escala",
+                "5.000 lojas, múltiplos painéis de BI consultando o mesmo lake",
+                "custo de ingestão cresce linear com volume; custo de consulta permanece proporcional ao recorte pedido",
+                "a economia de partição e formato se multiplica pelo número de consultas, não só pelo volume",
+                "considerar bucketing por `loja_id` só se surgir consulta recorrente que filtre por loja isolada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b18_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Firehose — ingestão",
+                "GB ingerido",
+                "independe do formato de saída; é sobre o volume de entrada"
+              ],
+              [
+                "Firehose — conversão de formato",
+                "GB processado na conversão",
+                "dimensão adicional que a ingestão sem conversão não tinha"
+              ],
+              [
+                "Armazenamento no S3",
+                "GB-mês",
+                "Parquet comprimido normalmente ocupa menos que o JSON equivalente"
+              ],
+              [
+                "Athena",
+                "byte varrido por consulta, com piso mínimo por execução",
+                "é a dimensão que este laboratório ataca diretamente"
+              ],
+              [
+                "Glue Crawler",
+                "DPU-hora por execução",
+                "uma execução diária, curta, é desprezível frente ao ganho em consulta"
+              ],
+              [
+                "Requisições ao S3",
+                "por mil requisições GET/LIST",
+                "menos arquivos, maiores, reduz também esta linha — efeito colateral favorável da correção"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b18_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho que não aparece em nenhuma linha isolada da fatura",
+            "content": "Bytes varridos por consulta caem por dois mecanismos independentes que se multiplicam: poda de partição reduz QUANTOS arquivos, formato colunar reduz QUANTO de cada arquivo. Uma consulta que antes varria 400 GB para 1 dia, filtrando 3 de 20 colunas sobre 1/30 do histórico, tende a varrer uma fração pequena do volume original — e esse ganho se repete a cada execução do painel."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "partição registrada por crawler agendado, schema-fonte versionado em Terraform",
+                "mudança de schema do evento sem processo formal de aviso",
+                "contrato de dado com validação e quarentena (L70)",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "papel do Firehose restrito, bucket sem acesso público",
+                "acesso ao lake ainda é por bucket inteiro, sem controle por coluna",
+                "Lake Formation com permissão por coluna (L69)",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "prefixo de erro separado, retenção no stream de origem permite reprocesso",
+                "schema-fonte desatualizado descarta campo silenciosamente",
+                "validação de schema antes da conversão, com alerta",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "bytes varridos reduzidos por partição e formato colunar, medidos",
+                "partição só por data; consulta futura por loja isolada não se beneficia",
+                "avaliar bucketing por loja_id SE esse padrão de consulta surgir",
+                "baixa"
+              ],
+              [
+                "Otimização de custos",
+                "custo de consulta descolado do tamanho do histórico",
+                "histórico anterior à mudança continua em JSON sem partição",
+                "backfill do histórico acumulado via CTAS único",
+                "média"
+              ],
+              [
+                "Sustentabilidade",
+                "menos I/O por consulta, menos requisições ao S3 por volume igual de dado",
+                "nenhum específico deste módulo",
+                "revisar compressão (Snappy vs. Gzip) se a consulta se tornar menos frequente que o armazenamento",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Evolução em níveis: o que muda, e o que passa a doer"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO trocar de desenho. Cada nível resolve um risco e compra outro, e a segunda coluna raramente se escreve com a mesma atenção que a primeira."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "Do arquivo cru ao lake que também alimenta modelo — e o risco que cada nível troca por outro",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Firehose grava JSON num prefixo plano, buffer mínimo. É onde a Cadência estava, e continua legítimo para ingestão que ninguém consulta agregada.",
+                "note": "Risco resolvido: nenhum. Novo risco: custo de consulta cresce sem teto junto com o histórico, mesmo sem mudança de volume diário. Custo: baixo em ingestão, crescente e sem limite em consulta."
+              },
+              {
+                "label": "Nível 2 — Este laboratório",
+                "instruction": "Parquet via conversão no Firehose, partição dinâmica por data, buffer calibrado pelo requisito de atraso, crawler agendado.",
+                "note": "Risco resolvido: bytes varridos proporcionais ao histórico inteiro. Novo risco: schema-fonte desatualizado descarta campo novo em silêncio. Custo: pequeno acréscimo de conversão na ingestão; grande queda em consulta."
+              },
+              {
+                "label": "Nível 3 — Produção com contrato de dado",
+                "instruction": "Validação de schema antes da conversão, quarentena para registro incompatível, alerta ao time produtor do evento (L70).",
+                "note": "Risco resolvido: campo descartado sem ninguém notar. Novo risco: falso positivo de validação bloqueando ingestão legítima por regra rígida demais. Custo: pipeline de validação, pequeno frente ao volume ingerido."
+              },
+              {
+                "label": "Nível 4 — Lakehouse com correção de dado histórico",
+                "instruction": "Migrar de Parquet particionado simples para uma tabela transacional (Iceberg) quando surgir a necessidade de corrigir um pedido já particionado sem reescrever o arquivo inteiro (L67).",
+                "note": "Risco resolvido: correção de dado histórico exigindo reescrita de partição inteira. Novo risco: complexidade operacional de compaction e snapshot. Custo: overhead de metadado por tabela, pequeno frente ao ganho de flexibilidade."
+              },
+              {
+                "label": "Nível 5 — Plataforma e governança",
+                "instruction": "Lake em camadas bronze/prata/ouro compartilhado entre times (L62), acesso por coluna via Lake Formation (L69), catálogo único para toda a empresa.",
+                "note": "Risco resolvido: cada time reescrevendo sua própria cópia particionada do mesmo evento. Novo risco: contenção de schema entre produtores e consumidores do lake compartilhado. Custo: governança tem custo de operação, não só de serviço."
+              },
+              {
+                "label": "Nível 6 — Dados e IA",
+                "instruction": "O mesmo lake particionado vira insumo de um MODELO simples de previsão de demanda por loja, treinado sobre os DADOS diários já em Parquet — sem pipeline de DADOS novo, porque a camada de consulta e a de treino leem o mesmo particionamento.",
+                "note": "Risco resolvido: nenhum da consulta original — este nível reaproveita a mesma decisão de escrita como base de IA. Novo risco: treinar sobre a partição do dia corrente, ainda incompleta porque o buffer do Firehose não fechou, produz um MODELO enganado por DADOS parciais. Custo: baixo — os DADOS já existem; o custo é o job de treino, não uma ingestão nova."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "Treinar um modelo de previsão de demanda (nível 6) sobre dado sem partição confiável (nível 1) significaria escanear o histórico inteiro a cada rodada de treino — o mesmo problema de custo deste laboratório, só que pago pelo time de dados em vez do time de BI. A decisão de escrita feita no nível 2 é o que torna o nível 6 barato o suficiente para ser tentado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Onde IA entra nesta arquitetura, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não resolve o problema central, e forçá-la seria o antipadrão que a própria série critica. \"Formato colunar, particionar por data, calibrar buffer pelo atraso aceitável\" são decisões determinísticas, derivadas de requisito — um modelo não melhora nenhuma delas."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b21_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Há um lugar em que IA acrescentaria valor real, e ele é modesto: recomendar automaticamente QUAL granularidade de partição usar, a partir do histórico real de predicados usados nas consultas — em vez de um humano decidir \"por data\" olhando um punhado de queries, como este módulo fez."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b21_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "sugerir granularidade e chave de partição a partir do padrão real de consultas"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "uma regra simples já cobre a maior parte: contar quais colunas aparecem no WHERE das últimas semanas de consulta e propor partição pela mais frequente. É exatamente o que a documentação do Athena recomenda — \"otimize para as consultas comuns\" — sem precisar de modelo nenhum"
+              ],
+              [
+                "De onde viriam os dados?",
+                "histórico de consultas do Athena (CloudTrail ou logs de query), já existente"
+              ],
+              [
+                "Qual o risco?",
+                "recomendar partição fina demais por causa de uma consulta rara e pouco representativa, fragmentando o dado para um caso que quase nunca ocorre"
+              ],
+              [
+                "Por que não agora?",
+                "porque a contagem de predicados por frequência já resolve a decisão deste laboratório sem incerteza nenhuma — não há problema residual que justifique um modelo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b21_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"decidir automaticamente o melhor formato e partição\" para cada novo pipeline de dado troca uma decisão auditável — derivada do padrão de consulta e do requisito de atraso, ambos escritos — por uma caixa-preta que ninguém consegue justificar numa revisão de arquitetura. Onde a regra simples decide com clareza, é isso que se documenta, não um modelo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Manter JSON cru para sempre, sem nunca converter",
+                "funciona sem configurar nada extra além do que já existe",
+                "toda consulta agregada paga o preço de ler a linha inteira, para sempre",
+                "consulta cara mesmo filtrando poucas colunas",
+                "converter na ingestão (Firehose) ou em lote programado (Glue ETL/CTAS)",
+                "dado consultado no máximo uma vez, nunca de forma recorrente"
+              ],
+              [
+                "Particionar mais fino do que a consulta usa",
+                "parece que granularidade extra \"não faz mal\"",
+                "fragmenta em mais prefixos e mais arquivos pequenos, sem nenhuma consulta se beneficiar do recorte",
+                "muitos arquivos pequenos por partição, sem ganho de tempo de consulta",
+                "particionar pela granularidade que as consultas REAIS usam, não pela mais fina possível",
+                "quando existe consulta recorrente que realmente filtra naquela granularidade"
+              ],
+              [
+                "Filtrar por coluna de timestamp em vez da coluna de partição",
+                "parece mais natural escrever a condição sobre o campo de negócio",
+                "sem filtro EXPLÍCITO nas colunas de partição, o motor não poda, mesmo que o valor implique a mesma faixa",
+                "consulta lenta e cara mesmo com a tabela corretamente particionada",
+                "filtrar literalmente em `ano`/`mes`/`dia`, além de qualquer filtro de timestamp",
+                "nunca, para tabela particionada; timestamp isolado serve só para tabela não particionada"
+              ],
+              [
+                "Diminuir o row group do Parquet abaixo do padrão",
+                "confunde tamanho de ARQUIVO (bom ser maior) com tamanho de ROW GROUP dentro dele",
+                "perde eficiência de leitura em bloco; a AWS recomenda não reduzir abaixo do padrão de 128 MB",
+                "sem ganho perceptível e possível perda de desempenho em consulta com muitas colunas",
+                "manter o padrão; aumentar só se a tabela tiver muitas colunas",
+                "quase nunca; é uma configuração que raramente precisa de ajuste manual"
+              ],
+              [
+                "Aumentar o buffer do Firehose para o máximo sem checar o requisito de atraso",
+                "\"arquivo maior é sempre melhor\" soa como regra segura",
+                "o atraso até o dado ficar consultável pode violar o SLA de frescor que o time de BI aceitou",
+                "painel \"quase em tempo real\" que na prática atrasa 20 minutos",
+                "dimensionar o buffer pelo requisito de atraso medido, não pelo maior valor permitido",
+                "pipeline puramente batch, sem expectativa de frescor"
+              ],
+              [
+                "`MSCK REPAIR TABLE` como rotina de manutenção de partição",
+                "é o comando que a maioria dos tutoriais mostra primeiro",
+                "documentação da AWS recomenda evitar: só adiciona partição nova, nunca remove a antiga, e piora com escala",
+                "partições removidas do S3 continuam registradas na tabela",
+                "crawler agendado, ou `ALTER TABLE ADD PARTITION` / API do Glue diretamente",
+                "exploração pontual num ambiente de teste, fora de produção"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Quando algo não funciona"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Consulta ainda varre o histórico inteiro",
+                "filtro não toca literalmente as colunas de partição",
+                "rode `EXPLAIN` e confira a linha `PARTITION_KEY`",
+                "plano de execução do Athena",
+                "reescreva o `WHERE` para filtrar ano/mes/dia diretamente, além de qualquer outro campo"
+              ],
+              [
+                "Partição existe no S3 mas a consulta não a encontra",
+                "crawler não rodou, ou rodou antes do objeto existir",
+                "compare partições listadas na tabela com prefixos reais no S3",
+                "`aws glue get-partitions` vs. `aws s3 ls`",
+                "rode o crawler manualmente ou registre a partição com `ALTER TABLE ADD PARTITION`"
+              ],
+              [
+                "Campo esperado não aparece nas linhas Parquet",
+                "tabela de schema-fonte do Firehose não declara o campo",
+                "compare o payload bruto do evento (CloudWatch Logs) com as colunas de `schema_fonte.tf`",
+                "log de entrada do Firehose vs. definição da tabela de schema",
+                "adicione a coluna à tabela de schema-fonte; reprocesse do stream, que mantém o dado original"
+              ],
+              [
+                "Muitos arquivos pequenos mesmo com buffer de produção",
+                "chave de partição inclui campo de alta cardinalidade",
+                "conte objetos por partição; se cada uma tem só alguns KB, é fragmentação, não volume",
+                "contagem de arquivos por prefixo `ano=/mes=/dia=/`",
+                "remova a chave extra (ex.: loja_id) da expressão de prefixo dinâmico"
+              ],
+              [
+                "Painel de BI mostra dado desatualizado",
+                "atraso de entrega do buffer maior que o esperado, ou crawler atrasado",
+                "confira a métrica de frescor de entrega do Firehose e o horário do último crawler",
+                "CloudWatch do Firehose; agendamento do crawler",
+                "se o atraso está dentro do fator de até 1,5× documentado, ajuste a expectativa; senão, investigue throttling"
+              ],
+              [
+                "Conversão para Parquet falhando silenciosamente",
+                "registro não corresponde ao schema-fonte declarado",
+                "conte objetos no `error_output_prefix`",
+                "prefixo de erro do Firehose",
+                "corrija o schema-fonte ou o produtor do evento; reprocesse do stream de origem"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Antes de mexer em buffer ou em partição, pergunte: o filtro da consulta toca literalmente as colunas de partição, por nome? A maioria dos \"por que ainda está lento\" desta arquitetura é essa pergunta respondida \"não\" — e nenhum ajuste de formato ou tamanho de buffer compensa um filtro que não aciona a poda."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Limpeza: o que o destroy não leva"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório grava dado continuamente enquanto está no ar. Interromper o Terraform não interrompe o que já foi entregue nem o que está em trânsito no stream."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "# 1. Pare a ingestao antes de derrubar infraestrutura, para nao perder\n#    registros em transito no buffer do Firehose.\naws firehose stop-delivery-stream-encryption --delivery-stream-name ffv-lab-pedidos-parquet 2>/dev/null || true\n\n# 2. Derrube o que o Terraform administra.\nterraform destroy -auto-approve\n\n# 3. BUCKET COM OBJETO: o destroy falha se o bucket nao estiver vazio.\n#    Interromper no meio deixa o bucket de pe, cobrando GB-mes.\naws s3 rm \"s3://ffv-lab-lake/\" --recursive\naws s3api delete-bucket --bucket ffv-lab-lake 2>/dev/null || true\n\n# 4. TABELAS DO GLUE DATA CATALOG: nao cobram por si so, mas sobrevivem\n#    ao bucket e apontam para um local que deixou de existir.\naws glue delete-table --database-name ffv_lab_lake --name pedidos 2>/dev/null || true\naws glue delete-table --database-name ffv_lab_schema_fonte --name pedido 2>/dev/null || true\n\n# 5. RESULTADOS DE CONSULTA DO ATHENA: cada execucao grava um objeto em\n#    OutputLocation, e eles NAO somem com o bucket principal se estiverem\n#    num bucket separado.\naws s3 rm \"s3://ffv-lab-resultados-athena/\" --recursive 2>/dev/null || true\n\n# 6. GRUPO DE LOGS do Firehose, se monitoramento detalhado estava ligado.\naws logs delete-log-group --log-group-name /aws/kinesisfirehose/ffv-lab-pedidos-parquet 2>/dev/null || true\n\n# 7. Prova final: nada com o nome do projeto de pe.\naws resourcegroupstaggingapi get-resources \\\n  --tag-filters Key=Projeto,Values=ffv-lab \\\n  --query \"ResourceTagMappingList[].ResourceARN\" --output table"
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Delivery stream do Firehose",
+                "sim",
+                "não",
+                "nada a reter; o registro simplesmente para de existir"
+              ],
+              [
+                "Bucket S3 do lake",
+                "só se vazio",
+                "sim, GB-mês",
+                "o destroy falha com objeto dentro; interrupção no meio deixa tudo de pé"
+              ],
+              [
+                "Tabelas do Glue Data Catalog",
+                "sim, se em Terraform",
+                "não, mas confundem",
+                "sobrevivem ao bucket e apontam para local inexistente se removidas fora de ordem"
+              ],
+              [
+                "Resultados de consulta do Athena",
+                "não",
+                "sim, GB-mês",
+                "cada execução grava um objeto novo; acumula independente do bucket principal"
+              ],
+              [
+                "Partições registradas no Glue",
+                "sim, com a tabela",
+                "não",
+                "metadado, não dado — mas cresce sem limite se nunca revisado"
+              ],
+              [
+                "Kinesis Data Stream (do L63)",
+                "não faz parte deste laboratório",
+                "sim, por hora de shard",
+                "pertence ao L63; não derrube aqui se outros consumidores ainda o usam"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Consulta lê linha inteira para 3 de 20 colunas",
+                "conversão para Parquet no Firehose",
+                "formato colunar lê só as colunas pedidas; conversão na escrita evita janela de dado em JSON"
+              ],
+              [
+                "Consulta abre todo objeto do histórico",
+                "partição dinâmica por ano/mes/dia",
+                "poda de partição evita listar e abrir o que não é do dia pedido"
+              ],
+              [
+                "Buffer mínimo produz milhares de arquivos pequenos",
+                "buffer calibrado por tamanho (128 MiB/300 s)",
+                "desloca o gatilho para tamanho, dentro do teto de atraso aceito pelo time de BI"
+              ],
+              [
+                "Loja_id pareceria uma chave de partição natural",
+                "partição só por data",
+                "evita multiplicar buffers independentes por 400 lojas — recriaria o arquivo pequeno"
+              ],
+              [
+                "Campo novo no evento pode sumir sem aviso",
+                "tabela de schema-fonte revisada por contrato",
+                "a conversão do Firehose exige schema conhecido de antemão; sem ele, descarta em silêncio"
+              ],
+              [
+                "Partição existe no S3 mas a consulta não a vê",
+                "crawler agendado, diário",
+                "cobre o volume real (1 partição nova/dia) sem operação manual nem custo contínuo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Consulta varrendo o histórico inteiro",
+                "partição por data + formato colunar",
+                "consulta que filtra por coluna equivalente, mas não pela coluna de partição literal"
+              ],
+              [
+                "Arquivo pequeno demais",
+                "buffer de 128 MiB/300 s",
+                "partição de alta cardinalidade que fragmenta o próprio buffer"
+              ],
+              [
+                "Campo descartado na conversão",
+                "revisão da tabela de schema-fonte",
+                "mudança feita sem aviso ao time que opera este pipeline"
+              ],
+              [
+                "Partição nova invisível à consulta",
+                "crawler diário agendado",
+                "partição criada entre execuções do crawler — fica invisível por até 24 h"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Um pedido é criado no app e vira evento no Kinesis Data Stream do L63.",
+              "O Firehose consome o stream continuamente, sem afetar outros consumidores.",
+              "Uma expressão jq extrai ano, mês e dia do campo `criado_em`, dentro do próprio Firehose.",
+              "Registros do mesmo dia acumulam num buffer independente daquela partição.",
+              "O buffer fecha por tamanho (128 MiB) ou tempo (300 s), o que vier primeiro.",
+              "O Firehose serializa em Parquet usando o schema da tabela-fonte do Glue.",
+              "O objeto é gravado no prefixo Hive-style `ano=/mes=/dia=`.",
+              "Um crawler agendado registra a partição nova na tabela de consulta.",
+              "A consulta do time de BI filtra literalmente por ano/mes/dia.",
+              "O motor poda as partições irrelevantes e lê só as colunas pedidas — as duas reduções compõem."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b26_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que minha consulta no Athena varre muito mais dado do que o esperado num dia?",
+            "answer": "Porque, sem partição e sem formato colunar, o motor não tem como saber onde está \"um dia\" antes de abrir cada arquivo e ler cada linha. A causa mais comum é dupla: o dado está em JSON ou CSV, que obriga a ler a linha inteira mesmo quando a consulta usa poucas colunas, e não existe estrutura de partição no caminho do S3 que permita ao motor pular o que não interessa. A correção também é dupla — converter para um formato colunar como Parquet e particionar pela granularidade que suas consultas realmente usam — e as duas reduções se somam: uma sozinha já ajuda, as duas juntas cortam bytes varridos em duas dimensões independentes."
+          }
+        },
+        {
+          "id": "b26_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Por que o Firehose grava tantos arquivos pequenos, mesmo com o buffer configurado?",
+            "answer": "Porque o buffer entrega assim que o PRIMEIRO de dois gatilhos é satisfeito — tamanho OU tempo, nunca os dois juntos. Com tráfego moderado por partição, o intervalo de tempo quase sempre vence a corrida antes de o volume atingir o tamanho configurado, e cada disparo grava um objeto menor do que o esperado. O ajuste é aumentar o gatilho de tamanho (até 128 MiB) e o intervalo (até 900 s), mas o efeito colateral é atraso até o dado aparecer para consulta — não existe ganho de tamanho de arquivo sem custo de frescor."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Devo particionar pelo loja_id, já que o evento já traz esse campo?",
+            "answer": "Só se alguma consulta recorrente filtrar por loja isolada, sem filtrar por data — e normalmente não é o caso. O Firehose mantém um buffer independente por combinação de chave de partição resultante; adicionar uma chave de alta cardinalidade como loja_id multiplica o número de buffers simultâneos, e a maioria fecha pelo tempo antes de atingir tamanho saudável, recriando o problema do arquivo pequeno que a mudança pretendia resolver. Particione pela granularidade que as consultas de fato usam — aqui, a data — e deixe a coluna de loja como um campo comum dentro do arquivo, filtrável sem custo de listagem extra."
+          }
+        },
+        {
+          "id": "b26_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "A conversão de formato do Firehose precisa de uma função Lambda?",
+            "answer": "Não, desde que os dados estejam em JSON e as chaves de partição possam ser extraídas por uma expressão jq simples sobre os campos do próprio evento. Esse caminho, chamado de inline parsing, evita manter e operar uma função separada. Uma Lambda só entra quando o dado precisa de transformação que jq não alcança — descompressão, descriptografia, ou um formato de origem diferente de JSON — ou quando a lógica de partição depende de uma consulta externa que o Firehose não consegue resolver sozinho."
+          }
+        },
+        {
+          "id": "b26_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Qual o tamanho ideal de arquivo Parquet, e por que não simplesmente o maior possível?",
+            "answer": "Não existe um número universal, mas a referência prática é o tamanho de row group do Parquet, que por padrão é 128 MB — e a orientação da documentação é não diminuí-lo. Arquivo maior demais não é grátis: em ingestão contínua, significa esperar mais tempo (ou mais volume) até o buffer fechar, o que atrasa quando o dado fica disponível para consulta. O tamanho certo é o ponto em que o custo de abrir muitos arquivos pequenos já foi eliminado, sem exigir um atraso de entrega maior do que o seu requisito de frescor aceita."
+          }
+        },
+        {
+          "id": "b26_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Minha tabela está particionada e o Athena continua varrendo tudo. O que checar?",
+            "answer": "Confirme que o filtro da consulta toca literalmente as colunas de partição, pelo nome exato delas — não uma coluna de timestamp dentro do arquivo que descreva a mesma janela de tempo. O motor só ativa a poda quando reconhece a condição sobre a coluna de partição declarada na tabela; filtrar por um campo equivalente, mas não registrado como partição, não aciona esse mecanismo, mesmo que logicamente restrinja o mesmo período. Use `EXPLAIN` antes da consulta real: se a linha de `PARTITION_KEY` lista todos os valores possíveis em vez de só o pedido, a poda não está acontecendo."
+          }
+        },
+        {
+          "id": "b26_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "Por que não usar MSCK REPAIR TABLE para manter as partições atualizadas?",
+            "answer": "Porque ele só adiciona partições novas e nunca remove as que deixaram de existir, além de ficar mais lento à medida que o número de partições cresce — a própria documentação da AWS recomenda evitá-lo para manutenção contínua. As alternativas recomendadas são um crawler agendado do Glue, que também detecta mudança de schema, ou chamadas diretas à API do Glue (`ALTER TABLE ADD PARTITION` ou o equivalente via SDK) quando o volume de partições novas é pequeno e previsível, como neste laboratório, com uma partição nova por dia."
+          }
+        },
+        {
+          "id": "b26_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "O que acontece se um campo novo aparecer no evento e eu esquecer de atualizar o schema?",
+            "answer": "Ele é descartado silenciosamente durante a conversão para Parquet, sem erro e sem alerta — o campo continua existindo no evento original do Kinesis, mas nunca chega ao arquivo convertido. A proteção não é técnica, é de processo: tratar a tabela de schema-fonte do Firehose como um contrato entre quem produz o evento e quem opera este pipeline, revisado toda vez que o formato do evento muda, e não apenas quando alguém percebe que um número está errado no painel."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b27_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Um time decide particionar um Firehose por `loja_id` E por data, já que `loja_id` está disponível no evento e \"mais partição parece sempre melhor\". Com 400 lojas e buffer de 128 MiB/300 s, qual é o efeito mais provável?",
+            "options": [
+              "O número de arquivos pequenos aumenta, porque cada combinação de loja e data tem um buffer independente",
+              "Os arquivos ficam ainda maiores, porque cada partição concentra mais dado relevante",
+              "Nada muda, porque o tamanho do buffer é o mesmo independente da chave de partição",
+              "O Athena passa a rejeitar consultas que não filtrem por loja_id"
+            ],
+            "correctIndex": 0,
+            "explanation": "O Firehose mantém um buffer INDEPENDENTE para cada combinação de chave de partição resultante. Com 400 lojas, isso significa até 400 buffers simultâneos por dia, cada um acumulando só o tráfego daquela loja específica — um volume bem menor do que o buffer global via. Na prática, a maioria desses buffers fecha pelo gatilho de TEMPO (300 s), não pelo de tamanho, porque poucas lojas têm tráfego suficiente para acumular 128 MiB sozinhas em 5 minutos. O resultado é o oposto do que \"mais partição parece sempre melhor\" sugere: mais arquivos pequenos, não menos.\n\nA primeira alternativa inverte a relação: mais granularidade de partição reduz o volume por buffer, não aumenta. A segunda ignora o mecanismo central do laboratório — o buffer é por partição, então mudar a chave de partição muda quantos buffers existem, mesmo com o mesmo tamanho configurado. A quarta descreve uma restrição de consulta que não existe: o Athena não rejeita consulta por não filtrar uma coluna de partição específica, ele só deixa de podar."
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "A tabela de schema-fonte que o Firehose usa para converter JSON em Parquet não foi atualizada depois que o time de produto adicionou o campo `metodo_pagamento` ao evento. Qual é o comportamento esperado?",
+            "options": [
+              "A conversão falha, e os registros vão para o prefixo de erro configurado",
+              "O campo `metodo_pagamento` é descartado silenciosamente; o resto do registro é convertido normalmente",
+              "O evento inteiro é rejeitado e permanece apenas no Kinesis, sem chegar ao S3",
+              "O Firehose infere o tipo do campo novo automaticamente e o inclui no Parquet"
+            ],
+            "correctIndex": 1,
+            "explanation": "A conversão de formato do Firehose exige um schema de colunas conhecido de antemão, lido de uma tabela do Glue Data Catalog dedicada a isso. Um campo presente no evento mas ausente dessa definição não gera erro nem é rejeitado — ele é simplesmente descartado durante a serialização, e o restante do registro segue normalmente para o Parquet. É exatamente por isso que a tabela de schema-fonte precisa ser tratada como um contrato revisado a cada mudança no formato do evento, e não como uma configuração que se escreve uma vez e esquece.\n\nA primeira alternativa assume uma validação estrita que a conversão não faz — ela é permissiva com campo a mais, não estrita. A terceira atribui ao Firehose uma capacidade de inferência de schema em tempo real que ele não tem: o schema vem da tabela declarada, não do formato observado do evento. A quarta confunde o destino do dado: o evento continua disponível no Kinesis, com sua própria retenção, mas o que chega ao S3 via esta conversão é que perde o campo, não o registro inteiro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b28",
+      "type": "section",
+      "position": 29,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b28_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L63 concluído (o Kinesis Data Stream existe, com chave de partição por loja), AWS CLI, noções básicas de SQL"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "por que formato colunar e partição reduzem bytes varridos em duas dimensões independentes; o mecanismo de buffer por tamanho-ou-tempo e por que ele é independente por partição; como configurar conversão e partição dinâmica no Firehose sem Lambda; como medir bytes varridos e confirmar poda de partição pelo plano de execução"
+              ],
+              [
+                "Limitação que fica",
+                "o histórico anterior a esta mudança continua em JSON sem partição; e o acesso ao lake ainda é por bucket inteiro, sem controle fino por coluna"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L66 — consultar o lake e pagar pouco (Athena). Reutiliza a tabela particionada deste módulo e é onde CTAS, projeção de partição e o custo por byte varrido são tratados a fundo"
+              ],
+              [
+                "Também habilitado por este módulo",
+                "L65 (catálogo e ETL com Glue) usa o mesmo par de tabelas como ponto de partida; L67 (lakehouse com Iceberg) resolve a limitação de reescrever partição inteira para corrigir um registro"
+              ],
+              [
+                "Data da última validação técnica",
+                "8 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b28_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "Buffer data for dynamic partitioning",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "Step 6: Configure buffering hints",
+                "code": true
+              },
+              {
+                "text": " — os limites de 1–128 MiB e 60–900 s, o mecanismo de \"o primeiro gatilho vence\", o buffer independente por partição e o fator de até 1,5× na entrega em múltiplos estágios; "
+              },
+              {
+                "text": "Understand partitioning keys",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "Use Amazon S3 bucket prefix to deliver data",
+                "code": true
+              },
+              {
+                "text": " — a sintaxe de inline parsing com jq 1.6 e a sintaxe de prefixo `!{partitionKeyFromQuery:chave}`; "
+              },
+              {
+                "text": "Use columnar storage formats",
+                "code": true
+              },
+              {
+                "text": ", "
+              },
+              {
+                "text": "Partition your data",
+                "code": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "Optimize data (performance tuning)",
+                "code": true
+              },
+              {
+                "text": " — predicate pushdown, o custo por byte varrido, o padrão de row group de 128 MB do Parquet, e a recomendação de particionar pela granularidade das consultas comuns. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque preço varia por região e envelhece mais rápido que o conteúdo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b28_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "Os nomes exatos de parâmetro do bloco `processing_configuration` no Terraform (`MetadataExtraction`, `MetadataExtractorQuery`, `JsonParsingEngine`) seguem a documentação de particionamento dinâmico consultada nesta data — é uma API que evolui, e o provider Terraform pode ter renomeado algo desde então. A razão de redução de bytes varridos medida na seção de provas vem de uma carga sintética de 8 campos por evento; meça com o schema real do seu evento antes de prometer um número específico de economia para o seu time."
+          }
+        }
+      ]
+    }
+  ]
+}

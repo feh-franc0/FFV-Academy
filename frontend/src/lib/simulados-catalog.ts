@@ -14,6 +14,7 @@ import type { Simulado } from './simulados';
 
 const AWS_PRACTITIONER: Simulado = {
   id: 'simulado-aws-practitioner',
+  dbBankId: 'aws-clf',
   certification: 'AWS Certified Cloud Practitioner (CLF-C02)',
   title: 'Simulado AWS Cloud Practitioner',
   description:
@@ -38,743 +39,99 @@ const AWS_PRACTITIONER: Simulado = {
   questions: [],
 };
 
-const AWS_SAA_PLACEHOLDER: Simulado = {
+const AWS_SAA: Simulado = {
   id: 'simulado-aws-saa',
+  dbBankId: 'aws-saa',
   certification: 'AWS Solutions Architect Associate (SAA-C03)',
   title: 'Simulado AWS SAA-C03',
   description:
-    'Em desenvolvimento. Simulado completo da certificação Solutions Architect Associate chegando em breve. Por enquanto, confira 5 questões de preview pra sentir o nível.',
-  price: 97,
-  questionCount: 5,
-  timeLimitMin: 10,
+    'Simulado da SAA-C03 com banco de 65 questões originais em PT-BR, nas proporções oficiais dos quatro domínios: Arquiteturas Seguras (30%), Resilientes (26%), de Alta Performance (24%) e Otimizadas em Custo (20%). Cada questão declara o enunciado de tarefa que exercita, com explicação que trata cada alternativa errada.',
+  // Restaurado em ago/2026 com banco real: antes eram 5 questões de prévia
+  // inline, 2 sem tratamento de distrator, a R$97 — o produto mais caro do
+  // catálogo com o menor banco. Preço só volta quando o banco existe de verdade.
+  price: 67,
+  // 65 por tentativa — o banco tem exatamente 65, então toda tentativa cobre
+  // o banco inteiro na proporção oficial dos domínios.
+  questionCount: 65,
+  timeLimitMin: 130,
   passingScore: 72,
-  comingSoon: true,
-  topics: ['Design of Resilient Architectures', 'High-Performing Architectures', 'Secure Applications', 'Cost-Optimized'],
-  questions: [
-    {
-      id: 'saa-q1',
-      stem: 'Qual padrão é mais apropriado pra desacoplar microserviços síncronos em fila assíncrona?',
-      options: [
-        { id: 'A', text: 'SNS + SQS fanout' },
-        { id: 'B', text: 'Direct invocation' },
-        { id: 'C', text: 'Kinesis Data Firehose' },
-        { id: 'D', text: 'EventBridge' },
-      ],
-      correctId: 'A',
-      topic: 'Design of Resilient Architectures',
-      difficulty: 'medium',
-      explanation:
-        'SNS + SQS fanout é o clássico: SNS notifica tópico, SQS subscribers bufferizam mensagens pra processamento assíncrono. EventBridge também funciona pra event-driven (com schema registry e rules avançadas). Direct invocation acopla. Firehose é pra streaming para storage/analytics.',
-    },
-    {
-      id: 'saa-q2',
-      stem: 'Qual serviço é mais apropriado para pipelines ETL batch em escala petabyte?',
-      options: [
-        { id: 'A', text: 'AWS Glue' },
-        { id: 'B', text: 'Lambda' },
-        { id: 'C', text: 'Step Functions' },
-        { id: 'D', text: 'AppFlow' },
-      ],
-      correctId: 'A',
-      topic: 'High-Performing Architectures',
-      difficulty: 'medium',
-      explanation:
-        'Glue é ETL serverless gerenciado com Spark por baixo, feito pra escalas grandes e integrado com Data Catalog, S3, Redshift. Lambda tem limite de 15min (inviável para ETL petabyte). Step Functions orquestra workflows. AppFlow é integração SaaS→AWS.',
-    },
-    {
-      id: 'saa-q3',
-      stem: 'Como implementar encryption at rest em um volume EBS?',
-      options: [
-        { id: 'A', text: 'Não é possível, EBS é sempre plaintext' },
-        { id: 'B', text: 'Ativar encryption at creation time com KMS key' },
-        { id: 'C', text: 'Apenas manualmente via OpenSSL' },
-        { id: 'D', text: 'Só em instâncias Windows' },
-      ],
-      correctId: 'B',
-      topic: 'Secure Applications',
-      difficulty: 'easy',
-      explanation:
-        'EBS suporta encryption at-rest via AWS KMS (default AWS-managed key ou CMK sua). Habilitar na criação do volume ou policy de account-level (padrão encrypted). É transparente ao OS. Snapshots encrypted também.',
-    },
-    {
-      id: 'saa-q4',
-      stem: 'Qual opção reduz custo de um fleet de EC2 com carga previsível rodando 24/7?',
-      options: [
-        { id: 'A', text: 'Compute Savings Plans 3 anos' },
-        { id: 'B', text: 'Spot Instances' },
-        { id: 'C', text: 'On-Demand' },
-        { id: 'D', text: 'Burstable (T3) unlimited mode' },
-      ],
-      correctId: 'A',
-      topic: 'Cost-Optimized',
-      difficulty: 'medium',
-      explanation:
-        'Savings Plans são ideais para carga previsível (commit de $/h): até 72% off em 3 anos. Spot é pra carga tolerante a interrupção. On-Demand é baseline sem desconto. Burstable T3 é pra workloads variáveis, não 24/7 steady.',
-    },
-    {
-      id: 'saa-q5',
-      stem: 'Qual combinação garante alta disponibilidade multi-AZ para uma aplicação web?',
-      options: [
-        { id: 'A', text: 'ALB + Auto Scaling Group com instâncias em 2+ AZs' },
-        { id: 'B', text: 'Instance única em m5.xlarge' },
-        { id: 'C', text: 'EC2 com EBS encrypted' },
-        { id: 'D', text: 'Lambda sem VPC' },
-      ],
-      correctId: 'A',
-      topic: 'Design of Resilient Architectures',
-      difficulty: 'easy',
-      explanation:
-        'Application Load Balancer + Auto Scaling Group spanning 2+ AZs é padrão-ouro de HA. ALB distribui tráfego, ASG substitui instâncias que falham, múltiplas AZs resistem a falha de datacenter. Instance única = SPOF.',
-    },
+  studyModeUrl: '/simulados/aws-saa/estudo',
+  topics: [
+    'Design de Arquiteturas Seguras',
+    'Design de Arquiteturas Resilientes',
+    'Design de Arquiteturas de Alta Performance',
+    'Design de Arquiteturas Otimizadas em Custo',
   ],
+  questions: [],
 };
 
 const AWS_DEVELOPER: Simulado = {
   id: 'simulado-aws-developer',
-  certification: 'AWS Certified Developer Associate (DVA-C02)',
+  dbBankId: 'aws-dva',
+  studyModeUrl: '/simulados/aws-developer/estudo',
+  certification: 'AWS Developer Associate (DVA-C02)',
   title: 'Simulado AWS Developer Associate',
   description:
-    'Simulado completo pra certificação AWS DVA-C02. 15 questões reais inspiradas no exame: Lambda profundo (cold start, SnapStart, concurrency), DynamoDB (GSI, Streams, transactions), API Gateway (REST vs HTTP, authorizers), S3 features, Step Functions, EventBridge/SQS/SNS, Cognito, KMS, CI/CD nativo, X-Ray e IaC (CFN/SAM/CDK). Explicações densas com referência pros FAQs oficiais.',
+    'Simulado da DVA-C02 com banco de 435 questões em PT-BR cobrindo os quatro domínios: desenvolvimento com serviços AWS, segurança, implantação, e solução de problemas com otimização. Cada tentativa sorteia 65 questões, então repetir não repete a prova.',
   price: 67,
-  questionCount: 15,
-  timeLimitMin: 30,
+  // 65 por tentativa, sorteadas de um banco de 435 no Postgres — alimentado por
+  // `frontend/data/question-bank/dva-c02-*.json` via `make gen-seed-migration`.
+  //
+  // Até 09/ago/2026 este simulado mostrava 15 questões de esboço a R$67 enquanto
+  // as 435 estavam escritas no repositório e nunca chegavam ao banco: o gerador
+  // de migration só lia `clf-c02-*`, e ignorava o resto em silêncio.
+  questionCount: 65,
+  timeLimitMin: 130,
   passingScore: 72,
   topics: [
-    'Lambda',
-    'DynamoDB',
-    'API Gateway',
-    'S3',
-    'Step Functions',
-    'EventBridge/SQS/SNS',
-    'Cognito',
-    'KMS',
-    'CI/CD',
-    'X-Ray',
-    'IaC (CFN/SAM/CDK)',
+    'Desenvolvimento com serviços AWS',
+    'Segurança',
+    'Implantação',
+    'Solução de problemas e otimização',
   ],
-  questions: [
-    {
-      id: 'dva-q1',
-      stem: 'Uma Lambda em VPC tem cold start de 8-10s. Qual é a mitigação mais eficaz em 2026?',
-      options: [
-        { id: 'A', text: 'Aumentar memória pra 10GB' },
-        { id: 'B', text: 'Remover Lambda da VPC (se possível), usar VPC endpoints pra DynamoDB/S3; ou aplicar Provisioned Concurrency' },
-        { id: 'C', text: 'Trocar pra EC2' },
-        { id: 'D', text: 'Diminuir timeout' },
-      ],
-      correctId: 'B',
-      topic: 'Lambda',
-      difficulty: 'medium',
-      explanation:
-        'Desde Hyperplane ENI (2019), Lambda VPC cold start caiu drasticamente (~1s), mas ainda existe. Se não precisa recursos privados da VPC, tire a Lambda de lá — acesse DynamoDB/S3 via VPC Endpoint. Pra apps que PRECISAM VPC, Provisioned Concurrency mantém N instâncias warm. Memória alta (10GB) dá mais CPU mas não remove o custo de ENI setup.',
-    },
-    {
-      id: 'dva-q2',
-      stem: 'Você tem DynamoDB com partition key = "tenantId". Cliente major tem 80% do tráfego. O que acontecer e como resolver?',
-      options: [
-        { id: 'A', text: 'Nada, DynamoDB escala automaticamente' },
-        { id: 'B', text: 'Hot partition — throttled em 3000 RCU / 1000 WCU por partition. Fix: adicionar suffix ao PK (tenantId#00-NN) e write-shard; DynamoDB Streams + aggregation' },
-        { id: 'C', text: 'Aumentar capacity total resolve' },
-        { id: 'D', text: 'Migrar pra RDS' },
-      ],
-      correctId: 'B',
-      topic: 'DynamoDB',
-      difficulty: 'medium',
-      explanation:
-        'DynamoDB divide em partitions por hash da PK. Uma PK concentrando 80% do tráfego = hot partition (throttled). Aumentar capacity da tabela não resolve porque o limite é POR partition. Técnica: write sharding (tenantId#RANDOM0..9 como PK) e agregação downstream via Streams ou Query com FilterExpression.',
-    },
-    {
-      id: 'dva-q3',
-      stem: 'Pra minimizar custo, você quer API Gateway com apenas JWT auth e sem WAF. Qual escolher?',
-      options: [
-        { id: 'A', text: 'REST API (mais features)' },
-        { id: 'B', text: 'HTTP API — 70% mais barato, latência menor, suporta JWT/Cognito authorizer nativamente' },
-        { id: 'C', text: 'Ambos iguais' },
-        { id: 'D', text: 'WebSocket' },
-      ],
-      correctId: 'B',
-      topic: 'API Gateway',
-      difficulty: 'easy',
-      explanation:
-        'HTTP API (v2) é versão moderna, enxuta, barata. Suporta JWT authorizer (nativo OIDC/Cognito), CORS, VPC Link. Falta: WAF, API keys + usage plans, mapping templates, private APIs. Se nada disso é necessário, HTTP API é default. Preço: ~$1/M vs $3.50/M do REST.',
-    },
-    {
-      id: 'dva-q4',
-      stem: 'Qual é a forma correta de dar segurança a upload direto do cliente pra S3 sem expor IAM credentials?',
-      options: [
-        { id: 'A', text: 'Deixar bucket público' },
-        { id: 'B', text: 'Presigned URL gerada no server com TTL curto (minutos); cliente faz PUT direto ao S3' },
-        { id: 'C', text: 'Configurar CORS permissivo' },
-        { id: 'D', text: 'Enviar access keys no browser' },
-      ],
-      correctId: 'B',
-      topic: 'S3',
-      difficulty: 'easy',
-      explanation:
-        'Presigned URL (SigV4) é padrão. Server autorizado gera URL com GetObject/PutObject e expiresIn (ex: 600s). Cliente usa URL direto ao S3 — zero exposição de credencial, zero passagem pelo server (grande arquivo não consome banda do backend). Multipart idem pra arquivos grandes.',
-    },
-    {
-      id: 'dva-q5',
-      stem: 'Step Functions workflow precisa aguardar aprovação humana antes de prosseguir. Qual padrão usar?',
-      options: [
-        { id: 'A', text: 'Wait state por 24h' },
-        { id: 'B', text: 'Callback pattern: Task state com waitForTaskToken — pausa até SendTaskSuccess(token) ser chamado (via API GW quando user aprova)' },
-        { id: 'C', text: 'Polling em Lambda' },
-        { id: 'D', text: 'Retry até sucesso' },
-      ],
-      correctId: 'B',
-      topic: 'Step Functions',
-      difficulty: 'hard',
-      explanation:
-        'Callback pattern é feature específica: state com "Type": "Task" + "Parameters": {..., "TaskToken.$": "$$.Task.Token"}. Workflow pausa (horas/dias/semanas até 1 ano). External caller (user clicando email link → API Gateway → Lambda → SendTaskSuccess) retoma workflow. Wait sem token não permite desbloqueio externo.',
-    },
-    {
-      id: 'dva-q6',
-      stem: 'Você tem 100k mensagens/dia entrando em SQS. Quer processar em Lambda em paralelo controlado. Como configurar?',
-      options: [
-        { id: 'A', text: 'Sem configuração especial — Lambda escala por si só' },
-        { id: 'B', text: 'Event source mapping com BatchSize 10 e MaximumConcurrency pra limitar Lambdas simultâneas (evita overwhelm de downstream)' },
-        { id: 'C', text: 'Usar EC2 em vez de Lambda' },
-        { id: 'D', text: 'SNS em vez de SQS' },
-      ],
-      correctId: 'B',
-      topic: 'EventBridge/SQS/SNS',
-      difficulty: 'medium',
-      explanation:
-        'SQS → Lambda event source mapping tem BatchSize (msgs por invocation, padrão 10, até 10k em FIFO) e MaximumConcurrency (lançado 2022, limita concurrent Lambdas lendo fila). Sem MaximumConcurrency, Lambda escala até account limit — overwhelm downstream. Combine com visibility timeout adequado + DLQ.',
-    },
-    {
-      id: 'dva-q7',
-      stem: 'Qual é o fluxo de auth padrão (mais seguro) em Cognito User Pool?',
-      options: [
-        { id: 'A', text: 'USER_PASSWORD_AUTH (senha plain)' },
-        { id: 'B', text: 'USER_SRP_AUTH — Secure Remote Password, senha nunca trafega' },
-        { id: 'C', text: 'Admin flow' },
-        { id: 'D', text: 'Client Credentials' },
-      ],
-      correctId: 'B',
-      topic: 'Cognito',
-      difficulty: 'medium',
-      explanation:
-        'USER_SRP_AUTH (Secure Remote Password protocol) é default pra app clients. Senha nunca viaja — uma chave derivada sim. Contrast: USER_PASSWORD_AUTH envia senha cleartext (só pra server-to-server confiável). ADMIN_USER_PASSWORD_AUTH exige admin credentials. CUSTOM_AUTH pra fluxo custom via Lambda triggers.',
-    },
-    {
-      id: 'dva-q8',
-      stem: 'Você tem IAM policy allowing kms:Decrypt, mas app recebe access denied. Qual é a causa provável?',
-      options: [
-        { id: 'A', text: 'IAM policy tem bug' },
-        { id: 'B', text: 'KMS key policy não concede acesso ao principal — KMS requer AMBAS (key policy + IAM). Fix: adicionar principal na key policy ou delegate pra IAM' },
-        { id: 'C', text: 'Network issue' },
-        { id: 'D', text: 'Key rotation' },
-      ],
-      correctId: 'B',
-      topic: 'KMS',
-      difficulty: 'hard',
-      explanation:
-        'KMS é único service que exige interseção: IAM policy AND key policy. Key policy default só permite root account. Pra outro principal: EITHER adicionar explicitamente na key policy, OR key policy delega pra IAM ("Principal: AWS: arn:...:root" com delegation). Clássico pegadinha DVA.',
-    },
-    {
-      id: 'dva-q9',
-      stem: 'CodeDeploy pra Lambda com blue/green. Quer 10% tráfego por 5min e depois 100%. Qual config?',
-      options: [
-        { id: 'A', text: 'AllAtOnce' },
-        { id: 'B', text: 'Canary10Percent5Minutes — preset CodeDeploy' },
-        { id: 'C', text: 'Linear10PercentEvery5Minutes' },
-        { id: 'D', text: 'Manual' },
-      ],
-      correctId: 'B',
-      topic: 'CI/CD',
-      difficulty: 'medium',
-      explanation:
-        'Canary = 2 steps (10% por N min, depois 100%). Linear = incrementos iguais (10% a cada N min até 100%). AllAtOnce = 100% imediato. Combine com CloudWatch Alarm — CodeDeploy rollback automático se alarm disparar durante shift.',
-    },
-    {
-      id: 'dva-q10',
-      stem: 'X-Ray sampling default: qual?',
-      options: [
-        { id: 'A', text: '100%' },
-        { id: 'B', text: 'Reservoir 1 req/s + 5% do excedente — balanceia coverage vs custo' },
-        { id: 'C', text: '0%' },
-        { id: 'D', text: '10% fixo' },
-      ],
-      correctId: 'B',
-      topic: 'X-Ray',
-      difficulty: 'medium',
-      explanation:
-        'Default rule: reservoir (1 trace/s garantido, barato) + fixed rate (5% do resto). Ajusta via Sampling Rules no console/CLI — custom rules por service, URL, method. 100% em high-volume explode custo; 5% default é bom trade-off pra troubleshooting.',
-    },
-    {
-      id: 'dva-q11',
-      stem: 'Secrets Manager vs Parameter Store — quando escolher Secrets Manager?',
-      options: [
-        { id: 'A', text: 'Sempre' },
-        { id: 'B', text: 'Quando precisa rotation automática (RDS/Redshift), cross-region replication ou cross-account sharing' },
-        { id: 'C', text: 'Só pra texto curto' },
-        { id: 'D', text: 'Parameter Store é obsoleto' },
-      ],
-      correctId: 'B',
-      topic: 'Secrets Manager',
-      difficulty: 'easy',
-      explanation:
-        'Secrets Manager: $0.40/secret/mês mas tem rotation nativa (Lambda AWS-managed pra RDS/DocDB/Redshift/DynamoDB), replicação cross-region, resource policy cross-account. Parameter Store: grátis (std tier) ou $0.05 (advanced) mas SEM rotation automática. Escolha Secrets Manager só se as features justificam o custo.',
-    },
-    {
-      id: 'dva-q12',
-      stem: 'Qual é o principal motivo pra escolher ECS Fargate em vez de Lambda?',
-      options: [
-        { id: 'A', text: 'Fargate é mais barato em idle' },
-        { id: 'B', text: 'Workload > 15min, runtime custom (gRPC, WebSocket server), container > 10GB, ou app com estado local (connection pool grande)' },
-        { id: 'C', text: 'Fargate tem menos cold start' },
-        { id: 'D', text: 'Apenas estética' },
-      ],
-      correctId: 'B',
-      topic: 'ECS',
-      difficulty: 'medium',
-      explanation:
-        'Lambda limita: 15min timeout, 10GB image, HTTP/Lambda event-driven. Pra > 15min (ETL longo), gRPC server persistente, imagem > 10GB (ML model grande), connection pool que precisa warming long-running — Fargate. Fargate paga task rodando continuamente (não escala zero).',
-    },
-    {
-      id: 'dva-q13',
-      stem: 'Qual IaC permite código real (loops, condicionais, funções) em TypeScript/Python?',
-      options: [
-        { id: 'A', text: 'CloudFormation puro' },
-        { id: 'B', text: 'AWS CDK — sintetiza pra CFN, mas você escreve em TS/Python/Java/Go/C#' },
-        { id: 'C', text: 'SAM' },
-        { id: 'D', text: 'Somente Terraform' },
-      ],
-      correctId: 'B',
-      topic: 'IaC',
-      difficulty: 'easy',
-      explanation:
-        'CDK = camada de código acima do CFN. cdk synth gera CFN JSON/YAML. cdk deploy sobe via CFN. L1 constructs = mapping 1:1 com CFN. L2 = defaults sensatos. L3 = patterns (ex: ApplicationLoadBalancedFargateService). SAM é macro de CFN pra serverless; não dá loops de código.',
-    },
-    {
-      id: 'dva-q14',
-      stem: 'Como ler DynamoDB Streams em Lambda automaticamente?',
-      options: [
-        { id: 'A', text: 'Polling manual',
- },
-        { id: 'B', text: 'Event source mapping com ARN do Stream → Lambda é invocada com batch de records (INSERT/MODIFY/REMOVE)' },
-        { id: 'C', text: 'SNS em cima do DynamoDB' },
-        { id: 'D', text: 'Apenas via CloudWatch' },
-      ],
-      correctId: 'B',
-      topic: 'DynamoDB',
-      difficulty: 'medium',
-      explanation:
-        'Event source mapping liga Stream ao Lambda. Configurar: BatchSize, ParallelizationFactor (até 10, para múltiplas Lambdas por shard), StartingPosition (LATEST ou TRIM_HORIZON), MaximumBatchingWindowInSeconds. Lambda recebe Records com NewImage/OldImage. Use pra replicate pra Elasticsearch, materialize views, notify downstream.',
-    },
-    {
-      id: 'dva-q15',
-      stem: 'CI pipeline precisa invalidar CloudFront cache após deploy. Como fazer via API?',
-      options: [
-        { id: 'A', text: 'Não é possível',
- },
-        { id: 'B', text: 'CreateInvalidation API do CloudFront com paths ["/*"] ou específicos. Cost: primeiras 1000 paths/mês free, depois $0.005/path' },
-        { id: 'C', text: 'Deletar distribuição' },
-        { id: 'D', text: 'Mudar S3 bucket' },
-      ],
-      correctId: 'B',
-      topic: 'CI/CD',
-      difficulty: 'easy',
-      explanation:
-        'aws cloudfront create-invalidation --distribution-id ABC --paths "/*". ConstCache invalidations é parte de deploy flow padrão. Para apps SPA (index.html sempre atualiza), invalida só index.html (demais assets têm hash no nome = cached forever).',
-    },
-  ],
-};
-
-const CKA: Simulado = {
-  id: 'simulado-cka',
-  certification: 'Certified Kubernetes Administrator (CKA)',
-  title: 'Simulado CKA — Kubernetes Administrator',
-  description:
-    'Avalie seu preparo para o CKA (Linux Foundation/CNCF). 10 questões cobrindo workloads, storage, networking, cluster ops, troubleshooting. Foco em kubectl e YAML real, não teórico.',
-  price: 67,
-  questionCount: 10,
-  timeLimitMin: 30,
-  passingScore: 66,
-  topics: ['Workloads', 'Storage', 'Networking', 'Troubleshooting', 'Cluster ops', 'Security'],
-  questions: [
-    { id: 'cka-q1', stem: 'Como escalar um Deployment chamado "api" para 5 réplicas via kubectl?', options: [{ id: 'A', text: 'kubectl resize deployment/api --count=5' }, { id: 'B', text: 'kubectl scale deployment/api --replicas=5' }, { id: 'C', text: 'kubectl set replicas api 5' }, { id: 'D', text: 'kubectl edit deployment api' }], correctId: 'B', topic: 'Workloads', difficulty: 'easy', explanation: 'kubectl scale é o comando canônico para escalar Deployments/ReplicaSets/StatefulSets. --replicas=N ajusta o campo .spec.replicas. Alternativa declarativa: editar o manifest e aplicar. Para autoscaling, usa-se HPA (HorizontalPodAutoscaler).' },
-    { id: 'cka-q2', stem: 'PVC está em status "Pending". Qual o primeiro check?', options: [{ id: 'A', text: 'Reinstalar Kubernetes' }, { id: 'B', text: 'Verificar se existe StorageClass disponível e se o PVC referencia uma válida; se for manual, checar se há PV compatível (size, accessMode)' }, { id: 'C', text: 'Deletar o pod' }, { id: 'D', text: 'Aumentar CPU' }], correctId: 'B', topic: 'Storage', difficulty: 'medium', explanation: 'Pending em PVC geralmente significa sem bind: ou StorageClass não existe / não tem provisioner, ou não há PV pré-provisionado com size/accessMode compatível. kubectl describe pvc mostra events. Para dynamic provisioning, verificar storageClassName e se CSI driver está rodando.' },
-    { id: 'cka-q3', stem: 'NetworkPolicy para bloquear TODO tráfego egress do namespace "prod"?', options: [{ id: 'A', text: 'Não é possível' }, { id: 'B', text: 'NetworkPolicy com podSelector {} e policyTypes [Egress] sem egress rules = deny all egress' }, { id: 'C', text: 'Firewall do host' }, { id: 'D', text: 'Remover networking' }], correctId: 'B', topic: 'Networking', difficulty: 'hard', explanation: 'NetworkPolicy com podSelector vazio seleciona todos os pods. policyTypes: [Egress] sem regras egress = implicit deny all. Requer CNI com suporte (Calico, Cilium). Lembre: se só houver ingress rules, egress continua permitido por padrão.' },
-    { id: 'cka-q4', stem: 'Pod em CrashLoopBackOff. Primeiro comando útil?', options: [{ id: 'A', text: 'kubectl delete pod' }, { id: 'B', text: 'kubectl logs POD --previous (se disponível) para ver output do container que crashou, e kubectl describe pod POD para events e exit code' }, { id: 'C', text: 'Restart do node' }, { id: 'D', text: 'Nada' }], correctId: 'B', topic: 'Troubleshooting', difficulty: 'easy', explanation: 'CrashLoopBackOff = container morrendo e kubelet aplicando backoff. --previous pega logs do container anterior que crashou. describe mostra events (pull error, probe failure, OOM kill via Last State, exit code). Delete apaga sintoma, não causa.' },
-    { id: 'cka-q5', stem: 'Backup de etcd em cluster kubeadm?', options: [{ id: 'A', text: 'kubectl backup etcd' }, { id: 'B', text: 'ETCDCTL_API=3 etcdctl snapshot save /tmp/etcd-backup.db com endpoints, cacert, cert, key apontando para /etc/kubernetes/pki/etcd' }, { id: 'C', text: 'tar /var/lib/kubelet' }, { id: 'D', text: 'Não precisa' }], correctId: 'B', topic: 'Cluster ops', difficulty: 'medium', explanation: 'etcd é a source of truth. Snapshot via etcdctl v3 API. Restore requer stop kube-apiserver, etcdctl snapshot restore com --data-dir, start. Produção: backup agendado + test de restore mensal.' },
-    { id: 'cka-q6', stem: 'RBAC: criar Role que permita list/get de pods no namespace "dev" para um ServiceAccount.', options: [{ id: 'A', text: 'ClusterRoleBinding global' }, { id: 'B', text: 'Role (namespace-scoped) com rules apiGroups [""], resources ["pods"], verbs ["get","list"] + RoleBinding amarrando ServiceAccount' }, { id: 'C', text: 'Editar kubelet config' }, { id: 'D', text: 'Não é possível' }], correctId: 'B', topic: 'Security', difficulty: 'medium', explanation: 'Role é namespace-scoped (vs ClusterRole cluster-wide). RoleBinding dentro do namespace "dev" amarra o SA à Role. Princípio: menor privilégio. ClusterRole seria overkill e concederia acesso em todos namespaces.' },
-    { id: 'cka-q7', stem: 'Node com disco cheio mostra pods em status "Evicted". Solução?', options: [{ id: 'A', text: 'Ignorar' }, { id: 'B', text: 'Liberar disco (logs, imagens), ajustar kubelet evictionHard/Soft thresholds, considerar storage dedicado pra /var/lib/containerd e kubelet' }, { id: 'C', text: 'Reboot e torcer' }, { id: 'D', text: 'Desabilitar kubelet' }], correctId: 'B', topic: 'Troubleshooting', difficulty: 'medium', explanation: 'Eviction é mecanismo do kubelet quando node está sob pressão (disk, memory, pid). Limpeza de imagens (crictl rmi), logs rotativos, e partição separada pro kubelet evitam impacto. evictionHard default é agressivo em prod.' },
-    { id: 'cka-q8', stem: 'Upgrade de cluster kubeadm: ordem correta dos nodes?', options: [{ id: 'A', text: 'Todos ao mesmo tempo' }, { id: 'B', text: 'Control plane primeiro (1 por vez, drain + upgrade + uncordon), depois worker nodes um a um com drain/upgrade/uncordon' }, { id: 'C', text: 'Workers antes' }, { id: 'D', text: 'Random' }], correctId: 'B', topic: 'Cluster ops', difficulty: 'hard', explanation: 'Control plane primeiro garante API compatível para workers novos. Drain move pods, respeita PDBs. kubeadm upgrade plan/apply. Workers dependem da mesma kubelet ou uma minor abaixo.' },
-    { id: 'cka-q9', stem: 'Service tipo NodePort expõe pod em qual range de portas por padrão?', options: [{ id: 'A', text: '1-1024' }, { id: 'B', text: '30000-32767' }, { id: 'C', text: '8080-9090' }, { id: 'D', text: 'Qualquer' }], correctId: 'B', topic: 'Networking', difficulty: 'easy', explanation: 'Range padrão NodePort é 30000-32767 (configurável via --service-node-port-range no apiserver). Cada node abre a porta e proxy para o Service. LoadBalancer normalmente cria NodePort + cloud LB na frente.' },
-    { id: 'cka-q10', stem: 'Init container: quando usar?', options: [{ id: 'A', text: 'Nunca' }, { id: 'B', text: 'Tarefas de setup que precisam rodar ANTES do container principal: migrations, wait-for-db, config download, permission fix — cada init roda sequencialmente até sucesso' }, { id: 'C', text: 'Logging' }, { id: 'D', text: 'Debugging' }], correctId: 'B', topic: 'Workloads', difficulty: 'medium', explanation: 'Init containers permitem setup ordenado. Se um falha, pod reinicia desde o primeiro init. Útil para wait-for-service (netcat loop), schema migration, decrypt secrets. Container principal só inicia após todos os inits OK.' },
-  ],
-};
-
-const TERRAFORM: Simulado = {
-  id: 'simulado-terraform',
-  certification: 'HashiCorp Certified Terraform Associate (003)',
-  title: 'Simulado Terraform Associate',
-  description:
-    'Prova HashiCorp Terraform Associate 003. 10 questões sobre state, providers, modules, workspaces, variables, sentinel, Terraform Cloud. Foco em conceitos que caem e armadilhas reais.',
-  price: 57,
-  questionCount: 10,
-  timeLimitMin: 30,
-  passingScore: 70,
-  topics: ['State', 'Providers', 'Modules', 'Workspaces', 'Variables', 'Terraform Cloud', 'CLI'],
-  questions: [
-    { id: 'tf-q1', stem: 'Onde o state é armazenado por padrão em Terraform local?', options: [{ id: 'A', text: 'Em ~/.terraform' }, { id: 'B', text: 'Arquivo terraform.tfstate no diretório corrente' }, { id: 'C', text: 'No Git' }, { id: 'D', text: 'Em memória' }], correctId: 'B', topic: 'State', difficulty: 'easy', explanation: 'Local backend default cria terraform.tfstate no working dir. NUNCA commitar este arquivo (contém secrets como passwords). Produção: remote backend (S3 + DynamoDB lock, Terraform Cloud, Azure Storage, GCS).' },
-    { id: 'tf-q2', stem: 'Como importar recurso existente sem recriar?', options: [{ id: 'A', text: 'terraform apply --force' }, { id: 'B', text: 'terraform import RESOURCE ID (adiciona ao state sem tocar infra); depois escrever o bloco resource correspondente' }, { id: 'C', text: 'Recriar e torcer' }, { id: 'D', text: 'Não é possível' }], correctId: 'B', topic: 'CLI', difficulty: 'medium', explanation: 'terraform import liga recurso existente ao state. No TF 1.5+, o bloco import {} permite fazer isso declarativamente. Essencial para adoção em infra legada.' },
-    { id: 'tf-q3', stem: 'Workspaces em Terraform são usados para?', options: [{ id: 'A', text: 'Multi-tenant completo' }, { id: 'B', text: 'Múltiplos estados paralelos para mesma configuração (ex: dev/staging/prod); não é ambiente isolado por perfil de credenciais' }, { id: 'C', text: 'Nada' }, { id: 'D', text: 'Controle de acesso' }], correctId: 'B', topic: 'Workspaces', difficulty: 'medium', explanation: 'Workspaces = múltiplos states da mesma config (terraform.tfstate.d/WS). Bom para dev/stage/prod quando infra é idêntica. NÃO substitui separar por diretório+backend se credenciais/variáveis diferem muito.' },
-    { id: 'tf-q4', stem: 'Como evitar leak de credenciais AWS em terraform.tfstate?', options: [{ id: 'A', text: 'Não é possível' }, { id: 'B', text: 'Remote backend com criptografia em repouso (S3 SSE-KMS), IAM policies restritas, state lock via DynamoDB, e nunca commitar state' }, { id: 'C', text: 'base64 encode' }, { id: 'D', text: 'Ignore file' }], correctId: 'B', topic: 'State', difficulty: 'hard', explanation: 'State contém plaintext de attributes sensíveis. S3 + SSE-KMS + bucket policy restritiva + DynamoDB para lock é padrão AWS. Alternativa: Terraform Cloud com tokens. sensitive = true em variables ajuda em output mas não no state.' },
-    { id: 'tf-q5', stem: 'Diferença entre count e for_each?', options: [{ id: 'A', text: 'São iguais' }, { id: 'B', text: 'count cria lista indexada (remove/move do meio é destrutivo); for_each cria map por chave (mais estável para modificações)' }, { id: 'C', text: 'for_each é obsoleto' }, { id: 'D', text: 'count funciona só em providers' }], correctId: 'B', topic: 'CLI', difficulty: 'medium', explanation: 'Armadilha clássica: com count, deletar item do meio da lista causa re-creation dos subsequentes (index shift). for_each usa chaves estáveis. Prefira for_each para coleções modificáveis.' },
-    { id: 'tf-q6', stem: 'Variable com default sensitive = true. O que muda?', options: [{ id: 'A', text: 'Nada' }, { id: 'B', text: 'Valor é omitido de plan/apply output e mensagens; ainda aparece em state (state precisa de proteção separada)' }, { id: 'C', text: 'Encripta globalmente' }, { id: 'D', text: 'Gera erro' }], correctId: 'B', topic: 'Variables', difficulty: 'medium', explanation: 'sensitive esconde de CLI output. NÃO encripta, não esconde do state. Produção: passar via env var TF_VAR_xxx ou secrets manager, nunca commitar tfvars com secret.' },
-    { id: 'tf-q7', stem: 'Módulo publicado em Terraform Registry. Como referenciar?', options: [{ id: 'A', text: 'URL direta' }, { id: 'B', text: 'source = "NAMESPACE/NAME/PROVIDER" com version = "~> 3.0". Terraform baixa e cacheia.' }, { id: 'C', text: 'Git clone manual' }, { id: 'D', text: 'Não é suportado' }], correctId: 'B', topic: 'Modules', difficulty: 'easy', explanation: 'Registry format: hashicorp/consul/aws. Sempre pinar version com ~> ou explicit. terraform init baixa. Alternativas: git::, http::, local path (../modules/x).' },
-    { id: 'tf-q8', stem: 'Terraform Cloud: qual benefício principal vs local?', options: [{ id: 'A', text: 'Mais rápido' }, { id: 'B', text: 'Remote state com lock nativo, run history, plan/apply em workers Cloud, integração com VCS, policy-as-code (Sentinel/OPA), collaboration' }, { id: 'C', text: 'GUI bonita' }, { id: 'D', text: 'Grátis sempre' }], correctId: 'B', topic: 'Terraform Cloud', difficulty: 'medium', explanation: 'TFC resolve state remote + lock + collaboration sem DIY. Sentinel (ou OPA via TF Enterprise) para guard rails. Free tier limitado, paid pra teams. Alternativas: Spacelift, env0, Scalr.' },
-    { id: 'tf-q9', stem: 'terraform fmt faz o quê?', options: [{ id: 'A', text: 'Deleta arquivos' }, { id: 'B', text: 'Formata arquivos .tf para canonical style (indent, spacing, alinhamento de =) — deve rodar em CI para consistency' }, { id: 'C', text: 'Apply dry-run' }, { id: 'D', text: 'Download modules' }], correctId: 'B', topic: 'CLI', difficulty: 'easy', explanation: 'fmt = formatador. Rodar em pre-commit hook. terraform fmt -recursive percorre subdirs. Combinado com terraform validate é o mínimo de CI sanity.' },
-    { id: 'tf-q10', stem: 'Data source em Terraform: para quê?', options: [{ id: 'A', text: 'Criar recursos' }, { id: 'B', text: 'LER informação de infra existente (não criada pelo TF) e usar em resources. Ex: data "aws_ami" para AMI dinâmica' }, { id: 'C', text: 'Gerar relatórios' }, { id: 'D', text: 'Nada' }], correctId: 'B', topic: 'CLI', difficulty: 'easy', explanation: 'data source = read-only lookup. Útil para AMI mais recente, account_id, availability_zones, recursos criados fora do TF. Avaliado em plan. Não modifica nada.' },
-  ],
-};
-
-const SECURITY_PLUS: Simulado = {
-  id: 'simulado-security-plus',
-  certification: 'CompTIA Security+ (SY0-701)',
-  title: 'Simulado CompTIA Security+ SY0-701',
-  description:
-    'Prova CompTIA Security+ 701. 10 questões nos 5 domínios: Attacks/Vulnerabilities, Architecture, Operations, Risk Management, Governance. Para quem está começando em security.',
-  price: 47,
-  questionCount: 10,
-  timeLimitMin: 30,
-  passingScore: 70,
-  topics: ['Attacks', 'Cryptography', 'IAM', 'Network Security', 'Risk', 'GRC'],
-  questions: [
-    { id: 'sec-q1', stem: 'Ataque "pass-the-hash" explora qual fraqueza?', options: [{ id: 'A', text: 'Senha fraca' }, { id: 'B', text: 'Autenticação NTLM que aceita hash direto sem re-digitar a senha — atacante que roubou o hash (via LSASS dump) autentica sem conhecer a senha plaintext' }, { id: 'C', text: 'DNS' }, { id: 'D', text: 'Buffer overflow' }], correctId: 'B', topic: 'Attacks', difficulty: 'medium', explanation: 'PtH é clássico em redes Windows. Mitigações: desabilitar NTLM onde possível, LSA protection (Credential Guard), LAPS (local admin senha por máquina), network segmentation.' },
-    { id: 'sec-q2', stem: 'Qual algoritmo é apropriado para armazenar senhas em 2026?', options: [{ id: 'A', text: 'MD5' }, { id: 'B', text: 'Argon2id (ou bcrypt/scrypt) com salt único por user e work factor calibrado para ~100ms' }, { id: 'C', text: 'SHA-256 puro' }, { id: 'D', text: 'Base64' }], correctId: 'B', topic: 'Cryptography', difficulty: 'easy', explanation: 'Hash de senha precisa ser LENTO e adaptativo. Argon2id venceu PHC (2015), recomendado por OWASP. bcrypt/scrypt são aceitáveis. SHA/MD5 são rápidos demais (atacante computa bilhões/s). Sempre salt único.' },
-    { id: 'sec-q3', stem: 'Zero-trust architecture: princípio central?', options: [{ id: 'A', text: 'Firewall de perímetro forte' }, { id: 'B', text: '"Never trust, always verify": autenticar e autorizar CADA request independente da origem (interna ou externa), baseado em identity + context + device posture' }, { id: 'C', text: 'VPN obrigatória' }, { id: 'D', text: 'Bloquear tudo' }], correctId: 'B', topic: 'Network Security', difficulty: 'medium', explanation: 'Zero-trust abandona modelo perímetro/castelo. Google BeyondCorp foi pioneiro. Implementação: IdP + MFA + device trust + micro-segmentation + policy engine (OPA) + mTLS service-to-service.' },
-    { id: 'sec-q4', stem: 'Phishing vs Spear Phishing?', options: [{ id: 'A', text: 'São sinônimos' }, { id: 'B', text: 'Phishing é mass (spray-and-pray); spear phishing é targeted a indivíduo ou pequeno grupo, usa OSINT para personalizar (CEO fraud, whale phishing)' }, { id: 'C', text: 'Spear usa email, phishing não' }, { id: 'D', text: 'Phishing é legal' }], correctId: 'B', topic: 'Attacks', difficulty: 'easy', explanation: 'Spear investe tempo em reconhecimento: LinkedIn, calendário público, brand voice. Taxa de sucesso maior. BEC (Business Email Compromise) é variante cara.' },
-    { id: 'sec-q5', stem: 'MFA: qual combinação conta como "dois fatores" reais?', options: [{ id: 'A', text: 'Senha + pergunta de segurança' }, { id: 'B', text: 'Senha (knowledge) + token/app TOTP ou hardware key (possession) — dois fatores DIFERENTES' }, { id: 'C', text: 'Duas senhas' }, { id: 'D', text: 'SMS sempre' }], correctId: 'B', topic: 'IAM', difficulty: 'easy', explanation: 'MFA real: 2+ de fatores DIFERENTES (knowledge/possession/inherence). Pergunta de segurança é knowledge = mesmo fator. SMS é possession fraco (SIM swap). Hardware key (WebAuthn/FIDO2) é o padrão-ouro.' },
-    { id: 'sec-q6', stem: 'Residual risk depois de implementar controles é?', options: [{ id: 'A', text: 'Zero' }, { id: 'B', text: 'O risco que sobra após os controles — precisa ser aceito pela gestão (accept) ou transferido (seguro, terceiro)' }, { id: 'C', text: 'Mesmo do inicial' }, { id: 'D', text: 'Ignorável' }], correctId: 'B', topic: 'Risk', difficulty: 'medium', explanation: 'Risk management: avoid / mitigate / transfer / accept. Nenhum controle elimina 100%. Accept formal via sign-off do owner. Seguro cibernético transfere financeiramente. Documentar em risk register.' },
-    { id: 'sec-q7', stem: 'SIEM: função principal?', options: [{ id: 'A', text: 'Firewall' }, { id: 'B', text: 'Coletar logs de múltiplas fontes (apps, rede, endpoints), correlacionar eventos, detectar padrões suspeitos, alertar — central pra SOC' }, { id: 'C', text: 'Antivírus' }, { id: 'D', text: 'Backup' }], correctId: 'B', topic: 'Operations', difficulty: 'easy', explanation: 'SIEM = Security Information and Event Management. Splunk, QRadar, Elastic Security, Wazuh (open). Complementa com SOAR (automation/playbooks) e XDR (endpoint+network+cloud).' },
-    { id: 'sec-q8', stem: 'GDPR/LGPD "right to erasure" (direito ao esquecimento) significa?', options: [{ id: 'A', text: 'Deletar toda a base' }, { id: 'B', text: 'Titular pode solicitar deleção de seus dados pessoais quando a base legal caducou ou consent foi revogado; não é absoluto (há exceções legais)' }, { id: 'C', text: 'Só afeta marketing' }, { id: 'D', text: 'Apenas UE' }], correctId: 'B', topic: 'GRC', difficulty: 'medium', explanation: 'LGPD art. 18 (semelhante GDPR art. 17). Exceções: cumprimento de lei, exercício regular de direitos, estudo com anonimização, etc. Implementação requer inventário de onde dados estão (data discovery).' },
-    { id: 'sec-q9', stem: 'Supply chain attack: definição?', options: [{ id: 'A', text: 'Ataque físico a loja' }, { id: 'B', text: 'Comprometimento via fornecedor terceiro (código, build pipeline, dependência). Exemplos: SolarWinds 2020, event-stream npm, Log4Shell, xz-utils 2024' }, { id: 'C', text: 'Phishing' }, { id: 'D', text: 'DDoS' }], correctId: 'B', topic: 'Attacks', difficulty: 'hard', explanation: 'Supply chain é vetor moderno crítico. Defesas: SBOM (Software Bill of Materials), dependency pinning + verification, reproducible builds, signing (sigstore/cosign), minimize transitive deps.' },
-    { id: 'sec-q10', stem: 'DLP (Data Loss Prevention): foco?', options: [{ id: 'A', text: 'Backup' }, { id: 'B', text: 'Detectar e bloquear exfiltração de dados sensíveis via egress (email, upload, USB) usando pattern matching, classification, context' }, { id: 'C', text: 'Firewall' }, { id: 'D', text: 'Encryption' }], correctId: 'B', topic: 'Operations', difficulty: 'medium', explanation: 'DLP inspeciona traffic procurando CPF, cartão, PII, código fonte. Endpoint DLP no cliente, Network DLP no gateway, Cloud DLP no CASB. Falsos positivos são comuns — requer tuning.' },
-  ],
-};
-
-const AZURE_FUND: Simulado = {
-  id: 'simulado-azure-fundamentals',
-  certification: 'Microsoft Azure Fundamentals (AZ-900)',
-  title: 'Simulado AZ-900 — Azure Fundamentals',
-  description:
-    'Prova AZ-900 da Microsoft. 10 questões sobre cloud concepts, Azure services (compute, storage, networking), Azure management, governance, cost management. Entry-level Azure.',
-  price: 47,
-  questionCount: 10,
-  timeLimitMin: 30,
-  passingScore: 70,
-  topics: ['Cloud Concepts', 'Azure Services', 'Management', 'Governance', 'Cost'],
-  questions: [
-    { id: 'az-q1', stem: 'IaaS vs PaaS vs SaaS: qual exemplo é PaaS?', options: [{ id: 'A', text: 'VM no Azure' }, { id: 'B', text: 'Azure App Service — runtime gerenciado (deploy código, Microsoft cuida do OS/runtime/load balancer)' }, { id: 'C', text: 'Office 365' }, { id: 'D', text: 'Azure Resource Manager' }], correctId: 'B', topic: 'Cloud Concepts', difficulty: 'easy', explanation: 'PaaS = Platform as a Service: você foca no código, provider cuida da infra. App Service, Azure Functions, Container Apps são PaaS. IaaS = VM (cliente cuida de OS). SaaS = app completo pronto (M365).' },
-    { id: 'az-q2', stem: 'Azure Resource Manager (ARM) é?', options: [{ id: 'A', text: 'Um tipo de VM' }, { id: 'B', text: 'A API/plane de controle do Azure — todas operações (portal, CLI, SDK, Bicep, Terraform) passam pelo ARM para CRUD de recursos' }, { id: 'C', text: 'Database' }, { id: 'D', text: 'CDN' }], correctId: 'B', topic: 'Management', difficulty: 'easy', explanation: 'ARM é a layer uniforme. Templates ARM (JSON) ou Bicep (DSL mais limpa) descrevem recursos declarativamente. Resource Group agrupa recursos (deletar RG apaga tudo).' },
-    { id: 'az-q3', stem: 'Azure AD (agora Microsoft Entra ID) é?', options: [{ id: 'A', text: 'DNS service' }, { id: 'B', text: 'Identity provider cloud-based — IAM, SSO, MFA, conditional access. Core da segurança Azure/M365' }, { id: 'C', text: 'Active Directory on-prem' }, { id: 'D', text: 'VPN' }], correctId: 'B', topic: 'Management', difficulty: 'easy', explanation: 'Entra ID (renomeado de Azure AD em 2023). Sincroniza com AD on-prem via Entra Connect. Não é LDAP por padrão (é REST/OIDC/SAML). Conditional access é feature killer.' },
-    { id: 'az-q4', stem: 'Azure Cost Management permite?', options: [{ id: 'A', text: 'Só ver fatura' }, { id: 'B', text: 'Ver/analisar custos, criar budgets com alertas, recomendações de otimização (Advisor), reservas/savings plans' }, { id: 'C', text: 'Nada' }, { id: 'D', text: 'Só exportar CSV' }], correctId: 'B', topic: 'Cost', difficulty: 'easy', explanation: 'Cost Management + Billing é free add-on. Budgets alertam via email/action group. Reserved Instances (1/3 anos) dão descontos significativos em cargas estáveis. Spot VMs para batch tolerante a interrupção.' },
-    { id: 'az-q5', stem: 'Azure Policy serve para?', options: [{ id: 'A', text: 'Firewall' }, { id: 'B', text: 'Governance: definir regras que recursos devem seguir (ex: só regiões permitidas, tags obrigatórias, SKU proibida) — audit ou deny' }, { id: 'C', text: 'Backup' }, { id: 'D', text: 'Identity' }], correctId: 'B', topic: 'Governance', difficulty: 'medium', explanation: 'Policy aplica guard rails. Effect: audit (reporta), deny (bloqueia), append (adiciona), modify. Initiative agrupa policies (ISO, PCI-DSS). Blueprint foi deprecated em favor de Template Specs + Policy.' },
-    { id: 'az-q6', stem: 'Azure Availability Zone vs Region?', options: [{ id: 'A', text: 'Mesma coisa' }, { id: 'B', text: 'Region = área geográfica (ex: East US). AZ = datacenters fisicamente isolados dentro da region (3 por region suportada). VM zonal tem SLA 99.99%' }, { id: 'C', text: 'AZ é menor que rack' }, { id: 'D', text: 'Só Europa tem AZ' }], correctId: 'B', topic: 'Cloud Concepts', difficulty: 'medium', explanation: 'AZ = pareamento de datacenters independentes (power, cooling, network). Resource zonal (AZ específico) vs zone-redundant (replica entre AZ). Nem toda region tem AZ — verificar.' },
-    { id: 'az-q7', stem: 'Azure Blob Storage tiers?', options: [{ id: 'A', text: 'Só um' }, { id: 'B', text: 'Hot (acesso frequente), Cool (pouco acesso), Cold (raro), Archive (arquival, latência em horas). Lifecycle policy move automaticamente' }, { id: 'C', text: 'Hot e Cold só' }, { id: 'D', text: 'Standard e Premium' }], correctId: 'B', topic: 'Azure Services', difficulty: 'medium', explanation: 'Cost trade-off: Hot paga mais storage + menos acesso, Archive é barato mas re-hydrate leva tempo. Lifecycle management policies automatizam transição baseada em idade.' },
-    { id: 'az-q8', stem: 'Azure Monitor + Log Analytics servem para?', options: [{ id: 'A', text: 'VM provisioning' }, { id: 'B', text: 'Observabilidade: coleta métricas + logs + traces, query via KQL (Kusto Query Language), alerts, workbooks, Application Insights para apps' }, { id: 'C', text: 'Networking' }, { id: 'D', text: 'Identity' }], correctId: 'B', topic: 'Management', difficulty: 'medium', explanation: 'Log Analytics é o data store; Monitor a interface. KQL é linguagem declarativa poderosa. App Insights é SDK para observability de apps (.NET, Java, Node). Integra com Grafana também.' },
-    { id: 'az-q9', stem: 'Azure subscription: papel?', options: [{ id: 'A', text: 'É o usuário' }, { id: 'B', text: 'Billing boundary + security boundary. Recursos vivem em subscriptions, que vivem em management groups. Separar prod/dev em subs diferentes é padrão' }, { id: 'C', text: 'Tipo de VM' }, { id: 'D', text: 'Não tem uso' }], correctId: 'B', topic: 'Management', difficulty: 'easy', explanation: 'Subscription = unidade de billing e quota. Multi-subscription via management groups para org grande. RBAC aplicável em sub, RG ou resource. Enterprise Agreement permite N subs.' },
-    { id: 'az-q10', stem: 'Azure Key Vault: casos de uso?', options: [{ id: 'A', text: 'VPN' }, { id: 'B', text: 'Gerenciar secrets (passwords, API keys), keys (criptografia), certificates; integrado com Managed Identity pra apps acessarem sem credenciais hardcoded' }, { id: 'C', text: 'Storage account' }, { id: 'D', text: 'Apenas keys SSH' }], correctId: 'B', topic: 'Azure Services', difficulty: 'medium', explanation: 'Key Vault é o HashiCorp Vault do Azure. Premium tier usa HSM. Certificate auto-rotation (Let\'s Encrypt ou CA interna). Managed Identity elimina credenciais em código.' },
-  ],
+  questions: [],
 };
 
 const AWS_AI_PRACTITIONER: Simulado = {
   id: 'simulado-aws-aif',
+  dbBankId: 'aws-aif',
   certification: 'AWS Certified AI Practitioner (AIF-C01)',
   title: 'Simulado AWS AI Practitioner',
   description:
-    'Prova oficial AWS AI Practitioner AIF-C01. 65 questões aleatórias nos 5 domínios: AI/ML Fundamentals (20%), Generative AI Fundamentals (24%), Applications of Foundation Models (28%), Responsible AI (14%), Security & Governance (14%). Banco com 1000+ questões em PT-BR com explicações ricas.',
+    'Simulado da AIF-C01 nas proporções oficiais dos cinco domínios: Fundamentos de IA e ML (20%), Fundamentos de GenAI (24%), Aplicações de foundation models (28%), IA responsável (14%) e Segurança e governança (14%). Questões originais escritas a partir dos enunciados de tarefa publicados pela AWS, com explicação que trata cada alternativa errada.',
   price: 47,
+  // 65 questões por tentativa, sorteadas de um banco de 115 no Postgres.
   questionCount: 65,
   timeLimitMin: 90,
   passingScore: 70,
-  studyModeUrl: '/simulados/aws-ai-practitioner/estudo',
+  // Restaurado em ago/2026: o EstudoClient agora aceita `dbBankId` e a rota
+  // dinâmica /simulados/[slug]/estudo resolve pelo catálogo. O slug é
+  // `aws-aif` (= id sem o prefixo `simulado-`), não `aws-ai-practitioner`,
+  // que era a rota inexistente que causava o 404 original.
+  studyModeUrl: '/simulados/aws-aif/estudo',
   topics: [
-    'AI/ML Fundamentals',
-    'Generative AI',
-    'Foundation Models',
-    'Amazon Bedrock',
-    'SageMaker',
-    'Responsible AI',
-    'Bedrock Guardrails',
-    'AI Security',
-    'Compliance',
+    'Fundamentos de IA e ML',
+    'Fundamentos de GenAI',
+    'Aplicações de foundation models',
+    'Engenharia de prompt',
+    'Avaliação de modelos',
+    'IA responsável',
+    'Segurança e governança',
+    'Agentes e MCP',
   ],
-  questions: [
-    {
-      id: 'aif-q1',
-      stem: 'Qual é a principal diferença entre Machine Learning supervisionado e não-supervisionado?',
-      options: [
-        { id: 'A', text: 'Supervisionado é mais rápido; não-supervisionado é mais lento' },
-        { id: 'B', text: 'Supervisionado treina com dados rotulados (input + output esperado); não-supervisionado encontra padrões sem rótulos (ex: clustering)' },
-        { id: 'C', text: 'Supervisionado só funciona em texto; não-supervisionado só em imagens' },
-        { id: 'D', text: 'Supervisionado requer GPU; não-supervisionado roda em CPU' },
-      ],
-      correctId: 'B',
-      topic: 'AI/ML Fundamentals',
-      difficulty: 'easy',
-      explanation:
-        'Supervisionado: dataset tem (X, y) — modelo aprende mapear X→y (classificação, regressão). Não-supervisionado: só X — modelo descobre estrutura (clusters via K-means, redução de dimensionalidade via PCA). Há ainda reforço (agente aprende por recompensa) e self-supervised (LLMs pré-treinam predizendo próximo token). Velocidade e modalidade dependem do problema, não do paradigma.',
-    },
-    {
-      id: 'aif-q2',
-      stem: 'Qual serviço AWS permite construir aplicações com foundation models (Claude, Llama, Titan) via API gerenciada, sem provisionar infraestrutura?',
-      options: [
-        { id: 'A', text: 'SageMaker Studio' },
-        { id: 'B', text: 'Amazon Bedrock' },
-        { id: 'C', text: 'Amazon Comprehend' },
-        { id: 'D', text: 'AWS DeepRacer' },
-      ],
-      correctId: 'B',
-      topic: 'Amazon Bedrock',
-      difficulty: 'easy',
-      explanation:
-        'Bedrock é o "serverless para foundation models" da AWS — você invoca modelos (Anthropic Claude, Meta Llama, Amazon Titan, Cohere, Mistral, AI21) via API única, sem gerenciar GPUs. SageMaker é para treinar/deployar modelos custom (mais baixo nível). Comprehend é NLP pronto (sentiment, entities). DeepRacer é jogo educacional de reinforcement learning.',
-      relatedSlug: 'amazon-bedrock',
-    },
-    {
-      id: 'aif-q3',
-      stem: 'O que é "hallucination" em LLMs e como mitigar em produção?',
-      options: [
-        { id: 'A', text: 'É quando o modelo trava; reinicia o servidor' },
-        { id: 'B', text: 'O modelo gera conteúdo plausível mas factualmente incorreto. Mitigações: RAG (grounding em fontes), prompts com instrução "diga não sei se não tiver certeza", citation requirements, validação posterior' },
-        { id: 'C', text: 'É um bug exclusivo do GPT; outros modelos não têm' },
-        { id: 'D', text: 'É o modelo recusar responder; resolve aumentando temperature' },
-      ],
-      correctId: 'B',
-      topic: 'Generative AI',
-      difficulty: 'medium',
-      explanation:
-        'Hallucination é fenômeno intrínseco a LLMs: o modelo é treinado para predizer próximo token estatisticamente provável, não para verificar verdade. Mitigações em produção: (1) RAG — recuperar documentos relevantes e ancorar resposta neles; (2) prompts defensivos pedindo citação ou "I don\'t know"; (3) validação downstream (regex, schema, fact-checker); (4) lower temperature em tarefas factuais. Aumentar temperature PIORA hallucination.',
-    },
-    {
-      id: 'aif-q4',
-      stem: 'Em RAG (Retrieval-Augmented Generation), qual o papel do vector store?',
-      options: [
-        { id: 'A', text: 'Treinar o LLM do zero' },
-        { id: 'B', text: 'Armazenar embeddings dos documentos para busca semântica por similaridade (cosine/dot product) e retornar os top-K mais relevantes à query do usuário' },
-        { id: 'C', text: 'Substituir o LLM completamente' },
-        { id: 'D', text: 'Apenas cachear respostas' },
-      ],
-      correctId: 'B',
-      topic: 'Foundation Models',
-      difficulty: 'medium',
-      explanation:
-        'Vector store (OpenSearch, Pinecone, pgvector, Bedrock Knowledge Bases) é o coração do retrieval em RAG. Pipeline: docs → chunk → embedding model (Titan Embeddings, Cohere) → vetores indexados. Em query time: query → mesmo embedding model → top-K nearest neighbors → contexto para LLM. Não substitui LLM (ainda precisa gerar resposta), não treina nada (read-only ao prompt).',
-      relatedSlug: 'rag-arquitetura',
-    },
-    {
-      id: 'aif-q5',
-      stem: 'Bedrock Guardrails permite o quê?',
-      options: [
-        { id: 'A', text: 'Acelerar inferência dos modelos' },
-        { id: 'B', text: 'Aplicar políticas de conteúdo (denied topics, PII redaction, palavras bloqueadas, contextual grounding) sobre input do usuário E output do modelo de forma consistente entre FMs' },
-        { id: 'C', text: 'Reduzir custos de billing' },
-        { id: 'D', text: 'Trocar o modelo automaticamente' },
-      ],
-      correctId: 'B',
-      topic: 'Responsible AI',
-      difficulty: 'medium',
-      explanation:
-        'Guardrails é a camada de safety nativa do Bedrock. Configurações: denied topics (lista temas proibidos), content filters (hate/violence/sexual em níveis low/med/high), word filters, PII detection com redact/block/anonymize, contextual grounding checks (anti-hallucination contra fonte). Independe do modelo escolhido (Claude, Titan, Llama). Não afeta latência/preço de inferência diretamente.',
-    },
-    {
-      id: 'aif-q6',
-      stem: 'Qual é a diferença entre fine-tuning e prompt engineering?',
-      options: [
-        { id: 'A', text: 'São sinônimos' },
-        { id: 'B', text: 'Fine-tuning ajusta pesos do modelo com dados custom (caro, requer dataset rotulado, dura permanente); prompt engineering muda só o input em tempo de inferência (barato, iterativo, sem retraining)' },
-        { id: 'C', text: 'Fine-tuning é grátis; prompt engineering é pago' },
-        { id: 'D', text: 'Fine-tuning é só para imagens; prompt engineering só para texto' },
-      ],
-      correctId: 'B',
-      topic: 'Foundation Models',
-      difficulty: 'medium',
-      explanation:
-        'Trade-off prático: comece sempre com prompt engineering (zero-shot, few-shot, chain-of-thought) — barato e rápido. Se prompts longos ficarem caros/lentos ou comportamento ainda inconsistente, considere fine-tuning (LoRA, full FT). Bedrock suporta custom model fine-tuning em Titan/Cohere/Llama. RAG é alternativa ortogonal para grounding em conhecimento específico sem retreinar.',
-    },
-    {
-      id: 'aif-q7',
-      stem: 'O que significa "bias" em modelos de ML e por que importa para Responsible AI?',
-      options: [
-        { id: 'A', text: 'É só um termo estatístico; não afeta o mundo real' },
-        { id: 'B', text: 'Viés sistemático nos dados de treinamento ou no algoritmo que produz outputs injustos para certos grupos (gênero, raça, idade). Importa porque modelos em produção amplificam discriminação se não auditados' },
-        { id: 'C', text: 'É a inclinação da curva de loss' },
-        { id: 'D', text: 'É o termo livre numa regressão linear apenas' },
-      ],
-      correctId: 'B',
-      topic: 'Responsible AI',
-      difficulty: 'medium',
-      explanation:
-        'Bias em ML = qualquer fonte de unfairness sistêmico. Origens: dados desbalanceados (sub-representação), labels viesados (annotator bias), proxy variables (CEP como proxy de raça). Ferramentas AWS: SageMaker Clarify (detecção de bias pré e pós treinamento, métricas como DPL, KL divergence, treatment equality). Bias técnico (intercepto) é coisa diferente — pergunta é sobre fairness ético.',
-    },
-  ],
-};
-
-const ANTHROPIC_AI: Simulado = {
-  id: 'simulado-anthropic-ai',
-  certification: 'Anthropic Claude AI Practitioner (FFV Edition)',
-  title: 'Simulado Anthropic AI Practitioner',
-  description:
-    'Certificação custom FFV+Anthropic. 60 questões aleatórias nos 6 domínios: Claude Fundamentals (20%), Prompt Engineering (20%), Tool Use & Function Calling (15%), Context Engineering & Long Context (15%), Claude Code & Agent SDK (15%), Safety/Evals/Responsible Deployment (15%). Banco com 1000+ questões cobrindo a API, Claude Code, MCP e produção de agents.',
-  price: 47,
-  questionCount: 60,
-  timeLimitMin: 90,
-  passingScore: 70,
-  studyModeUrl: '/simulados/anthropic-ai/estudo',
-  topics: [
-    'Messages API',
-    'Prompt Engineering',
-    'Tool Use',
-    'MCP',
-    'Prompt Caching',
-    'Claude Code',
-    'Agent SDK',
-    'Safety',
-    'Evals',
-  ],
-  questions: [
-    {
-      id: 'anth-q1',
-      stem: 'Na Messages API da Anthropic, qual é a forma correta de instruir o modelo sobre seu papel e regras gerais?',
-      options: [
-        { id: 'A', text: 'Adicionar como uma mensagem com role: "user" no início' },
-        { id: 'B', text: 'Usar o parâmetro top-level `system` (string ou array de blocos de texto), separado da lista `messages`' },
-        { id: 'C', text: 'Concatenar tudo num único campo `prompt`' },
-        { id: 'D', text: 'Enviar via header HTTP custom' },
-      ],
-      correctId: 'B',
-      topic: 'Messages API',
-      difficulty: 'easy',
-      explanation:
-        'A Messages API tem `system` como parâmetro top-level (não vai dentro de `messages`). Pode ser string ou array de blocos `{type: "text", text: "..."}` — útil para prompt caching parcial. `messages` alterna `user`/`assistant`. Não existe campo `prompt` (esse era o legado da Text Completions API antes de 2023).',
-      relatedSlug: 'anthropic-messages-api',
-    },
-    {
-      id: 'anth-q2',
-      stem: 'Qual técnica de prompt engineering é mais eficaz para tarefas que requerem raciocínio multi-step (matemática, lógica, planejamento)?',
-      options: [
-        { id: 'A', text: 'Pedir resposta em uma única palavra' },
-        { id: 'B', text: 'Chain-of-Thought (CoT): instruir o modelo a "pensar passo a passo" antes de responder, ou usar extended thinking quando disponível' },
-        { id: 'C', text: 'Usar temperature = 2.0' },
-        { id: 'D', text: 'Repetir a pergunta 3 vezes' },
-      ],
-      correctId: 'B',
-      topic: 'Prompt Engineering',
-      difficulty: 'easy',
-      explanation:
-        'CoT é a técnica fundamental para raciocínio: expor tokens intermediários melhora drasticamente accuracy em GSM8K, MATH, planning. Em Claude, você pode pedir explicitamente ("Pense passo a passo antes de responder") ou usar `<thinking>` tags como scratchpad. Claude 4+ tem `thinking` parameter nativo (extended thinking) que aloca budget de tokens de raciocínio invisíveis ao usuário final.',
-    },
-    {
-      id: 'anth-q3',
-      stem: 'Como o tool use (function calling) funciona com Claude?',
-      options: [
-        { id: 'A', text: 'Claude executa funções diretamente no servidor da Anthropic' },
-        { id: 'B', text: 'Você define `tools` (nome + descrição + JSON schema dos inputs). Claude decide quando chamar, retorna `tool_use` block. Seu código executa, devolve `tool_result`. Loop até `stop_reason: end_turn`' },
-        { id: 'C', text: 'Tool use só funciona com modelos OpenAI' },
-        { id: 'D', text: 'Claude precisa de acesso SSH para chamar funções' },
-      ],
-      correctId: 'B',
-      topic: 'Tool Use',
-      difficulty: 'medium',
-      explanation:
-        'Tool use é orquestração cliente-side: a Anthropic NUNCA executa código por você (security boundary). Fluxo: (1) request com `tools` schema; (2) Claude responde com `tool_use` block contendo `id`, `name`, `input`; (3) você executa localmente; (4) devolve `tool_result` com mesmo `tool_use_id`; (5) Claude continua. Suporta parallel tool use e tool_choice forçado. Base de agents.',
-      relatedSlug: 'claude-tool-use',
-    },
-    {
-      id: 'anth-q4',
-      stem: 'O que é MCP (Model Context Protocol)?',
-      options: [
-        { id: 'A', text: 'Uma versão paga do Claude' },
-        { id: 'B', text: 'Protocolo aberto da Anthropic que padroniza como aplicações expõem contexto (tools, resources, prompts) a LLMs. Roda via stdio/HTTP entre client (Claude Desktop, Claude Code) e server (seu app)' },
-        { id: 'C', text: 'Substituto do REST API' },
-        { id: 'D', text: 'Linguagem de programação' },
-      ],
-      correctId: 'B',
-      topic: 'MCP',
-      difficulty: 'medium',
-      explanation:
-        'MCP (lançado nov/2024) é o "USB-C dos LLMs": uma vez que seu app expõe um MCP server, qualquer cliente compatível (Claude Desktop, Claude Code, Cursor, etc.) ganha as ferramentas. Capabilities: tools (funções executáveis), resources (dados read-only com URI), prompts (templates). Spec é aberta — implementações em TS, Python, Go, Rust. Não substitui REST; é uma camada acima para LLMs.',
-      relatedSlug: 'model-context-protocol',
-    },
-    {
-      id: 'anth-q5',
-      stem: 'Prompt caching na Messages API reduz custo/latência. Como ativar?',
-      options: [
-        { id: 'A', text: 'Header HTTP `X-Cache: true`' },
-        { id: 'B', text: 'Adicionar `cache_control: {type: "ephemeral"}` em blocos do system prompt, tools ou messages. Cache hit dá ~90% desconto e <100ms TTFT em prefixos repetidos' },
-        { id: 'C', text: 'É automático, sem nada a fazer' },
-        { id: 'D', text: 'Só funciona em batch API' },
-      ],
-      correctId: 'B',
-      topic: 'Prompt Caching',
-      difficulty: 'medium',
-      explanation:
-        'Prompt caching é explícito: você marca o ponto de corte com `cache_control: {type: "ephemeral"}` (TTL ~5 min) ou `{type: "ephemeral", ttl: "1h"}` (1h, mais caro). Cache write custa 25% mais; cache read custa 10% do normal. Excelente para system prompts longos, tool definitions repetidas, RAG context grande. Min ~1024 tokens para cachear. Não é automático — você decide onde "cortar".',
-      relatedSlug: 'anthropic-prompt-caching',
-    },
-    {
-      id: 'anth-q6',
-      stem: 'Claude Code é melhor descrito como?',
-      options: [
-        { id: 'A', text: 'Um plugin de IDE' },
-        { id: 'B', text: 'CLI agente (terminal-first) da Anthropic que opera num diretório com tools nativos (Read, Edit, Bash, Grep, Write) e suporta extensões via MCP, skills e subagents' },
-        { id: 'C', text: 'Versão web do Claude' },
-        { id: 'D', text: 'Modelo de embeddings' },
-      ],
-      correctId: 'B',
-      topic: 'Claude Code',
-      difficulty: 'easy',
-      explanation:
-        'Claude Code é o agente oficial da Anthropic para desenvolvedores: roda no terminal, lê/edita seu repo via tools embarcados, executa Bash, faz commits Git. Diferencial: integra MCP servers (extensibilidade), skills (capabilities ativadas sob demanda), subagents (delegação para contextos isolados), hooks (automação de eventos). Não é IDE plugin — é processo standalone que conversa com seu workflow.',
-    },
-    {
-      id: 'anth-q7',
-      stem: 'Quando você precisa rodar um agent autônomo em produção (não interativo), qual SDK da Anthropic é apropriado?',
-      options: [
-        { id: 'A', text: 'A Messages API crua, escrevendo loop manual' },
-        { id: 'B', text: 'Claude Agent SDK (TypeScript/Python) — abstrai o loop tool-use, gerencia compaction de contexto, suporta MCP e skills, é o mesmo motor do Claude Code' },
-        { id: 'C', text: 'Bedrock Agents' },
-        { id: 'D', text: 'OpenAI Assistants API' },
-      ],
-      correctId: 'B',
-      topic: 'Agent SDK',
-      difficulty: 'medium',
-      explanation:
-        'Agent SDK (lançado 2025) é a forma idiomática de construir agents Claude em produção: gerencia o loop `request → tool_use → execute → tool_result → repeat`, faz auto-compaction quando context window enche, expõe hooks de observabilidade, integra MCP e skills nativamente. Você ainda pode usar Messages API direto, mas reescreverá muito do que o SDK dá grátis. Bedrock Agents é a alternativa AWS-managed.',
-    },
-    {
-      id: 'anth-q8',
-      stem: 'Em context engineering, qual prática é mais eficaz para janelas de contexto longas (>100k tokens)?',
-      options: [
-        { id: 'A', text: 'Despejar todo dump de dados disponível no prompt' },
-        { id: 'B', text: 'Curadoria seletiva (só relevante via RAG/retrieval), estruturação clara (XML tags, headings), instruções no início E no fim, exemplos few-shot estrategicamente posicionados, evals para medir degradação por posição' },
-        { id: 'C', text: 'Repetir a query 5 vezes no final' },
-        { id: 'D', text: 'Comprimir com base64' },
-      ],
-      correctId: 'B',
-      topic: 'Prompt Engineering',
-      difficulty: 'hard',
-      explanation:
-        'Context >100k não é desculpa para encher de lixo — modelos sofrem "lost in the middle" (atenção degrada em posições centrais). Boas práticas: (1) recupere só o relevante; (2) use estrutura (XML, markdown headers) para ajudar o modelo a navegar; (3) repita a tarefa principal no fim ("Now, focusing on the question above..."); (4) avalie com evals dedicadas que variam posição da informação chave. Claude 4+ lida melhor mas não é mágico.',
-      relatedSlug: 'context-engineering',
-    },
-  ],
+  // Vazio de propósito, como no CLF-C02: o banco vive no Postgres, alimentado por
+  // `frontend/data/question-bank/aif-c01-*.json` via `make gen-seed-migration`.
+  //
+  // Chegaram a ficar 65 questões INLINE aqui em 09/ago/2026, e a medição mandou
+  // desfazer: o arquivo foi a 128 KB, a suíte de testes saiu de 10 s para 915 s
+  // com 8 arquivos estourando por tempo, e este módulo é importado por componente
+  // de CLIENTE — os 128 KB iriam para o navegador de todo visitante.
+  questions: [],
 };
 
 export const SIMULADOS_CATALOG: readonly Simulado[] = [
   AWS_PRACTITIONER,
   AWS_DEVELOPER,
-  AWS_SAA_PLACEHOLDER,
+  AWS_SAA,
   AWS_AI_PRACTITIONER,
-  ANTHROPIC_AI,
-  CKA,
-  TERRAFORM,
-  SECURITY_PLUS,
-  AZURE_FUND,
 ] as const;

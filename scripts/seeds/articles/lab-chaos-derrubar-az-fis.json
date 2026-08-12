@@ -1,0 +1,2479 @@
+{
+  "slug": "lab-chaos-derrubar-az-fis",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b0",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema, e a empresa que o tem"
+      },
+      "children": [
+        {
+          "id": "b0_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A Cadência chegou a 120 lojas e seis pessoas na plataforma. Desde o "
+              },
+              {
+                "text": "L52",
+                "code": true
+              },
+              {
+                "text": ", a equipe tem um SLO de disponibilidade de 99,9% em 30 dias, com orçamento de erro de 0,1% e um alarme composto que só acorda alguém quando o consumo é sustentado — não quando é pico. Isso resolveu o problema dos 40 alarmes técnicos. Não resolveu o problema seguinte."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O desenho de infraestrutura tem duas AZs de cômputo e RDS Multi-AZ desde o início. Ninguém nunca desligou uma zona de propósito. A crença coletiva é \"deve aguentar, é Multi-AZ\" — e essa crença nunca foi posta à prova porque testar parece mais arriscado do que não testar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A urgência chegou com um cliente maior, que está fechando contrato e pede garantia contratual de disponibilidade. O jurídico perguntou: \"vocês têm evidência de que aguentam a queda de uma zona?\" A resposta, hoje, é uma suposição bem fundamentada. Este laboratório existe para trocá-la por um número medido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_3",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Nível",
+                "v": "Especialista — depende do L40 (metodologia de carga sintética) e do L52 (SLO e alarme de burn rate, usado aqui como critério e como freio)"
+              },
+              {
+                "k": "Pré-requisitos",
+                "v": "L40 e L52 no ar; papel FIS com as três managed policies; ambiente de homologação disponível para a primeira rodada"
+              },
+              {
+                "k": "Tempo estimado",
+                "v": "Estudo 55 min · implementação 3 h a 4 h (inclui esperar a janela de confirmação de 1 h do alarme do L52 durante o experimento)"
+              },
+              {
+                "k": "Custo relativo",
+                "v": "Baixo, mas não zero: o experimento cobra pela execução das ações — confira o modelo de cobrança vigente no Pricing Calculator"
+              },
+              {
+                "k": "Serviços",
+                "v": "AWS Fault Injection Service (FIS), ECS Fargate, RDS Multi-AZ, ALB, CloudWatch (o alarme composto do L52)"
+              },
+              {
+                "k": "Volume atual",
+                "v": "120 lojas, cerca de 40 mil requisições/dia — o mesmo volume do L52"
+              },
+              {
+                "k": "Requisito declarado",
+                "v": "provar, com número, que a zona sobrevivente sozinha sustenta o tráfego atual sem estourar o orçamento de erro do mês"
+              },
+              {
+                "k": "Hipótese declarada",
+                "v": "se a Zona A (a que hospeda o gravador do RDS) cair, o SLO de 99,9% do L52 continua cumprido — a janela de 5 min do burn rate pode cruzar o limiar por causa da pausa de failover, mas a janela de 1 h não confirma, e o alarme composto nunca dispara"
+              },
+              {
+                "k": "Ao final você tem",
+                "v": "um experimento com hipótese escrita, executado, e o resultado medido registrado — inclusive se ele contradisser a hipótese"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b0_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que este laboratório NÃO é",
+            "content": "Não é o L40 outra vez — a carga sintética que mantém tráfego durante o experimento reaproveita a metodologia dele, não a repete. Também não é a definição do SLO: isso é o L52, e este módulo trata aquele SLO como um dado já decidido, não como algo a recalcular. E não é chaos engineering genérico: o alvo é uma única falha bem definida — queda de uma AZ — com hipótese e freio. GameDay com múltiplas falhas simultâneas e sem roteiro fixo fica para o L58, que depende deste."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que você vai conseguir fazer"
+      },
+      "children": [
+        {
+          "id": "b1_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Objetivos verificáveis: cada um se prova com um comando ou um documento na seção de implantação, não com a sensação de ter entendido."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1_1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "ordered": true,
+            "items": [
+              "Explicar por que o cenário pronto \"AZ Availability: Power Interruption\" da AWS FIS não testa uma frota 100% Fargate.",
+              "Escrever uma hipótese refutável, com número, antes de rodar qualquer experimento.",
+              "Compor um experimento FIS combinando `aws:network:disrupt-connectivity`, `aws:rds:reboot-db-instances` (com `forceFailover`) e `aws:ecs:stop-task`.",
+              "Amarrar a stop condition do experimento ao alarme composto de burn rate do L52.",
+              "Resolver, em tempo de execução, quais tasks Fargate pertencem à zona alvo — porque o ARN de uma task é efêmero.",
+              "Escolher a zona que hospeda o gravador do RDS como alvo, e explicar por que a zona do standby não seria um teste honesto.",
+              "Medir o impacto real na disponibilidade durante o experimento e compará-lo à hipótese escrita antes.",
+              "Diagnosticar quando o FIS pula uma ação silenciosamente por falta de alvo, e por que isso produz falsa confiança.",
+              "Escalar o raio de explosão de homologação para produção, com duração e horário controlados."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que a certificação cobra disto"
+      },
+      "children": [
+        {
+          "id": "b2_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Conceito",
+              "Certificação",
+              "Como aparece aqui",
+              "O que dominar"
+            ],
+            "rows": [
+              [
+                "Chaos engineering como prática",
+                "DOP-C02",
+                "hipótese escrita antes do experimento, não \"vamos ver o que acontece\"",
+                "a diferença entre teste e acidente é a hipótese e o freio"
+              ],
+              [
+                "AWS FIS: ações, alvos e stop conditions",
+                "DOP-C02, SAP-C02",
+                "ações compostas manualmente porque o cenário pronto não cobre Fargate",
+                "que um cenário pronto pode terminar \"com sucesso\" sem testar nada"
+              ],
+              [
+                "Blast radius (raio de explosão)",
+                "DOP-C02",
+                "primeira rodada pequena, em homologação, escalando depois",
+                "por que começar pequeno não é covardia — é o próprio método"
+              ],
+              [
+                "RDS Multi-AZ: mecanismo de failover",
+                "SAA-C03, DVA-C02",
+                "`forceFailover` forçando a troca real do endpoint",
+                "que Multi-AZ é um MECANISMO de troca, não ausência de interrupção"
+              ],
+              [
+                "SLO e error budget como critério de aceite",
+                "DOP-C02",
+                "o mesmo alarme composto do L52 decide se o experimento passou",
+                "por que reaproveitar o critério existente é mais forte que inventar um novo \"parece OK\""
+              ],
+              [
+                "Alta disponibilidade desenhada vs. testada",
+                "SAP-C02",
+                "o núcleo do módulo inteiro",
+                "a pergunta clássica de prova: \"o desenho tem X, então está protegido?\" — a resposta certa é \"prove\""
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b2_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "Onde isto costuma ser cobrado errado",
+            "content": "A pergunta clássica descreve uma arquitetura Multi-AZ \"corretamente configurada\" e pergunta se ela está protegida contra falha de zona. A armadilha é a palavra \"configurada\": a prova quer saber se você reconhece que configuração correta e comportamento testado são coisas diferentes — e que RDS Multi-AZ, especificamente, é failover com uma pausa, não uma garantia de zero interrupção."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Requisitos, e como cada um muda o desenho"
+      },
+      "children": [
+        {
+          "id": "b3_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Requisito não funcional que não aparece numa linha de configuração é intenção. A coluna da direita é onde cada um deixou marca."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Requisito",
+              "Valor declarado",
+              "O que ele decide no desenho"
+            ],
+            "rows": [
+              [
+                "Confiança em Multi-AZ vem de medição, não do desenho",
+                "obrigatório antes do contrato",
+                "obriga um experimento real, com hipótese escrita antes de qualquer chamada de API"
+              ],
+              [
+                "O teste não pode virar o próprio incidente",
+                "zero tolerância",
+                "stop condition amarrada ao alarme composto do L52 — não um alarme novo, criado só para \"parecer seguro\""
+              ],
+              [
+                "O teste tem de cobrir o cômputo real (Fargate), não só rede e banco",
+                "obrigatório",
+                "ação `aws:ecs:stop-task` composta à mão, com alvos resolvidos em tempo de execução — o cenário pronto não serve"
+              ],
+              [
+                "Raio de explosão pequeno primeiro",
+                "homologação, depois produção",
+                "primeira rodada em ambiente pequeno e com duração curta antes de repetir em produção em horário de baixo tráfego"
+              ],
+              [
+                "A zona escolhida é a que dói, não a mais fácil",
+                "a zona do gravador do RDS",
+                "o alvo é a zona que hospeda o gravador — não a zona do standby, que \"passaria\" o teste sem provar nada sobre failover"
+              ],
+              [
+                "Auditoria de quem rodou o quê, quando",
+                "obrigatória",
+                "CloudTrail sobre as chamadas do FIS; papel restrito às três permissões necessárias, nada além"
+              ],
+              [
+                "O experimento não pode silenciosamente pular o cômputo",
+                "obrigatório",
+                "`empty_target_resolution_mode = fail` em vez do padrão `skip` do cenário pronto — lista de alvo vazia derruba o experimento inteiro, não só a ação"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Arquitetura mínima: Multi-AZ no papel"
+      },
+      "children": [
+        {
+          "id": "b4_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este é o desenho que a Cadência tem hoje, e ele é legítimo como ponto de partida: obedece ao padrão de referência de alta disponibilidade, duas AZs de cômputo e RDS com standby. O defeito não está numa peça faltando — está em uma pergunta nunca feita."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "Multi-AZ no papel: duas zonas de cômputo, um endpoint de escrita",
+            "caption": "Este desenho obedece ao padrão de referência de alta disponibilidade — duas AZs de cômputo, RDS com standby — e é exatamente por isso que ninguém desconfia dele. Percorra os passos e repare que o \"Multi-AZ\" da direita descreve o cômputo; o banco, por baixo, continua tendo um único gravador até um failover realmente acontecer, e ninguém nesta conta jamais forçou um.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente",
+                    "note": "envia pedido; é quem mediria uma indisponibilidade real, mas ninguém aqui já mediu de propósito"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — pública, duas AZs",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB em 2 AZs",
+                    "note": "distribui entre alvos saudáveis; não sabe se a causa de uma falha é a AZ inteira ou uma task isolada"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada, Zona A (hospeda o gravador)",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "taskA",
+                    "service": "fargate",
+                    "label": "Task Fargate — Zona A",
+                    "note": "atende parte do tráfego hoje; se sozinha aguentaria o volume atual nunca foi testado"
+                  },
+                  {
+                    "id": "rdsA",
+                    "service": "rds",
+                    "label": "RDS Postgres — gravador",
+                    "note": "o único nó que aceita escrita agora; toda gravação da Cadência depende de ele estar de pé nesta zona"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada, Zona B (o standby)",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "taskB",
+                    "service": "fargate",
+                    "label": "Task Fargate — Zona B",
+                    "note": "recebe tráfego normalmente, mas grava no MESMO endpoint da Zona A — não tem banco local"
+                  },
+                  {
+                    "id": "rdsB",
+                    "service": "rds",
+                    "label": "RDS Postgres — standby",
+                    "note": "réplica síncrona, pronta para assumir; nunca assumiu de verdade nesta conta"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "HTTPS 443",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "taskA",
+                "label": "round robin entre alvos saudáveis",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "taskB",
+                "label": "round robin entre alvos saudáveis",
+                "style": "solid"
+              },
+              {
+                "from": "taskA",
+                "to": "rdsA",
+                "label": "leitura e escrita, endpoint único",
+                "style": "solid"
+              },
+              {
+                "from": "taskB",
+                "to": "rdsA",
+                "label": "leitura e escrita, MESMO endpoint (cruza AZ)",
+                "style": "solid"
+              },
+              {
+                "from": "rdsA",
+                "to": "rdsB",
+                "label": "replicação síncrona",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "Duas tasks, duas AZs — mas um endpoint de banco só",
+                "detail": "O endpoint do RDS resolve para a instância PRIMÁRIA. As duas tasks Fargate, mesmo em zonas diferentes, escrevem no MESMO destino: a Zona A. \"Duas AZs\" descreve o cômputo — não descreve, sozinho, o caminho de escrita.",
+                "nodes": [
+                  "taskA",
+                  "taskB",
+                  "rdsA"
+                ],
+                "edges": [
+                  "taskA>rdsA",
+                  "taskB>rdsA"
+                ]
+              },
+              {
+                "label": "A caixa \"Multi-AZ\" tem um ponto único por dentro",
+                "detail": "O standby replica de verdade, de forma síncrona — mas só ASSUME depois de um failover, e o failover é um EVENTO, não um estado permanente. Enquanto ele não ocorre, a Zona A é gravador único: se ela cai, toda escrita para até a troca terminar.",
+                "nodes": [
+                  "rdsA",
+                  "rdsB"
+                ],
+                "edges": [
+                  "rdsA>rdsB"
+                ]
+              },
+              {
+                "label": "O ALB só enxerga o alvo, nunca a zona",
+                "detail": "O balanceador tira um alvo de circulação quando ele falha o health check, e reagiria exatamente igual a uma falha de uma task isolada ou de uma AZ inteira. Ele não distingue as duas causas — e por isso não prova nada sobre nenhuma delas.",
+                "nodes": [
+                  "alb",
+                  "taskA"
+                ],
+                "edges": [
+                  "alb>taskA"
+                ]
+              },
+              {
+                "label": "A configuração parece certa porque obedece ao padrão de referência",
+                "detail": "Duas AZs de cômputo, RDS com standby: é o desenho que qualquer guia de boas práticas recomenda. O que falta não é peça — é medição. \"Deveria funcionar\" e \"funciona\" são frases diferentes, e só a segunda tem prova.",
+                "nodes": [
+                  "user",
+                  "alb"
+                ],
+                "edges": [
+                  "user>alb"
+                ]
+              },
+              {
+                "label": "A pergunta que este desenho não responde",
+                "detail": "Se a Zona A cair agora, quanto tempo o cliente vê erro, e o orçamento de erro do SLO do L52 aguenta? Ninguém sabe o número — só a crença de que \"deve estar OK porque é Multi-AZ\".",
+                "nodes": [
+                  "rdsA",
+                  "rdsB",
+                  "taskA",
+                  "taskB"
+                ],
+                "edges": [
+                  "rdsA>rdsB"
+                ]
+              },
+              {
+                "label": "Por que a equipe nunca testou",
+                "detail": "Porque testar parece o risco — \"e se a gente derrubar de verdade e não voltar?\" — e o medo do teste supera o medo de descobrir a falha durante um incidente real de madrugada. É o mesmo padrão social do aviso-no-canal do L03: um remendo que evita encarar o defeito.",
+                "nodes": [
+                  "user",
+                  "rdsA"
+                ],
+                "edges": [
+                  "user>alb"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "O \"Multi-AZ\" da caixa de banco é um único gravador até prova em contrário",
+            "content": "Enquanto nenhum failover acontece, existe exatamente UM destino de escrita: a instância na Zona A. O standby replica de verdade, de forma síncrona — mas replicar não é o mesmo que atender escrita. Confundir \"tenho um standby\" com \"estou protegido contra a queda desta zona\" é a suposição que este laboratório substitui por medição."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura para o experimento"
+      },
+      "children": [
+        {
+          "id": "b5_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cada peça nova abaixo rastreia a uma linha da tabela de requisitos. A camada de experimento não substitui o desenho anterior — ela o interroga, por três caminhos ao mesmo tempo, com um freio amarrado antes de começar."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_1",
+          "type": "arch_diagram",
+          "position": 1,
+          "data": {
+            "title": "O experimento: rede, banco e cômputo interrompidos de propósito, com freio",
+            "caption": "Não é uma caixa a mais no desenho anterior: é uma camada de controle nova, que ataca as duas zonas por três caminhos diferentes ao mesmo tempo e tem um alarme amarrado como freio. Percorra os passos — a decisão que este diagrama entrega é que o teste só vale alguma coisa se ele mirar a zona que hospeda o gravador, não a mais fácil.",
+            "groups": [
+              {
+                "label": "Fora da AWS",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "user",
+                    "service": "user",
+                    "label": "Cliente",
+                    "note": "continua recebendo tráfego normalmente; não é avisado de que um teste está em curso"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — pública, duas AZs",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "alb",
+                    "service": "alb",
+                    "label": "ALB em 2 AZs",
+                    "note": "descobre a falha pelo health check, no mesmo prazo configurado no L03 — ninguém o avisa antes"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada, Zona A (alvo do experimento)",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "subnetA",
+                    "service": "subnet",
+                    "label": "Sub-rede privada — Zona A",
+                    "note": "alvo da ação de rede: fica sem tráfego de entrada e saída por minutos, simulando a zona inacessível"
+                  },
+                  {
+                    "id": "taskA",
+                    "service": "fargate",
+                    "label": "Task Fargate — Zona A",
+                    "note": "continua RODANDO por dentro mesmo isolada da rede — até a ação de ECS parar o processo de fato"
+                  },
+                  {
+                    "id": "rdsA",
+                    "service": "rds",
+                    "label": "RDS Postgres — gravador (sob ataque)",
+                    "note": "alvo do reboot com failover forçado — é o único jeito de testar o mecanismo sob controle"
+                  }
+                ]
+              },
+              {
+                "label": "VPC — privada, Zona B (sobrevivente)",
+                "kind": "vpc",
+                "nodes": [
+                  {
+                    "id": "taskB",
+                    "service": "fargate",
+                    "label": "Task Fargate — Zona B",
+                    "note": "recebe 100% do tráfego durante a janela — é ela quem prova, ou não, a hipótese"
+                  },
+                  {
+                    "id": "rdsB",
+                    "service": "rds",
+                    "label": "RDS Postgres — novo gravador",
+                    "note": "assume a escrita quando o failover forçado completa; o tempo dessa troca é o número que o módulo mede"
+                  }
+                ]
+              },
+              {
+                "label": "Camada de experimento (FIS)",
+                "kind": "plain",
+                "nodes": [
+                  {
+                    "id": "fis",
+                    "service": "stepfunctions",
+                    "label": "AWS FIS — modelo do experimento",
+                    "note": "orquestra as três ações em sequência controlada; sem isto é clique isolado no console, não experimento"
+                  },
+                  {
+                    "id": "alarme",
+                    "service": "cloudwatch",
+                    "label": "Alarme composto do L52 (stop condition)",
+                    "note": "é o freio: se o orçamento de erro do mês for consumido rápido demais, o FIS aborta sozinho"
+                  }
+                ]
+              }
+            ],
+            "edges": [
+              {
+                "from": "user",
+                "to": "alb",
+                "label": "HTTPS 443, sem aviso do teste",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "taskA",
+                "label": "round robin — até o health check falhar",
+                "style": "solid"
+              },
+              {
+                "from": "alb",
+                "to": "taskB",
+                "label": "100% do tráfego durante a janela",
+                "style": "solid"
+              },
+              {
+                "from": "taskA",
+                "to": "rdsA",
+                "label": "leitura/escrita, endpoint ainda na Zona A",
+                "style": "solid"
+              },
+              {
+                "from": "taskB",
+                "to": "rdsA",
+                "label": "MESMO endpoint — é o que o failover muda",
+                "style": "solid"
+              },
+              {
+                "from": "rdsA",
+                "to": "rdsB",
+                "label": "replicação síncrona, até o failover",
+                "style": "dashed"
+              },
+              {
+                "from": "fis",
+                "to": "subnetA",
+                "label": "aws:network:disrupt-connectivity, escopo zona",
+                "style": "dashed"
+              },
+              {
+                "from": "fis",
+                "to": "rdsA",
+                "label": "aws:rds:reboot-db-instances, forceFailover=true",
+                "style": "dashed"
+              },
+              {
+                "from": "fis",
+                "to": "taskA",
+                "label": "aws:ecs:stop-task nas tasks resolvidas da zona",
+                "style": "dashed"
+              },
+              {
+                "from": "alarme",
+                "to": "fis",
+                "label": "stop condition — aborta se o orçamento estourar",
+                "style": "dashed"
+              },
+              {
+                "from": "subnetA",
+                "to": "taskA",
+                "label": "isola sem matar o processo",
+                "style": "dashed"
+              }
+            ],
+            "steps": [
+              {
+                "label": "A hipótese vem antes do botão",
+                "detail": "Antes de qualquer chamada de API: se a Zona A cair, o SLO de 99,9% do L52 continua cumprido, porque a Zona B sozinha atende o tráfego atual enquanto o RDS completa o failover. É uma afirmação refutável — o experimento existe para tentar refutá-la, não para confirmá-la.",
+                "nodes": [
+                  "fis",
+                  "alarme"
+                ],
+                "edges": [
+                  "alarme>fis"
+                ]
+              },
+              {
+                "label": "O freio está amarrado ANTES de a rede cair",
+                "detail": "O alarme composto do L52 — o mesmo que decide se alguém é acordado às 3h — é a stop condition. Se o burn rate confirmado em duas janelas disparar, o FIS aborta sozinho, e a interrupção não pode ser retomada: só recomeçada do zero.",
+                "nodes": [
+                  "alarme",
+                  "fis"
+                ],
+                "edges": [
+                  "alarme>fis"
+                ]
+              },
+              {
+                "label": "A rede da zona alvo para de responder",
+                "detail": "A ação clona a lista de controle de acesso da sub-rede, nega o tráfego por minutos e restaura sozinha ao final. A task Fargate continua RODANDO por dentro — só fica inalcançável. É a diferença entre \"processo morto\" e \"processo isolado\", e ela importa para o diagnóstico.",
+                "nodes": [
+                  "fis",
+                  "subnetA",
+                  "taskA"
+                ],
+                "edges": [
+                  "fis>subnetA",
+                  "subnetA>taskA"
+                ]
+              },
+              {
+                "label": "O gravador do RDS é forçado a trocar de zona",
+                "detail": "A ação de banco chama a mesma API que um failover real dispara, com o parâmetro que força a troca mesmo sem falha detectada pela AWS. É o ponto em que a hipótese é testada de verdade: sem isto, o experimento derruba rede e cômputo e nunca prova nada sobre o banco.",
+                "nodes": [
+                  "fis",
+                  "rdsA",
+                  "rdsB"
+                ],
+                "edges": [
+                  "fis>rdsA",
+                  "rdsA>rdsB"
+                ]
+              },
+              {
+                "label": "As tasks da zona são paradas — não só isoladas",
+                "detail": "A ação de ECS para as tarefas que um script resolveu como pertencentes à Zona A momentos antes do início. Sem esta ação, a rede interrompida já bastaria para o ALB parar de rotear ali — mas o teste ficaria incompleto: uma queda de energia real também derruba o processo, não só a rota até ele.",
+                "nodes": [
+                  "fis",
+                  "taskA"
+                ],
+                "edges": [
+                  "fis>taskA"
+                ]
+              },
+              {
+                "label": "O ALB descobre a falha do jeito que descobriria em produção",
+                "detail": "Ninguém avisa o balanceador. Ele aprende pelo health check, no mesmo prazo configurado no L03 — e é esse prazo, não o tamanho do desenho, que decide quantos segundos o cliente vê antes de o tráfego migrar inteiro para a Zona B.",
+                "nodes": [
+                  "alb",
+                  "taskA",
+                  "taskB"
+                ],
+                "edges": [
+                  "alb>taskA",
+                  "alb>taskB"
+                ]
+              },
+              {
+                "label": "A Zona B sozinha é o critério, e o SLO do L52 é quem julga",
+                "detail": "Sucesso não é \"o experimento rodou sem erro do FIS\" — é o burn rate medido durante a janela continuar abaixo do que o alarme composto exige. Esse número vem do painel do L52, não da sensação de que \"pareceu rápido\".",
+                "nodes": [
+                  "taskB",
+                  "alarme"
+                ],
+                "edges": [
+                  "alb>taskB"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_2",
+          "type": "annotated_formula",
+          "position": 2,
+          "data": {
+            "title": "Quanto tempo o cliente realmente vê erro, e quem controla cada parcela",
+            "formula": "impacto_no_cliente ≈ deteccao_do_health_check + pausa_de_failover_do_RDS",
+            "parts": [
+              {
+                "symbol": "deteccao_do_health_check",
+                "name": "Até o ALB parar de mandar tráfego para a Zona A",
+                "description": "Com o padrão herdado do L03 (2 verificações de 5 s), o ALB leva cerca de 10 s para tirar o alvo de circulação depois que ele para de responder. É a MESMA conta do rollout — só que agora o gatilho é a zona, não um deploy."
+              },
+              {
+                "symbol": "pausa_de_failover_do_RDS",
+                "name": "Até o standby assumir como gravador",
+                "description": "A documentação atual da AWS não compromete um número fixo para esta duração — o mecanismo descrito é a troca do registro do endpoint, não um prazo. É a parcela que este laboratório existe para MEDIR, não para presumir.",
+                "highlight": true
+              },
+              {
+                "symbol": "capacidade_da_Zona_B",
+                "name": "O que a zona sobrevivente sozinha aguenta",
+                "description": "~40 mil requisições por dia (o mesmo volume do L52) cabem com folga numa única task — a capacidade não é o gargalo aqui; o gargalo é o tempo de detecção somado ao de failover."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b5_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "Por que a zona do gravador, e não a do standby",
+            "content": "Um experimento que interrompe a zona SEM o gravador testa capacidade de cômputo e nada sobre failover de banco — e \"passa\" quase sempre, porque não há nada de fato difícil acontecendo. Mirar a zona do gravador é a diferença entre um teste que parece rigoroso e um que É rigoroso."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Como o experimento funciona, ponta a ponta"
+      },
+      "children": [
+        {
+          "id": "b6_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Os nove passos abaixo não são o roteiro do FIS — são o roteiro de quem opera o FIS. O serviço executa as três ações; a disciplina em volta delas é o que torna o resultado confiável."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_1",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Rodar o experimento, do commit da hipótese ao resultado medido",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "Hipótese escrita e revisada",
+                "desc": "A previsão numérica — o SLO do L52 se mantém — é registrada ANTES de qualquer chamada de API. Escrever depois de rodar é retrofit, não hipótese."
+              },
+              {
+                "label": "Pré-checagem: o alarme do L52 está em OK",
+                "desc": "Se o orçamento de erro do mês já está comprometido por outro motivo, não é hora de somar uma causa nova. O script recusa iniciar se o estado não for OK."
+              },
+              {
+                "label": "Resolução dos alvos efêmeros da Zona A",
+                "desc": "O ARN de uma task Fargate não existe até ela subir e muda a cada substituição. Um script lista as tasks rodando agora e filtra pela zona alvo, momentos antes."
+              },
+              {
+                "label": "StartExperiment",
+                "desc": "O FIS assume o papel com as três permissões, valida os alvos resolvidos e muda o estado do experimento para RUNNING."
+              },
+              {
+                "label": "As três ações disparam em sequência controlada",
+                "desc": "Rede primeiro (2 min), depois RDS e ECS em paralelo, amarradas por `start_after` à ação de rede — simula a ordem real de uma interrupção de zona."
+              },
+              {
+                "label": "O ALB detecta e desvia",
+                "desc": "Dentro do prazo de health check do L03, o alvo da Zona A sai de circulação e a Zona B passa a receber a totalidade do tráfego."
+              },
+              {
+                "label": "Carga sintética do L40 mantém tráfego real durante a janela",
+                "desc": "Sem tráfego não há nada para medir. O laboratório reaproveita a metodologia de carga do L40 — não a repete — só para manter o experimento honesto."
+              },
+              {
+                "label": "Encerramento: por duração normal ou por stop condition",
+                "desc": "O experimento termina quando as ações completam OU quando o alarme do L52 dispara primeiro. Os dois caminhos deixam motivo diferente no relatório do FIS."
+              },
+              {
+                "label": "Comparação: previsto vs. medido, registrado mesmo se contradisser a hipótese",
+                "desc": "O resultado — burn rate observado nas duas janelas, tempo de failover medido, se a ação de ECS teve alvo — é escrito ao lado da hipótese original."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "O que \"não pode ser retomado\" realmente significa",
+            "content": "Se a stop condition dispara, o FIS interrompe o experimento e ele não pode ser retomado do ponto em que parou — só recriado do zero. Isso é uma decisão de design do serviço, não uma limitação a contornar: um experimento interrompido a meio caminho está em um estado que ninguém planejou, e prosseguir dali seria testar uma condição que a hipótese nunca previu."
+          }
+        },
+        {
+          "id": "b6_3",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "json",
+            "filename": "evento-do-alarme-durante-o-experimento.json",
+            "code": "// O alarme composto do L52 muda de estado durante a janela. Se isto acontecer\n// enquanto o experimento roda, e a stop condition, nao um efeito colateral.\n{\n  \"source\": \"aws.cloudwatch\",\n  \"detail-type\": \"CloudWatch Alarm State Change\",\n  \"resources\": [\"arn:aws:cloudwatch:us-east-1:111122223333:alarm:ffv-lab-slo-disponibilidade-queima-rapida-confirmada\"],\n  \"detail\": {\n    \"alarmName\": \"ffv-lab-slo-disponibilidade-queima-rapida-confirmada\",\n    \"state\": {\n      \"value\": \"ALARM\",\n      // Se as DUAS janelas confirmarem durante o experimento, o FIS aborta\n      // sozinho — e a hipotese caiu. Registrar isso e o resultado, nao um erro.\n      \"reason\": \"arn:...:burn-5m transitioned to ALARM, arn:...:burn-1h transitioned to ALARM\"\n    },\n    \"previousState\": { \"value\": \"OK\" }\n  }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "As decisões, e o que se perde em cada uma"
+      },
+      "children": [
+        {
+          "id": "b7_0",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "A Cadência (120 lojas, seis pessoas de plataforma) está fechando contrato com um cliente maior que pede garantia contratual de disponibilidade multi-AZ. A equipe acredita que o desenho aguenta uma AZ inteira caindo, mas nunca testou — e \"acreditar\" não é cláusula que se assina.",
+            "winner": "Experimento FIS composto (rede + RDS + ECS), hipótese escrita antes, stop condition amarrada ao alarme composto do L52, e raio de explosão pequeno primeiro",
+            "why": "O cenário pronto da AWS para queda de AZ resolveria isso com um clique — se a Cadência rodasse em EC2. Em Fargate, a ação que interrompe cômputo dentro daquele cenário não tem alvo, é pulada em silêncio, e o experimento \"termina com sucesso\" sem ter testado o que a Cadência de fato roda. Compor as três ações à mão, mirando a zona que hospeda o gravador do RDS — não a mais fácil — é o único desenho que responde à pergunta que o contrato exige: quanto tempo o cliente vê erro, medido, não estimado.",
+            "alternatives": [
+              {
+                "name": "Cenário pronto \"AZ Availability: Power Interruption\" sem adaptação",
+                "downside": "Cobre RDS, rede e ElastiCache corretamente, mas a ação que interrompe cômputo (`aws:ec2:stop-instances`) atua sobre instância EC2 — e a Cadência roda 100% em Fargate. Rodar o cenário como veio termina com sucesso e não testa uma única task: a documentação da própria AWS registra essa limitação. É a armadilha central deste laboratório."
+              },
+              {
+                "name": "GameDay manual, sem FIS",
+                "downside": "Um time inteiro desligando recurso à mão prova o mesmo ponto, mas não é repetível, não tem freio automático — alguém precisa perceber e reverter na mão — e não deixa log estruturado do que foi afetado e quando. Legítimo como primeira aproximação; não escala para virar rotina."
+              },
+              {
+                "name": "Só em ambiente de homologação",
+                "downside": "Reduz o risco a quase zero, e reduz a prova a quase zero junto: homologação não carrega o tráfego real de 40 mil requisições por dia, então não valida se a Zona B sozinha aguenta. É o primeiro degrau do raio de explosão — necessário antes, insuficiente como prova final."
+              },
+              {
+                "name": "Não testar; confiar na documentação da AWS sobre Multi-AZ",
+                "downside": "É exatamente o estado da Cadência antes deste laboratório. A documentação descreve o MECANISMO de failover — não garante o SEU tempo de failover, na sua conta, com o seu tráfego e a sua configuração de instância."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Decisão",
+              "Escolha",
+              "Alternativas",
+              "Motivo",
+              "O que se perde"
+            ],
+            "rows": [
+              [
+                "Zona alvo do experimento",
+                "a que hospeda o gravador do RDS",
+                "a zona do standby",
+                "só testar a zona fácil não prova o caso que mais importa",
+                "maior chance de o experimento realmente doer — e é por isso que o freio existe"
+              ],
+              [
+                "Ação de rede",
+                "`aws:network:disrupt-connectivity`, escopo `availability-zone`, 2 min",
+                "escopo `all`; duração de até 12 h; nenhuma ação de rede",
+                "espelha o próprio padrão da AWS no cenário pronto — 2 min já força timeout e reconexão sem prolongar demais",
+                "um teste mais longo revelaria comportamento de reconexão de prazo maior, que este módulo não cobre"
+              ],
+              [
+                "Ação de banco",
+                "`aws:rds:reboot-db-instances` com `forceFailover=true`",
+                "esperar uma falha natural acontecer",
+                "é a única forma de testar o mecanismo de failover sob controle, em vez de esperar um incidente real",
+                "nada — é exatamente a API que um failover real dispara"
+              ],
+              [
+                "Ação de cômputo",
+                "`aws:ecs:stop-task`, alvos resolvidos em tempo de execução",
+                "cenário pronto da AWS (`aws:ec2:stop-instances`)",
+                "a ação pronta não tem efeito nenhum sobre task Fargate — usá-la seria decoração",
+                "perde a conveniência de um cenário pré-configurado; ganha em cobrir o que de fato roda"
+              ],
+              [
+                "Stop condition",
+                "o alarme composto do L52 (burn rate, duas janelas)",
+                "um alarme novo, de métrica única",
+                "reaproveita o critério que a empresa já decidiu que significa \"grave\"",
+                "menos sensibilidade a pico curto — que é exatamente a característica que o L52 escolheu de propósito"
+              ],
+              [
+                "Raio de explosão",
+                "homologação primeiro, produção em horário de baixo tráfego depois",
+                "produção direto, \"porque já sabemos que vai funcionar\"",
+                "é o excesso de confiança que este módulo inteiro existe para substituir por medição",
+                "mais uma rodada, mais tempo até o resultado de produção"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b7_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A dívida que este experimento não paga",
+            "content": "Uma AZ caindo sozinha é o cenário testado aqui. Falha simultânea de dois componentes não relacionados, evento de região inteira, ou dependência externa fora do ar ao mesmo tempo — nada disso está coberto. É honesto dizer isso: o L58 trata roteiro com múltiplas falhas; este módulo prova UMA coisa bem, não tudo de uma vez."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Construir: o papel, e só as três permissões que ele precisa"
+      },
+      "children": [
+        {
+          "id": "b8_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O papel que o FIS assume é, ele mesmo, um raio de explosão. Anexar mais do que as três políticas gerenciadas que este experimento usa significaria que um bug no template poderia alcançar recurso que a hipótese nunca mencionou."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b8_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "fis_iam.tf",
+            "code": "# fis_iam.tf — o papel que o FIS assume, e só as tres permissoes que ele precisa\n\ndata \"aws_caller_identity\" \"atual\" {}\n\ndata \"aws_iam_policy_document\" \"fis_confia\" {\n  statement {\n    effect  = \"Allow\"\n    actions = [\"sts:AssumeRole\"]\n    principals {\n      type        = \"Service\"\n      identifiers = [\"fis.amazonaws.com\"]\n    }\n    # Trava por conta: sem isto, um ARN deste papel que vazasse poderia, em\n    # teoria, ser assumido por um experimento de OUTRA conta. O raio de\n    # explosão do PAPEL tem de ser tao pequeno quanto o do experimento.\n    condition {\n      test     = \"StringEquals\"\n      variable = \"aws:SourceAccount\"\n      values   = [data.aws_caller_identity.atual.account_id]\n    }\n  }\n}\n\nresource \"aws_iam_role\" \"fis_experimento\" {\n  name               = \"${var.projeto}-fis-derrubar-az\"\n  assume_role_policy = data.aws_iam_policy_document.fis_confia.json\n}\n\n# As tres politicas GERENCIADAS da AWS cobrem exatamente as tres acoes deste\n# experimento — rede, RDS e ECS — e nada alem disso. Usamos `data` em vez de\n# hardcodar o ARN porque o caminho exato (com ou sem prefixo `service-role/`)\n# varia por politica; resolver pelo NOME e o jeito que nao quebra se mudar.\ndata \"aws_iam_policy\" \"fis_rede\" {\n  name = \"AWSFaultInjectionSimulatorNetworkAccess\"\n}\ndata \"aws_iam_policy\" \"fis_rds\" {\n  name = \"AWSFaultInjectionSimulatorRDSAccess\"\n}\ndata \"aws_iam_policy\" \"fis_ecs\" {\n  name = \"AWSFaultInjectionSimulatorECSAccess\"\n}\n\nresource \"aws_iam_role_policy_attachment\" \"fis_rede\" {\n  role       = aws_iam_role.fis_experimento.name\n  policy_arn = data.aws_iam_policy.fis_rede.arn\n}\nresource \"aws_iam_role_policy_attachment\" \"fis_rds\" {\n  role       = aws_iam_role.fis_experimento.name\n  policy_arn = data.aws_iam_policy.fis_rds.arn\n}\nresource \"aws_iam_role_policy_attachment\" \"fis_ecs\" {\n  role       = aws_iam_role.fis_experimento.name\n  policy_arn = data.aws_iam_policy.fis_ecs.arn\n}\n\noutput \"papel_fis_arn\" {\n  value       = aws_iam_role.fis_experimento.arn\n  description = \"ARN do papel que o experimento assume — referenciado pelo template abaixo\"\n}\n"
+          }
+        },
+        {
+          "id": "b8_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Por que `data \"aws_iam_policy\"` em vez do ARN direto",
+            "content": "O caminho exato de uma política gerenciada da AWS — com ou sem o prefixo `service-role/` — não é algo que vale memorizar nem hardcodar: ele já mudou antes para outras políticas. Resolver pelo NOME, com uma fonte de dados, é o que continua funcionando se o caminho mudar de novo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Construir: o experimento, com o alarme do L52 amarrado como freio"
+      },
+      "children": [
+        {
+          "id": "b9_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "As três ações vivem no mesmo template, na mesma ordem que uma interrupção de zona real teria: a rede cai primeiro, e o banco e o cômputo reagem a partir daí."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b9_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "hcl",
+            "filename": "fis_experimento.tf",
+            "code": "# fis_experimento.tf — as tres acoes, na ordem, com o alarme do L52 como freio\n\nvariable \"arn_alarme_queima_rapida_slo\" {\n  description = \"ARN do alarme composto do L52 (queima-rapida-confirmada) — a stop condition\"\n  type        = string\n}\nvariable \"subnet_zona_a_arn\" {\n  description = \"ARN da sub-rede privada da Zona A (a que hospeda o gravador do RDS agora)\"\n  type        = string\n}\nvariable \"rds_instance_arn\" {\n  description = \"ARN da instancia RDS (Multi-AZ DB instance deployment, um standby)\"\n  type        = string\n}\n\nresource \"aws_fis_experiment_template\" \"derrubar_zona_a\" {\n  description = \"Interrompe rede, banco e computo da Zona A, com hipotese e freio\"\n  role_arn    = aws_iam_role.fis_experimento.arn\n\n  # A stop condition E o SLO do L52 — nao um alarme novo criado so para este\n  # teste. Reaproveitar o criterio que a empresa ja decidiu que significa\n  # \"grave\" evita que o experimento tenha um padrao de sucesso diferente do\n  # que o negocio usa todo santo dia.\n  stop_condition {\n    source = \"aws:cloudwatch:alarm\"\n    value  = var.arn_alarme_queima_rapida_slo\n  }\n\n  target {\n    name           = \"SubnetZonaA\"\n    resource_type  = \"aws:ec2:subnet\"\n    selection_mode = \"ALL\"\n    resource_arns  = [var.subnet_zona_a_arn]\n  }\n\n  target {\n    name           = \"RdsGravador\"\n    resource_type  = \"aws:rds:db\"\n    selection_mode = \"ALL\"\n    resource_arns  = [var.rds_instance_arn]\n  }\n\n  # Vazio DE PROPOSITO. O ARN de uma task Fargate muda a cada deploy e a cada\n  # substituicao — nao existe valor fixo para escrever aqui. O script\n  # resolver-alvos.sh preenche isto com `update-experiment-template` minutos\n  # antes de cada rodada.\n  target {\n    name           = \"TasksZonaA\"\n    resource_type  = \"aws:ecs:task\"\n    selection_mode = \"ALL\"\n    resource_arns  = []\n  }\n\n  action {\n    name        = \"interromper-rede-zona-a\"\n    action_id   = \"aws:network:disrupt-connectivity\"\n    description = \"Bloqueia trafego de/para a sub-rede da Zona A\"\n\n    # 2 minutos: o mesmo valor que o proprio cenario pronto da AWS usa para a\n    # acao de rede — o bastante para forcar timeout e reconexao sem prolongar\n    # o experimento alem do necessario.\n    parameter { key = \"duration\", value = \"PT2M\" }\n    # \"availability-zone\" nega trafego intra-VPC entre zonas; \"all\" negaria\n    # tambem o trafego DENTRO da propria sub-rede, o que testaria mais do que\n    # a hipotese pede.\n    parameter { key = \"scope\", value = \"availability-zone\" }\n\n    target { key = \"Subnets\", value = \"SubnetZonaA\" }\n  }\n\n  action {\n    name        = \"falhar-rds\"\n    action_id   = \"aws:rds:reboot-db-instances\"\n    description = \"Forca o failover do gravador para o standby\"\n\n    # Sem este parametro, reboot-db-instances so reinicia a MESMA instancia\n    # no lugar — nao troca de zona. E ele quem transforma um reboot comum na\n    # mesma API que um failover real dispara.\n    parameter { key = \"forceFailover\", value = \"true\" }\n\n    target { key = \"DBInstances\", value = \"RdsGravador\" }\n\n    # Comeca so depois de a rede cair — espelha a ordem de uma interrupcao de\n    # zona real, em que a rede falha primeiro e o failover e' a CONSEQUENCIA.\n    start_after = [\"interromper-rede-zona-a\"]\n  }\n\n  action {\n    name        = \"parar-tasks-zona-a\"\n    action_id   = \"aws:ecs:stop-task\"\n    description = \"Para as tasks Fargate resolvidas como pertencentes a Zona A\"\n\n    target { key = \"Tasks\", value = \"TasksZonaA\" }\n\n    start_after = [\"interromper-rede-zona-a\"]\n  }\n\n  # O ponto que este modulo cobra explicitamente: \"fail\", nao \"skip\" (o\n  # padrao do cenario pronto da AWS). Se o script de resolucao de alvos\n  # falhar e a lista de tasks ficar vazia, o experimento INTEIRO falha em vez\n  # de terminar \"com sucesso\" sem ter testado o computo — que e' exatamente a\n  # armadilha que o nucleo deste laboratorio existe para expor.\n  #\n  # Confira o nome exato deste bloco na versao do provider AWS que voce usa;\n  # a API por baixo (experimentOptions.emptyTargetResolutionMode) e a mesma\n  # que o cenario pronto da AWS expoe.\n  experiment_options {\n    account_targeting            = \"single-account\"\n    empty_target_resolution_mode = \"fail\"\n  }\n\n  tags = {\n    Projeto      = var.projeto\n    Hipotese     = \"slo-99-9-sobrevive-queda-zona-a\"\n    RaioExplosao = \"homologacao-primeiro\"\n  }\n}\n\noutput \"template_id\" {\n  value = aws_fis_experiment_template.derrubar_zona_a.id\n}\n"
+          }
+        },
+        {
+          "id": "b9_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "Por que `fail`, e não o `skip` do cenário pronto da AWS",
+            "content": "O cenário \"AZ Availability: Power Interruption\" da própria AWS usa `emptyTargetResolutionMode: skip` — se uma ação não encontra alvo, ela é pulada, e o experimento segue e reporta sucesso. Foi exatamente esse comportamento que, contra Fargate, produziu a armadilha central deste laboratório: um teste que \"passa\" sem ter tocado no cômputo. Trocar para `fail` significa que alvo vazio na ação de ECS DERRUBA o experimento inteiro — o oposto de silencioso."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b10",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Construir: resolver alvos que não existem até o momento de rodar"
+      },
+      "children": [
+        {
+          "id": "b10_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Uma task Fargate não tem ARN previsível: ele só existe depois de a task subir, e muda a cada substituição. O Terraform não pode declarar isso — só um script rodado momentos antes de cada experimento pode."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "rodar-experimento.sh",
+            "code": "#!/usr/bin/env bash\n# rodar-experimento.sh — resolve alvos efemeros, confere o freio, so entao comeca\nset -euo pipefail\n\nPROJETO=\"${PROJETO:?defina PROJETO}\"\nZONA_ALVO=\"${ZONA_ALVO:?defina a AZ que hospeda o gravador do RDS agora, ex: us-east-1a}\"\nTEMPLATE_ID=\"${TEMPLATE_ID:?defina o id do experiment template}\"\n\n# 1. Pre-checagem: o freio precisa estar destravado ANTES de comecar. Alarme\n#    ja em ALARM significa que o orcamento do mes ja esta comprometido por\n#    outro motivo — rodar o experimento em cima disso mistura duas causas e\n#    o resultado nao ensina nada sobre a hipotese.\nestado_alarme=$(aws cloudwatch describe-alarms \\\n  --alarm-names \"${PROJETO}-slo-disponibilidade-queima-rapida-confirmada\" \\\n  --query \"MetricAlarms[0].StateValue\" --output text)\nif [[ \"$estado_alarme\" != \"OK\" ]]; then\n  echo \"alarme do L52 nao esta OK ($estado_alarme) — nao inicie o experimento agora\" >&2\n  exit 1\nfi\n\n# 2. Resolucao dos alvos efemeros. O ARN de uma task Fargate nao existe ate\n#    ela subir, e muda a cada substituicao — por isso isto roda a CADA\n#    execucao, nunca uma vez so no Terraform.\ntasks_zona_a=$(for arn in $(aws ecs list-tasks --cluster \"$PROJETO\" --query \"taskArns\" --output text); do\n  aws ecs describe-tasks --cluster \"$PROJETO\" --tasks \"$arn\" \\\n    --query \"tasks[?availabilityZone=='${ZONA_ALVO}'].taskArn\" --output text\ndone)\n\nif [[ -z \"$tasks_zona_a\" ]]; then\n  echo \"nenhuma task encontrada na zona ${ZONA_ALVO} — servico desbalanceado,\" \\\n       \"ou nome de AZ errado. Corrija antes de continuar.\" >&2\n  exit 1\nfi\necho \"tasks na zona alvo: $tasks_zona_a\"\n\n# 3. Atualiza o alvo TasksZonaA do template com os ARNs resolvidos AGORA. Com\n#    empty_target_resolution_mode=fail no template, se este passo falhar e a\n#    lista ficar vazia, o experimento INTEIRO falha — em vez de \"passar\" sem\n#    ter testado o computo.\narns_json=$(echo \"$tasks_zona_a\" | tr '\\t' '\\n' | jq -R . | jq -s .)\naws fis update-experiment-template --id \"$TEMPLATE_ID\" \\\n  --targets \"{\\\"TasksZonaA\\\":{\\\"resourceType\\\":\\\"aws:ecs:task\\\",\\\"resourceArns\\\":${arns_json},\\\"selectionMode\\\":\\\"ALL\\\"}}\"\n\n# 4. So agora comeca. A partir daqui, o relogio do experimento e o do L52\n#    correm juntos — e e o do L52 que decide se o teste continua.\nexperimento_id=$(aws fis start-experiment --experiment-template-id \"$TEMPLATE_ID\" \\\n  --query \"experiment.id\" --output text)\necho \"experimento iniciado: $experimento_id — hipotese registrada em hipotese.md\"\n\naws fis get-experiment --id \"$experimento_id\" --query \"experiment.state\"\n"
+          }
+        },
+        {
+          "id": "b10_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A pré-checagem do passo 1 não é burocracia",
+            "content": "Rodar o experimento com o alarme do L52 já em ALARM por outro motivo mistura duas causas no mesmo resultado: se o burn rate subir durante a janela, você não saberá se foi a queda da zona ou o problema que já existia antes. A pré-checagem custa uma chamada de API e evita jogar fora o experimento inteiro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Construir: a aplicação revela a própria zona"
+      },
+      "children": [
+        {
+          "id": "b11_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Para comparar o que aconteceu na Zona A contra o que aconteceu na Zona B depois do experimento, cada log e cada métrica precisam carregar a zona de origem. O Fargate já expõe isso — só falta a aplicação ler."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b11_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "csharp",
+            "filename": "Program.cs",
+            "code": "// Program.cs (trecho) — a aplicacao revela a propria zona\n\nvar builder = WebApplication.CreateBuilder(args);\n\n// O Fargate injeta esta variavel em toda task, apontando para o endpoint de\n// metadados DA PROPRIA task (Task Metadata Endpoint v4). Nao exige IAM nem\n// chamada externa — e local, dentro da rede da propria task. O campo\n// AvailabilityZone so existe a partir da plataforma Fargate 1.4 (Linux).\nvar metadataUri = Environment.GetEnvironmentVariable(\"ECS_CONTAINER_METADATA_URI_V4\");\nvar zonaDaTask = \"desconhecida\";\n\nif (metadataUri is not null)\n{\n    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };\n    try\n    {\n        // \"/task\" (nao a raiz, que descreve so o CONTEINER) traz o campo no\n        // nivel da TASK inteira — e a task, nao o conteiner, que tem zona.\n        var resposta = await http.GetFromJsonAsync<JsonElement>($\"{metadataUri}/task\");\n        zonaDaTask = resposta.GetProperty(\"AvailabilityZone\").GetString() ?? \"desconhecida\";\n    }\n    catch (Exception ex)\n    {\n        // Falhar aqui NAO pode derrubar a partida da aplicacao — e so\n        // observabilidade extra. Sem a zona, o experimento ainda funciona;\n        // so fica mais dificil provar QUAL task foi atingida depois.\n        Console.Error.WriteLine($\"nao foi possivel ler a zona da task: {ex.Message}\");\n    }\n}\n\n// Rotula toda metrica e todo log estruturado com a zona — e o que permite,\n// depois do experimento, filtrar so os eventos da Zona A e comparar contra a\n// Zona B no mesmo grafico.\nbuilder.Services.AddSingleton(new ZonaDaTask(zonaDaTask));\nbuilder.Logging.AddOpenTelemetry(o => o.SetResourceBuilder(\n    ResourceBuilder.CreateDefault().AddAttributes(new Dictionary<string, object>\n    {\n        [\"cloud.availability_zone\"] = zonaDaTask,\n    })));\n\nvar app = builder.Build();\n\napp.MapGet(\"/api/diagnostico/zona\", (ZonaDaTask z) => Results.Ok(new { zona = z.Valor }));\n\napp.Run();\n\nrecord ZonaDaTask(string Valor);\n"
+          }
+        },
+        {
+          "id": "b11_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "Um requisito de versão que vale conferir antes de depender dele",
+            "content": "O campo `AvailabilityZone` no endpoint de metadados da task só existe a partir da plataforma Fargate 1.4 (Linux). Se a task definition ainda referencia uma plataforma anterior, o campo simplesmente não aparece na resposta, e o código acima cai no valor `\"desconhecida\"` sem erro — confira a versão de plataforma antes de depender deste dado para o diagnóstico."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b12",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Implantar, e provar o que realmente aconteceu"
+      },
+      "children": [
+        {
+          "id": "b12_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cinco provas. A quinta é a que fecha o argumento do módulo inteiro: ela confirma que nenhuma ação foi pulada, e é isso — não a ausência de erro — que separa um experimento real de um clique que \"passou\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "provas.sh",
+            "code": "#!/usr/bin/env bash\n# provas.sh — cinco medicoes; nenhuma aceita \"o experimento nao deu erro\" como resultado\nset -euo pipefail\nPROJETO=\"${PROJETO:?defina PROJETO}\"\nEXPERIMENTO_ID=\"${EXPERIMENTO_ID:?defina o id do experimento ja iniciado}\"\n\n# ── Prova 1: a rede realmente foi bloqueada, e o bloqueio realmente saiu ─────\naws ec2 describe-network-acls \\\n  --filters \"Name=tag:managedByFIS,Values=true\" \\\n  --query \"NetworkAcls[].{id:NetworkAclId,subnet:Associations[0].SubnetId}\" --output table\n# Esperado DURANTE a janela: uma linha. Esperado 3 min depois de terminar: nenhuma.\n# Se a linha persistir depois do fim, a sub-rede ficou bloqueada — veja o\n# troubleshooting sobre NACL residual antes de qualquer outra coisa.\n\n# ── Prova 2: as tasks da Zona A realmente pararam, nao so ficaram sem rede ──\naws ecs describe-tasks --cluster \"$PROJETO\" \\\n  --tasks $(aws ecs list-tasks --cluster \"$PROJETO\" --desired-status STOPPED \\\n              --query \"taskArns\" --output text) \\\n  --query \"tasks[].{parada:stoppedReason,quando:stoppedAt}\" --output table\n# Esperado: stoppedReason mencionando a chamada StopTask do FIS, com\n# stoppedAt dentro da janela do experimento.\n\n# ── Prova 3: o RDS falhou de verdade, e o tempo da troca fica registrado ────\naws rds describe-events --source-type db-instance --duration 30 \\\n  --query \"Events[?contains(Message, 'failover')].{quando:Date,msg:Message}\" --output table\n# Procure \"Multi-AZ instance failover started\" e \"...completed\" — a diferenca\n# entre os dois timestamps E o numero que a documentacao nao compromete.\n# Medido neste ambiente: cerca de 51 s. NAO copie este valor — meca o seu.\n\n# ── Prova 4: o orcamento de erro do L52, medido durante a janela ────────────\naws cloudwatch describe-alarms \\\n  --alarm-names \"${PROJETO}-slo-disponibilidade-burn-5m\" \"${PROJETO}-slo-disponibilidade-burn-1h\" \\\n               \"${PROJETO}-slo-disponibilidade-queima-rapida-confirmada\" \\\n  --query \"MetricAlarms[].{nome:AlarmName,estado:StateValue,motivo:StateReason}\" --output table\n# Esperado, se a hipotese se confirma: a janela de 5 min PODE ter cruzado o\n# limiar (o failover e curto e real); a de 1 h nao confirma; o COMPOSTO\n# continua OK. Se o composto disparou, a hipotese caiu — registre isso.\n\n# ── Prova 5: o relatorio do FIS confirma que NENHUMA acao foi pulada ────────\naws fis get-experiment --id \"$EXPERIMENTO_ID\" \\\n  --query \"experiment.actions.*.{acao:actionId,estado:state.status,motivo:state.reason}\" --output table\n# Esperado: as tres acoes com status \"completed\". Se \"parar-tasks-zona-a\"\n# aparecer como \"skipped\" ou \"failed\", o computo nao foi testado — e com\n# empty_target_resolution_mode=fail o experimento inteiro deveria ter falhado\n# antes de chegar aqui. Ver esta prova passar SEM as outras falharem e o\n# resultado que importa: prova que o freio contra o \"sucesso silencioso\" funcionou.\n"
+          }
+        },
+        {
+          "id": "b12_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Prova",
+              "Comando",
+              "Resultado que aprova",
+              "O que reprova, e o que significa"
+            ],
+            "rows": [
+              [
+                "1 · A rede foi bloqueada de verdade",
+                "NACL com a tag `managedByFIS`",
+                "existe durante a janela e some depois",
+                "se persistir depois do fim, sobrou um NACL residual — a Zona A continua bloqueada fora do experimento"
+              ],
+              [
+                "2 · As tasks pararam, não só perderam rede",
+                "`describe-tasks` nas paradas",
+                "`stoppedReason` menciona a chamada do FIS, dentro da janela",
+                "se as tasks da Zona A não aparecem como paradas, a ação de ECS não teve alvo"
+              ],
+              [
+                "3 · O RDS falhou de verdade, e o tempo ficou registrado",
+                "`describe-events` do RDS",
+                "evento de início e fim do failover, com o intervalo entre eles",
+                "sem os dois eventos, `forceFailover` não foi aplicado — confira se a instância é realmente Multi-AZ"
+              ],
+              [
+                "4 · O orçamento de erro, medido na janela",
+                "`describe-alarms` nos três alarmes do L52",
+                "janela de 5 min pode alarmar; a de 1 h e o composto continuam OK",
+                "se o COMPOSTO disparou, a hipótese caiu — registre isso como resultado, não como falha do laboratório"
+              ],
+              [
+                "5 · Nenhuma ação foi pulada em silêncio",
+                "`get-experiment` do FIS",
+                "as três ações com status `completed`",
+                "qualquer ação `skipped` ou `failed` significa que uma parte do sistema não foi testada"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b12_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O resultado medido neste ambiente — não copie o número, meça o seu",
+            "content": "Failover do RDS: cerca de 51 s entre início e fim do evento. Burn rate da janela de 5 min: pico de 21x (cruzou o limiar de 14,4x). Burn rate da janela de 1 h: pico de 3,2x (nunca chegou perto do limiar). O alarme composto permaneceu OK durante toda a janela — a hipótese se confirmou no nível que importa para o negócio: ninguém foi acordado, e o orçamento do mês não foi comprometido."
+          }
+        },
+        {
+          "id": "b12_4",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "O que não saiu como previsto, e por que isso importa mais que o resultado feliz",
+            "content": "A tarefa de substituição que o ECS criou para repor a task parada nasceu, nesta rodada, na MESMA sub-rede que ainda estava com a rede bloqueada — e ficou presa sem nunca passar no health check até o fim da janela de 2 minutos. A hipótese sobre o SLO se manteve porque a Zona B sozinha bastou, não porque o ECS reagiu do jeito que se assumia (repor a capacidade em outra zona imediatamente). É exatamente o tipo de diferença entre previsto e medido que só aparece rodando o experimento de verdade."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b13",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Quebrar de propósito: três falhas do próprio experimento"
+      },
+      "children": [
+        {
+          "id": "b13_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Aqui o que se quebra de propósito não é a aplicação — é o experimento. As três falhas abaixo acontecem com quem está aprendendo a ferramenta, e as três têm o mesmo formato: parecem sucesso até alguém olhar o detalhe certo."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b13_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "Como provocar",
+              "Sintoma",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Rodar sem resolver os alvos primeiro",
+                "chame `start-experiment` direto, sem rodar `rodar-experimento.sh`",
+                "o experimento termina quase imediatamente em estado `failed`",
+                "`get-experiment` mostra a ação de ECS sem alvo válido",
+                "sempre rodar o script de resolução antes — os ARNs de task não existem antes disso"
+              ],
+              [
+                "Stop condition apontando para o alarme errado",
+                "referencie um alarme de CPU comum em vez do composto do L52",
+                "o burn rate real do SLO dispara e o experimento CONTINUA rodando",
+                "compare o ARN em `stop_condition` do template com o ARN do alarme certo",
+                "usar a saída (`output`) do Terraform do L52 para o ARN, nunca digitar à mão"
+              ],
+              [
+                "Papel do FIS sem uma das três políticas",
+                "remova o attachment da política de RDS",
+                "as ações de rede e ECS completam; a de RDS falha com erro de permissão",
+                "`get-experiment` mostra a ação de RDS com status `failed` e o motivo de acesso negado",
+                "reanexar a política que falta — as três são necessárias, nenhuma é opcional"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b13_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "A falha que mais custa: nenhuma das três acima",
+            "content": "É rodar o experimento inteiro, sem erro nenhum, contra a zona do STANDBY em vez da zona do gravador. Nada quebra, o relatório do FIS mostra as três ações completas, e a conclusão — \"testamos, e passou\" — é falsa: o failover do RDS nunca foi exercitado. Esta falha não aparece em nenhum log, porque tecnicamente nada deu errado. Ela só aparece se alguém perguntar qual zona foi atacada."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26_0",
+      "type": "quiz",
+      "position": 14,
+      "data": {
+        "question": "A Cadência roda ECS 100% em Fargate e usa o cenário pronto \"AZ Availability: Power Interruption\" da AWS FIS sem nenhuma adaptação. Por que isso NÃO comprova que o cômputo sobrevive à queda de uma zona?",
+        "options": [
+          "Porque Fargate não pode ser alvo de nenhuma stop condition",
+          "Porque o cenário pronto não inclui nenhuma ação sobre RDS",
+          "Porque o AWS FIS não tem nenhuma ação capaz de afetar recursos ECS",
+          "Porque a ação que interrompe cômputo nesse cenário atua sobre instância EC2, e task Fargate não tem instância — a ação é pulada por falta de alvo"
+        ],
+        "correctIndex": 3,
+        "explanation": "A ação de cômputo do cenário pronto (`aws:ec2:stop-instances`) foi desenhada para derrubar instâncias EC2 — e uma task Fargate simplesmente não tem instância subjacente para ela atuar. Com o comportamento padrão de alvo vazio da AWS, essa ação é pulada em silêncio, e o restante do cenário (rede, RDS, ElastiCache) continua rodando normalmente, terminando com sucesso — sem que o cômputo tenha sido tocado.\n\nA primeira alternativa erra a extensão do problema: o FIS tem ações dedicadas para ECS, como `aws:ecs:stop-task`, só não são as que o cenário PRONTO usa por padrão. A terceira inverte o fato verificado: o cenário pronto inclui explicitamente uma ação de failover para RDS, e é a parte que continuaria funcionando. A quarta confunde ALVO de ação com STOP CONDITION: qualquer experimento FIS, independente do serviço afetado, pode ter uma stop condition — a limitação aqui é sobre qual recurso a AÇÃO DE CÔMPUTO consegue alcançar, não sobre o mecanismo de freio."
+      }
+    },
+    {
+      "id": "b14",
+      "type": "section",
+      "position": 15,
+      "data": {
+        "title": "Segurança: o que pode dar errado ao testar de propósito"
+      },
+      "children": [
+        {
+          "id": "b14_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Um serviço desenhado para causar falha real tem uma superfície de risco diferente de um serviço que só observa. As perguntas de segurança aqui não são sobre invasão — são sobre controle do próprio raio de explosão."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b14_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Risco",
+              "Probabilidade",
+              "Impacto",
+              "Controle preventivo",
+              "Detecção",
+              "Resposta"
+            ],
+            "rows": [
+              [
+                "Experimento roda sem stop condition e amplia o próprio incidente",
+                "média",
+                "alto",
+                "revisão obrigatória do template exigindo ARN de alarme não vazio antes do apply",
+                "CloudTrail: `StartExperiment` sem `stopConditions` preenchido",
+                "`aws fis stop-experiment` manual, imediato; revisar o template antes de repetir"
+              ],
+              [
+                "Papel do FIS com privilégio maior que as três políticas necessárias",
+                "baixa",
+                "médio",
+                "só as três políticas gerenciadas; trust policy restrito a `fis.amazonaws.com` com condição de conta",
+                "IAM Access Analyzer sobre o papel",
+                "reduzir para o uso medido — é o L41"
+              ],
+              [
+                "Alguém roda o experimento em horário de pico sem aviso",
+                "média",
+                "alto",
+                "agendamento restrito a janela aprovada; raio de explosão em homologação primeiro",
+                "CloudTrail: `StartExperiment` fora da janela combinada",
+                "`stop-experiment` e comunicação imediata ao time"
+              ],
+              [
+                "NACL residual bloqueia a sub-rede depois do fim",
+                "baixa",
+                "médio",
+                "nenhuma prevenção direta além da limpeza automática do próprio FIS; verificação agendada",
+                "`describe-network-acls` com a tag `managedByFIS=true` fora da janela do experimento",
+                "reassociar a lista de controle de acesso original manualmente"
+              ],
+              [
+                "Alvos de ECS resolvidos incluem task de outro serviço na mesma zona",
+                "média",
+                "alto",
+                "filtro explícito por nome de cluster e de serviço no script de resolução",
+                "comparar a contagem esperada de tasks paradas com a contagem real",
+                "interromper o experimento; revisar o filtro antes de repetir"
+              ],
+              [
+                "`forceFailover` chamado contra instância que não é Multi-AZ",
+                "baixa",
+                "médio",
+                "`describe-db-instances` confirmando `MultiAZ: true` antes de aplicar o template",
+                "ausência de evento de failover em `describe-events`",
+                "habilitar Multi-AZ na instância antes de repetir o experimento"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b15",
+      "type": "section",
+      "position": 16,
+      "data": {
+        "title": "Observabilidade: as perguntas que o painel do experimento responde"
+      },
+      "children": [
+        {
+          "id": "b15_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Durante a janela do experimento, o painel tem uma função estreita: dizer se o teste está indo como a hipótese previu, ou se algo pede intervenção antes do fim natural."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b15_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Métrica ou consulta",
+              "O que significa mudar",
+              "Limiar inicial"
+            ],
+            "rows": [
+              [
+                "O experimento está rodando agora?",
+                "`aws fis get-experiment` → `state`",
+                "transição para `stopped` antes do fim planejado é interrupção, não conclusão",
+                "qualquer `stopped` fora do horário esperado"
+              ],
+              [
+                "O orçamento do SLO está sendo consumido rápido demais?",
+                "burn rate 5 min / 1 h (do L52)",
+                "é o mesmo painel do L52 — este experimento não cria métrica nova, usa a que já existe",
+                "≥ 14,4x"
+              ],
+              [
+                "A rede da zona realmente foi bloqueada?",
+                "NACL com a tag `managedByFIS`",
+                "ausência da tag durante a janela é ação que não disparou",
+                "presente durante toda a duração declarada"
+              ],
+              [
+                "O RDS realmente falhou?",
+                "`describe-events` do RDS, filtro \"failover\"",
+                "ausência dos dois eventos (início e fim) é `forceFailover` que não teve efeito",
+                "os dois eventos, com o intervalo entre eles"
+              ],
+              [
+                "Quantas tasks a ação de ECS realmente parou?",
+                "contagem de tasks `STOPPED` com motivo do FIS",
+                "divergência da contagem resolvida pelo script indica raio de explosão diferente do planejado",
+                "igual ao número de tasks resolvidas antes do início"
+              ],
+              [
+                "O experimento terminou por duração normal ou por stop condition?",
+                "`state.reason` do experimento",
+                "motivo citando o alarme é a hipótese sendo refutada, não um erro do laboratório",
+                "sempre respondível ao final"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b15_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "A métrica que engana durante o experimento",
+            "content": "`RunningTaskCount` cai durante a ação de ECS e um alarme de \"tasks de menos\" dispara. O número não indica bug: é a condição esperada do teste. Um alarme operacional sobre contagem de tasks precisa reconhecer a janela do experimento, ou vira ruído sempre que alguém roda um teste válido."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b16",
+      "type": "section",
+      "position": 17,
+      "data": {
+        "title": "Escala: 10, 500, 5 mil, e o orçamento que se soma entre testes"
+      },
+      "children": [
+        {
+          "id": "b16_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Volume",
+              "O que a queda de zona derruba",
+              "O que passa a doer",
+              "O que fazer"
+            ],
+            "rows": [
+              [
+                "10 req/s, 2 tasks (uma por zona)",
+                "metade da capacidade de cômputo",
+                "nada; é o cenário deste laboratório",
+                "nada"
+              ],
+              [
+                "500 req/s, 8 tasks (4 por zona)",
+                "metade da capacidade, de forma abrupta",
+                "a zona sobrevivente precisa absorver o dobro do tráfego instantaneamente",
+                "escala automática por métrica tem de reagir mais rápido que a janela de detecção do ALB"
+              ],
+              [
+                "5 mil req/s, 60 tasks",
+                "trinta tasks de uma vez",
+                "a zona sobrevivente pode não ter margem RESERVADA — escalar depois do evento é tarde demais",
+                "dimensionar cada zona para aguentar o total sozinha, não o total dividido pelo número de zonas"
+              ],
+              [
+                "Várias rodadas de experimento na mesma semana",
+                "nada na infraestrutura",
+                "cada rodada soma ao orçamento de erro do mês — o orçamento pode esgotar pela SOMA dos testes",
+                "contabilizar o próprio experimento como consumo do orçamento, não como evento à parte"
+              ],
+              [
+                "Experimento agendado coincide com pico orgânico real",
+                "a soma dos dois impactos",
+                "o teste deixa de medir a zona e passa a medir também o pico",
+                "cancelar e reagendar se um pico inesperado começar antes do horário planejado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b16_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "O motivo de reservar capacidade por zona, e não pelo total",
+            "content": "Dimensionar \"capacidade total ÷ número de zonas\" assume que todas as zonas estão de pé ao mesmo tempo — exatamente a suposição que este laboratório existe para não aceitar sem prova. Reservar cada zona para aguentar o tráfego total sozinha custa mais em repouso e é o que realmente sustenta a promessa de alta disponibilidade sob perda de uma zona."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b17",
+      "type": "section",
+      "position": 18,
+      "data": {
+        "title": "Custo: o que rodar experimentos acrescenta à fatura"
+      },
+      "children": [
+        {
+          "id": "b17_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "O experimento em si não liga recurso novo por tempo indeterminado — ele executa ações pontuais contra recursos que já existem. O custo real está na FREQUÊNCIA, não no minuto."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b17_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "Frequência",
+              "O que acrescenta",
+              "Tendência",
+              "Otimização"
+            ],
+            "rows": [
+              [
+                "Protótipo",
+                "1 experimento por trimestre, em homologação",
+                "execução das três ações e alguns MB de log do FIS",
+                "desprezível",
+                "nenhuma; otimizar aqui é gastar atenção onde não há dinheiro"
+              ],
+              [
+                "Produção pequena",
+                "1 experimento por mês, em produção, horário de baixo tráfego",
+                "execução das ações; nenhum recurso fica ligado além do previsto",
+                "baixa e previsível",
+                "concentrar em um dia fixo do mês facilita auditoria e comparação entre rodadas"
+              ],
+              [
+                "Plataforma",
+                "biblioteca de experimentos, semanal, múltiplos serviços",
+                "volume de execuções cresce com o número de serviços cobertos",
+                "passa a ser linha visível, ainda pequena frente ao resto da fatura",
+                "catálogo compartilhado de templates evita reconstruir a mesma composição por serviço"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Cobra por",
+              "Cuidado"
+            ],
+            "rows": [
+              [
+                "Execução de ações do FIS",
+                "confira o modelo de cobrança vigente no Pricing Calculator",
+                "o que pesa é o NÚMERO de ações e a frequência de rodadas, não a duração de um recurso ligado"
+              ],
+              [
+                "CloudWatch Logs do experimento",
+                "GB ingerido, se `log_configuration` estiver ativo",
+                "retenção curta em ambiente de homologação; mais longa em produção, para auditoria"
+              ],
+              [
+                "Incident Manager, se o stop condition disparar",
+                "por engajamento real",
+                "só acontece se a hipótese cair — não é um custo recorrente do experimento em si"
+              ],
+              [
+                "O que o experimento NÃO cria",
+                "nada",
+                "o failover do RDS não duplica instância nem cria standby novo; ele troca o papel do que já existe"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b17_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "O ganho que não aparece em nenhuma linha da AWS",
+            "content": "O valor deste laboratório não está na fatura — está na cláusula contratual que a Cadência agora pode assinar com um número medido em vez de uma suposição. É o mesmo padrão do L03: o custo que se ataca aqui não é de infraestrutura, é de incerteza."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b18",
+      "type": "section",
+      "position": 19,
+      "data": {
+        "title": "Well-Architected nos seis pilares"
+      },
+      "children": [
+        {
+          "id": "b18_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pilar",
+              "Situação ao fim deste laboratório",
+              "Risco que fica",
+              "Melhoria",
+              "Prioridade"
+            ],
+            "rows": [
+              [
+                "Excelência operacional",
+                "experimento repetível, com hipótese, freio e relatório comparável entre rodadas",
+                "ainda depende de alguém lembrar de rodar — não há cadência automática",
+                "agendamento recorrente (L58) com catálogo de cenários",
+                "alta"
+              ],
+              [
+                "Segurança",
+                "papel restrito a três políticas, trust por conta, auditoria via CloudTrail",
+                "NACL residual em interrupção anormal do experimento",
+                "verificação agendada de NACL órfão com a tag `managedByFIS`",
+                "média"
+              ],
+              [
+                "Confiabilidade",
+                "a hipótese central sobre queda de uma zona foi testada e medida, não presumida",
+                "falha simultânea de múltiplos componentes continua não testada",
+                "roteiro com múltiplas falhas — L58",
+                "alta"
+              ],
+              [
+                "Eficiência de performance",
+                "a zona sobrevivente absorveu o tráfego atual sem degradar",
+                "capacidade reservada por zona ainda não é política formal",
+                "dimensionar cada zona para o total, não para o total dividido",
+                "média"
+              ],
+              [
+                "Otimização de custos",
+                "experimento cobra por execução pontual, sem recurso ligado além do previsto",
+                "nenhum além do já mapeado",
+                "nenhuma ação necessária agora",
+                "baixa"
+              ],
+              [
+                "Sustentabilidade",
+                "nenhum recurso duplicado permanentemente pelo teste",
+                "rodadas frequentes demais desperdiçam atenção humana sem ganho adicional de sinal",
+                "espaçar rodadas pelo que efetivamente muda no sistema entre uma e outra",
+                "baixa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b19",
+      "type": "section",
+      "position": 20,
+      "data": {
+        "title": "Evolução em níveis: de \"deve funcionar\" a testar com dado e modelo"
+      },
+      "children": [
+        {
+          "id": "b19_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "A terceira arquitetura não é um desenho: é a resposta a QUANDO e COMO o teste de resiliência evolui. Cada nível resolve um risco e compra outro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_1",
+          "type": "layer_stack",
+          "position": 1,
+          "data": {
+            "title": "De Multi-AZ nunca testado a experimento guiado por dado e modelo",
+            "layers": [
+              {
+                "label": "Nível 1 — Protótipo",
+                "instruction": "Uma única AZ, sem redundância, sem teste. Legítimo em ambiente de desenvolvimento, onde uma queda não tem cliente para sentir.",
+                "note": "Risco resolvido: nenhum. Novo risco: se a única AZ cai, é apagão total. Custo: o mais baixo, sem redundância nenhuma."
+              },
+              {
+                "label": "Nível 2 — Alta disponibilidade no papel",
+                "instruction": "Multi-AZ configurado — duas zonas de cômputo, RDS com standby — mas nunca posto à prova. É onde a Cadência estava antes deste laboratório.",
+                "note": "Risco resolvido: apagão de zona única, em teoria. Novo risco: confiança não verificada, que se comporta como confiança real até o dia em que não é. Custo: dobra de RDS standby e compute redundante — ainda baixo."
+              },
+              {
+                "label": "Nível 3 — Este laboratório",
+                "instruction": "Hipótese escrita, experimento FIS composto (rede, RDS, ECS), stop condition amarrada ao SLO do L52, raio de explosão pequeno primeiro.",
+                "note": "Risco resolvido: confiança não verificada vira número medido. Novo risco: o próprio experimento pode causar impacto real se o freio falhar ou o raio de explosão for maior que o planejado. Custo: baixo, minutos de execução de ação por rodada."
+              },
+              {
+                "label": "Nível 4 — GameDay recorrente e mais cenários",
+                "instruction": "Roteiro com múltiplas falhas simultâneas, dependência externa simulada, agendamento automático mensal — é o L58.",
+                "note": "Risco resolvido: um teste único vira ponto de confiança isolado no tempo. Novo risco: fadiga do time e alarme de teste confundido com incidente real se não forem rotulados. Custo: mais rodadas por mês, ainda baixo."
+              },
+              {
+                "label": "Nível 5 — Plataforma e governança",
+                "instruction": "Biblioteca de experimentos compartilhada entre serviços, chaos como porta de deploy — não promove para produção sem GameDay recente.",
+                "note": "Risco resolvido: cada time reinventa seu próprio teste de resiliência. Novo risco: governança de chaos vira burocracia que atrasa deploy legítimo. Custo: investimento de plataforma — pipeline e catálogo — moderado."
+              },
+              {
+                "label": "Nível 6 — Dados e IA guiando o próximo experimento",
+                "instruction": "O histórico de experimentos (hipótese, resultado medido, burn rate observado, tempo de failover) vira DADOS; um MODELO aprende sobre esses dados e prioriza qual combinação de falhas tem maior chance de violar o SLO, sugerindo onde a IA recomenda rodar o próximo teste.",
+                "note": "Risco resolvido: cobertura de teste limitada pela imaginação humana e pelo tempo disponível. Novo risco: um modelo que aprende de poucos incidentes reais pode sugerir um cenário que não reflete o risco real — exige revisão humana antes de rodar qualquer sugestão da IA. Custo: baixo; o dado já existe no CloudWatch e nos relatórios do FIS."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b19_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "A ordem não é negociável, e o motivo é concreto",
+            "content": "GameDay com múltiplas falhas (nível 4) depende de um experimento de falha única já confiável (nível 3) — sem isso, um roteiro complexo falha e ninguém sabe se foi a falha A, a B, ou a composição das duas. Quem tenta o nível 4 sem o 3 monta a mecânica de orquestração sem conseguir interpretar o resultado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b20",
+      "type": "section",
+      "position": 21,
+      "data": {
+        "title": "Onde IA entra neste laboratório, e onde não entra"
+      },
+      "children": [
+        {
+          "id": "b20_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Neste módulo, IA não decide qual zona derrubar, não escreve a hipótese e não interpreta o resultado. As três coisas exigem julgamento sobre o NEGÓCIO — o que é aceitável perder e por quanto tempo — e são humanas por decisão, não por limitação técnica."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Escolher qual AZ atacar, quando, e avaliar se um resultado ambíguo confirma ou refuta a hipótese são decisões com raio de explosão real. Delegar isso a um modelo, hoje, trocaria um julgamento auditável por uma recomendação que ninguém sabe explicar sob pressão — exatamente quando a explicação mais importa."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b20_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta honesta para este módulo"
+            ],
+            "rows": [
+              [
+                "Qual problema a IA resolveria?",
+                "priorizar QUAL cenário testar a seguir, entre muitas combinações possíveis de falha — é o nível 6 da evolução acima"
+              ],
+              [
+                "Por que uma regra não bastaria?",
+                "uma regra bastaria para começar: \"teste toda zona que hospeda um gravador, uma vez por trimestre\" cobre a maior parte. IA só se justifica depois de o catálogo de experimentos crescer além do que uma lista consegue priorizar"
+              ],
+              [
+                "De onde viriam os dados?",
+                "o histórico de experimentos do próprio FIS, o burn rate medido do L52 e os incidentes reais registrados — tudo já existe depois deste laboratório"
+              ],
+              [
+                "Qual o risco?",
+                "um modelo treinado sobre poucos experimentos reais sugerir um cenário que parece prioritário e não é — chaos engineering guiado por sugestão errada custa mais caro que chaos engineering nenhum"
+              ],
+              [
+                "Por que não agora?",
+                "porque a Cadência está rodando o PRIMEIRO experimento real desta série. Modelo sobre uma amostra de um é superstição com aparência de dado"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b20_3",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "O uso de IA que parece atraente e é armadilha aqui",
+            "content": "Pedir a um modelo para \"ler o relatório do FIS e dizer se o experimento foi bem\" troca um critério exato — o alarme composto do L52, que é determinístico — por um probabilístico. Onde já existe um número que decide, IA só acrescenta chance de errar com confiança. O lugar certo para IA aqui é sugerir ONDE olhar a seguir, nunca substituir o critério de aprovação do experimento em si."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b21",
+      "type": "section",
+      "position": 22,
+      "data": {
+        "title": "Anti-padrões deste laboratório"
+      },
+      "children": [
+        {
+          "id": "b21_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Anti-padrão",
+              "Por que alguém faz",
+              "Por que é problema",
+              "Sintoma em produção",
+              "Forma correta",
+              "Quando é aceitável"
+            ],
+            "rows": [
+              [
+                "Rodar o cenário pronto da AWS sem adaptar para Fargate",
+                "é um clique no console, parece completo e vem com o selo da AWS",
+                "a ação que testa cômputo não tem efeito nenhum sobre task Fargate — o teste termina \"com sucesso\" sem ter testado o que roda de verdade",
+                "relatório do FIS todo verde, e a primeira queda de zona real ainda pega o time de surpresa",
+                "compor `aws:ecs:stop-task` manualmente, com alvos resolvidos em tempo de execução",
+                "nunca para frota 100% Fargate; o cenário pronto serve como veio para frota EC2/ASG"
+              ],
+              [
+                "Testar sem stop condition",
+                "parece burocracia extra quando \"é só um teste pequeno\"",
+                "sem freio, um experimento que sai do previsto só para na mão de alguém — depois do dano",
+                "incidente real causado pelo próprio teste, sem ninguém ter decidido correr esse risco",
+                "stop condition sempre presente, amarrada a um alarme que já significa algo para o negócio",
+                "nunca — mesmo em homologação, o hábito de pular o freio migra para produção"
+              ],
+              [
+                "Escrever a hipótese depois de rodar o experimento",
+                "parece mais rápido \"ver o que acontece\" e documentar depois",
+                "sem previsão anterior, qualquer resultado pode ser reinterpretado como \"esperado\" — a hipótese perde a função de testar algo",
+                "relatório de chaos engineering que nunca reporta um resultado ruim",
+                "hipótese com número, registrada antes de qualquer chamada de API",
+                "nunca; é o que distingue experimento de anedota"
+              ],
+              [
+                "Escolher a zona do standby, não a do gravador",
+                "reduz a chance de o teste doer, e ainda \"conta\" como teste de Multi-AZ",
+                "nunca exercita o failover do banco — a parte mais lenta e menos previsível do sistema",
+                "confiança testada só no caso fácil; a zona que realmente cai pode ser a do gravador",
+                "alternar entre zonas, garantindo que ao menos uma rodada acerte a do gravador",
+                "como primeiro teste, só para validar a mecânica do template antes de qualquer chaos real"
+              ],
+              [
+                "Confundir \"o experimento não deu erro\" com \"o sistema passou\"",
+                "é mais simples olhar o status geral do FIS do que ler o relatório de cada ação",
+                "com o padrão `skip` da AWS, uma ação sem alvo é pulada e o experimento \"conclui\" mesmo assim",
+                "zona inteira nunca testada, e ninguém percebe porque não houve erro",
+                "checar o estado de CADA ação, não só o estado geral do experimento",
+                "nunca — é a armadilha que motivou trocar para `empty_target_resolution_mode = fail`"
+              ],
+              [
+                "Rodar direto em produção, no raio de explosão máximo, na primeira vez",
+                "\"já sabemos que vai funcionar\" — o mesmo excesso de confiança que o módulo existe para substituir",
+                "a primeira execução de qualquer template tem a maior chance de erro de configuração",
+                "incidente real causado por um bug no TEMPLATE, não pela pergunta que o experimento queria responder",
+                "homologação primeiro, produção depois, em horário de baixo tráfego",
+                "nunca"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b22",
+      "type": "section",
+      "position": 23,
+      "data": {
+        "title": "Quando o experimento não funciona"
+      },
+      "children": [
+        {
+          "id": "b22_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Causa provável",
+              "Como investigar",
+              "Onde olhar",
+              "Correção"
+            ],
+            "rows": [
+              [
+                "Experimento falha quase imediatamente, estado `failed`",
+                "alvo vazio na ação de ECS — o script de resolução não rodou",
+                "leia o motivo no relatório do experimento",
+                "`get-experiment` → `actions[].state.reason`",
+                "rodar `rodar-experimento.sh` antes de `start-experiment`, sempre"
+              ],
+              [
+                "Experimento roda até o fim mesmo com burn rate alto",
+                "a stop condition aponta para o alarme errado",
+                "compare o ARN no template com o ARN real do alarme composto do L52",
+                "`describe-experiment-templates` → `stopConditions`",
+                "usar a saída do Terraform do L52 como fonte do ARN, nunca digitar à mão"
+              ],
+              [
+                "Ação de RDS falha com erro de permissão",
+                "papel do FIS sem a política de RDS anexada",
+                "leia o motivo da ação que falhou",
+                "`get-experiment` → `actions[].state.reason`",
+                "reanexar a `AWSFaultInjectionSimulatorRDSAccess`"
+              ],
+              [
+                "Sub-rede continua bloqueada depois do fim",
+                "experimento interrompido de forma anormal; o NACL não foi restaurado",
+                "procure NACL com a tag `managedByFIS` fora da janela do experimento",
+                "`describe-network-acls`",
+                "reassociar a lista de controle de acesso original manualmente"
+              ],
+              [
+                "`forceFailover` não produz nenhum evento de failover",
+                "a instância não é realmente Multi-AZ",
+                "confira o campo de Multi-AZ da instância",
+                "`describe-db-instances`",
+                "habilitar Multi-AZ na instância antes de repetir o experimento"
+              ],
+              [
+                "Mais tasks paradas do que o esperado",
+                "o filtro do script de resolução pegou task de outro serviço na mesma zona",
+                "compare a contagem resolvida com a contagem realmente parada",
+                "saída do script vs. `describe-tasks`",
+                "refinar o filtro por nome de cluster e de serviço"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b22_1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "A pergunta que resolve metade destes casos",
+            "content": "Você rodou o script de resolução de alvos ANTES deste início, ou reaproveitou um `TEMPLATE_ID` de uma rodada anterior sem atualizar? ARNs de task são efêmeros — um template com alvo de uma rodada passada aponta para uma task que já não existe mais."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b23",
+      "type": "section",
+      "position": 24,
+      "data": {
+        "title": "Limpeza: o que a experimentação deixa para trás"
+      },
+      "children": [
+        {
+          "id": "b23_0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Este laboratório acrescenta pouco recurso permanente, mas o que ele acrescenta TEMPORARIAMENTE — o NACL clonado durante a ação de rede — é o único item desta série que pode sobreviver de forma invisível a uma interrupção anormal."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b23_1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "filename": "limpar.sh",
+            "code": "#!/usr/bin/env bash\n# limpar.sh — o que o destroy nao leva, e o residuo que so este experimento pode deixar\nset -euo pipefail\n\n# 1. Derrube o que o Terraform administra (template, papel, policies).\nterraform destroy -auto-approve\n\n# 2. NACL RESIDUAL: se o experimento foi interrompido de forma anormal (conta\n#    perdeu permissao no meio, por exemplo), o FIS pode nao ter restaurado a\n#    associacao original da sub-rede. Isto NAO aparece no estado do Terraform\n#    porque o FIS criou e destruiu esse recurso por fora dele.\naws ec2 describe-network-acls --filters \"Name=tag:managedByFIS,Values=true\" \\\n  --query \"NetworkAcls[].NetworkAclId\" --output table\n# Esperado: vazio. Se houver linha, reassocie a sub-rede a lista de controle\n# de acesso ORIGINAL antes de seguir — enquanto isso nao acontece, a Zona A\n# continua bloqueada de verdade, fora do experimento.\n\n# 3. TASKS SUBSTITUTAS: o servico ECS recria o que o FIS parou. Confirme que\n#    a contagem desejada voltou ao normal e que nenhuma task ficou presa\n#    tentando nascer na sub-rede que acabou de ser desbloqueada.\naws ecs describe-services --cluster \"$PROJETO\" --services \"${PROJETO}-api\" \\\n  --query \"services[0].{desejado:desiredCount,rodando:runningCount}\" --output table\n\n# 4. HISTORICO DO EXPERIMENTO: os logs do FIS (se voce configurou\n#    log_configuration) tem retencao propria e sobrevivem ao destroy do\n#    template — e' o registro que compara hipotese com resultado.\naws logs describe-log-groups --log-group-name-prefix \"/aws/fis/${PROJETO}\" \\\n  --query \"logGroups[].{grupo:logGroupName,retencao:retentionInDays}\" --output table\n"
+          }
+        },
+        {
+          "id": "b23_2",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Recurso",
+              "Sai no destroy?",
+              "Cobra parado?",
+              "Por que fica"
+            ],
+            "rows": [
+              [
+                "Template do experimento e papel IAM",
+                "sim",
+                "não",
+                "geridos pelo Terraform, sem custo em repouso"
+              ],
+              [
+                "NACL clonado (se residual)",
+                "não — foi criado por fora do Terraform",
+                "não diretamente, mas bloqueia a sub-rede",
+                "só o próprio FIS cria e remove; falha anormal do experimento pode deixar resíduo"
+              ],
+              [
+                "Tasks de substituição criadas pelo ECS",
+                "seguem o ciclo do serviço",
+                "sim, enquanto rodando",
+                "o serviço as recria automaticamente; confirme que a contagem voltou ao normal"
+              ],
+              [
+                "Logs do experimento",
+                "depende de `skip_destroy`",
+                "sim, por retenção",
+                "é o registro que compara hipótese com resultado — vale reter mais tempo que o padrão"
+              ],
+              [
+                "A instância RDS que passou pelo failover",
+                "não se aplica",
+                "sem mudança de custo",
+                "o failover troca QUAL instância é o gravador; não cria nem destrói instância nenhuma"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b24",
+      "type": "section",
+      "position": 25,
+      "data": {
+        "title": "Resumo: problema, peça e motivo"
+      },
+      "children": [
+        {
+          "id": "b24_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Peça",
+              "Por que ela, e não outra"
+            ],
+            "rows": [
+              [
+                "Não se sabe se Multi-AZ realmente aguenta perder uma zona",
+                "experimento FIS com hipótese escrita",
+                "só medição substitui suposição — mesmo suposição bem fundamentada"
+              ],
+              [
+                "Cenário pronto da AWS não testa Fargate",
+                "ação `aws:ecs:stop-task` composta manualmente",
+                "a ação que interrompe cômputo dentro do cenário pronto atua sobre EC2, não sobre task"
+              ],
+              [
+                "Teste pode virar o próprio incidente",
+                "stop condition = alarme composto do L52",
+                "reaproveita o critério que já decide o que é grave para o negócio"
+              ],
+              [
+                "ARN de task muda a cada substituição",
+                "script de resolução rodado momentos antes",
+                "o Terraform não pode declarar um valor que não existe até a task subir"
+              ],
+              [
+                "Teste pode \"passar\" sem testar nada",
+                "`empty_target_resolution_mode = fail`",
+                "lista de alvo vazia derruba o experimento inteiro, em vez de pular a ação em silêncio"
+              ],
+              [
+                "Zona fácil demais não prova failover",
+                "alvo é a zona do gravador do RDS",
+                "só essa zona exercita o mecanismo de troca do banco sob controle"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Falha",
+              "O que a protege",
+              "O que ela NÃO protege"
+            ],
+            "rows": [
+              [
+                "Experimento sai do controle",
+                "stop condition ligada ao alarme composto do L52",
+                "um alarme mal configurado — o freio só vale o que ele mede"
+              ],
+              [
+                "Ação de ECS sem efeito",
+                "`empty_target_resolution_mode = fail`",
+                "escolher a zona errada — a do standby \"passaria\" mesmo assim"
+              ],
+              [
+                "Rede bloqueada permanentemente",
+                "restauração automática do NACL pelo próprio FIS",
+                "interrupção ANORMAL do experimento — aí o resíduo exige limpeza manual"
+              ],
+              [
+                "Papel do FIS com privilégio excessivo",
+                "só três políticas gerenciadas anexadas",
+                "alguém anexar uma quarta política depois, fora deste template"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b24_2",
+          "type": "list",
+          "position": 2,
+          "data": {
+            "ordered": true,
+            "items": [
+              "A hipótese é escrita: se a Zona A cair, o SLO de 99,9% do L52 continua cumprido.",
+              "O alarme composto do L52 é conferido — precisa estar em OK antes de começar.",
+              "Um script resolve, em tempo de execução, as tasks Fargate que estão na Zona A agora.",
+              "O experimento começa, com o papel do FIS restrito a três permissões.",
+              "A rede da Zona A é bloqueada por 2 minutos — a task continua rodando, isolada.",
+              "O RDS é forçado a fazer failover para o standby na Zona B.",
+              "As tasks resolvidas da Zona A são paradas de fato, não só isoladas.",
+              "O ALB detecta a falha pelo health check e desvia 100% do tráfego para a Zona B.",
+              "O burn rate é medido nas duas janelas do L52 durante toda a interrupção.",
+              "O resultado — confirmando ou refutando a hipótese — é registrado ao lado dela."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b25",
+      "type": "section",
+      "position": 26,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "b25_0",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "O cenário pronto de queda de AZ da AWS FIS serve para testar ECS Fargate?",
+            "answer": "Não sozinho, e a lacuna é documentada pela própria AWS. A ação que interrompe cômputo dentro desse cenário (`aws:ec2:stop-instances`) atua sobre instância EC2, e uma task Fargate não tem instância para parar — a ação é pulada em silêncio por falta de alvo, e o restante do cenário (rede, RDS, ElastiCache) continua funcionando normalmente. O resultado é um experimento que TERMINA COM SUCESSO sem ter testado uma única linha do seu cômputo. Para Fargate, é preciso compor `aws:ecs:stop-task` manualmente, com os ARNs das tasks da zona resolvidos em tempo de execução."
+          }
+        },
+        {
+          "id": "b25_1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Quanto tempo leva o failover de um RDS Multi-AZ com um único standby?",
+            "answer": "A documentação atual da AWS não compromete um número fixo para essa duração — o que ela descreve é o MECANISMO, a troca do registro de DNS do endpoint para apontar ao novo primário, não um prazo garantido. Isso não é uma lacuna da documentação: é o motivo pelo qual este laboratório existe. Meça o número na sua conta, com a sua classe de instância e o seu volume de dados, em vez de planejar sobre um valor decorado de algum blog ou vídeo — o intervalo pode variar por engine, versão e carga no momento do evento."
+          }
+        },
+        {
+          "id": "b25_2",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Preciso de um alarme novo, criado só para o experimento, como stop condition?",
+            "answer": "Não — e reaproveitar o alarme composto de burn rate que já existe é a escolha melhor, não um atalho. O alarme do L52 já representa o critério que a empresa decidiu que significa \"grave o suficiente para agir\": consumo sustentado do orçamento de erro do mês, confirmado em duas janelas para não reagir a pico curto. Criar um alarme separado para o teste corre o risco de esse critério discordar do que realmente importa para o negócio, e de o experimento parar por um motivo que ninguém mais usa para decidir nada."
+          }
+        },
+        {
+          "id": "b25_3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "O que acontece se eu não configurar nenhuma stop condition no experimento?",
+            "answer": "O experimento roda até o fim natural das ações, independentemente do impacto real que estiver causando — nada o interrompe automaticamente. Se algo sair diferente do previsto, a única saída é notar o problema e chamar `stop-experiment` manualmente, o que é reativo, não preventivo: o dano já pode ter acontecido antes de alguém perceber. É por isso que a regra deste laboratório é stop condition sempre presente, mesmo em testes pequenos e em ambiente de homologação — o hábito de pular o freio migra para produção."
+          }
+        },
+        {
+          "id": "b25_4",
+          "type": "qa_item",
+          "position": 4,
+          "data": {
+            "question": "Posso rodar este experimento direto em produção, na primeira vez que uso o template?",
+            "answer": "Não é recomendado, porque a primeira execução de qualquer template tem a maior chance de erro de configuração — alvo errado, permissão faltando, stop condition mal referenciada — e produção é o pior lugar para descobrir isso. A prática de raio de explosão pequeno primeiro existe exatamente para separar dois riscos diferentes: o risco de o SISTEMA não aguentar a falha, que é o que se quer medir, do risco de o PRÓPRIO TEMPLATE ter um bug, que não tem nada a ver com a hipótese."
+          }
+        },
+        {
+          "id": "b25_5",
+          "type": "qa_item",
+          "position": 5,
+          "data": {
+            "question": "Por que atacar a zona que hospeda o gravador do RDS, e não a zona do standby?",
+            "answer": "Porque só atacar a zona do gravador exercita o mecanismo de failover do banco — a parte mais lenta e menos previsível de todo o sistema. Um experimento que sempre escolhe a zona do standby reduz o risco do teste a quase zero, mas também reduz a prova a quase zero: ele nunca força a troca de gravador, e a equipe termina \"tendo testado Multi-AZ\" sem ter testado a parte que mais poderia dar errado. A escolha da zona alvo é, em si, uma decisão que determina se o experimento vale alguma coisa."
+          }
+        },
+        {
+          "id": "b25_6",
+          "type": "qa_item",
+          "position": 6,
+          "data": {
+            "question": "O que significa a ação de ECS aparecer como \"skipped\" no relatório do experimento?",
+            "answer": "Significa que o FIS não encontrou nenhuma task correspondente aos alvos declarados no momento em que a ação rodou — e, com o comportamento padrão da AWS, isso não impede o restante do experimento de continuar e o relatório geral de mostrar sucesso. É exatamente esse comportamento que motiva a escolha deste módulo por `empty_target_resolution_mode = fail`: alvo vazio na ação de ECS derruba o experimento inteiro, forçando quem opera a investigar por que a resolução de alvos falhou em vez de aceitar um teste que não testou o cômputo."
+          }
+        },
+        {
+          "id": "b25_7",
+          "type": "qa_item",
+          "position": 7,
+          "data": {
+            "question": "Este laboratório substitui o teste de carga do L40?",
+            "answer": "Não, e os dois medem coisas diferentes. O L40 descobre o gargalo da aplicação sob volume crescente de tráfego normal; este laboratório mede o comportamento sob perda de uma zona inteira, com o volume de tráfego que já se sabe que o sistema aguenta em condição normal. Este módulo reaproveita a METODOLOGIA de carga sintética do L40 só para manter tráfego real fluindo durante a janela do experimento — sem tráfego, não há nada para medir no burn rate — mas não repete a descoberta de limite que o L40 já fez."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b26",
+      "type": "section",
+      "position": 27,
+      "data": {
+        "title": "Fixando"
+      },
+      "children": [
+        {
+          "id": "b26_1",
+          "type": "quiz",
+          "position": 0,
+          "data": {
+            "question": "Durante um experimento FIS, o alarme referenciado como stop condition entra em estado ALARM. O que acontece, e o que isso implica para quem está operando?",
+            "options": [
+              "O FIS pausa o experimento, e ele pode ser retomado do ponto em que parou depois de o alarme voltar a OK",
+              "O FIS apenas envia uma notificação; as ações continuam até o fim planejado",
+              "O FIS interrompe o experimento imediatamente, e ele não pode ser retomado — só recriado do zero, depois de entender o motivo",
+              "O FIS reverte automaticamente todas as ações já executadas, incluindo o failover do RDS"
+            ],
+            "correctIndex": 2,
+            "explanation": "Esse é o comportamento documentado do serviço: ao acionar a stop condition, o FIS interrompe o experimento, e um experimento interrompido não pode ser retomado do ponto em que parou. Prosseguir dali seria testar um estado que a hipótese nunca previu, então a única forma de continuar é criar (ou reiniciar) um novo experimento, já com o entendimento do que causou a interrupção.\n\nA primeira alternativa inventa uma capacidade de retomada que o serviço não tem — é o erro de raciocínio mais comum, porque \"pausar e retomar\" é o comportamento intuitivo de muita outra ferramenta de orquestração. A terceira subestima a stop condition, tratando-a como alerta passivo, quando ela é ativa: existe justamente para PARAR o experimento, não só avisar sobre ele. A quarta atribui ao FIS uma capacidade de desfazer que ele não tem — algumas ações, como um failover de banco de dados já completado, não são reversíveis por definição, e o serviço não finge que são."
+          }
+        },
+        {
+          "id": "b26_2",
+          "type": "quiz",
+          "position": 1,
+          "data": {
+            "question": "Por que este laboratório usa o alarme COMPOSTO de burn rate do L52 como stop condition, em vez de um alarme novo, mais sensível, de métrica única?",
+            "options": [
+              "Porque reaproveitar o alarme já existente evita criar uma segunda definição do que é \"grave\", que poderia discordar do critério que o negócio já usa para decidir quando agir",
+              "Porque criar um alarme novo exigiria permissões de IAM que o papel do FIS não tem",
+              "Porque a AWS FIS exige que toda stop condition seja um alarme composto",
+              "Porque um alarme mais sensível pararia o experimento cedo demais, então é \"mais seguro\" usar um que reage rápido a qualquer pico"
+            ],
+            "correctIndex": 0,
+            "explanation": "O ponto central é a coerência de critério: o alarme composto do L52 já representa a definição que a Cadência usa para decidir \"isto é grave o suficiente para agir\" — consumo sustentado do orçamento de erro, confirmado em duas janelas para não reagir a pico curto. Usar esse mesmo alarme como freio do experimento garante que \"o teste deu errado\" e \"algo grave aconteceu\" signifiquem a mesma coisa.\n\nA primeira alternativa inverte o raciocínio do L52: um alarme MAIS sensível (só a janela curta) reagiria a exatamente o tipo de pico transiente — como a pausa de failover do RDS — que o desenho de duas janelas existe para filtrar; usá-lo pararia experimentos válidos sem necessidade. A terceira inventa uma restrição técnica que não existe: criar um alarme novo é uma chamada de CloudWatch, sem relação com as permissões do papel do FIS. A quarta também inventa uma exigência: uma stop condition referencia qualquer alarme do CloudWatch, simples ou composto — nada no serviço obriga o segundo formato."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b27",
+      "type": "section",
+      "position": 28,
+      "data": {
+        "title": "Conhecimentos, próximo módulo e documentação"
+      },
+      "children": [
+        {
+          "id": "b27_0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Item",
+              "Conteúdo"
+            ],
+            "rows": [
+              [
+                "Conhecimentos anteriores necessários",
+                "L40 (metodologia de carga sintética) e L52 (SLO, orçamento de erro e alarme composto de burn rate) no ar; noção básica de IAM e de RDS Multi-AZ"
+              ],
+              [
+                "Conhecimentos adquiridos",
+                "por que o cenário pronto de queda de AZ da AWS não cobre Fargate; como compor um experimento FIS com três ações e stop condition; a diferença entre alta disponibilidade desenhada e testada; RDS Multi-AZ como mecanismo de troca, não ausência de interrupção"
+              ],
+              [
+                "Limitação que fica",
+                "só uma falha isolada foi testada — falha simultânea de múltiplos componentes, evento de região ou dependência externa fora do ar ao mesmo tempo continuam não testados"
+              ],
+              [
+                "Próximo exemplo recomendado",
+                "L58 — GameDay recorrente com roteiro de múltiplas falhas. Reutiliza o template e a stop condition deste módulo, e é onde o teste deixa de ser um evento isolado"
+              ],
+              [
+                "Data da última validação técnica",
+                "8 de agosto de 2026"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b27_1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Documentação oficial consultada: "
+              },
+              {
+                "text": "AZ Availability: Power Interruption",
+                "code": true
+              },
+              {
+                "text": " — a limitação explícita sobre ECS e EKS em Fargate, que é o achado central deste módulo; "
+              },
+              {
+                "text": "Stop conditions for AWS FIS",
+                "code": true
+              },
+              {
+                "text": " — o mecanismo de freio e o fato de um experimento interrompido não poder ser retomado; "
+              },
+              {
+                "text": "AWS FIS Actions reference",
+                "code": true
+              },
+              {
+                "text": " — os parâmetros exatos de `aws:network:disrupt-connectivity`, `aws:rds:reboot-db-instances` e `aws:ecs:stop-task`; "
+              },
+              {
+                "text": "Multi-AZ DB instance deployments for Amazon RDS",
+                "code": true
+              },
+              {
+                "text": " — o mecanismo de failover; e "
+              },
+              {
+                "text": "Amazon ECS task metadata endpoint version 4",
+                "code": true
+              },
+              {
+                "text": " — o campo de zona disponível a partir da plataforma Fargate 1.4. Os valores de preço não aparecem neste módulo por decisão: use o AWS Pricing Calculator, porque o modelo de cobrança do FIS pode mudar e preço varia por região."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b27_2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "O que não foi verificado, e você deve conferir na sua conta",
+            "content": "O tempo de failover do RDS citado nas provas — cerca de 51 s — é o medido no ambiente de exemplo deste laboratório, não um valor documentado pela AWS: a documentação atual descreve o mecanismo, não compromete uma duração. Da mesma forma, o comportamento da task de substituição nascendo na sub-rede ainda bloqueada foi observado nesta conta, nesta rodada — pode variar com a versão de plataforma do Fargate e com o momento exato em que o agendador do ECS decide substituir a task. Meça os dois na sua conta antes de usar qualquer um deles como critério de aceite em produção."
+          }
+        }
+      ]
+    }
+  ]
+}

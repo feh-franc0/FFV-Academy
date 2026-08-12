@@ -330,6 +330,23 @@ func (uc *RefreshTokenUseCase) Execute(ctx context.Context, tokenHash string) (R
 	}
 
 	now := uc.clock.Now()
+
+	// Reuso de token JÁ REVOGADO é o sinal clássico de token roubado: a rotação
+	// normal do fluxo (verify → refresh → refresh → …) sempre usa o token MAIS
+	// RECENTE, nunca um que já foi trocado. Se um revogado reaparece, alguém
+	// tem uma cópia antiga — trata como sessão comprometida e derruba TODA a
+	// família de tokens do usuário, não só este.
+	if rt.IsRevoked() {
+		if revokeErr := uc.refreshRepo.RevokeAllForUser(ctx, rt.UserID); revokeErr != nil {
+			slog.Default().ErrorContext(ctx, "refresh token: falha ao revogar família após reuso detectado",
+				"error", revokeErr, "user_id", rt.UserID.String())
+		} else {
+			slog.Default().WarnContext(ctx, "refresh token revogado reapresentado — família inteira invalidada (possível token roubado)",
+				"user_id", rt.UserID.String())
+		}
+		return RefreshTokenResult{}, fmt.Errorf("%w: sessão comprometida, faça login novamente", shared.ErrUnauthorized)
+	}
+
 	if !rt.IsValid(now) {
 		return RefreshTokenResult{}, fmt.Errorf("%w: refresh token expirado ou revogado", shared.ErrUnauthorized)
 	}
