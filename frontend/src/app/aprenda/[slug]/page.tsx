@@ -148,6 +148,14 @@ async function getArticleOutcome(slug: string): Promise<ArticleOutcome> {
   const seedArticle = await fetchArticleFromSeeds(slug);
   if (seedArticle) return { kind: 'ok', article: seedArticle };
 
+  // O currículo publicado já conhece este slug, mas o CMS pode estar alguns
+  // instantes atrás durante um deploy/import. Isso não é um link inexistente:
+  // exibir 404 aqui congela a página em cache e faz o aluno perder um módulo
+  // válido. Mantemos 404 apenas para URLs que não pertencem ao currículo.
+  if (result.status === 'not-found' && getModuleBySlug(slug)) {
+    return { kind: 'unavailable' };
+  }
+
   return result.status === 'not-found' ? { kind: 'not-found' } : { kind: 'unavailable' };
 }
 
