@@ -74,8 +74,8 @@ func seedCurriculumImpl(ctx context.Context, pool *pgxpool.Pool, seedsRoot strin
 				hubID = h.ID
 			}
 			_, err := pool.Exec(ctx, `
-				INSERT INTO hubs (id, name, short_name, description, icon, color, position)
-				VALUES ($1, $2, $3, $4, $5, $6, $7)
+				INSERT INTO hubs (id, name, short_name, description, icon, color, position, base_slug, slug, tagline)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, 'tecnologia', $1, $8)
 				ON CONFLICT (id) DO UPDATE
 					SET name = EXCLUDED.name,
 					    short_name = EXCLUDED.short_name,
@@ -83,8 +83,11 @@ func seedCurriculumImpl(ctx context.Context, pool *pgxpool.Pool, seedsRoot strin
 					    icon = EXCLUDED.icon,
 					    color = EXCLUDED.color,
 					    position = EXCLUDED.position,
+					    slug = EXCLUDED.slug,
+					    tagline = EXCLUDED.tagline,
+					    base_slug = EXCLUDED.base_slug,
 					    updated_at = now();
-			`, hubID, h.Name, h.ShortName, h.Tagline, h.Icon, h.Color, i)
+			`, hubID, h.Name, h.ShortName, h.Tagline, h.Icon, h.Color, i, h.Tagline)
 			if err != nil {
 				return fmt.Errorf("upsert hub %s: %w", hubID, err)
 			}
@@ -135,17 +138,23 @@ func seedCurriculumImpl(ctx context.Context, pool *pgxpool.Pool, seedsRoot strin
 				level = "" // nullable
 			}
 			_, err := pool.Exec(ctx, `
-				INSERT INTO trails (id, hub_id, name, description, difficulty, icon, position)
-				VALUES ($1, $2, $3, $4, $5, $6, $7)
+				INSERT INTO trails (id, hub_id, name, description, difficulty, icon, position, slug, tagline, color, href, status, level, pos)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $1, '', $8, $9, 'published', $5, $7)
 				ON CONFLICT (id) DO UPDATE
 					SET hub_id = EXCLUDED.hub_id,
 					    name = EXCLUDED.name,
 					    description = EXCLUDED.description,
 					    difficulty = EXCLUDED.difficulty,
 					    icon = EXCLUDED.icon,
-					    position = EXCLUDED.position,
-					    updated_at = now();
-			`, tr.ID, hubID, tr.Name, tr.Desc, nullIfEmpty(level), tr.Icon, i)
+				    position = EXCLUDED.position,
+				    slug = EXCLUDED.slug,
+				    color = EXCLUDED.color,
+				    href = EXCLUDED.href,
+				    status = EXCLUDED.status,
+				    level = EXCLUDED.level,
+				    pos = EXCLUDED.pos,
+				    updated_at = now();
+			`, tr.ID, hubID, tr.Name, tr.Desc, nullIfEmpty(level), tr.Icon, i, tr.Color, nullIfEmpty(tr.Href))
 			if err != nil {
 				failed++
 				continue
