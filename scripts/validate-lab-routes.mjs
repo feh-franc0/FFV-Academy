@@ -22,8 +22,10 @@ const workers = Array.from({ length: 4 }, async () => {
       const html = await page.text();
       const validPage = page.ok
         && /<h1[ >]/.test(html)
-        && !html.includes('Conteúdo temporariamente indisponível')
-        && !html.includes('Esta página não existe');
+        // O texto do componente de fallback também é enviado no bundle RSC,
+        // portanto não é uma prova de que ele foi renderizado. Um bloco de
+        // seção só existe no artigo efetivamente montado na página.
+        && html.includes('data-section-title=');
       if (!validPage || !api.ok) failures.push({ slug, page: page.status, api: api.status });
     } catch (error) {
       failures.push({ slug, error: error instanceof Error ? error.message : String(error) });
